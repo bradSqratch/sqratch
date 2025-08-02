@@ -1,0 +1,80 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String   @id @default(cuid())
+  name           String?
+  email          String   @unique
+  isEmailVerified Boolean @default(false)
+  emailVerifiedAt DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  password       String?
+  emailVerificationTokens EmailVerificationToken[] // Reverse relation for EmailVerificationToken
+  qrRedemptions  QRCode[] @relation("QRCodeRedeemedByUser")
+  qrCodesCreated QRCode[] @relation("QRCodeCreatedByUser")
+  campaigns      Campaign[] @relation("CampaignCreatedByUser")
+  role           Role     @default(USER)
+}
+
+model Campaign {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  inviteUrl   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  createdById String
+  createdBy   User     @relation("CampaignCreatedByUser", fields: [createdById], references: [id])
+
+  qrCodes     QRCode[]
+}
+
+model QRCode {
+  id            String   @id @default(cuid())
+  qrCodeData    String   @unique // This will hold the random part in URL
+  status        QRStatus @default(NEW)
+  qrCodeUrl     String?  // Can hold the full landing URL if needed
+  email         String?  // Optional: Track which email used it
+  usedAt        DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  // Relations
+  campaignId    String
+  campaign      Campaign @relation(fields: [campaignId], references: [id])
+
+  redeemedById  String? // optional, to support anonymous scans too
+  redeemedBy    User?   @relation("QRCodeRedeemedByUser", fields: [redeemedById], references: [id])
+
+  createdById String
+  createdBy   User @relation("QRCodeCreatedByUser", fields: [createdById], references: [id])
+}
+
+model EmailVerificationToken {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  emailVerifyToken      String   @unique
+  expires    DateTime
+  createdAt  DateTime @default(now())
+}
+
+enum Role {
+  USER
+  ADMIN
+  EXTERNAL
+}
+
+enum QRStatus {
+  NEW
+  USED
+  INVALID
+}
