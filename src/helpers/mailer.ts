@@ -2,7 +2,8 @@ import nodemailer from "nodemailer";
 
 export const sendVerificationEmail = async (
   email: string,
-  emailVerifyToken: string
+  emailVerifyToken: string,
+  qrCodeId?: string
 ) => {
   try {
     // create a hased token
@@ -29,7 +30,11 @@ export const sendVerificationEmail = async (
       },
     });
 
-    const verificationUrl = `${process.env.DOMAIN}/verify-email?token=${emailVerifyToken}`;
+    const verificationUrl = `${
+      process.env.DOMAIN
+    }/verify-email?token=${emailVerifyToken}${
+      qrCodeId ? `&qrcodeID=${qrCodeId}` : ""
+    }`;
 
     const mailOptions = {
       from: process.env.ADMIN_EMAIL,
@@ -49,3 +54,31 @@ export const sendVerificationEmail = async (
     throw new Error(error.message);
   }
 };
+
+export async function sendInviteEmail(
+  email: string,
+  inviteUrl: string,
+  campaignName: string
+) {
+  const transport = nodemailer.createTransport({
+    host: "sandbox.smtp.mailtrap.io",
+    port: 2525,
+    auth: {
+      user: process.env.MAILTRAP_USER,
+      pass: process.env.MAILTRAP_PASSWORD,
+    },
+  });
+
+  const mailOptions = {
+    from: process.env.ADMIN_EMAIL,
+    to: email,
+    subject: `You're invited to join ${campaignName} on SQRATCH!`,
+    html: `
+      <h1>Welcome to ${campaignName}!</h1>
+      <p>Click the link below to join the campaign:</p>
+      <a href="${inviteUrl}" style="padding: 10px 20px; background: #2563eb; color: white; border-radius: 4px;">Join Campaign</a>
+    `,
+  };
+
+  return await transport.sendMail(mailOptions);
+}

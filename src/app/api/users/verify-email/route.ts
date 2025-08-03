@@ -1,10 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { sendInviteEmail } from "@/helpers/mailer";
 
 export async function POST(request: NextRequest) {
   try {
-    const { emailVerifyToken } = await request.json();
-    console.log("emailVerifyToken", emailVerifyToken);
+    const { emailVerifyToken, qrcodeID } = await request.json();
     if (!emailVerifyToken || typeof emailVerifyToken !== "string") {
       return NextResponse.json(
         { error: "Invalid or missing token" },
@@ -32,6 +32,30 @@ export async function POST(request: NextRequest) {
       where: { id: verificationToken.userId },
       data: { isEmailVerified: true, emailVerifiedAt: new Date() },
     });
+
+    // 3. If qrcodeID is present, send campaign invite link
+    if (qrcodeID) {
+      // Find QR code by qrCodeData or id, as per your usage
+      const qr = await prisma.qRCode.findFirst({
+        where: {
+          OR: [{ id: qrcodeID }, { qrCodeData: qrcodeID }],
+        },
+        include: {
+          campaign: true,
+          redeemedBy: true,
+        },
+      });
+
+      if (qr && qr.campaign && qr.campaign.inviteUrl && qr.redeemedBy) {
+        // Send invite to redeemedBy.email
+        await sendInviteEmail(
+          qr.redeemedBy.email,
+          qr.campaign.inviteUrl,
+          qr.campaign.name
+        );
+      }
+      // Optionally handle if QR not found or campaign/URL missing
+    }
 
     await prisma.emailVerificationToken.delete({
       where: { id: verificationToken.id },

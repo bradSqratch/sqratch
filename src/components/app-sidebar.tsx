@@ -50,9 +50,9 @@ export function AppSidebar() {
   // Admin-specific items.
   const adminItems = [
     {
-      title: "User Management",
-      url: "/admin/user-management",
-      icon: UserPlus,
+      title: "Campaign Management",
+      url: "/admin/campaigns-management",
+      icon: ListTodo,
     },
     {
       title: "QR Management",
@@ -60,9 +60,9 @@ export function AppSidebar() {
       icon: ListTodo,
     },
     {
-      title: "Campaigns",
-      url: "/admin/campaigns-management",
-      icon: ListTodo,
+      title: "User Management",
+      url: "/admin/user-management",
+      icon: UserPlus,
     },
   ];
 

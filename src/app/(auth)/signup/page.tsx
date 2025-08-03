@@ -66,7 +66,7 @@ export default function SignupPage() {
   }, [user]);
 
   return (
-    <section className="position-relative bg-[url('/assets/login-bg.jpg')] bg-center bg-cover">
+    <section className="position-relative bg-[url('/assets/homepage/home_bg.jpeg')] bg-center bg-cover">
       <div className="absolute inset-0 bg-black opacity-75"></div>
       <div className="container-fluid relative">
         <div className="grid grid-cols-1">

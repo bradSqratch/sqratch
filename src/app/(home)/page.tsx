@@ -11,54 +11,16 @@ import {
   CardContent,
   CardFooter,
 } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCaption,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-
-type SongRequest = {
-  id: string;
-  name: string;
-  song: string;
-  createdAt: string;
-};
+import PublicHeader from "@/components/publicHeader";
 
 export default function GuestQueuePage() {
-  const [queue, setQueue] = useState<SongRequest[]>([]);
-  const [loading, setLoading] = useState<boolean>(true);
-
-  const fetchQueue = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await axios.get<{ data: SongRequest[] }>(
-        "/api/public-song-requests/get-approved-songs?status=APPROVED"
-      );
-      setQueue(res.data.data);
-    } catch (err) {
-      console.error("Failed to load queue:", err);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchQueue();
-    const interval = setInterval(fetchQueue, 30_000);
-    return () => clearInterval(interval);
-  }, [fetchQueue]);
-
   return (
     <div
       className="min-h-screen flex flex-col relative
        bg-[url('/assets/homepage/home_bg.jpeg')]
        bg-cover bg-center"
     >
-      {/* Header */}
+      {/* Header
       <header className="flex items-center justify-between p-4 bg-black shadow">
         <Link href="/">
           <img
@@ -75,48 +37,21 @@ export default function GuestQueuePage() {
             Admin Login
           </Button>
         </Link>
-      </header>
+      </header> */}
+
+      <PublicHeader showAdminLogin />
 
       {/* Main Content */}
       <main className="flex-1 flex items-center justify-center p-8">
         <Card className="w-full max-w-4xl bg-[#ffffff] shadow-2xl z-10">
-          <CardHeader>
-            <CardTitle>Current Karaoke Queue</CardTitle>
-          </CardHeader>
           <CardContent>
-            <Table>
-              <TableCaption>
-                {loading
-                  ? "Loading..."
-                  : queue.length
-                  ? `Updated at ${new Date().toLocaleTimeString()}`
-                  : "No songs in queue."}
-              </TableCaption>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Position</TableHead>
-                  <TableHead>Song Title</TableHead>
-                  <TableHead>Requested By</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {queue.map((item, idx) => (
-                  <TableRow key={item.id}>
-                    <TableCell>{idx + 1}</TableCell>
-                    <TableCell>{item.song}</TableCell>
-                    <TableCell>{item.name.split(" ")[0]}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+            <div className="text-center">
+              <h2 className="text-2xl font-bold mb-4">Welcome to SQRATCH</h2>
+              <p className="text-gray-600 mb-6">
+                Experience the best closed communities with SQRATCH.
+              </p>
+            </div>
           </CardContent>
-          <CardFooter className="flex justify-center mt-5">
-            <Link href="/new-song-request">
-              <Button className="bg-[#202020] text-xl py-5 px-5">
-                Request a Song
-              </Button>
-            </Link>
-          </CardFooter>
         </Card>
       </main>
     </div>

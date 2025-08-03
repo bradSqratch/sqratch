@@ -7,7 +7,7 @@ import { sendVerificationEmail } from "@/helpers/mailer";
 export async function POST(request: NextRequest) {
   try {
     const reqBody = await request.json();
-    const { email, name, password, qrCodeId } = reqBody;
+    const { email, name, password } = reqBody;
 
     // Check for missing fields
     if (!email || !name || !password) {
@@ -34,37 +34,15 @@ export async function POST(request: NextRequest) {
 
     // Check if a QR Code ID is provided
     let newUser;
-    if (qrCodeId) {
-      // Validate QR Code ID
-      const qrCode = await prisma.qRCode.findUnique({
-        where: { id: qrCodeId },
-      });
 
-      if (!qrCode) {
-        return NextResponse.json(
-          { error: "Invalid QR Code ID" },
-          { status: 400 }
-        );
-      }
-
-      // Create a temporary user
-      newUser = await prisma.user.create({
-        data: {
-          email,
-          name,
-          password: hashedPassword,
-        },
-      });
-    } else {
-      // Create a permanent user
-      newUser = await prisma.user.create({
-        data: {
-          email,
-          name,
-          password: hashedPassword,
-        },
-      });
-    }
+    // Create a permanent user
+    newUser = await prisma.user.create({
+      data: {
+        email,
+        name,
+        password: hashedPassword,
+      },
+    });
     // Generate a unique verification token
     const verificationToken = crypto.randomBytes(32).toString("hex");
     const expires = new Date(Date.now() + 48 * 60 * 60 * 1000); // Token valid for 24 hours

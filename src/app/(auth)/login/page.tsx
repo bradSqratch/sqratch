@@ -140,7 +140,7 @@ export default function LoginPage() {
   }, [user]);
 
   return (
-    <section className="position-relative bg-[url('/assets/login/login-bg.avif')] bg-center bg-cover">
+    <section className="position-relative bg-[url('/assets/homepage/home_bg.jpeg')] bg-center bg-cover">
       <div className="absolute inset-0 bg-black opacity-75" />
       <div className="relative container-fluid">
         <div className="grid grid-cols-1">
