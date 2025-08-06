@@ -47,6 +47,7 @@ import {
   CommandInput,
   CommandItem,
 } from "@/components/ui/command";
+import Papa from "papaparse";
 
 type QRCode = {
   id: string;
@@ -103,6 +104,34 @@ export default function QRManagementPage() {
     };
     fetchData();
   }, []);
+
+  const exportFilteredQRCodes = () => {
+    const exportData = filteredQRCodes.map((qr) => ({
+      Code: qr.code,
+      Campaign: qr.campaignName,
+      Status: qr.status,
+      UsedBy: qr.usedBy || "",
+      UsedAt: qr.usedAt ? new Date(qr.usedAt).toLocaleString() : "",
+      ImageURL: qr.imageUrl,
+    }));
+
+    const csv = Papa.unparse(exportData);
+
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+
+    const filename =
+      selectedCampaignId === "all"
+        ? "all_qrcodes.csv"
+        : `campaign_${selectedCampaignId}_qrcodes.csv`;
+
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // fetch user emails
   const fetchUserEmails = async (query: string) => {
@@ -181,24 +210,33 @@ export default function QRManagementPage() {
         <CardHeader className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <CardTitle>QR Code Management</CardTitle>
 
-          <div className="flex items-center gap-2">
-            <Label htmlFor="campaign-filter">Filter by Campaign:</Label>
-            <Select
-              value={selectedCampaignId}
-              onValueChange={(val) => setSelectedCampaignId(val)}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+            <div className="flex items-center gap-2">
+              <Label htmlFor="campaign-filter">Filter by Campaign:</Label>
+              <Select
+                value={selectedCampaignId}
+                onValueChange={(val) => setSelectedCampaignId(val)}
+              >
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder="Select Campaign" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  {campaigns.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <Button
+              onClick={exportFilteredQRCodes}
+              className="bg-[#0A0E24] text-white hover:bg-[#1c2246]"
             >
-              <SelectTrigger className="w-[200px]">
-                <SelectValue placeholder="Select Campaign" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All</SelectItem>
-                {campaigns.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              Export CSV
+            </Button>
           </div>
         </CardHeader>
 

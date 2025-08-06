@@ -66,7 +66,8 @@ export async function PATCH(
 
     // Step 2: Generate new QR image using same qrCodeData
     const qrData = existingQRCode.qrCodeData;
-    const buffer = await QRCode.toBuffer(qrData, {
+    const redeemUrl = `https://sqratch-qrcode.vercel.app/redeemQR/${campaignId}/${qrData}`;
+    const buffer = await QRCode.toBuffer(redeemUrl, {
       type: "png",
       width: 500,
       color: {

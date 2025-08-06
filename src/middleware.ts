@@ -10,6 +10,11 @@ export async function middleware(request: NextRequest) {
 
   const token = await getToken({ req: request }).catch(() => null);
 
+  // Redirect /signup to /login
+  if (url.pathname === "/signup") {
+    return NextResponse.redirect(new URL("/login", request.url));
+  }
+
   // Allow access to the scanner route for everyone (no redirects)
   // if (url.pathname.startsWith("/qr-scanner")) {
   //   return NextResponse.next();

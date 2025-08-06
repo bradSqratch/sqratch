@@ -4,9 +4,9 @@ import {
   LogOut,
   LayoutDashboard,
   QrCode,
-  LayoutPanelLeft,
+  FlagIcon,
   ListTodo,
-  Scan,
+  Printer,
   UserPlus,
   Headset,
 } from "lucide-react";
@@ -52,12 +52,17 @@ export function AppSidebar() {
     {
       title: "Campaign Management",
       url: "/admin/campaigns-management",
-      icon: ListTodo,
+      icon: FlagIcon,
     },
     {
       title: "QR Management",
       url: "/admin/qr-management",
       icon: ListTodo,
+    },
+    {
+      title: "Print QR",
+      url: "/admin/print-qr",
+      icon: Printer,
     },
     {
       title: "User Management",

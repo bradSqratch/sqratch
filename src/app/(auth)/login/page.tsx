@@ -39,8 +39,25 @@ export default function LoginPage() {
       return;
     }
 
+    setLoading(true);
     try {
-      setLoading(true);
+      // Check if user is ADMIN before login
+      const roleRes = await fetch("/api/auth/check-roles-login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: user.email }),
+      });
+
+      const roleData = await roleRes.json();
+
+      if (!roleRes.ok || roleData.role !== "ADMIN") {
+        setMessage({
+          type: "error",
+          text: "Only ADMIN users are allowed to log in.",
+        });
+        setLoading(false);
+        return;
+      }
       const result = await signIn("credentials", {
         redirect: false,
         email: user.email,
@@ -66,7 +83,7 @@ export default function LoginPage() {
     }
   };
 
-  const sendVerificationEmail = async (email: string) => {
+  const ReSendVerificationEmail = async (email: string) => {
     try {
       const res = await fetch("/api/auth/send-verification", {
         method: "POST",
@@ -106,7 +123,7 @@ export default function LoginPage() {
             <>
               Your email is not verified.{" "}
               <button
-                onClick={() => sendVerificationEmail(email)}
+                onClick={() => ReSendVerificationEmail(email)}
                 className="text-blue-500 underline"
               >
                 Click here to resend verification email.
@@ -142,6 +159,14 @@ export default function LoginPage() {
   return (
     <section className="position-relative bg-[url('/assets/homepage/home_bg.jpeg')] bg-center bg-cover">
       <div className="absolute inset-0 bg-black opacity-75" />
+      {loading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80">
+          <div className="flex flex-col items-center gap-4">
+            <div className="w-12 h-12 border-4 border-white border-t-transparent rounded-full animate-spin" />
+            <p className="text-white text-lg">Validating credentials...</p>
+          </div>
+        </div>
+      )}
       <div className="relative container-fluid">
         <div className="grid grid-cols-1">
           <div className="lg:col-span-4">

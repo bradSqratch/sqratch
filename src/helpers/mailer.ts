@@ -22,7 +22,7 @@ export const sendVerificationEmail = async (
     // }
 
     var transport = nodemailer.createTransport({
-      host: "sandbox.smtp.mailtrap.io",
+      host: process.env.MAILTRAP_HOST,
       port: 2525,
       auth: {
         user: process.env.MAILTRAP_USER,
@@ -61,7 +61,7 @@ export async function sendInviteEmail(
   campaignName: string
 ) {
   const transport = nodemailer.createTransport({
-    host: "sandbox.smtp.mailtrap.io",
+    host: process.env.MAILTRAP_HOST,
     port: 2525,
     auth: {
       user: process.env.MAILTRAP_USER,

@@ -1,0 +1,8 @@
+{
+  "webhookUrl": null,
+  "interactionUrl": null,
+  "federatedSearchUrl": null,
+  "redirectUris": null,
+  "federatedSearchEnabled": false,
+  "webhookSubscriptions": null
+}

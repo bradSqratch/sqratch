@@ -16,11 +16,12 @@ model User {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   password       String?
+  bettermodeMemberId String?
   emailVerificationTokens EmailVerificationToken[] // Reverse relation for EmailVerificationToken
   qrRedemptions  QRCode[] @relation("QRCodeRedeemedByUser")
   qrCodesCreated QRCode[] @relation("QRCodeCreatedByUser")
   campaigns      Campaign[] @relation("CampaignCreatedByUser")
-  role           Role     @default(USER)
+  role           Role     @default(EXTERNAL)
 }
 
 model Campaign {
@@ -30,6 +31,7 @@ model Campaign {
   inviteUrl   String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+  isActive    Boolean @default(true)
 
   createdById String
   createdBy   User     @relation("CampaignCreatedByUser", fields: [createdById], references: [id])
@@ -65,6 +67,13 @@ model EmailVerificationToken {
   emailVerifyToken      String   @unique
   expires    DateTime
   createdAt  DateTime @default(now())
+}
+
+model TokenStore {
+  service   String   @id           // e.g., "bettermode"
+  token     String                 // the OAuth access token
+  expiresAt DateTime              // when the token expires
+  updatedAt DateTime @updatedAt   // helpful for debugging or logs
 }
 
 enum Role {

@@ -6,7 +6,9 @@ import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
+import Papa from "papaparse";
 
+// Types
 type CampaignStats = {
   campaignId: string;
   campaignName: string;
@@ -32,12 +34,12 @@ export default function AdminDashboardPage() {
   const fetchStats = useCallback(async () => {
     setLoading(true);
     try {
-      const [currentMonthRes, allTimeRes] = await Promise.all([
-        axios.get<{ data: DashboardStats }>(
-          "/api/dashboard-stats?scope=current-month"
-        ),
-        axios.get<{ data: DashboardStats }>("/api/dashboard-stats?scope=all"),
-      ]);
+      const currentMonthRes = await axios.get<{ data: DashboardStats }>(
+        "/api/dashboard-stats?scope=current-month"
+      );
+      const allTimeRes = await axios.get<{ data: DashboardStats }>(
+        "/api/dashboard-stats?scope=all"
+      );
 
       setCurrentMonthStats(currentMonthRes.data.data);
       setAllTimeStats(allTimeRes.data.data);
@@ -59,6 +61,40 @@ export default function AdminDashboardPage() {
     }
   }, [status, session, router, fetchStats]);
 
+  const handleExport = () => {
+    if (!allTimeStats || !currentMonthStats) return;
+
+    const csvData: any[] = [];
+
+    allTimeStats.campaignStats.forEach((c) => {
+      csvData.push({
+        Timeframe: "All Time",
+        Campaign: c.campaignName,
+        TotalQRCodes: c.totalQRCodes,
+        Redeemed: c.redeemedCount,
+      });
+    });
+
+    currentMonthStats.campaignStats.forEach((c) => {
+      csvData.push({
+        Timeframe: "Current Month",
+        Campaign: c.campaignName,
+        TotalQRCodes: c.totalQRCodes,
+        Redeemed: c.redeemedCount,
+      });
+    });
+
+    const csv = Papa.unparse(csvData);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = "campaign_dashboard_report.csv";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   if (loading || !currentMonthStats || !allTimeStats) {
     return (
       <div className="flex items-center justify-center min-h-screen">
@@ -78,16 +114,9 @@ export default function AdminDashboardPage() {
 
       {/* All-Time Section */}
       <section>
-        <h2 className="text-2xl font-semibold mb-4">📊 All Time Stats</h2>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-3xl font-semibold mb-4">
-              Can you please send me a máĩl on sumedhtirodkar16@gmail.com with
-              your emáil and whátsapp númber. Need to discuss something off
-              Fívêrr. Please do not mention any of this on Fîvérr.
-            </CardTitle>
-          </CardHeader>
-        </Card>
+        <h2 className="text-2xl font-semibold mb-4">
+          \ud83d\udcca All Time Stats
+        </h2>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 gap-6">
           <Card
             style={{ backgroundColor: "var(--card-colour-1)" }}
@@ -196,7 +225,9 @@ export default function AdminDashboardPage() {
       </section>
 
       <div className="pt-10">
-        <Button className="bg-green-600 text-white">Export Reports</Button>
+        <Button className="bg-green-600 text-white" onClick={handleExport}>
+          Export Reports
+        </Button>
       </div>
     </div>
   );

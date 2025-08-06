@@ -158,13 +158,25 @@ export default function AdminUsersPage() {
           <h1 className="text-2xl font-semibold">Admin Users</h1>
 
           {/* Create Admin Dialog */}
-          <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+          <Dialog
+            open={createOpen}
+            onOpenChange={(open) => {
+              setCreateOpen(open);
+              if (open) resetForm(); // Clear form fields when opening the Create dialog
+            }}
+          >
             <DialogTrigger asChild>
-              <Button>Create Admin</Button>
+              <Button
+                onClick={() => {
+                  resetForm(); // Extra safety, though not strictly necessary with onOpenChange
+                }}
+              >
+                Create User
+              </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
-                <DialogTitle>Create Admin User</DialogTitle>
+                <DialogTitle>Create User</DialogTitle>
                 <DialogDescription>
                   All fields required, email must be unique.
                 </DialogDescription>
@@ -212,6 +224,7 @@ export default function AdminUsersPage() {
                       <SelectValue placeholder="Select role" />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="EXTERNAL">EXTERNAL</SelectItem>
                       <SelectItem value="USER">USER</SelectItem>
                       <SelectItem value="ADMIN">ADMIN</SelectItem>
                     </SelectContent>
@@ -309,6 +322,7 @@ export default function AdminUsersPage() {
                     <SelectValue placeholder="Select role" />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="EXTERNAL">EXTERNAL</SelectItem>
                     <SelectItem value="ADMIN">ADMIN</SelectItem>
                     <SelectItem value="USER">USER</SelectItem>
                   </SelectContent>
