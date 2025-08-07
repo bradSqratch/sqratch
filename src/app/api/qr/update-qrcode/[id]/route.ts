@@ -96,6 +96,7 @@ export async function PATCH(
       status,
       usedAt: usedAt ? new Date(usedAt) : null,
       redeemedById: user?.id || null,
+      email: usedBy || null,
       qrCodeUrl: newImageUrl,
     },
   });
