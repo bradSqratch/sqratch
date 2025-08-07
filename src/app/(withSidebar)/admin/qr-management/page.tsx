@@ -58,6 +58,7 @@ type QRCode = {
   usedBy?: string;
   usedAt?: string;
   imageUrl: string;
+  email?: string;
 };
 
 type Campaign = {
@@ -174,6 +175,7 @@ export default function QRManagementPage() {
       status: isRedeemed ? "USED" : "NEW",
       usedBy: isRedeemed ? selectedQRCode.usedBy : null,
       usedAt: isRedeemed ? new Date().toISOString() : null,
+      email: isRedeemed ? selectedQRCode.usedBy : null,
     };
 
     try {
@@ -338,6 +340,7 @@ export default function QRManagementPage() {
                         updated.status = "NEW";
                         updated.usedBy = "";
                         updated.usedAt = undefined;
+                        updated.email = "";
                       } else {
                         updated.status = "REDEEMED";
                       }

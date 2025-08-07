@@ -69,7 +69,15 @@ export async function POST(request: NextRequest) {
     });
 
     // 5. Send verification email (include qrCodeId in the link)
-    await sendVerificationEmail(email, verificationToken, qrCodeId);
+    try {
+      await sendVerificationEmail(email, verificationToken, qrCodeId);
+    } catch (emailErr) {
+      console.error("Failed to send email:", emailErr);
+      return NextResponse.json(
+        { error: "Could not send verification email." },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json(
       { message: "Check your email to verify & complete redemption!" },
