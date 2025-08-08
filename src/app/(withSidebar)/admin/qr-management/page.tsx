@@ -448,13 +448,15 @@ export default function QRManagementPage() {
                     )
                   }
                 >
-                  <SelectTrigger className="w-full">
+                  <SelectTrigger className="w-full max-w-full truncate">
                     <SelectValue placeholder="Select Campaign" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="max-h-60 overflow-auto">
                     {campaigns.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>
-                        {c.name}
+                      <SelectItem key={c.id} value={c.id} title={c.name}>
+                        <span className="block max-w-[250px] truncate">
+                          {c.name}
+                        </span>
                       </SelectItem>
                     ))}
                   </SelectContent>

@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
 
   for (let i = 0; i < quantity; i++) {
     const qrCodeData = nanoid();
-    const redeemUrl = `https://sqratch-qrcode.vercel.app/redeemQR/${campaignId}/${qrCodeData}`;
+    const redeemUrl = `${process.env.DOMAIN}/redeemQR/${campaignId}/${qrCodeData}`;
 
     const buffer = await QRCode.toBuffer(redeemUrl, {
       type: "png",
