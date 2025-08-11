@@ -2,6 +2,7 @@
 "use client";
 
 import React, { useEffect } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn, useSession, getSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
@@ -175,11 +176,13 @@ export default function LoginPage() {
       <div className="relative z-10 flex min-h-screen flex-col">
         {/* Logo */}
         <div className="pt-8 flex justify-center">
-          <img
-            src="/sqratchLogo.png"
-            alt="SQRATCH"
-            className="h-10 w-auto mx-auto translate-x-[0.15rem] sm:translate-x-0"
-          />
+          <Link href="/" className="inline-flex">
+            <img
+              src="/sqratchLogo.png"
+              alt="SQRATCH"
+              className="h-10 w-auto mx-auto translate-x-[0.15rem] sm:translate-x-0"
+            />
+          </Link>
         </div>
 
         {/* Login Form (centered) */}
