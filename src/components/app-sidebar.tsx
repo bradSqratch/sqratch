@@ -75,7 +75,7 @@ export function AppSidebar() {
     user: {
       name: session?.user?.name || "SQRATCH",
       email: session?.user?.email || "dummyemail@gmail.com",
-      avatar: session?.user?.image || "../../sqratchLogo.png",
+      avatar: session?.user?.image || "../../P_logo.png",
     },
   };
 

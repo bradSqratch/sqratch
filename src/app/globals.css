@@ -80,7 +80,7 @@
   --card-colour-1: oklch(60.238% 0.101 197.435);
   --card-colour-2: oklch(75.47% 0.16209 71.392);
   --card-colour-3: oklch(32.765% 0.06784 257.29);
-  --card-colour-4: oklch(46.543% 0.191 29.223);
+  --card-colour-4: oklch(59.058% 0.16589 32.373);
   --card-colour-5: oklch(16.903% 0.0314 222.684);
   --card-colour-6: #ffffff;
 }
@@ -130,8 +130,8 @@
 
 /* Neumorphic button used in the header */
 .neo-btn {
-  color: #3b639a; /* SQRATCH blue */
-  padding: 0.6em 2em;
+  color: #3b639a;
+  padding: 0.4em 1.5em;
   font-size: 16px;
   font-weight: 700;
   border-radius: 0.5em;
@@ -141,8 +141,28 @@
   transition: all 0.3s;
   box-shadow: 6px 6px 12px #c5c5c5, -6px -6px 12px #ffffff;
 }
+
 .neo-btn:active {
   color: #666;
   box-shadow: 0 0 0 #c5c5c5, 0 0 0 #ffffff, inset 4px 4px 12px #c5c5c5,
     inset -4px -4px 12px #ffffff;
+}
+
+/* 📱 Mobile adjustments */
+@media (max-width: 640px) {
+  .neo-btn {
+    padding: 0.4em 0.7em; /* smaller padding */
+    font-size: 12px; /* smaller text */
+    white-space: nowrap; /* force single line */
+  }
+
+  .mobile-hero-text {
+    position: relative;
+    top: 40%; /* 40% from top of screen */
+    transform: translateY(-40%); /* keeps it visually centered */
+    text-align: center;
+    font-size: 28px; /* slightly smaller for mobile */
+    line-height: 1.2;
+    padding: 0 1rem; /* avoid text touching edges */
+  }
 }

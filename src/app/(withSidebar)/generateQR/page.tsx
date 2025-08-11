@@ -102,7 +102,10 @@ export default function GenerateQRPage() {
             />
           </div>
 
-          <Button onClick={handleGenerate} className="w-full">
+          <Button
+            onClick={handleGenerate}
+            className="w-full bg-[#3b639a] text-white rounded-full py-3 hover:bg-[#6388bb] transition-colors"
+          >
             Generate QR Codes
           </Button>
         </CardContent>

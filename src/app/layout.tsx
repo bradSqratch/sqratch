@@ -6,6 +6,7 @@ import AuthProvider from "@/context/AuthProvider";
 const geistSans = Geist({
   variable: "--font-geist-sans",
   subsets: ["latin"],
+  weight: ["400", "700"],
 });
 
 const geistMono = Geist_Mono({
@@ -28,7 +29,7 @@ export default function RootLayout({
     <html lang="en">
       <AuthProvider>
         <body
-          className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+          className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}
         >
           {children}
         </body>

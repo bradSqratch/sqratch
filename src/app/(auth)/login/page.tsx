@@ -1,6 +1,6 @@
+// app/login/page.tsx
 "use client";
 
-import Link from "next/link";
 import React, { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { signIn, useSession, getSession } from "next-auth/react";
@@ -15,7 +15,6 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 type Message = { type: "error" | "success"; text: string };
 
@@ -58,6 +57,7 @@ export default function LoginPage() {
         setLoading(false);
         return;
       }
+
       const result = await signIn("credentials", {
         redirect: false,
         email: user.email,
@@ -69,6 +69,7 @@ export default function LoginPage() {
           type: "error",
           text: result.error || "Invalid credentials.",
         });
+        setLoading(false);
       } else {
         await checkSession();
       }
@@ -78,7 +79,6 @@ export default function LoginPage() {
         type: "error",
         text: "An unexpected error occurred. Please try again.",
       });
-    } finally {
       setLoading(false);
     }
   };
@@ -88,9 +88,7 @@ export default function LoginPage() {
       const res = await fetch("/api/auth/send-verification", {
         method: "POST",
         body: JSON.stringify({ email }),
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
       });
 
       const data = await res.json();
@@ -131,6 +129,7 @@ export default function LoginPage() {
             </>
           ) as any,
         });
+        setLoading(false);
         return;
       }
 
@@ -139,6 +138,7 @@ export default function LoginPage() {
           type: "error",
           text: "You are not allowed to log in with this account.",
         });
+        setLoading(false);
         return;
       }
 
@@ -157,127 +157,104 @@ export default function LoginPage() {
   }, [user]);
 
   return (
-    <section className="position-relative bg-[url('/assets/homepage/home_bg.jpeg')] bg-center bg-cover">
-      <div className="absolute inset-0 bg-black opacity-75" />
+    <section className="relative min-h-screen bg-[url('/assets/homepage/home_bg.jpeg')] bg-cover bg-center">
+      {/* dark overlay */}
+      <div className="absolute inset-0 bg-black/75" />
+
+      {/* Loader overlay */}
       {loading && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-80">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
           <div className="flex flex-col items-center gap-4">
             <div className="w-12 h-12 border-4 border-white border-t-transparent rounded-full animate-spin" />
             <p className="text-white text-lg">Validating credentials...</p>
           </div>
         </div>
       )}
-      <div className="relative container-fluid">
-        <div className="grid grid-cols-1">
-          <div className="lg:col-span-4">
-            <div className="flex flex-col min-h-screen md:px-12 py-12 px-3">
-              {/* Logo */}
-              <div className="text-center mx-auto mb-4">
-                <Link href="/">
-                  <div className="flex justify-center mb-4 bg-transparent">
-                    <Avatar
-                      style={{
-                        height: "4rem",
-                        width: "12rem",
-                        padding: "0.3rem",
-                        borderRadius: "2rem",
-                      }}
-                    >
-                      <AvatarImage src="/sqratchLogo.png" alt="Logo" />
-                      <AvatarFallback>SQRATCH</AvatarFallback>
-                    </Avatar>
-                  </div>
-                </Link>
-              </div>
 
-              {/* Login Form */}
-              <div className="my-auto">
-                <div className="grid grid-cols-1 w-full max-w-sm m-auto px-6 py-4">
-                  <Card className="w-[350px] z-10 py-4">
-                    <form
-                      onSubmit={(e) => {
-                        e.preventDefault();
-                        onLogin();
-                      }}
+      {/* content layer */}
+      <div className="relative z-10 flex min-h-screen flex-col">
+        {/* Logo */}
+        <div className="pt-8 flex justify-center">
+          <img
+            src="/sqratchLogo.png"
+            alt="SQRATCH"
+            className="h-10 w-auto mx-auto translate-x-[0.15rem] sm:translate-x-0"
+          />
+        </div>
+
+        {/* Login Form (centered) */}
+        <div className="flex flex-1 items-center justify-center px-4 mx-4">
+          <Card className="w-full max-w-sm rounded-2xl shadow-2xl">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                onLogin();
+              }}
+            >
+              <CardHeader>
+                <CardTitle className="text-center text-3xl font-bold">
+                  Login
+                </CardTitle>
+                <CardDescription>
+                  {message && (
+                    <div
+                      className={`mt-2 text-center ${
+                        message.type === "error"
+                          ? "text-red-500"
+                          : "text-green-500"
+                      }`}
                     >
-                      <CardHeader>
-                        <CardTitle className="text-3xl text-center">
-                          {loading ? "Processing..." : "Login"}
-                        </CardTitle>
-                      </CardHeader>
-                      <CardDescription>
-                        {/* Message Banner */}
-                        {message && (
-                          <div
-                            className={`max-w-sm mx-auto mb-4 text-center ${
-                              message.type === "error"
-                                ? "text-red-500"
-                                : "text-green-500"
-                            }`}
-                          >
-                            {message.text}
-                          </div>
-                        )}
-                      </CardDescription>
-                      <CardContent className="space-y-4">
-                        <div>
-                          <Label htmlFor="email">Email</Label>
-                          <Input
-                            className="p-2 border border-gray-400 rounded-lg mt-1 mb-4 focus:outline-none focus:border-gray-600 text-black"
-                            id="email"
-                            type="email"
-                            autoComplete="email"
-                            value={user.email}
-                            onChange={(e) =>
-                              setUser({ ...user, email: e.target.value })
-                            }
-                          />
-                        </div>
-                        <div>
-                          <Label htmlFor="password">Password</Label>
-                          <Input
-                            className="p-2 border border-gray-400 rounded-lg mt-1 mb-4 focus:outline-none focus:border-gray-600 text-black"
-                            id="password"
-                            type="password"
-                            autoComplete="current-password"
-                            value={user.password}
-                            onChange={(e) =>
-                              setUser({ ...user, password: e.target.value })
-                            }
-                          />
-                        </div>
-                      </CardContent>
-                      <CardFooter className="flex flex-col">
-                        <Button
-                          type="submit"
-                          disabled={buttonDisabled || loading}
-                          className="w-full bg-[#2970a8] text-white rounded-full py-3 my-3 hover:bg-[#6388bb] transition-colors animate-none hover:animate-bounceHover"
-                        >
-                          {loading ? "Logging in..." : "Login"}
-                        </Button>
-                        {/* <Button
-                          variant="link"
-                          asChild
-                          className="text-blue-500 hover:underline mt-5"
-                        >
-                          <Link href="/signup">
-                            Don't have an account? Sign up here
-                          </Link>
-                        </Button> */}
-                      </CardFooter>
-                    </form>
-                  </Card>
+                      {message.text}
+                    </div>
+                  )}
+                </CardDescription>
+              </CardHeader>
+
+              <CardContent className="space-y-5">
+                <div>
+                  <Label htmlFor="email">Email</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    autoComplete="email"
+                    value={user.email}
+                    onChange={(e) =>
+                      setUser({ ...user, email: e.target.value })
+                    }
+                    className="mt-1"
+                  />
                 </div>
-              </div>
+                <div>
+                  <Label htmlFor="password">Password</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    autoComplete="current-password"
+                    value={user.password}
+                    onChange={(e) =>
+                      setUser({ ...user, password: e.target.value })
+                    }
+                    className="mt-1"
+                  />
+                </div>
+              </CardContent>
 
-              {/* Footer */}
-              <div className="text-center">
-                <p className="text-gray-400">
-                  © {new Date().getFullYear()} SQRATCH. All rights reserved.
-                </p>
-              </div>
-            </div>
-          </div>
+              <CardFooter className="flex flex-col mt-6">
+                <Button
+                  type="submit"
+                  disabled={buttonDisabled || loading}
+                  className="w-full bg-[#3b639a] text-white rounded-full py-3 hover:bg-[#6388bb] transition-colors"
+                >
+                  Login
+                </Button>
+              </CardFooter>
+            </form>
+          </Card>
+        </div>
+
+        {/* Footer */}
+        <div className="pb-6 text-center text-gray-400">
+          © {new Date().getFullYear()} SQRATCH. All rights reserved.
         </div>
       </div>
     </section>
