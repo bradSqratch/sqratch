@@ -70,16 +70,13 @@ export async function POST(request: NextRequest) {
             // redeemedByEmail: qr.redeemedBy?.email || null,
           };
 
-          const res = await fetch(
-            "https://hooks.zapier.com/hooks/catch/24081094/u64t1fl/",
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-              },
-              body: JSON.stringify(payload),
-            }
-          );
+          const res = await fetch(process.env.ZAPIER_WEBHOOK_URL || "", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify(payload),
+          });
 
           const text = await res.text();
           console.log("Zapier webhook status:", res.status, text);
