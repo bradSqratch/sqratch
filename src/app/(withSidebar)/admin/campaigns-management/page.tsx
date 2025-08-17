@@ -20,6 +20,13 @@ import {
   DialogClose,
 } from "@/components/ui/dialog";
 import {
+  Select,
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select";
+import {
   Table,
   TableHeader,
   TableBody,
@@ -42,7 +49,18 @@ export default function CampaignsPage() {
     name: "",
     description: "",
     inviteUrl: "",
+    communityId: "" as string | "",
   });
+
+  const [communities, setCommunities] = useState<Community[]>([]);
+  useEffect(() => {
+    axios
+      .get<{ data: Community[] }>("/api/admin/communities")
+      .then((res) => setCommunities(res.data.data))
+      .catch(() => toast.error("Failed to load communities"));
+  }, []);
+
+  type Community = { id: string; type: "BETTERMODE" | "GENERIC" };
 
   type Campaign = {
     id: string;
@@ -50,10 +68,18 @@ export default function CampaignsPage() {
     description?: string;
     inviteUrl: string;
     createdAt: string;
+    communityId?: string | null;
+    community?: Community | null;
   };
 
   const resetForm = () => {
-    setForm({ id: "", name: "", description: "", inviteUrl: "" });
+    setForm({
+      id: "",
+      name: "",
+      description: "",
+      inviteUrl: "",
+      communityId: "",
+    });
   };
 
   const fetchCampaigns = async () => {
@@ -91,6 +117,7 @@ export default function CampaignsPage() {
       name: c.name,
       description: c.description || "",
       inviteUrl: c.inviteUrl,
+      communityId: c.communityId || "",
     });
     setEditOpen(true);
   };
@@ -109,6 +136,7 @@ export default function CampaignsPage() {
           name,
           description,
           inviteUrl,
+          communityId: form.communityId || null,
         }
       );
       toast.success("Updated");
@@ -137,6 +165,7 @@ export default function CampaignsPage() {
         name,
         description,
         inviteUrl,
+        communityId: form.communityId || null,
       });
       toast.success("Campaign created");
       setCreateOpen(false);
@@ -217,6 +246,24 @@ export default function CampaignsPage() {
                     }
                   />
                 </div>
+                <div>
+                  <Label htmlFor="create-community">Community</Label>
+                  <Select
+                    value={form.communityId || ""}
+                    onValueChange={(v) => setForm({ ...form, communityId: v })}
+                  >
+                    <SelectTrigger id="create-community" className="w-full">
+                      <SelectValue placeholder="Choose community (BetterMode or others)" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {communities.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.type === "BETTERMODE" ? "(BetterMode)" : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
               <DialogFooter>
                 <DialogClose asChild>
@@ -241,6 +288,7 @@ export default function CampaignsPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Name</TableHead>
+                  <TableHead>Community</TableHead>
                   <TableHead>Description</TableHead>
                   <TableHead>Invite URL</TableHead>
                   <TableHead>Created At</TableHead>
@@ -258,6 +306,7 @@ export default function CampaignsPage() {
                         {c.name}
                       </Link>
                     </TableCell>
+                    <TableCell>{c.community?.type ?? "—"}</TableCell>
                     <TableCell>{c.description || "—"}</TableCell>
                     <TableCell className="max-w-xs truncate text-blue-600">
                       {c.inviteUrl}
@@ -320,6 +369,24 @@ export default function CampaignsPage() {
                     setForm({ ...form, inviteUrl: e.target.value })
                   }
                 />
+              </div>
+              <div>
+                <Label htmlFor="create-community">Community</Label>
+                <Select
+                  value={form.communityId || ""}
+                  onValueChange={(v) => setForm({ ...form, communityId: v })}
+                >
+                  <SelectTrigger id="create-community" className="w-full">
+                    <SelectValue placeholder="Choose community (BetterMode or others)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {communities.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.type === "BETTERMODE" ? "(BetterMode)" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
             <DialogFooter>

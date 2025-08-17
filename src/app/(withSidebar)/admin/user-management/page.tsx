@@ -37,7 +37,7 @@ type AdminUser = {
   id: string;
   name: string;
   email: string;
-  role: "USER" | "ADMIN";
+  role: "USER" | "ADMIN" | "EXTERNAL";
   createdAt: string;
 };
 
@@ -50,7 +50,7 @@ export default function AdminUsersPage() {
     name: "",
     email: "",
     password: "",
-    role: "ADMIN" as "USER" | "ADMIN",
+    role: "ADMIN" as "USER" | "ADMIN" | "EXTERNAL",
   });
   const [editId, setEditId] = useState<string | null>(null);
 
@@ -90,7 +90,7 @@ export default function AdminUsersPage() {
         password,
         role,
       });
-      toast.success("Admin created");
+      toast.success("Admin created. Verification email sent.");
       setCreateOpen(false);
       resetForm();
       fetchUsers();

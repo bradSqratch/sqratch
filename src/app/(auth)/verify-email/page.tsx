@@ -47,7 +47,10 @@ export default function VerifyEmailPage() {
           </CardHeader>
           <CardContent>
             {isVerified ? (
-              <p>Email verified successfully!</p>
+              <p>
+                Email verified successfully! <br /> Check your email for the
+                invite link.
+              </p>
             ) : (
               <Button onClick={verifyToken} disabled={loading}>
                 {loading ? "Loading..." : "Verify Email"}

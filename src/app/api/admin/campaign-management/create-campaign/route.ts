@@ -13,6 +13,7 @@ export async function POST(request: Request) {
     name: string;
     description?: string;
     inviteUrl: string;
+    communityId?: string;
   };
 
   try {
@@ -37,6 +38,7 @@ export async function POST(request: Request) {
         description,
         inviteUrl,
         createdById: session.user.id,
+        communityId: body.communityId ?? null,
       },
       select: {
         id: true,
@@ -44,6 +46,7 @@ export async function POST(request: Request) {
         inviteUrl: true,
         description: true,
         createdAt: true,
+        communityId: true,
       },
     });
 

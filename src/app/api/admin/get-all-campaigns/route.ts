@@ -11,6 +11,7 @@ export async function GET(request: Request) {
 
   const campaigns = await prisma.campaign.findMany({
     orderBy: { createdAt: "desc" },
+    include: { community: true },
   });
 
   return NextResponse.json({ data: campaigns });

@@ -1,12 +1,12 @@
-// src/app/api/admin/users/route.ts
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import bcrypt from "bcryptjs";
+import crypto from "crypto";
+import { sendVerificationEmail } from "@/helpers/mailer";
 
 export async function GET() {
-  // only ADMINs
   const session = await getServerSession(authOptions);
   if (!session || session.user.role !== "ADMIN") {
     return NextResponse.json({ error: "Admins only" }, { status: 403 });
@@ -20,7 +20,6 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
-  // only ADMINs
   const session = await getServerSession(authOptions);
   if (!session || session.user.role !== "ADMIN") {
     return NextResponse.json({ error: "Admins only" }, { status: 403 });
@@ -36,25 +35,53 @@ export async function POST(request: Request) {
 
   try {
     const hashed = await bcrypt.hash(password, 10);
-    const user = await prisma.user.create({
-      data: { name, email, password: hashed, role },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        createdAt: true,
-      },
+
+    const result = await prisma.$transaction(async (tx) => {
+      // 1) Create user (unverified by default)
+      const newUser = await tx.user.create({
+        data: { name, email, password: hashed, role }, // isEmailVerified defaults to false
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          createdAt: true,
+        },
+      });
+
+      // 2) Clear any existing tokens for this user (belt & suspenders)
+      await tx.emailVerificationToken.deleteMany({
+        where: { userId: newUser.id },
+      });
+
+      // 3) Create fresh verification token (48h)
+      const token = crypto.randomBytes(32).toString("hex");
+      const expires = new Date(Date.now() + 48 * 60 * 60 * 1000);
+      await tx.emailVerificationToken.create({
+        data: { userId: newUser.id, emailVerifyToken: token, expires },
+      });
+
+      // 4) Send verification email
+      await sendVerificationEmail(newUser.email, token);
+
+      return newUser;
     });
-    return NextResponse.json({ data: user }, { status: 201 });
+
+    return NextResponse.json(
+      { data: result, message: "User created; verification email sent." },
+      { status: 201 }
+    );
   } catch (err: any) {
-    // duplicate email?
     if (err.code === "P2002" && err.meta?.target?.includes("email")) {
       return NextResponse.json(
         { error: "Email already in use" },
         { status: 409 }
       );
     }
-    return NextResponse.json({ error: "Failed to create" }, { status: 500 });
+    console.error("Create user error:", err);
+    return NextResponse.json(
+      { error: "Failed to create user" },
+      { status: 500 }
+    );
   }
 }

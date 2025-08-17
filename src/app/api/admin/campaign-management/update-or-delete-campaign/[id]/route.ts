@@ -18,14 +18,19 @@ export async function PATCH(
     );
   }
 
-  let body: { name?: string; description?: string; inviteUrl?: string };
+  let body: {
+    name?: string;
+    description?: string;
+    inviteUrl?: string;
+    communityId?: string | null;
+  };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { name, description, inviteUrl } = body;
+  const { name, description, inviteUrl, communityId } = body;
   if (!name || !inviteUrl) {
     return NextResponse.json(
       { error: "Name and Invite URL are required" },
@@ -36,13 +41,14 @@ export async function PATCH(
   try {
     const updated = await prisma.campaign.update({
       where: { id },
-      data: { name, description, inviteUrl },
+      data: { name, description, inviteUrl, communityId: communityId ?? null },
       select: {
         id: true,
         name: true,
         description: true,
         inviteUrl: true,
         createdAt: true,
+        communityId: true,
       },
     });
 

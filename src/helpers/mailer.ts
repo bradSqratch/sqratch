@@ -1,84 +1,83 @@
+// src/helpers/mailer.ts
 import nodemailer from "nodemailer";
 
-export const sendVerificationEmail = async (
+function createTransport() {
+  const host = process.env.MAILTRAP_HOST;
+  const port = Number(process.env.MAILTRAP_PORT || 2525);
+  const user = process.env.MAILTRAP_USER;
+  const pass = process.env.MAILTRAP_PASSWORD;
+
+  if (!host || !user || !pass) {
+    throw new Error("Mailtrap credentials are missing in env");
+  }
+
+  return nodemailer.createTransport({
+    host,
+    port,
+    auth: { user, pass },
+  });
+}
+
+const transporter = createTransport();
+
+/**
+ * Sends the verification email with a link to /verify-email
+ */
+export async function sendVerificationEmail(
   email: string,
   emailVerifyToken: string,
   qrCodeId?: string
-) => {
-  try {
-    // create a hased token
-    // const hashedToken = await bcryptjs.hash(userId.toString(), 10);
+) {
+  const domain = process.env.DOMAIN;
 
-    // if (emailType === "VERIFY") {
-    //   await User.findByIdAndUpdate(userId, {
-    //     verifyToken: hashedToken,
-    //     verifyTokenExpiry: Date.now() + 3600000,
-    //   });
-    // } else if (emailType === "RESET") {
-    //   await User.findByIdAndUpdate(userId, {
-    //     forgotPasswordToken: hashedToken,
-    //     forgotPasswordTokenExpiry: Date.now() + 3600000,
-    //   });
-    // }
+  const verificationUrl = `${domain}/verify-email?token=${emailVerifyToken}${
+    qrCodeId ? `&qrcodeID=${encodeURIComponent(qrCodeId)}` : ""
+  }`;
 
-    var transport = nodemailer.createTransport({
-      host: process.env.MAILTRAP_HOST,
-      port: 2525,
-      auth: {
-        user: process.env.MAILTRAP_USER,
-        pass: process.env.MAILTRAP_PASSWORD,
-      },
-    });
+  const from = process.env.ADMIN_EMAIL;
 
-    const verificationUrl = `${
-      process.env.DOMAIN
-    }/verify-email?token=${emailVerifyToken}${
-      qrCodeId ? `&qrcodeID=${qrCodeId}` : ""
-    }`;
+  const mailOptions = {
+    from,
+    to: email,
+    subject: "Verify Your Email Address",
+    html: `
+      <h1>Welcome to SQRATCH!</h1>
+      <p>Please click the link below to verify your email address:</p>
+      <a href="${verificationUrl}" style="padding:10px 20px;color:#fff;background:#3b82f6;text-decoration:none;border-radius:6px;">
+        Verify Email
+      </a>
+      <p>If you did not sign up, you can safely ignore this email.</p>
+    `,
+  };
 
-    const mailOptions = {
-      from: process.env.ADMIN_EMAIL,
-      to: email,
-      subject: "Verify Your Email Address",
-      html: `
-        <h1>Welcome to SQRATCH!</h1>
-        <p>Please click the link below to verify your email address:</p>
-        <a href="${verificationUrl}" style="padding: 10px 20px; color: white; background-color: blue; text-decoration: none; border-radius: 5px;">Verify Email</a>
-        <p>If you did not sign up, you can safely ignore this email.</p>
-      `,
-    };
+  return transporter.sendMail(mailOptions);
+}
 
-    const mailresponse = await transport.sendMail(mailOptions);
-    return mailresponse;
-  } catch (error: any) {
-    throw new Error(error.message);
-  }
-};
-
+/**
+ * Sends a simple invite email that contains the campaign invite URL.
+ * Used in the "default" (non-BetterMode) branch after email verification.
+ */
 export async function sendInviteEmail(
   email: string,
   inviteUrl: string,
   campaignName: string
 ) {
-  const transport = nodemailer.createTransport({
-    host: process.env.MAILTRAP_HOST,
-    port: Number(process.env.MAILTRAP_PORT) || 2525,
-    auth: {
-      user: process.env.MAILTRAP_USER,
-      pass: process.env.MAILTRAP_PASSWORD,
-    },
-  });
+  const from = process.env.ADMIN_EMAIL;
 
   const mailOptions = {
-    from: process.env.ADMIN_EMAIL,
+    from,
     to: email,
-    subject: `You're invited to join ${campaignName} on SQRATCH!`,
+    subject: `You're invited to join ${campaignName}!`,
     html: `
       <h1>Welcome to ${campaignName}!</h1>
-      <p>Click the link below to join the campaign:</p>
-      <a href="${inviteUrl}" style="padding: 10px 20px; background: #2563eb; color: white; border-radius: 4px;">Join Campaign</a>
+      <p>Click the button below to join:</p>
+      <a href="${inviteUrl}" style="padding:10px 20px;background:#2563eb;color:white;border-radius:6px;text-decoration:none;">
+        Join ${campaignName}
+      </a>
+      <p>If the button doesn't work, copy and paste this link in your browser:</p>
+      <p><a href="${inviteUrl}">${inviteUrl}</a></p>
     `,
   };
 
-  return await transport.sendMail(mailOptions);
+  return transporter.sendMail(mailOptions);
 }

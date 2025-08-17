@@ -8,7 +8,7 @@ import {
   ListTodo,
   Printer,
   UserPlus,
-  Headset,
+  Users,
 } from "lucide-react";
 import { signOut } from "next-auth/react";
 import { useRouter } from "next/navigation";
@@ -49,6 +49,11 @@ export function AppSidebar() {
 
   // Admin-specific items.
   const adminItems = [
+    {
+      title: "Community Management",
+      url: "/admin/community-management",
+      icon: Users,
+    },
     {
       title: "Campaign Management",
       url: "/admin/campaigns-management",

@@ -24,6 +24,15 @@ model User {
   role           Role     @default(EXTERNAL)
 }
 
+model Community {
+  id          String        @id @default(cuid())
+  type        CommunityType @default(GENERIC)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  campaigns   Campaign[]
+}
+
 model Campaign {
   id          String   @id @default(cuid())
   name        String   @unique
@@ -36,6 +45,9 @@ model Campaign {
   createdById String
   createdBy   User     @relation("CampaignCreatedByUser", fields: [createdById], references: [id])
 
+  communityId String?
+  community   Community? @relation(fields: [communityId], references: [id])
+  
   qrCodes     QRCode[]
 }
 
@@ -86,4 +98,9 @@ enum QRStatus {
   NEW
   USED
   INVALID
+}
+
+enum CommunityType {
+  BETTERMODE   // special handling (Zapier)
+  GENERIC      // everything else (email invite flow)
 }
