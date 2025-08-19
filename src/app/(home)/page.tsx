@@ -10,35 +10,55 @@ export default function HomePage() {
       <PublicHeader showAdminLogin />
 
       {/* MEDIA LAYER */}
-      {/* Mobile: image bg */}
-      <div
-        className="
-          absolute inset-0 bg-[url('/assets/homepage/home_bg-mobile.jpeg')] bg-cover bg-[left_bottom]
-          sm:hidden
-        "
-      />
-
-      {/* Desktop/Tablet: video bg */}
-      <div className="absolute inset-0 hidden sm:block">
+      {/* Mobile: <640px */}
+      <div className="absolute inset-0 sm:hidden">
         <video
           className="w-full h-full object-cover"
-          src="/assets/homepage/hero_video.mp4"
+          src="/assets/homepage/hero_video_mobile.mp4"
           autoPlay
           muted
           loop
           playsInline
           preload="metadata"
+          // poster optional:
+          // poster="/assets/homepage/home_bg-mobile.jpeg"
         />
       </div>
 
-      {/* Dim overlay for readability (above media, below content) */}
+      {/* Tablet / Small laptops: 640px–1279px */}
+      <div className="absolute inset-0 hidden sm:block lg:hidden">
+        <video
+          className="w-full h-full object-cover"
+          src="/assets/homepage/hero_video_ipad.mp4"
+          autoPlay
+          muted
+          loop
+          playsInline
+          preload="metadata"
+          poster="/assets/homepage/home_bg.jpeg"
+        />
+      </div>
+
+      {/* Large laptops / 4K monitors: ≥1280px */}
+      <div className="absolute inset-0 hidden lg:block">
+        <video
+          className="w-full h-full object-cover"
+          src="/assets/homepage/hero_video_laptop.mp4"
+          autoPlay
+          muted
+          loop
+          playsInline
+          preload="metadata"
+          poster="/assets/homepage/home_bg.jpeg"
+        />
+      </div>
+
+      {/* Dim overlay for readability */}
       <div className="absolute inset-0 bg-black/30" />
 
       {/* CONTENT */}
       <main className="relative z-10 pt-16 flex flex-col items-center justify-center min-h-screen sm:pt-16">
-        {/* <h1 className="text-5xl font-bold tracking-[-0.5px] text-[#2C70B7] drop-shadow-sm mobile-hero-text text-center">
-          Welcome to the real world.
-        </h1> */}
+        {/* Add hero content here if needed */}
       </main>
     </div>
   );

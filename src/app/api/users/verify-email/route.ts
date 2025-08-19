@@ -53,15 +53,15 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      console.log("[verify-email] qrcodeID:", qrcodeID);
-      console.log("[verify-email] qr found:", Boolean(qr));
-      console.log("[verify-email] campaign found:", Boolean(qr?.campaign));
-      console.log("[verify-email] inviteUrl:", qr?.campaign?.inviteUrl);
-      console.log("[verify-email] community:", qr?.campaign?.community);
-      console.log(
-        "[verify-email] community.type:",
-        qr?.campaign?.community?.type
-      );
+      // console.log("[verify-email] qrcodeID:", qrcodeID);
+      // console.log("[verify-email] qr found:", Boolean(qr));
+      // console.log("[verify-email] campaign found:", Boolean(qr?.campaign));
+      // console.log("[verify-email] inviteUrl:", qr?.campaign?.inviteUrl);
+      // console.log("[verify-email] community:", qr?.campaign?.community);
+      // console.log(
+      //   "[verify-email] community.type:",
+      //   qr?.campaign?.community?.type
+      // );
 
       if (!qr) {
         console.warn("[verify-email] QR not found for qrcodeID:", qrcodeID);
