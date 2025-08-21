@@ -235,7 +235,7 @@ export default function QRManagementPage() {
 
             <Button
               onClick={exportFilteredQRCodes}
-              className="bg-[#0A0E24] text-white hover:bg-[#1c2246]"
+              className="bg-[#3b639a] text-white"
             >
               Export CSV
             </Button>

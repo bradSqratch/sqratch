@@ -7,7 +7,6 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import Link from "next/link";
 import PublicHeader from "@/components/publicHeader";
 
 export default function QRRedemptionPage() {
@@ -21,12 +20,19 @@ export default function QRRedemptionPage() {
   const [form, setForm] = useState({ name: "", email: "" });
   const [submitting, setSubmitting] = useState(false);
 
+  // New: campaign name for personalized SUBMITTED screen
+  const [campaignName, setCampaignName] = useState<string>("");
+
+  // Load QR status, and also try to get the campaign name
   useEffect(() => {
     const checkQRCode = async () => {
       try {
         const res = await axios.get(
           `/api/qr/check-qrcode/${qrCodeId}?campaignId=${campaignId}`
         );
+        // if your check endpoint ever returns campaignName, read it here:
+        if (res.data?.campaignName) setCampaignName(res.data.campaignName);
+
         if (res.data.status === "USED") setQrStatus("REDEEMED");
         else if (res.data.status === "NEW") setQrStatus("NEW");
         else setQrStatus("INVALID");
@@ -34,7 +40,20 @@ export default function QRRedemptionPage() {
         setQrStatus("INVALID");
       }
     };
-    checkQRCode();
+
+    const fetchCampaignName = async () => {
+      try {
+        // fallback public endpoint to get the campaign name
+        const r = await axios.get(
+          `/api/public/get-campaign-name?campaignId=${campaignId}`
+        );
+        if (r.data?.name) setCampaignName(r.data.name);
+      } catch {
+        // silently ignore (UI still works without the name)
+      }
+    };
+
+    checkQRCode().finally(fetchCampaignName);
   }, [campaignId, qrCodeId]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -55,6 +74,39 @@ export default function QRRedemptionPage() {
     }
   };
 
+  const SubmittedCard = () => (
+    <div className="text-center space-y-4">
+      {/* Welcome line with user name */}
+      {form.name ? (
+        <div className="font-semibold">
+          <span className="text-gray-900">WELCOME,</span>{" "}
+          <span className="text-gray-900">{form.name}</span>
+        </div>
+      ) : null}
+
+      {/* Main message */}
+      <div className="text-sm leading-relaxed text-gray-800">
+        <p className="font-semibold">
+          Check your email for a verification link.
+        </p>
+        <p className="mt-2">
+          Click on the link in your email to complete your redemption, where you
+          will receive an exclusive one‑time invite
+          {campaignName ? (
+            <>
+              {" "}
+              to{" "}
+              <span className="font-extrabold">&quot;{campaignName}&quot;</span>
+              .
+            </>
+          ) : (
+            "."
+          )}
+        </p>
+      </div>
+    </div>
+  );
+
   const renderCardContent = () => {
     switch (qrStatus) {
       case "INVALID":
@@ -62,14 +114,7 @@ export default function QRRedemptionPage() {
       case "REDEEMED":
         return "This QR code has already been redeemed.";
       case "SUBMITTED":
-        return (
-          <p className="text-center py-8">
-            <b>Check your email for the verification link.</b>
-            <br />
-            Click on the link, then click <b>“Verify and Redeem”</b> to complete
-            your redemption.
-          </p>
-        );
+        return <SubmittedCard />;
       case "NEW":
         return (
           <form className="space-y-4" onSubmit={handleSubmit}>
@@ -88,7 +133,11 @@ export default function QRRedemptionPage() {
               }
               required
             />
-            <Button type="submit" disabled={submitting}>
+            <Button
+              type="submit"
+              disabled={submitting}
+              className="bg-[#3b639a] hover:bg-[#335689]"
+            >
               {submitting ? "Sending..." : "Submit"}
             </Button>
           </form>
@@ -103,18 +152,28 @@ export default function QRRedemptionPage() {
       <PublicHeader />
 
       <main className="flex-1 flex items-center justify-center p-4">
-        <Card className="w-[350px] bg-white shadow-2xl z-10">
-          <CardHeader>
-            <CardTitle>
-              {qrStatus === "SUBMITTED"
-                ? "Check Your Email"
-                : qrStatus === "NEW"
-                ? "Redeem QR Code"
-                : qrStatus === "INVALID"
-                ? "Invalid QR"
-                : "QR Code Info"}
-            </CardTitle>
+        <Card className=" w-[90%] md:w-[35%] bg-white shadow-2xl z-10">
+          <CardHeader className="flex justify-center">
+            {qrStatus === "SUBMITTED" ? (
+              // Use logo instead of text
+              <img
+                src="/sqratchLogo.png"
+                alt="SQRATCH"
+                className="h-6 w-auto"
+              />
+            ) : (
+              <CardTitle className="text-[#3b639a] text-center">
+                {qrStatus === "NEW"
+                  ? "Redeem Your SQRATCH Code"
+                  : qrStatus === "INVALID"
+                  ? "Invalid QR"
+                  : qrStatus === "REDEEMED"
+                  ? "QR Code Info"
+                  : "Check Your Email"}
+              </CardTitle>
+            )}
           </CardHeader>
+
           <CardContent>{renderCardContent()}</CardContent>
         </Card>
       </main>

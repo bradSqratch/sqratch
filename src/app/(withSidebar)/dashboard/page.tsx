@@ -107,7 +107,11 @@ export default function AdminDashboardPage() {
     <div className="min-h-screen p-8 space-y-10">
       <div className="flex items-center justify-between">
         <h1 className="text-3xl font-semibold">Admin Dashboard</h1>
-        <Button onClick={fetchStats} disabled={loading}>
+        <Button
+          onClick={fetchStats}
+          disabled={loading}
+          className="bg-[#3b639a]"
+        >
           {loading ? "Refreshing…" : "Refresh"}
         </Button>
       </div>

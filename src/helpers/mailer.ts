@@ -70,12 +70,10 @@ export async function sendInviteEmail(
     subject: `You're invited to join ${campaignName}!`,
     html: `
       <h1>Welcome to ${campaignName}!</h1>
-      <p>Click the button below to join:</p>
-      <a href="${inviteUrl}" style="padding:10px 20px;background:#2563eb;color:white;border-radius:6px;text-decoration:none;">
+      <p>Click the button below to join this exciting new exclusive community!</p>
+      <a href="${inviteUrl}" style="padding:10px 20px;background:#3b639a;color:white;border-radius:8px;text-decoration:none;">
         Join ${campaignName}
       </a>
-      <p>If the button doesn't work, copy and paste this link in your browser:</p>
-      <p><a href="${inviteUrl}">${inviteUrl}</a></p>
     `,
   };
 

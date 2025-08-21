@@ -60,7 +60,7 @@ export default function CampaignsPage() {
       .catch(() => toast.error("Failed to load communities"));
   }, []);
 
-  type Community = { id: string; type: "BETTERMODE" | "GENERIC" };
+  type Community = { id: string; name: string; type: "BETTERMODE" | "GENERIC" };
 
   type Campaign = {
     id: string;
@@ -210,7 +210,7 @@ export default function CampaignsPage() {
             }}
           >
             <DialogTrigger asChild>
-              <Button>Create Campaign</Button>
+              <Button className="bg-[#3b639a]">Create Campaign</Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
@@ -258,6 +258,7 @@ export default function CampaignsPage() {
                     <SelectContent>
                       {communities.map((c) => (
                         <SelectItem key={c.id} value={c.id}>
+                          {c.name}{" "}
                           {c.type === "BETTERMODE" ? "(BetterMode)" : ""}
                         </SelectItem>
                       ))}
@@ -306,7 +307,11 @@ export default function CampaignsPage() {
                         {c.name}
                       </Link>
                     </TableCell>
-                    <TableCell>{c.community?.type ?? "—"}</TableCell>
+                    <TableCell>
+                      {c.community
+                        ? `${c.community.name} (${c.community.type})`
+                        : "—"}
+                    </TableCell>
                     <TableCell>{c.description || "—"}</TableCell>
                     <TableCell className="max-w-xs truncate text-blue-600">
                       {c.inviteUrl}
@@ -382,7 +387,7 @@ export default function CampaignsPage() {
                   <SelectContent>
                     {communities.map((c) => (
                       <SelectItem key={c.id} value={c.id}>
-                        {c.type === "BETTERMODE" ? "(BetterMode)" : ""}
+                        {c.name} {c.type === "BETTERMODE" ? "(BetterMode)" : ""}
                       </SelectItem>
                     ))}
                   </SelectContent>

@@ -22,7 +22,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { name, description, inviteUrl } = body;
+  const { name, description, inviteUrl, communityId } = body;
 
   if (!name || !inviteUrl) {
     return NextResponse.json(
@@ -46,7 +46,7 @@ export async function POST(request: Request) {
         inviteUrl: true,
         description: true,
         createdAt: true,
-        communityId: true,
+        community: { select: { id: true, name: true, type: true } },
       },
     });
 

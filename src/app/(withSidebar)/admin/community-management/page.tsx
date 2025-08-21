@@ -121,7 +121,7 @@ export default function CommunitiesPage() {
           <h1 className="text-2xl font-semibold">Communities</h1>
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
             <DialogTrigger asChild>
-              <Button>Create Community</Button>
+              <Button className="bg-[#3b639a]">Create Community</Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>

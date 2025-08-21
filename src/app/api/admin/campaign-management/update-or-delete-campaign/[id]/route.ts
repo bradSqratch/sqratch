@@ -48,7 +48,7 @@ export async function PATCH(
         description: true,
         inviteUrl: true,
         createdAt: true,
-        communityId: true,
+        community: { select: { id: true, name: true, type: true } },
       },
     });
 

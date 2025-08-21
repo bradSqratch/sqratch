@@ -44,9 +44,7 @@ export async function POST(request: NextRequest) {
         include: {
           campaign: {
             include: {
-              community: {
-                select: { id: true, type: true },
-              },
+              community: true,
             },
           },
           redeemedBy: true,
