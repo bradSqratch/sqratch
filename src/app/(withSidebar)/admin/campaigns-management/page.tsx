@@ -253,13 +253,12 @@ export default function CampaignsPage() {
                     onValueChange={(v) => setForm({ ...form, communityId: v })}
                   >
                     <SelectTrigger id="create-community" className="w-full">
-                      <SelectValue placeholder="Choose community (BetterMode or others)" />
+                      <SelectValue placeholder="Choose community" />
                     </SelectTrigger>
                     <SelectContent>
                       {communities.map((c) => (
                         <SelectItem key={c.id} value={c.id}>
                           {c.name}{" "}
-                          {c.type === "BETTERMODE" ? "(BetterMode)" : ""}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -268,7 +267,10 @@ export default function CampaignsPage() {
               </div>
               <DialogFooter>
                 <DialogClose asChild>
-                  <Button className="w-full" onClick={handleCreate}>
+                  <Button
+                    className="w-full bg-[#3b639a]"
+                    onClick={handleCreate}
+                  >
                     Create
                   </Button>
                 </DialogClose>
