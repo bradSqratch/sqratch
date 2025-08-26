@@ -3,6 +3,41 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { sendInviteEmail } from "@/helpers/mailer";
 
+async function createDiscordOneTimeInvite(): Promise<string> {
+  const token = process.env.DISCORD_BOT_TOKEN; // Bot token
+  const channelId = process.env.DISCORD_CHANNEL_ID; // Text channel ID to create invites from
+  if (!token || !channelId) {
+    throw new Error("DISCORD_BOT_TOKEN or DISCORD_CHANNEL_ID not set");
+  }
+
+  // Discord API: POST /channels/{channel.id}/invites
+  const res = await fetch(
+    `https://discord.com/api/v10/channels/${channelId}/invites`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bot ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        max_uses: 1, // single-use
+        max_age: 172800, // 2 days (in seconds)
+        temporary: false, // true = kicks user when they disconnect; usually false
+        unique: true, // force a unique code
+      }),
+    }
+  );
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`Discord invite creation failed: ${res.status} ${text}`);
+  }
+
+  const json = (await res.json()) as { code: string };
+  // standard invite URL form:
+  return `https://discord.gg/${json.code}`;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { emailVerifyToken, qrcodeID } = (await request.json()) as {
@@ -106,6 +141,25 @@ export async function POST(request: NextRequest) {
                 );
             } catch (err) {
               console.error("[verify-email] Zapier error:", err);
+            }
+            break;
+          }
+
+          case "DISCORD": {
+            try {
+              // 1) create a single-use invite link
+              const oneTimeInviteUrl = await createDiscordOneTimeInvite();
+
+              // 2) email it to the user (reuses your existing helper)
+              if (user.email) {
+                await sendInviteEmail(
+                  user.email,
+                  oneTimeInviteUrl,
+                  campaign.name
+                );
+              }
+            } catch (e) {
+              console.error("Discord invite flow failed:", e);
             }
             break;
           }

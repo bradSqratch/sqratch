@@ -155,6 +155,7 @@ export default function CommunitiesPage() {
                       <SelectItem value="BETTERMODE">
                         BetterMode (Zapier)
                       </SelectItem>
+                      <SelectItem value="DISCORD">Discord (Invite)</SelectItem>
                       <SelectItem value="GENERIC">
                         Generic (Email Invite)
                       </SelectItem>
@@ -239,6 +240,7 @@ export default function CommunitiesPage() {
                     <SelectItem value="BETTERMODE">
                       BetterMode (Zapier)
                     </SelectItem>
+                    <SelectItem value="DISCORD">Discord (Invite)</SelectItem>
                     <SelectItem value="GENERIC">
                       Generic (Email Invite)
                     </SelectItem>

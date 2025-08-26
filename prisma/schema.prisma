@@ -104,4 +104,5 @@ enum QRStatus {
 enum CommunityType {
   BETTERMODE   // special handling (Zapier)
   GENERIC      // everything else (email invite flow)
+  DISCORD      // special handling
 }
