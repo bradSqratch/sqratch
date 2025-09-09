@@ -51,6 +51,7 @@ export async function PATCH(
         name: true,
         email: true,
         role: true,
+        points: true,
         createdAt: true,
       },
     });

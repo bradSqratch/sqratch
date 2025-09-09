@@ -38,6 +38,7 @@ type AdminUser = {
   name: string;
   email: string;
   role: "USER" | "ADMIN" | "EXTERNAL";
+  points: number;
   createdAt: string;
 };
 
@@ -53,6 +54,22 @@ export default function AdminUsersPage() {
     role: "ADMIN" as "USER" | "ADMIN" | "EXTERNAL",
   });
   const [editId, setEditId] = useState<string | null>(null);
+
+  // Helper function to format date as "9/8/25, 1:00 AM"
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString);
+    const dateStr = date.toLocaleDateString("en-US", {
+      year: "2-digit",
+      month: "numeric",
+      day: "numeric",
+    });
+    const timeStr = date.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+    return `${dateStr}, ${timeStr}`;
+  };
 
   const fetchUsers = async () => {
     setLoading(true);
@@ -255,6 +272,7 @@ export default function AdminUsersPage() {
                   <TableHead>Name</TableHead>
                   <TableHead>Email</TableHead>
                   <TableHead>Role</TableHead>
+                  <TableHead>Sqratch Points</TableHead>
                   <TableHead>Created At</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
@@ -265,9 +283,8 @@ export default function AdminUsersPage() {
                     <TableCell>{u.name}</TableCell>
                     <TableCell>{u.email}</TableCell>
                     <TableCell>{u.role}</TableCell>
-                    <TableCell>
-                      {new Date(u.createdAt).toLocaleString()}
-                    </TableCell>
+                    <TableCell>{u.points}</TableCell>
+                    <TableCell>{formatDate(u.createdAt)}</TableCell>
                     <TableCell className="space-x-2">
                       <Button size="sm" onClick={() => openEdit(u)}>
                         Edit

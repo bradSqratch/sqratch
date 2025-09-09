@@ -73,9 +73,52 @@ export async function DELETE(
   }
 
   try {
-    await prisma.campaign.delete({ where: { id } });
-    return NextResponse.json({});
-  } catch {
+    // First, get the campaign to be deleted to track its name
+    const campaign = await prisma.campaign.findUnique({
+      where: { id },
+      select: { id: true, name: true },
+    });
+
+    if (!campaign) {
+      return NextResponse.json(
+        { error: "Campaign not found" },
+        { status: 404 }
+      );
+    }
+
+    // Get all QR codes for this campaign before we delete it
+    const qrCodes = await prisma.qRCode.findMany({
+      where: { campaignId: id },
+      select: { id: true, qrCodeData: true, campaignId: true },
+    });
+
+    // First, update all QR codes associated with the campaign
+    for (const qrCode of qrCodes) {
+      try {
+        await prisma.qRCode.update({
+          where: { id: qrCode.id },
+          data: {
+            status: "INVALID",
+            isActive: false,
+            deletedCampaignName: campaign.name,
+            campaignId: "cmfa7v2gn0001y15t5n1hfoea",
+          },
+        });
+      } catch (error) {
+        console.error(`Error updating QR code ${qrCode.id}:`, error);
+      }
+    }
+
+    // Finally, delete the campaign itself
+    await prisma.campaign.delete({
+      where: { id },
+    });
+
+    return NextResponse.json({
+      message: `Campaign "${campaign.name}" and its ${qrCodes.length} QR codes have been deleted.`,
+    });
+  } catch (error) {
+    console.error("Delete campaign error:", error);
     return NextResponse.json({ error: "Delete failed" }, { status: 500 });
   }
 }

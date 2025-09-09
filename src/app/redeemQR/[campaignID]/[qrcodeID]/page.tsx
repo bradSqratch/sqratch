@@ -15,7 +15,14 @@ export default function QRRedemptionPage() {
   const qrCodeId = params.qrcodeID as string;
 
   const [qrStatus, setQrStatus] = useState<
-    "LOADING" | "INVALID" | "REDEEMED" | "NEW" | "USED" | "SUBMITTED"
+    | "LOADING"
+    | "INVALID"
+    | "REDEEMED"
+    | "NEW"
+    | "USED"
+    | "SUBMITTED"
+    | "DIRECT_INVITE"
+    | "VERIFY_FIRST"
   >("LOADING");
   const [form, setForm] = useState({ name: "", email: "" });
   const [submitting, setSubmitting] = useState(false);
@@ -60,52 +67,109 @@ export default function QRRedemptionPage() {
     e.preventDefault();
     setSubmitting(true);
     try {
-      await axios.post("/api/users/add-user-send-verify-email", {
-        ...form,
-        qrCodeId,
-        campaignId,
-      });
-      toast.success("Check your email to verify & complete redemption!");
-      setQrStatus("SUBMITTED");
+      const response = await axios.post(
+        "/api/users/add-user-send-verify-email",
+        {
+          ...form,
+          qrCodeId,
+          campaignId,
+        }
+      );
+
+      // Check the response message to determine which card to show
+      const message = response.data.message;
+      if (message === "Invite sent directly to your email!") {
+        toast.success(message);
+        setQrStatus("DIRECT_INVITE");
+      } else {
+        // This case should no longer happen with the new flow, but keeping for safety
+        toast.success("Check your email to verify & complete redemption!");
+        setQrStatus("SUBMITTED");
+      }
     } catch (err: any) {
-      toast.error(err.response?.data?.error || "Failed to register.");
+      const errorMessage = err.response?.data?.error || "Failed to register.";
+      toast.error(errorMessage);
+
+      // Check if it's the "verify first" error
+      if (errorMessage.includes("Verify the email address first")) {
+        setQrStatus("VERIFY_FIRST");
+      }
     } finally {
       setSubmitting(false);
     }
   };
 
-  const SubmittedCard = () => (
-    <div className="text-center space-y-4">
-      {/* Welcome line with user name */}
-      {form.name ? (
-        <div className="font-semibold">
-          <span className="text-gray-900">WELCOME,</span>{" "}
-          <span className="text-gray-900">{form.name}</span>
-        </div>
-      ) : null}
+  const SubmittedCard = () => {
+    if (qrStatus === "DIRECT_INVITE") {
+      return (
+        <Card className="w-full max-w-md">
+          <CardHeader className="text-center">
+            <CardTitle>Invite Sent!</CardTitle>
+          </CardHeader>
+          <CardContent className="text-center space-y-4">
+            <div className="text-green-600 font-medium">
+              Great news! Your community invite has been sent directly to your
+              email.
+            </div>
+            <p className="text-gray-600">
+              Check your inbox for the community invite link. You're all set!
+            </p>
+          </CardContent>
+        </Card>
+      );
+    }
 
-      {/* Main message */}
-      <div className="text-sm leading-relaxed text-gray-800">
-        <p className="font-semibold">
-          Check your email for a verification link.
-        </p>
-        <p className="mt-2">
-          Click on the link in your email to complete your redemption, where you
-          will receive an exclusive one‑time invite
-          {campaignName ? (
-            <>
-              {" "}
-              to{" "}
-              <span className="font-extrabold">&quot;{campaignName}&quot;</span>
-              .
-            </>
-          ) : (
-            "."
-          )}
-        </p>
-      </div>
-    </div>
-  );
+    if (qrStatus === "VERIFY_FIRST") {
+      return (
+        <Card className="w-full max-w-md">
+          <CardHeader className="text-center">
+            <CardTitle>Email Verification Required</CardTitle>
+          </CardHeader>
+          <CardContent className="text-center space-y-4">
+            <div className="text-orange-600 font-medium">
+              We found an account with your email, but it needs verification
+              first.
+            </div>
+            <p className="text-gray-600">
+              Please complete your email verification using the mail you
+              received by scanning a QR code earlier. Once verified, you can
+              scan this QR code again.
+            </p>
+          </CardContent>
+        </Card>
+      );
+    }
+
+    // Default SUBMITTED state
+    return (
+      <Card className="w-full max-w-md">
+        <CardHeader className="text-center">
+          <CardTitle>Check your email for a verification link.</CardTitle>
+        </CardHeader>
+        <CardContent className="text-center space-y-4">
+          <div className="text-green-600 font-medium">
+            Thank you for your submission!
+          </div>
+          <p className="text-gray-600">
+            Click on the link in your email to complete your redemption, where
+            you will receive an exclusive one‑time invite
+            {campaignName ? (
+              <>
+                {" "}
+                to{" "}
+                <span className="font-extrabold">
+                  &quot;{campaignName}&quot;
+                </span>
+                .
+              </>
+            ) : (
+              "."
+            )}
+          </p>
+        </CardContent>
+      </Card>
+    );
+  };
 
   const renderCardContent = () => {
     switch (qrStatus) {
@@ -114,6 +178,8 @@ export default function QRRedemptionPage() {
       case "REDEEMED":
         return "This QR code has already been redeemed.";
       case "SUBMITTED":
+      case "DIRECT_INVITE":
+      case "VERIFY_FIRST":
         return <SubmittedCard />;
       case "NEW":
         return (
@@ -154,7 +220,9 @@ export default function QRRedemptionPage() {
       <main className="flex-1 flex items-center justify-center p-4">
         <Card className=" w-[90%] md:w-[35%] bg-white shadow-2xl z-10">
           <CardHeader className="flex justify-center">
-            {qrStatus === "SUBMITTED" ? (
+            {qrStatus === "SUBMITTED" ||
+            qrStatus === "DIRECT_INVITE" ||
+            qrStatus === "VERIFY_FIRST" ? (
               // Use logo instead of text
               <img
                 src="/sqratchLogo.png"

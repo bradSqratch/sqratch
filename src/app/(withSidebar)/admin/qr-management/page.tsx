@@ -1,11 +1,11 @@
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import axios from "axios";
 import { debounce } from "lodash";
 import { cn } from "@/lib/utils";
-import { Check, ChevronsUpDown } from "lucide-react";
+import { Check, ChevronsUpDown, Trash } from "lucide-react";
 import {
   Table,
   TableBody,
@@ -28,6 +28,7 @@ import { toast } from "sonner";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
   SelectTrigger,
@@ -72,11 +73,16 @@ export default function QRManagementPage() {
   // page data
   const [qrCodes, setQrCodes] = useState<QRCode[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
+  const [loading, setLoading] = useState(true);
 
   // filters & dialogs
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>("all");
   const [editOpen, setEditOpen] = useState(false);
   const [selectedQRCode, setSelectedQRCode] = useState<QRCode | null>(null);
+
+  // selection state for bulk operations
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
 
   // user-search combobox
   const [userOptions, setUserOptions] = useState<string[]>([]);
@@ -101,6 +107,8 @@ export default function QRManagementPage() {
         setCampaigns(campaignsRes.data.data);
       } catch {
         toast.error("Failed to fetch data");
+      } finally {
+        setLoading(false);
       }
     };
     fetchData();
@@ -155,10 +163,39 @@ export default function QRManagementPage() {
   );
 
   // filtered list
-  const filteredQRCodes =
-    selectedCampaignId === "all"
+  const filteredQRCodes = useMemo(() => {
+    return selectedCampaignId === "all"
       ? qrCodes
       : qrCodes.filter((q) => q.campaignId === selectedCampaignId);
+  }, [qrCodes, selectedCampaignId]);
+
+  // Selection helpers
+  const allFilteredSelected =
+    filteredQRCodes.length > 0 &&
+    filteredQRCodes.every((q) => selectedIds.has(q.id));
+  const someFilteredSelected = filteredQRCodes.some((q) =>
+    selectedIds.has(q.id)
+  );
+
+  const toggleSelectAllFiltered = (checked: boolean | "indeterminate") => {
+    const next = new Set(selectedIds);
+    if (checked) {
+      filteredQRCodes.forEach((q) => next.add(q.id));
+    } else {
+      filteredQRCodes.forEach((q) => next.delete(q.id));
+    }
+    setSelectedIds(next);
+  };
+
+  const toggleRow = (id: string, checked: boolean | "indeterminate") => {
+    const next = new Set(selectedIds);
+    if (checked) {
+      next.add(id);
+    } else {
+      next.delete(id);
+    }
+    setSelectedIds(next);
+  };
 
   // update and delete handlers
   const handleUpdateQRCode = async () => {
@@ -201,13 +238,71 @@ export default function QRManagementPage() {
         "/api/qr/get-all-qrcodes"
       );
       setQrCodes(qrRes.data.data);
+      // Clear selection if deleted item was selected
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
     } catch {
       toast.error("Delete failed");
     }
   };
 
+  // Handle Bulk Delete
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) {
+      toast.error("No QR codes selected");
+      return;
+    }
+
+    if (
+      !confirm(
+        `Are you sure you want to delete ${selectedIds.size} selected QR code(s)?`
+      )
+    ) {
+      return;
+    }
+
+    setBulkDeleteLoading(true);
+
+    try {
+      await Promise.all(
+        Array.from(selectedIds).map((id) =>
+          axios.delete(`/api/qr/delete-qrcode/${id}`)
+        )
+      );
+      toast.success(`${selectedIds.size} QR code(s) deleted successfully`);
+
+      // Refresh data and clear selection
+      const qrRes = await axios.get<{ data: QRCode[] }>(
+        "/api/qr/get-all-qrcodes"
+      );
+      setQrCodes(qrRes.data.data);
+      setSelectedIds(new Set());
+    } catch {
+      toast.error("Failed to delete selected QR codes");
+    } finally {
+      setBulkDeleteLoading(false);
+    }
+  };
+
   return (
     <div className="min-h-screen p-8">
+      {/* Full screen loader overlay */}
+      {bulkDeleteLoading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="flex flex-col items-center space-y-4 rounded-lg bg-white p-6 shadow-xl">
+            <div className="h-8 w-8 animate-spin rounded-full border-4 border-gray-300 border-t-blue-600"></div>
+            <p className="text-lg font-medium text-gray-900">
+              Deleting {selectedIds.size} QR code
+              {selectedIds.size !== 1 ? "s" : ""}...
+            </p>
+            <p className="text-sm text-gray-500">Please wait</p>
+          </div>
+        </div>
+      )}
+
       <Card className="mx-auto max-w-6xl">
         <CardHeader className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <CardTitle>QR Code Management</CardTitle>
@@ -239,11 +334,25 @@ export default function QRManagementPage() {
             >
               Export CSV
             </Button>
+
+            <Button
+              onClick={handleBulkDelete}
+              variant="destructive"
+              disabled={selectedIds.size === 0 || bulkDeleteLoading}
+              className="flex items-center gap-2"
+            >
+              <Trash size={16} />
+              {bulkDeleteLoading
+                ? "Deleting..."
+                : `Delete Selected (${selectedIds.size})`}
+            </Button>
           </div>
         </CardHeader>
 
         <CardContent className="overflow-x-auto">
-          {filteredQRCodes.length === 0 ? (
+          {loading ? (
+            <div className="text-center py-10 text-gray-500">Loading...</div>
+          ) : filteredQRCodes.length === 0 ? (
             <div className="text-center py-10 text-gray-500">
               No QR codes found.
             </div>
@@ -251,6 +360,19 @@ export default function QRManagementPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-10">
+                    <Checkbox
+                      checked={
+                        allFilteredSelected
+                          ? true
+                          : someFilteredSelected
+                          ? "indeterminate"
+                          : false
+                      }
+                      onCheckedChange={toggleSelectAllFiltered}
+                      aria-label="Select all"
+                    />
+                  </TableHead>
                   <TableHead>Code</TableHead>
                   <TableHead>Campaign</TableHead>
                   <TableHead>Status</TableHead>
@@ -262,6 +384,13 @@ export default function QRManagementPage() {
               <TableBody>
                 {filteredQRCodes.map((q) => (
                   <TableRow key={q.id}>
+                    <TableCell>
+                      <Checkbox
+                        checked={selectedIds.has(q.id)}
+                        onCheckedChange={(checked) => toggleRow(q.id, checked)}
+                        aria-label={`Select row`}
+                      />
+                    </TableCell>
                     <TableCell>{q.code}</TableCell>
                     <TableCell>{q.campaignName}</TableCell>
                     <TableCell>{q.status}</TableCell>

@@ -13,7 +13,14 @@ export async function GET() {
   }
 
   const users = await prisma.user.findMany({
-    select: { id: true, name: true, email: true, role: true, createdAt: true },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      points: true,
+      createdAt: true,
+    },
     orderBy: { createdAt: "desc" },
   });
   return NextResponse.json({ data: users });
@@ -45,6 +52,7 @@ export async function POST(request: Request) {
           name: true,
           email: true,
           role: true,
+          points: true,
           createdAt: true,
         },
       });

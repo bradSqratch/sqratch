@@ -187,6 +187,29 @@ export async function POST(request: NextRequest) {
             break;
           }
         }
+
+        // Add point for successful QR scan and invite sent (after email verification)
+        try {
+          await prisma.pointTransaction.create({
+            data: {
+              userId: user.id,
+              points: 1,
+              reason: "QR_SCAN",
+              qrCodeId: qr.id,
+            },
+          });
+
+          // Update user's total points
+          await prisma.user.update({
+            where: { id: user.id },
+            data: {
+              points: { increment: 1 },
+            },
+          });
+        } catch (pointError) {
+          console.error("Failed to add points:", pointError);
+          // Don't fail the request if points can't be added
+        }
       }
     }
 

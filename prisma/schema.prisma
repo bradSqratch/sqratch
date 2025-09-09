@@ -22,6 +22,10 @@ model User {
   qrCodesCreated QRCode[] @relation("QRCodeCreatedByUser")
   campaigns      Campaign[] @relation("CampaignCreatedByUser")
   role           Role     @default(EXTERNAL)
+  isActive    Boolean @default(true)
+  // Gamification
+  points              Int                @default(0) // quick lookup total
+  pointTransactions   PointTransaction[] // full history
 }
 
 model Community {
@@ -61,16 +65,20 @@ model QRCode {
   usedAt        DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+  isActive    Boolean @default(true)
 
   // Relations
   campaignId    String
   campaign      Campaign @relation(fields: [campaignId], references: [id])
+  deletedCampaignName  String?
 
   redeemedById  String? // optional, to support anonymous scans too
   redeemedBy    User?   @relation("QRCodeRedeemedByUser", fields: [redeemedById], references: [id])
 
   createdById String
   createdBy   User @relation("QRCodeCreatedByUser", fields: [createdById], references: [id])
+  // Gamification link
+  pointTransactions PointTransaction[]
 }
 
 model EmailVerificationToken {
@@ -89,6 +97,23 @@ model TokenStore {
   updatedAt DateTime @updatedAt   // helpful for debugging or logs
 }
 
+model PointTransaction {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  points    Int                    // e.g. +1 for a scan
+  reason    PointReason            // enum "QR_SCAN", "BONUS", "REFERRAL"
+  qrCodeId  String?                // link back to the QRCode scanned
+  qrCode    QRCode?  @relation(fields: [qrCodeId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@unique([userId, qrCodeId]) // prevents multiple transactions for same QR by same user
+  @@index([userId])
+  @@index([qrCodeId])
+}
+
 enum Role {
   USER
   ADMIN
@@ -105,4 +130,10 @@ enum CommunityType {
   BETTERMODE   // special handling (Zapier)
   GENERIC      // everything else (email invite flow)
   DISCORD      // special handling
+}
+
+enum PointReason {
+  QR_SCAN
+  BONUS
+  REFERRAL
 }
