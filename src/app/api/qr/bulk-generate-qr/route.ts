@@ -41,50 +41,61 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const createdQRs = [];
+  const createdQRs: any[] = [];
+  const batchSize = 50; // adjust for speed vs Cloudinary limits
 
-  for (let i = 0; i < quantity; i++) {
-    const qrCodeData = nanoid();
-    const redeemUrl = `${process.env.DOMAIN}/redeemQR/${campaignId}/${qrCodeData}`;
+  for (let i = 0; i < quantity; i += batchSize) {
+    const batch = Array.from({ length: Math.min(batchSize, quantity - i) }).map(
+      async () => {
+        const qrCodeData = nanoid();
+        const redeemUrl = `${process.env.DOMAIN}/redeemQR/${campaignId}/${qrCodeData}`;
 
-    const buffer = await QRCode.toBuffer(redeemUrl, {
-      type: "png",
-      width: 500,
-      color: {
-        dark: "#000000",
-        light: "#0000",
-      },
-    });
+        try {
+          const buffer = await QRCode.toBuffer(redeemUrl, {
+            type: "png",
+            width: 500,
+            color: {
+              dark: "#000000",
+              light: "#0000",
+            },
+          });
 
-    const dataUri = "data:image/png;base64," + buffer.toString("base64");
+          const dataUri = "data:image/png;base64," + buffer.toString("base64");
 
-    let uploadResult;
-    try {
-      uploadResult = await cloudinary.uploader.upload(dataUri, {
-        folder: "qrCodes",
-        public_id: `qr_${qrCodeData}`,
-        overwrite: false,
-        resource_type: "image",
-      });
-    } catch (err: any) {
-      console.error("Cloudinary upload error:", err);
-      continue;
-    }
+          const uploadResult = await cloudinary.uploader.upload(dataUri, {
+            folder: "qrCodes",
+            public_id: `qr_${qrCodeData}`,
+            overwrite: false,
+            resource_type: "image",
+          });
 
-    try {
-      const record = await prisma.qRCode.create({
-        data: {
-          qrCodeData,
-          qrCodeUrl: uploadResult.secure_url,
-          status: "NEW",
-          campaignId,
-          createdById: session.user.id,
-        },
-      });
-      createdQRs.push(record);
-    } catch (err) {
-      console.error("Prisma DB error:", err);
-      continue;
+          return {
+            qrCodeData,
+            qrCodeUrl: uploadResult.secure_url,
+            status: "NEW" as const,
+            campaignId,
+            createdById: session.user.id,
+          };
+        } catch (err) {
+          console.error("QR/Cloudinary error:", err);
+          return null;
+        }
+      }
+    );
+
+    const results = await Promise.allSettled(batch);
+
+    const validRecords = results
+      .filter((r) => r.status === "fulfilled" && r.value !== null)
+      .map((r: any) => r.value);
+
+    if (validRecords.length > 0) {
+      try {
+        await prisma.qRCode.createMany({ data: validRecords });
+        createdQRs.push(...validRecords);
+      } catch (err) {
+        console.error("Prisma createMany error:", err);
+      }
     }
   }
 
