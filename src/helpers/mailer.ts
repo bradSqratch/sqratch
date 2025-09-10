@@ -71,9 +71,18 @@ export async function sendInviteEmail(
     html: `
       <h1>Welcome to ${campaignName}!</h1>
       <p>Click the button below to join this exciting new exclusive community!</p>
-      <a href="${inviteUrl}" style="padding:10px 20px;background:#3b639a;color:white;border-radius:8px;text-decoration:none;">
-        Join ${campaignName}
-      </a>
+      <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="start">
+        <tr>
+          <td align="start" bgcolor="#3b639a" style="border-radius:8px;">
+            <a href="${inviteUrl}"
+              target="_blank"
+              style="display:inline-block; padding:12px 24px; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
+                    font-size:16px; font-weight:600; color:#ffffff; text-decoration:none; border-radius:8px;">
+              Join ${campaignName}
+            </a>
+          </td>
+        </tr>
+      </table>
     `,
   };
 
