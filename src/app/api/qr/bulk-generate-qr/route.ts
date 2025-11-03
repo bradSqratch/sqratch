@@ -41,6 +41,25 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Get campaign to derive folder path
+  const campaign = await prisma.campaign.findUnique({
+    where: { id: campaignId },
+    select: { id: true, name: true },
+  });
+  if (!campaign) {
+    return NextResponse.json({ error: "Campaign not found" }, { status: 404 });
+  }
+
+  // Create a Cloudinary-safe folder path
+  const campaignFolder = `qrCodes/${campaign.name.replace(/[\\/]/g, "-")}`;
+  try {
+    await cloudinary.api.create_folder(campaignFolder);
+  } catch (e: any) {
+    if (!(e?.http_code === 409 || /already exists/i.test(e?.message || ""))) {
+      console.warn("Cloudinary create_folder warning:", e?.message || e);
+    }
+  }
+
   const createdQRs: any[] = [];
   const batchSize = 50; // adjust for speed vs Cloudinary limits
 
@@ -63,7 +82,7 @@ export async function POST(request: NextRequest) {
           const dataUri = "data:image/png;base64," + buffer.toString("base64");
 
           const uploadResult = await cloudinary.uploader.upload(dataUri, {
-            folder: "qrCodes",
+            folder: campaignFolder,
             public_id: `qr_${qrCodeData}`,
             overwrite: false,
             resource_type: "image",

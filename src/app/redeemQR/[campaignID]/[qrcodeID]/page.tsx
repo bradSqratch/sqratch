@@ -24,11 +24,17 @@ export default function QRRedemptionPage() {
     | "DIRECT_INVITE"
     | "VERIFY_FIRST"
   >("LOADING");
-  const [form, setForm] = useState({ name: "", email: "" });
+  const [form, setForm] = useState({ name: "", email: "", confirmEmail: "" });
   const [submitting, setSubmitting] = useState(false);
 
   // New: campaign name for personalized SUBMITTED screen
   const [campaignName, setCampaignName] = useState<string>("");
+
+  // Email validation
+  const emailsMatch = form.email === form.confirmEmail;
+  const showEmailError = form.confirmEmail && !emailsMatch;
+  const isFormValid =
+    form.name && form.email && form.confirmEmail && emailsMatch;
 
   // Load QR status, and also try to get the campaign name
   useEffect(() => {
@@ -199,10 +205,25 @@ export default function QRRedemptionPage() {
               }
               required
             />
+            <Input
+              placeholder="Confirm Email"
+              type="email"
+              value={form.confirmEmail}
+              onChange={(e) =>
+                setForm((f) => ({ ...f, confirmEmail: e.target.value }))
+              }
+              required
+              className={showEmailError ? "border-red-500" : ""}
+            />
+            {showEmailError && (
+              <p className="text-red-500 text-sm">
+                Email addresses do not match
+              </p>
+            )}
             <Button
               type="submit"
-              disabled={submitting}
-              className="bg-[#3b639a] hover:bg-[#335689]"
+              disabled={submitting || !isFormValid}
+              className="bg-[#3b639a] hover:bg-[#335689] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {submitting ? "Sending..." : "Submit"}
             </Button>

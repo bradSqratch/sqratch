@@ -50,11 +50,16 @@ export async function PATCH(
     if (existingQRCode.qrCodeUrl) {
       try {
         const urlObj = new URL(existingQRCode.qrCodeUrl);
-        const segments = urlObj.pathname.split("/");
-        const idx = segments.findIndex((s) => s === "qrCodes");
-        if (idx !== -1 && segments.length > idx + 1) {
-          const filename = segments[idx + 1];
-          const publicId = `qrCodes/${filename.replace(/\.[^.]+$/, "")}`;
+        // Extract public_id by finding the "upload" segment and taking the path after cloud name
+        // URL pattern: https://res.cloudinary.com/<cloud>/image/upload/v<ver>/qrCodes/.../<public_id>.<ext>
+        const path = urlObj.pathname; // /<cloud>/image/upload/v123/qrCodes/.../qr_xxx.png
+        const uploadIdx = path.indexOf("/upload/");
+        if (uploadIdx !== -1) {
+          const afterUpload = path.substring(uploadIdx + "/upload/".length);
+          // remove leading version if present (e.g., v123/)
+          const afterVersion = afterUpload.replace(/^v\d+\//, "");
+          // remove extension
+          const publicId = afterVersion.replace(/\.[^.]+$/, "");
           await cloudinary.uploader.destroy(publicId, {
             resource_type: "image",
           });
@@ -77,10 +82,26 @@ export async function PATCH(
     });
     const dataUri = "data:image/png;base64," + buffer.toString("base64");
 
+    // Ensure folder for target campaign exists
+    const targetCampaign = await prisma.campaign.findUnique({
+      where: { id: campaignId },
+      select: { name: true },
+    });
+    const targetFolder = `qrCodes/${(
+      targetCampaign?.name ?? "_unknown"
+    ).replace(/[\\/]/g, "-")}`;
+    try {
+      await cloudinary.api.create_folder(targetFolder);
+    } catch (e: any) {
+      if (!(e?.http_code === 409 || /already exists/i.test(e?.message || ""))) {
+        console.warn("Cloudinary create_folder warning:", e?.message || e);
+      }
+    }
+
     const cloudinaryPublicId = `qr_${qrData}`;
 
     const uploadResult = await cloudinary.uploader.upload(dataUri, {
-      folder: "qrCodes",
+      folder: targetFolder,
       public_id: cloudinaryPublicId,
       overwrite: true,
       resource_type: "image",

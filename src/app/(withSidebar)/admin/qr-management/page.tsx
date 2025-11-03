@@ -49,6 +49,15 @@ import {
   CommandItem,
 } from "@/components/ui/command";
 import Papa from "papaparse";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
 
 type QRCode = {
   id: string;
@@ -74,6 +83,10 @@ export default function QRManagementPage() {
   const [qrCodes, setQrCodes] = useState<QRCode[]>([]);
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // pagination state
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(100);
 
   // filters & dialogs
   const [selectedCampaignId, setSelectedCampaignId] = useState<string>("all");
@@ -105,6 +118,10 @@ export default function QRManagementPage() {
         ]);
         setQrCodes(qrRes.data.data);
         setCampaigns(campaignsRes.data.data);
+        // Default selection: if no campaignId in URL, select the first campaign (not 'All') when available
+        if (!campaignParam && campaignsRes.data.data.length > 0) {
+          setSelectedCampaignId(campaignsRes.data.data[0].id);
+        }
       } catch {
         toast.error("Failed to fetch data");
       } finally {
@@ -164,10 +181,26 @@ export default function QRManagementPage() {
 
   // filtered list
   const filteredQRCodes = useMemo(() => {
-    return selectedCampaignId === "all"
-      ? qrCodes
-      : qrCodes.filter((q) => q.campaignId === selectedCampaignId);
+    const data =
+      selectedCampaignId === "all"
+        ? qrCodes
+        : qrCodes.filter((q) => q.campaignId === selectedCampaignId);
+    return data;
   }, [qrCodes, selectedCampaignId]);
+
+  // derived: paged data
+  const total = filteredQRCodes.length;
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const pagedQRCodes = useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return filteredQRCodes.slice(start, start + pageSize);
+  }, [filteredQRCodes, currentPage, pageSize]);
+
+  // reset to page 1 when filters/pageSize change
+  useEffect(() => {
+    setPage(1);
+  }, [selectedCampaignId, pageSize]);
 
   // Selection helpers
   const allFilteredSelected =
@@ -382,7 +415,7 @@ export default function QRManagementPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredQRCodes.map((q) => (
+                {pagedQRCodes.map((q) => (
                   <TableRow key={q.id}>
                     <TableCell>
                       <Checkbox
@@ -429,6 +462,112 @@ export default function QRManagementPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* Pagination Controls */}
+      {!loading && filteredQRCodes.length > 0 && (
+        <div className="mx-auto mt-4 flex max-w-6xl items-center justify-between px-2">
+          <div className="text-sm text-muted-foreground">
+            Showing {(currentPage - 1) * pageSize + 1}–
+            {Math.min(currentPage * pageSize, total)} of {total}
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <Label>Rows:</Label>
+              <Select
+                value={String(pageSize)}
+                onValueChange={(v) => setPageSize(Number(v))}
+              >
+                <SelectTrigger className="w-[140px]">
+                  <SelectValue placeholder="Rows per page" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="100">100</SelectItem>
+                  <SelectItem value="500">500</SelectItem>
+                  <SelectItem value="1000">1000</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <Pagination>
+              <PaginationContent>
+                <PaginationItem>
+                  <PaginationPrevious
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setPage((p) => Math.max(1, p - 1));
+                    }}
+                    className={cn(
+                      currentPage === 1 && "pointer-events-none opacity-50"
+                    )}
+                  />
+                </PaginationItem>
+
+                {/* Page numbers: show up to 7 buttons with ellipsis */}
+                {(() => {
+                  const items: React.ReactNode[] = [];
+                  const maxToShow = 7;
+                  const createLink = (p: number) => (
+                    <PaginationItem key={p}>
+                      <PaginationLink
+                        href="#"
+                        isActive={p === currentPage}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          setPage(p);
+                        }}
+                      >
+                        {p}
+                      </PaginationLink>
+                    </PaginationItem>
+                  );
+
+                  if (totalPages <= maxToShow) {
+                    for (let p = 1; p <= totalPages; p++)
+                      items.push(createLink(p));
+                  } else {
+                    const left = Math.max(2, currentPage - 1);
+                    const right = Math.min(totalPages - 1, currentPage + 1);
+                    items.push(createLink(1));
+                    if (left > 2) {
+                      items.push(
+                        <PaginationItem key="start-ellipsis">
+                          <PaginationEllipsis />
+                        </PaginationItem>
+                      );
+                    }
+                    for (let p = left; p <= right; p++)
+                      items.push(createLink(p));
+                    if (right < totalPages - 1) {
+                      items.push(
+                        <PaginationItem key="end-ellipsis">
+                          <PaginationEllipsis />
+                        </PaginationItem>
+                      );
+                    }
+                    items.push(createLink(totalPages));
+                  }
+                  return items;
+                })()}
+
+                <PaginationItem>
+                  <PaginationNext
+                    href="#"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      setPage((p) => Math.min(totalPages, p + 1));
+                    }}
+                    className={cn(
+                      currentPage === totalPages &&
+                        "pointer-events-none opacity-50"
+                    )}
+                  />
+                </PaginationItem>
+              </PaginationContent>
+            </Pagination>
+          </div>
+        </div>
+      )}
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
         <DialogContent>

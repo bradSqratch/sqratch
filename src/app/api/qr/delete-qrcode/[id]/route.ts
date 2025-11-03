@@ -35,14 +35,13 @@ export async function DELETE(
   if (record.qrCodeUrl) {
     try {
       const urlObj = new URL(record.qrCodeUrl);
-      const segments = urlObj.pathname.split("/");
-      const idx = segments.findIndex((s) => s === "qrCodes");
-      if (idx !== -1 && segments.length > idx + 1) {
-        const filename = segments[idx + 1];
-        const publicId = `qrCodes/${filename.replace(/\.[^.]+$/, "")}`;
-        await cloudinary.uploader.destroy(publicId, {
-          resource_type: "image",
-        });
+      const path = urlObj.pathname; // /<cloud>/image/upload/v123/qrCodes/.../qr_xxx.png
+      const uploadIdx = path.indexOf("/upload/");
+      if (uploadIdx !== -1) {
+        const afterUpload = path.substring(uploadIdx + "/upload/".length);
+        const afterVersion = afterUpload.replace(/^v\d+\//, "");
+        const publicId = afterVersion.replace(/\.[^.]+$/, "");
+        await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
       }
     } catch (err) {
       console.error("Cloudinary deletion error:", err);
