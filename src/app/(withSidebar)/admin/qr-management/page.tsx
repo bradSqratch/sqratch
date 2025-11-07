@@ -103,6 +103,12 @@ export default function QRManagementPage() {
   const [userSearchLoading, setUserSearchLoading] = useState(false);
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
 
+  // Shift-range selection support
+  const [lastSelectedIndex, setLastSelectedIndex] = useState<number | null>(
+    null
+  );
+  const [isShiftPressed, setIsShiftPressed] = useState(false);
+
   const campaignParam = searchParams.get("campaignId");
   useEffect(() => {
     setSelectedCampaignId(campaignParam || "all");
@@ -129,6 +135,22 @@ export default function QRManagementPage() {
       }
     };
     fetchData();
+  }, []);
+
+  // Track Shift key globally to enable range selection with checkboxes
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Shift") setIsShiftPressed(true);
+    };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.key === "Shift") setIsShiftPressed(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
   }, []);
 
   const exportFilteredQRCodes = () => {
@@ -200,34 +222,61 @@ export default function QRManagementPage() {
   // reset to page 1 when filters/pageSize change
   useEffect(() => {
     setPage(1);
+    // Reset last anchor when filter/page size changes to avoid stale indices
+    setLastSelectedIndex(null);
   }, [selectedCampaignId, pageSize]);
 
   // Selection helpers
+  // Selection state now scoped to CURRENT PAGE only (not entire filtered set)
   const allFilteredSelected =
-    filteredQRCodes.length > 0 &&
-    filteredQRCodes.every((q) => selectedIds.has(q.id));
-  const someFilteredSelected = filteredQRCodes.some((q) =>
-    selectedIds.has(q.id)
-  );
+    pagedQRCodes.length > 0 && pagedQRCodes.every((q) => selectedIds.has(q.id));
+  const someFilteredSelected = pagedQRCodes.some((q) => selectedIds.has(q.id));
 
   const toggleSelectAllFiltered = (checked: boolean | "indeterminate") => {
+    // Only affect items visible on the CURRENT PAGE
     const next = new Set(selectedIds);
     if (checked) {
-      filteredQRCodes.forEach((q) => next.add(q.id));
+      pagedQRCodes.forEach((q) => next.add(q.id));
     } else {
-      filteredQRCodes.forEach((q) => next.delete(q.id));
+      pagedQRCodes.forEach((q) => next.delete(q.id));
     }
     setSelectedIds(next);
   };
 
-  const toggleRow = (id: string, checked: boolean | "indeterminate") => {
+  const toggleRow = (
+    id: string,
+    checked: boolean | "indeterminate",
+    globalIndex?: number
+  ) => {
     const next = new Set(selectedIds);
-    if (checked) {
-      next.add(id);
+    const shouldCheck = checked === true || checked === "indeterminate";
+
+    if (
+      isShiftPressed &&
+      lastSelectedIndex !== null &&
+      typeof globalIndex === "number"
+    ) {
+      const start = Math.min(lastSelectedIndex, globalIndex);
+      const end = Math.max(lastSelectedIndex, globalIndex);
+      for (let i = start; i <= end; i++) {
+        const q = filteredQRCodes[i];
+        if (!q) continue;
+        if (shouldCheck) next.add(q.id);
+        else next.delete(q.id);
+      }
     } else {
-      next.delete(id);
+      if (shouldCheck) next.add(id);
+      else next.delete(id);
     }
+
     setSelectedIds(next);
+
+    // Update the anchor index for subsequent Shift selections
+    if (typeof globalIndex === "number") setLastSelectedIndex(globalIndex);
+    else {
+      const idx = filteredQRCodes.findIndex((q) => q.id === id);
+      setLastSelectedIndex(idx >= 0 ? idx : null);
+    }
   };
 
   // update and delete handlers
@@ -415,12 +464,18 @@ export default function QRManagementPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {pagedQRCodes.map((q) => (
+                {pagedQRCodes.map((q, idx) => (
                   <TableRow key={q.id}>
                     <TableCell>
                       <Checkbox
                         checked={selectedIds.has(q.id)}
-                        onCheckedChange={(checked) => toggleRow(q.id, checked)}
+                        onCheckedChange={(checked) =>
+                          toggleRow(
+                            q.id,
+                            checked,
+                            (currentPage - 1) * pageSize + idx
+                          )
+                        }
                         aria-label={`Select row`}
                       />
                     </TableCell>
