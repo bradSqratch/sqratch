@@ -349,11 +349,8 @@ export default function QRManagementPage() {
     setBulkDeleteLoading(true);
 
     try {
-      await Promise.all(
-        Array.from(selectedIds).map((id) =>
-          axios.delete(`/api/qr/delete-qrcode/${id}`)
-        )
-      );
+      const ids = Array.from(selectedIds);
+      await axios.post("/api/qr/bulk-delete", { ids });
       toast.success(`${selectedIds.size} QR code(s) deleted successfully`);
 
       // Refresh data and clear selection
@@ -362,7 +359,8 @@ export default function QRManagementPage() {
       );
       setQrCodes(qrRes.data.data);
       setSelectedIds(new Set());
-    } catch {
+    } catch (err) {
+      console.error(err);
       toast.error("Failed to delete selected QR codes");
     } finally {
       setBulkDeleteLoading(false);
