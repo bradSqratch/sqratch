@@ -114,6 +114,14 @@ model PointTransaction {
   @@index([qrCodeId])
 }
 
+model WaitlistEntry {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  source    String?  // optional: "homepage", "cta-card", etc.
+  ip        String?  // For spam protection
+  createdAt DateTime @default(now())
+}
+
 enum Role {
   USER
   ADMIN

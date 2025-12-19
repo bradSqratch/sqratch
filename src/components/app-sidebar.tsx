@@ -40,12 +40,15 @@ export function AppSidebar() {
       url: "/dashboard",
       icon: LayoutDashboard,
     },
-    {
+  ];
+
+  if (session?.user?.role === "ADMIN" || session?.user?.role === "USER") {
+    items.push({
       title: "Generate QR",
       url: "/generateQR",
       icon: QrCode,
-    },
-  ];
+    });
+  }
 
   // Admin-specific items.
   const adminItems = [
@@ -98,36 +101,37 @@ export function AppSidebar() {
     }
   };
 
-  const USERorADMINisAllowed =
-    session?.user?.role === "ADMIN" || session?.user?.role === "USER";
+  const showNavigation = items.length > 0;
 
   return (
     <>
-      <Sidebar>
+      <Sidebar className="border-r border-white/10 backdrop-blur-xl bg-gradient-to-b from-white/5 to-white/[0.02]">
         <SidebarHeader
           onClick={() => router.push("/dashboard")}
-          className="transition-colors text-white bg-[var(--leftsidebar-primary)]"
+          className="transition-all duration-200 text-white bg-transparent cursor-pointer hover:bg-white/5 rounded-lg mx-2 mt-2"
         >
           <NavUser user={data.user} />
         </SidebarHeader>
-        <SidebarContent className="text-white bg-[var(--leftsidebar-primary)]">
-          {USERorADMINisAllowed && (
+        <SidebarContent className="text-white bg-transparent px-2">
+          {showNavigation && (
             <SidebarGroup>
-              <SidebarGroupLabel className="text-white">
+              <SidebarGroupLabel className="text-white/70 text-xs font-semibold uppercase tracking-wider px-3 py-2">
                 Navigation
               </SidebarGroupLabel>
               <SidebarGroupContent>
-                <SidebarMenu>
+                <SidebarMenu className="space-y-1">
                   {items.map((item) => (
                     <SidebarMenuItem key={item.title}>
                       <SidebarMenuButton
                         asChild
-                        className="hover:bg-[var(--sidebar-accent)] hover:text-shadow-gray-700 transition-colors"
+                        className="text-white/90 hover:!text-white hover:!bg-white/10 hover:backdrop-blur-sm hover:border hover:border-white/20 hover:shadow-lg hover:shadow-blue-500/10 rounded-lg transition-all duration-200 group"
                       >
-                        <a href={item.url}>
-                          <item.icon />
-
-                          <span>{item.title}</span>
+                        <a
+                          href={item.url}
+                          className="flex items-center gap-3 px-3 py-2"
+                        >
+                          <item.icon className="w-5 h-5 group-hover:scale-110 transition-transform duration-200" />
+                          <span className="font-medium">{item.title}</span>
                         </a>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
@@ -139,21 +143,24 @@ export function AppSidebar() {
 
           {/* Admin Section */}
           {session?.user?.role === "ADMIN" && (
-            <SidebarGroup>
-              <SidebarGroupLabel className="text-white">
+            <SidebarGroup className="mt-4">
+              <SidebarGroupLabel className="text-white/70 text-xs font-semibold uppercase tracking-wider px-3 py-2">
                 Admin
               </SidebarGroupLabel>
               <SidebarGroupContent>
-                <SidebarMenu>
+                <SidebarMenu className="space-y-1">
                   {adminItems.map((item) => (
                     <SidebarMenuItem key={item.title}>
                       <SidebarMenuButton
                         asChild
-                        className="hover:bg-[var(--sidebar-accent)] hover:text-shadow-gray-700 transition-colors"
+                        className="text-white/90 hover:!text-white hover:!bg-white/10 hover:backdrop-blur-sm hover:border hover:border-white/20 hover:shadow-lg hover:shadow-blue-500/10 rounded-lg transition-all duration-200 group"
                       >
-                        <a href={item.url}>
-                          <item.icon />
-                          <span>{item.title}</span>
+                        <a
+                          href={item.url}
+                          className="flex items-center gap-3 px-3 py-2"
+                        >
+                          <item.icon className="w-5 h-5 group-hover:scale-110 transition-transform duration-200" />
+                          <span className="font-medium">{item.title}</span>
                         </a>
                       </SidebarMenuButton>
                     </SidebarMenuItem>
@@ -163,15 +170,15 @@ export function AppSidebar() {
             </SidebarGroup>
           )}
         </SidebarContent>
-        <SidebarFooter className="text-white bg-[var(--leftsidebar-primary)]">
+        <SidebarFooter className="text-white bg-transparent px-2 pb-4">
           <SidebarMenu>
             <SidebarMenuItem key="logout">
               <SidebarMenuButton
                 onClick={logout}
-                className="hover:bg-[var(--sidebar-accent)] hover:text-shadow-gray-700 transition-colors"
+                className="text-red-300 hover:!text-red-100 hover:!bg-red-500/20 hover:backdrop-blur-sm hover:border hover:border-red-400/30 hover:shadow-lg hover:shadow-red-500/20 rounded-lg transition-all duration-200 cursor-pointer group"
               >
-                <LogOut />
-                <span>Logout</span>
+                <LogOut className="w-5 h-5 group-hover:scale-110 transition-transform duration-200" />
+                <span className="font-medium">Logout</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>

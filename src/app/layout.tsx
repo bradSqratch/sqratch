@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Lexend_Giga, Montserrat } from "next/font/google";
 import "./globals.css";
 import AuthProvider from "@/context/AuthProvider";
 
@@ -14,6 +14,18 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const lexendGiga = Lexend_Giga({
+  variable: "--font-lexend-giga",
+  subsets: ["latin"],
+  weight: ["700"],
+});
+
+const montserrat = Montserrat({
+  variable: "--font-montserrat",
+  subsets: ["latin"],
+  weight: ["400", "500", "600"],
+});
+
 export const metadata: Metadata = {
   title: "Sqratch",
   description:
@@ -26,10 +38,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en">
+    <html lang="en" className="dark">
       <AuthProvider>
         <body
-          className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}
+          className={`${geistSans.variable} ${geistMono.variable} ${lexendGiga.variable} ${montserrat.variable} font-sans antialiased app-bg`}
         >
           {children}
         </body>

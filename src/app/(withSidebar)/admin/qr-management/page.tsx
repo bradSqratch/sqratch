@@ -383,18 +383,20 @@ export default function QRManagementPage() {
         </div>
       )}
 
-      <Card className="mx-auto max-w-6xl">
-        <CardHeader className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-          <CardTitle>QR Code Management</CardTitle>
+      <Card className="mx-auto max-w-6xl bg-white/[0.02] backdrop-blur-sm border border-white/10">
+        <CardHeader className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-white/10">
+          <CardTitle className="text-white">QR Code Management</CardTitle>
 
           <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
             <div className="flex items-center gap-2">
-              <Label htmlFor="campaign-filter">Filter by Campaign:</Label>
+              <Label htmlFor="campaign-filter" className="text-white">
+                Filter by Campaign:
+              </Label>
               <Select
                 value={selectedCampaignId}
                 onValueChange={(val) => setSelectedCampaignId(val)}
               >
-                <SelectTrigger className="w-[200px]">
+                <SelectTrigger className="w-[200px] bg-white/10 border-white/20 text-white">
                   <SelectValue placeholder="Select Campaign" />
                 </SelectTrigger>
                 <SelectContent>
@@ -431,16 +433,16 @@ export default function QRManagementPage() {
 
         <CardContent className="overflow-x-auto">
           {loading ? (
-            <div className="text-center py-10 text-gray-500">Loading...</div>
+            <div className="text-center py-10 text-gray-400">Loading...</div>
           ) : filteredQRCodes.length === 0 ? (
-            <div className="text-center py-10 text-gray-500">
+            <div className="text-center py-10 text-gray-400">
               No QR codes found.
             </div>
           ) : (
             <Table>
               <TableHeader>
-                <TableRow>
-                  <TableHead className="w-10">
+                <TableRow className="border-b border-white/10 hover:bg-transparent">
+                  <TableHead className="w-10 text-gray-300">
                     <Checkbox
                       checked={
                         allFilteredSelected
@@ -451,19 +453,23 @@ export default function QRManagementPage() {
                       }
                       onCheckedChange={toggleSelectAllFiltered}
                       aria-label="Select all"
+                      className="border-white/30"
                     />
                   </TableHead>
-                  <TableHead>Code</TableHead>
-                  <TableHead>Campaign</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Used By</TableHead>
-                  <TableHead>Used At</TableHead>
-                  <TableHead>Actions</TableHead>
+                  <TableHead className="text-gray-300">Code</TableHead>
+                  <TableHead className="text-gray-300">Campaign</TableHead>
+                  <TableHead className="text-gray-300">Status</TableHead>
+                  <TableHead className="text-gray-300">Used By</TableHead>
+                  <TableHead className="text-gray-300">Used At</TableHead>
+                  <TableHead className="text-gray-300">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {pagedQRCodes.map((q, idx) => (
-                  <TableRow key={q.id}>
+                  <TableRow
+                    key={q.id}
+                    className="border-b border-white/5 hover:bg-white/5"
+                  >
                     <TableCell>
                       <Checkbox
                         checked={selectedIds.has(q.id)}
@@ -475,13 +481,18 @@ export default function QRManagementPage() {
                           )
                         }
                         aria-label={`Select row`}
+                        className="border-white/30"
                       />
                     </TableCell>
-                    <TableCell>{q.code}</TableCell>
-                    <TableCell>{q.campaignName}</TableCell>
-                    <TableCell>{q.status}</TableCell>
-                    <TableCell>{q.usedBy || "—"}</TableCell>
-                    <TableCell>
+                    <TableCell className="text-gray-200">{q.code}</TableCell>
+                    <TableCell className="text-gray-200">
+                      {q.campaignName}
+                    </TableCell>
+                    <TableCell className="text-gray-200">{q.status}</TableCell>
+                    <TableCell className="text-gray-200">
+                      {q.usedBy || "—"}
+                    </TableCell>
+                    <TableCell className="text-gray-200">
                       {q.usedAt ? new Date(q.usedAt).toLocaleString() : "—"}
                     </TableCell>
                     <TableCell className="space-x-2">

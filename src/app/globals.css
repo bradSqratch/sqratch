@@ -8,6 +8,8 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --font-logo: var(--font-lexend-giga);
+  --font-button: var(--font-montserrat);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -45,7 +47,7 @@
 
 :root {
   --radius: 0.625rem;
-  --background: oklch(1 0 0);
+  --background: transparent;
   --foreground: oklch(0.129 0.042 264.695);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.129 0.042 264.695);
@@ -68,14 +70,14 @@
   --chart-3: oklch(0.398 0.07 227.392);
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.984 0.003 247.858);
-  --sidebar-foreground: oklch(0.129 0.042 264.695);
-  --sidebar-primary: oklch(100% 0 0);
-  --leftsidebar-primary: oklch(24.354% 0.00003 271.152);
+  --sidebar: transparent;
+  --sidebar-foreground: oklch(0.984 0.003 247.858);
+  --sidebar-primary: transparent;
+  --leftsidebar-primary: transparent;
   --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
   --sidebar-accent: oklch(0.968 0.007 247.896);
   --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
-  --sidebar-border: oklch(0.929 0.013 255.508);
+  --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(48.505% 0.0695 207.195);
   --card-colour-1: oklch(60.238% 0.101 197.435);
   --card-colour-2: oklch(75.47% 0.16209 71.392);
@@ -86,7 +88,7 @@
 }
 
 .dark {
-  --background: oklch(0.129 0.042 264.695);
+  --background: transparent;
   --foreground: oklch(0.984 0.003 247.858);
   --card: oklch(0.208 0.042 265.755);
   --card-foreground: oklch(0.984 0.003 247.858);
@@ -109,9 +111,10 @@
   --chart-3: oklch(0.769 0.188 70.08);
   --chart-4: oklch(0.627 0.265 303.9);
   --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.208 0.042 265.755);
+  /* Make sidebar surfaces transparent so app-wide background shows through */
+  --sidebar: transparent;
   --sidebar-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
+  --sidebar-primary: transparent;
   --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
   --sidebar-accent: oklch(0.279 0.041 260.031);
   --sidebar-accent-foreground: oklch(0.984 0.003 247.858);
@@ -124,8 +127,38 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply text-foreground;
   }
+  html {
+    @apply bg-transparent;
+  }
+}
+
+/* App-wide background to match Figma (dark with subtle blue glows) */
+.app-bg {
+  /* Solid dark base */
+  background-color: #0b0e13 !important;
+  /* Layered radial glows + gentle vertical gradient */
+  background-image: radial-gradient(
+      900px 500px at 82% 14%,
+      rgba(48, 145, 235, 0.18),
+      transparent 60%
+    ),
+    radial-gradient(
+      800px 450px at 88% 82%,
+      rgba(48, 145, 235, 0.12),
+      transparent 60%
+    ),
+    radial-gradient(
+      700px 400px at 8% 90%,
+      rgba(16, 23, 42, 0.35),
+      transparent 60%
+    ),
+    linear-gradient(180deg, #0d1117 0%, #0b0e13 100%);
+  background-repeat: no-repeat !important;
+  background-attachment: fixed !important; /* keep consistent on scroll */
+  background-size: cover !important;
+  min-height: 100vh;
 }
 
 /* Neumorphic button used in the header */
@@ -148,6 +181,55 @@
     inset -4px -4px 12px #ffffff;
 }
 
+/* Logo text styling */
+.logo-text {
+  font-family: var(--font-lexend-giga), sans-serif;
+  font-weight: 700;
+  font-size: 32px;
+  letter-spacing: -4px;
+  text-shadow: 0 0 6px rgba(255, 255, 255, 0.6),
+    0 0 14px rgba(255, 255, 255, 0.15);
+}
+
+/* Reusable button styles matching Figma */
+.btn-outlined {
+  font-family: var(--font-montserrat), sans-serif;
+  font-weight: 400;
+  font-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  padding: 0.5rem 1.8rem;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  background-color: rgba(0, 0, 0, 0.3);
+  color: rgba(226, 232, 240, 0.9);
+  backdrop-filter: blur(12px);
+  transition: all 0.2s;
+}
+
+.btn-outlined:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.btn-solid {
+  font-family: var(--font-montserrat), sans-serif;
+  font-weight: 400;
+  font-size: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9999px;
+  padding: 0.5rem 1.8rem;
+  background-color: #ffffff;
+  color: #0f172a;
+  transition: all 0.2s;
+}
+
+.btn-solid:hover {
+  background-color: #f1f5f9;
+}
+
 /* 📱 Mobile adjustments */
 @media (max-width: 640px) {
   .neo-btn {
@@ -164,5 +246,11 @@
     font-size: 28px; /* slightly smaller for mobile */
     line-height: 1.2;
     padding: 0 1rem; /* avoid text touching edges */
+  }
+
+  .btn-outlined,
+  .btn-solid {
+    font-size: 14px;
+    padding: 0.4rem 0.8rem;
   }
 }

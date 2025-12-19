@@ -50,14 +50,14 @@ export default function LoginPage() {
 
       const roleData = await roleRes.json();
 
-      if (!roleRes.ok || roleData.role !== "ADMIN") {
-        setMessage({
-          type: "error",
-          text: "Only ADMIN users are allowed to log in.",
-        });
-        setLoading(false);
-        return;
-      }
+      // if (!roleRes.ok || roleData.role !== "ADMIN") {
+      //   setMessage({
+      //     type: "error",
+      //     text: "Only ADMIN users are allowed to log in.",
+      //   });
+      //   setLoading(false);
+      //   return;
+      // }
 
       const result = await signIn("credentials", {
         redirect: false,
@@ -134,14 +134,14 @@ export default function LoginPage() {
         return;
       }
 
-      if (role !== "USER" && role !== "ADMIN") {
-        setMessage({
-          type: "error",
-          text: "You are not allowed to log in with this account.",
-        });
-        setLoading(false);
-        return;
-      }
+      // if (role !== "USER" && role !== "ADMIN") {
+      //   setMessage({
+      //     type: "error",
+      //     text: "You are not allowed to log in with this account.",
+      //   });
+      //   setLoading(false);
+      //   return;
+      // }
 
       setMessage({ type: "success", text: "Login successful! Redirecting…" });
       setTimeout(() => {

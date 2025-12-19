@@ -28,7 +28,7 @@ export default function DashboardLayout({
         {/* SidebarInset to contain breadcrumbs and main content */}
         <SidebarInset className="flex flex-col w-full">
           {/* Header with Sticky Styling */}
-          <header className="flex h-16 shrink-0 items-center justify-between transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12 bg-white/85 backdrop-blur-md border-b border-black/5">
+          <header className="flex h-16 shrink-0 items-center justify-between transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12 bg-transparent backdrop-blur-md border-b border-white/10">
             {" "}
             {/* Added styling classes from new code. */}
             <div className="flex items-center gap-3 px-4 sm:px-6">
@@ -45,29 +45,25 @@ export default function DashboardLayout({
                 href="/dashboard"
                 className="hidden sm:flex items-center" // Hidden on mobile, flex on small and larger screens.
               >
-                <img
-                  src="/sqratchLogo.png"
-                  alt="SQRATCH Logo"
-                  className="h-10 w-auto"
-                />
+                <h1 className="text-white text-3xl font-bold tracking-tight">
+                  SQRATCH<sup className="text-sm align-super">™</sup>
+                </h1>
               </Link>
               {/* Mobile-only centered logo */}
               <Link
                 href="/dashboard"
                 className="sm:hidden justify-self-center flex items-center ml-12" // Flex on mobile, hidden on small and larger screens.
               >
-                <img
-                  src="/sqratchLogo.png"
-                  alt="SQRATCH Logo"
-                  className="h-10 w-auto"
-                />
+                <h1 className="text-white text-2xl font-bold tracking-tight">
+                  SQRATCH<sup className="text-xs align-super">™</sup>
+                </h1>
               </Link>
             </div>
             <div className="pr-4 text-white"></div>
           </header>
 
           {/* Main Content Area */}
-          <div className="flex-1 p-4 bg-[#EFEFEF]">
+          <div className="flex-1 p-4 bg-transparent">
             <Suspense fallback={<div>Loading...</div>}>
               <main>{children}</main>
               <Toaster richColors />
