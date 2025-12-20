@@ -43,10 +43,15 @@ export async function POST(request: Request) {
   try {
     const hashed = await bcrypt.hash(password, 10);
 
-    const result = await prisma.$transaction(async (tx) => {
-      // 1) Create user (unverified by default)
-      const newUser = await tx.user.create({
-        data: { name, email, password: hashed, role }, // isEmailVerified defaults to false
+    // Prepare token BEFORE the DB write, but don't send email yet
+    const token = crypto.randomBytes(32).toString("hex");
+    const expires = new Date(Date.now() + 48 * 60 * 60 * 1000);
+
+    // Prisma 7 safe transaction: use the "array of queries" form
+    const newUser = await prisma.$transaction(async (tx) => {
+      // 1) Create user
+      const created = await tx.user.create({
+        data: { name, email, password: hashed, role },
         select: {
           id: true,
           name: true,
@@ -57,26 +62,24 @@ export async function POST(request: Request) {
         },
       });
 
-      // 2) Clear any existing tokens for this user (belt & suspenders)
+      // 2) Clear existing tokens
       await tx.emailVerificationToken.deleteMany({
-        where: { userId: newUser.id },
+        where: { userId: created.id },
       });
 
-      // 3) Create fresh verification token (48h)
-      const token = crypto.randomBytes(32).toString("hex");
-      const expires = new Date(Date.now() + 48 * 60 * 60 * 1000);
+      // 3) Create fresh token
       await tx.emailVerificationToken.create({
-        data: { userId: newUser.id, emailVerifyToken: token, expires },
+        data: { userId: created.id, emailVerifyToken: token, expires },
       });
 
-      // 4) Send verification email
-      await sendVerificationEmail(newUser.email, token);
-
-      return newUser;
+      return created;
     });
 
+    // 4) Send verification email AFTER transaction commits
+    await sendVerificationEmail(newUser.email, token);
+
     return NextResponse.json(
-      { data: result, message: "User created; verification email sent." },
+      { data: newUser, message: "User created; verification email sent." },
       { status: 201 }
     );
   } catch (err: any) {
