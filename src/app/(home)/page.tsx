@@ -206,7 +206,7 @@ export default function HomePage() {
           <div className="flex items-center justify-between gap-8">
             <div className="max-w-[530px]">
               {/* Sub Title */}
-              <p className="text-[16px] font-semibold uppercase tracking-[0.05em] text-[#FFFFFF]/70">
+              <p className="text-[16px] font-semibold uppercase tracking-[0.30em] text-[#FFFFFF]/50">
                 How Sqratch works
               </p>
 

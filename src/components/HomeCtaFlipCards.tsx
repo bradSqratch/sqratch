@@ -9,6 +9,7 @@ import { IterationCcw, X } from "lucide-react";
 type CardData = {
   key: string;
   title: React.ReactNode;
+  subtitle: string;
   description: string;
   bgImageUrl: string;
   cta:
@@ -23,6 +24,7 @@ type CardData = {
 
 function FlipCard({
   title,
+  subtitle,
   description,
   isOpen,
   onToggle,
@@ -30,6 +32,7 @@ function FlipCard({
   cta,
 }: {
   title: React.ReactNode;
+  subtitle: string;
   description: string;
   isOpen: boolean;
   onToggle: () => void;
@@ -126,9 +129,24 @@ function FlipCard({
 
           {/* Center title */}
           <div className="absolute inset-0 grid place-items-center px-8 text-center">
-            <h3 className="text-4xl sm:text-5xl font-semibold tracking-wide text-white group-hover:hidden">
-              {title}
-            </h3>
+            <div className="group-hover:hidden">
+              {/* TITLE — 32px */}
+              <h4 className="text-[32px] sm:text-4xl font-semibold tracking-wide text-white group-hover:hidden">
+                {title}
+              </h4>
+              {/* SUBTITLE — 16px, max 2 lines */}
+              <p
+                className="
+                text-[16px]
+                text-white/75
+                max-w-[36ch]
+                line-clamp-3
+                group-hover:hidden
+              "
+              >
+                {subtitle}
+              </p>
+            </div>
           </div>
 
           {/* CTA area */}
@@ -244,6 +262,8 @@ export default function HomeCtaFlipCards() {
             BUILDERS
           </>
         ),
+        subtitle:
+          "Build a space designed for real connection. Move beyond algorithmic noise and foster a high-value community that truly engages and learns.",
         description:
           "SQRATCH is for experts with demonstrated experience and subject-matter knowledge who want to build intentional communities. If you’re interested in creating a focused, brand-supported space where members participate, learn, and connect directly, we’d like to hear from you. Apply to build with SQRATCH.",
         bgImageUrl: "/assets/homepage/FlipCard1.mp4",
@@ -255,13 +275,9 @@ export default function HomeCtaFlipCards() {
       },
       {
         key: "fans",
-        title: (
-          <>
-            FOR
-            <br />
-            BRANDS
-          </>
-        ),
+        title: <>FOR BRANDS</>,
+        subtitle:
+          "For brands wanting depth. Move past one-off campaigns and treat customers as participants, not targets, through real access and rewards.",
         description:
           "SQRATCH is for brands that want depth, not just reach. If you’re prepared to support a community with access, rewards, or real involvement—and treat customers as participants rather than targets—SQRATCH can help. This works best for brands willing to engage long-term, not run one-off campaigns. Explore a partnership.",
         bgImageUrl: "/assets/homepage/FlipCard2.png",
@@ -294,6 +310,7 @@ export default function HomeCtaFlipCards() {
             <FlipCard
               key={c.key}
               title={c.title}
+              subtitle={c.subtitle}
               description={c.description}
               bgImageUrl={c.bgImageUrl}
               cta={c.cta}
