@@ -2,14 +2,14 @@
 export const whatSqratchCreatesSteps = [
   {
     video: "/assets/homepage/sticky-vid-1.mp4",
-    title: "Start with a SQRATCH sticker.",
+    title: "Start with a\nSQRATCH sticker.",
     subtitle: "",
     paragraph:
       "A SQRATCH sticker unlocks access to something more than what’s on the shelf. It signals access to a space you can enter, people you can connect with, and value that only appears when you choose to engage.",
   },
   {
     video: "/assets/homepage/sticky-vid-2.mp4",
-    title: "Scratch to reveal the code.",
+    title: "Scratch to reveal\nthe code.",
     subtitle: "",
     paragraph:
       "You scratch the sticker to reveal a unique QR code, confirming a real person chose to participate. That small physical action creates a clear boundary - only people who show up in the real world can get in.",

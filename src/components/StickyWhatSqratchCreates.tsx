@@ -170,19 +170,19 @@ export default function StickyWhatSqratchCreates() {
                 transition={{ duration: 0.4, ease: "easeOut" }}
                 // === CHANGE END ===
               >
-                <p className="text-[18px] font-semibold uppercase tracking-[0.18em] text-[#CDCDCD]/60">
+                <p className="mt-8 text-[16px] font-semibold uppercase tracking-[0.18em] text-[#FFFFFF]/70">
                   HOW SQRATCH WORKS
                 </p>
 
-                <h2 className="mt-4 text-[32px] leading-[1.2] font-bold tracking-[-0.02em] text-white sm:text-[40px]">
+                <h2 className="mt-4 text-[32px] leading-[1.2] font-bold whitespace-pre-line text-[#A98DFF] sm:text-[40px]">
                   {step.title}
                 </h2>
 
-                <p className="mt-0 text-[18px] leading-[1.6] font-medium text-white/85">
+                <p className="mt-0 text-[18px] font-medium text-white/85">
                   {step.subtitle}
                 </p>
 
-                <p className="mt-5 text-[16px] leading-[1.85] text-slate-200/80 max-w-[60ch]">
+                <p className="mt-3 text-[18px] text-white max-w-[60ch]">
                   {step.paragraph}
                 </p>
               </motion.div>
