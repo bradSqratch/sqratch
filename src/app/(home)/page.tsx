@@ -837,7 +837,7 @@ export default function HomePage() {
                   href="https://www.sqratch.com/"
                   className="text-[22px] font-semibold tracking-[-0.03em] text-[#ECECEC] whitespace-nowrap hover:text-white transition"
                 >
-                  Sqratch.com
+                  Sqratch Inc.
                 </Link>
               </div>
             </div>

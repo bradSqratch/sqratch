@@ -8,7 +8,7 @@ import { IterationCcw, X } from "lucide-react";
 
 type CardData = {
   key: string;
-  title: string;
+  title: React.ReactNode;
   description: string;
   bgImageUrl: string;
   cta:
@@ -29,7 +29,7 @@ function FlipCard({
   bgImageUrl,
   cta,
 }: {
-  title: string;
+  title: React.ReactNode;
   description: string;
   isOpen: boolean;
   onToggle: () => void;
@@ -126,7 +126,7 @@ function FlipCard({
 
           {/* Center title */}
           <div className="absolute inset-0 grid place-items-center px-8 text-center">
-            <h3 className="text-4xl sm:text-5xl font-semibold tracking-tight text-white group-hover:hidden">
+            <h3 className="text-4xl sm:text-5xl font-semibold tracking-wide text-white group-hover:hidden">
               {title}
             </h3>
           </div>
@@ -237,9 +237,15 @@ export default function HomeCtaFlipCards() {
     () => [
       {
         key: "creators",
-        title: "Value for Creators",
+        title: (
+          <>
+            COMMUNITY
+            <br />
+            BUILDERS
+          </>
+        ),
         description:
-          "SQRATCH gives creators, brands, and retailers a direct channel to activate and engage loyal supporters. Transform real-world moments into measurable online action—without added friction, complexity, or cost.",
+          "SQRATCH is for experts with demonstrated experience and subject-matter knowledge who want to build intentional communities. If you’re interested in creating a focused, brand-supported space where members participate, learn, and connect directly, we’d like to hear from you. Apply to build with SQRATCH.",
         bgImageUrl: "/assets/homepage/FlipCard1.mp4",
         cta: {
           type: "link",
@@ -249,9 +255,15 @@ export default function HomeCtaFlipCards() {
       },
       {
         key: "fans",
-        title: "Free for Fans",
+        title: (
+          <>
+            FOR
+            <br />
+            BRANDS
+          </>
+        ),
         description:
-          "For fans, SQRATCH is effortless and powerful — scan, connect, and participate. Join exclusive communities of real people, engage directly with experts, and unlock unprecedented rewards.",
+          "SQRATCH is for brands that want depth, not just reach. If you’re prepared to support a community with access, rewards, or real involvement—and treat customers as participants rather than targets—SQRATCH can help. This works best for brands willing to engage long-term, not run one-off campaigns. Explore a partnership.",
         bgImageUrl: "/assets/homepage/FlipCard2.png",
         cta: {
           type: "waitlist",
