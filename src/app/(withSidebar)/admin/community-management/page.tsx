@@ -121,7 +121,7 @@ export default function CommunitiesPage() {
           <h1 className="text-2xl font-semibold">Communities</h1>
           <Dialog open={createOpen} onOpenChange={setCreateOpen}>
             <DialogTrigger asChild>
-              <Button className="bg-[#3b639a] text-xs px-2 py-1 leading-tight whitespace-normal text-center sm:text-base sm:px-4 sm:py-2 sm:whitespace-nowrap">
+              <Button className="bg-[#3E93DE] text-white text-xs px-2 py-1 leading-tight whitespace-normal text-center sm:text-base sm:px-4 sm:py-2 sm:whitespace-nowrap">
                 <span className="block sm:hidden">
                   Create
                   <br />

@@ -73,7 +73,7 @@ export async function sendInviteEmail(
       <p>Click the button below to join this exciting new exclusive community!</p>
       <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="start">
         <tr>
-          <td align="start" bgcolor="#3b639a" style="border-radius:8px;">
+          <td align="start" bgcolor="#3E93DE" style="border-radius:8px;">
             <a href="${inviteUrl}"
               target="_blank"
               style="display:inline-block; padding:12px 24px; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;

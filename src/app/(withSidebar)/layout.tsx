@@ -63,7 +63,7 @@ export default function DashboardLayout({
           </header>
 
           {/* Main Content Area */}
-          <div className="flex-1 p-4 bg-transparent">
+          <div className="flex-1 bg-transparent">
             <Suspense fallback={<div>Loading...</div>}>
               <main>{children}</main>
               <Toaster richColors />

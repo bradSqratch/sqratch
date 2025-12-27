@@ -223,7 +223,7 @@ export default function QRRedemptionPage() {
             <Button
               type="submit"
               disabled={submitting || !isFormValid}
-              className="bg-[#3b639a] hover:bg-[#335689] disabled:opacity-50 disabled:cursor-not-allowed"
+              className="bg-[#3E93DE] text-white hover:bg-[#335689] disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {submitting ? "Sending..." : "Submit"}
             </Button>
@@ -251,7 +251,7 @@ export default function QRRedemptionPage() {
                 className="h-6 w-auto"
               />
             ) : (
-              <CardTitle className="text-[#3b639a] text-center">
+              <CardTitle className="text-[#3E93DE] text-center">
                 {qrStatus === "NEW"
                   ? "Redeem Your SQRATCH Code"
                   : qrStatus === "INVALID"

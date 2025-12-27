@@ -412,7 +412,7 @@ export default function QRManagementPage() {
 
             <Button
               onClick={exportFilteredQRCodes}
-              className="bg-[#3b639a] text-white"
+              className="bg-[#3E93DE] text-white"
             >
               Export CSV
             </Button>

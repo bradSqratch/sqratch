@@ -187,7 +187,7 @@ export default function AdminUsersPage() {
                 onClick={() => {
                   resetForm(); // Extra safety, though not strictly necessary with onOpenChange
                 }}
-                className="bg-[#3b639a]"
+                className="bg-[#3E93DE] text-white"
               >
                 Create User
               </Button>

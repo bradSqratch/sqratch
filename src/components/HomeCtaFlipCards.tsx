@@ -255,15 +255,8 @@ export default function HomeCtaFlipCards() {
     () => [
       {
         key: "creators",
-        title: (
-          <>
-            COMMUNITY
-            <br />
-            BUILDERS
-          </>
-        ),
-        subtitle:
-          "Build a space designed for real connection. Move beyond algorithmic noise and foster a high-value community that truly engages and learns.",
+        title: <>COMMUNITY BUILDERS</>,
+        subtitle: "Build a space designed for real connection.",
         description:
           "SQRATCH is for experts with demonstrated experience and subject-matter knowledge who want to build intentional communities. If you’re interested in creating a focused, brand-supported space where members participate, learn, and connect directly, we’d like to hear from you. Apply to build with SQRATCH.",
         bgImageUrl: "/assets/homepage/FlipCard1.mp4",
@@ -276,8 +269,7 @@ export default function HomeCtaFlipCards() {
       {
         key: "fans",
         title: <>FOR BRANDS</>,
-        subtitle:
-          "For brands wanting depth. Move past one-off campaigns and treat customers as participants, not targets, through real access and rewards.",
+        subtitle: "Treat customers as participants, not targets.",
         description:
           "SQRATCH is for brands that want depth, not just reach. If you’re prepared to support a community with access, rewards, or real involvement—and treat customers as participants rather than targets—SQRATCH can help. This works best for brands willing to engage long-term, not run one-off campaigns. Explore a partnership.",
         bgImageUrl: "/assets/homepage/FlipCard2.png",

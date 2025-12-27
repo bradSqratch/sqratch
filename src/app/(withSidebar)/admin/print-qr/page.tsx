@@ -274,7 +274,7 @@ export default function PrintQRPage() {
 
         <DateRangePicker dateRange={dateRange} setDateRange={setDateRange} />
 
-        <Button onClick={handleExportExcel} className="bg-[#3b639a]">
+        <Button onClick={handleExportExcel} className="bg-[#3E93DE] text-white">
           Export Excel
         </Button>
         <Button onClick={handlePrint}>Print Selected</Button>

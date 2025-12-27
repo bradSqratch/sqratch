@@ -246,7 +246,7 @@ export default function LoginPage() {
                 <Button
                   type="submit"
                   disabled={buttonDisabled || loading}
-                  className="w-full bg-[#3b639a] text-white rounded-full py-3 hover:bg-[#6388bb] transition-colors"
+                  className="w-full bg-[#3E93DE] text-white rounded-full py-3 hover:bg-[#6388bb] transition-colors"
                 >
                   Login
                 </Button>

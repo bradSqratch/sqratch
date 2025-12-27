@@ -105,7 +105,7 @@ export function AppSidebar() {
 
   return (
     <>
-      <Sidebar className="border-r border-white/10 backdrop-blur-xl bg-gradient-to-b from-white/5 to-white/[0.02]">
+      <Sidebar className="border-r border-white/10 bg-[#0C1117]">
         <SidebarHeader
           onClick={() => router.push("/dashboard")}
           className="transition-all duration-200 text-white bg-transparent cursor-pointer hover:bg-white/5 rounded-lg mx-2 mt-2"

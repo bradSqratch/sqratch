@@ -68,7 +68,7 @@ export default function VerifyEmailPage() {
           <CardContent className="text-center space-y-4">
             {isVerified ? (
               <>
-                <div className="font-semibold text-[#3b639a]">
+                <div className="font-semibold text-[#3E93DE]">
                   Your Invitation is Waiting!
                 </div>
                 <p className="text-sm">
@@ -79,7 +79,7 @@ export default function VerifyEmailPage() {
               </>
             ) : (
               <>
-                <div className="font-semibold text-[#3b639a]">
+                <div className="font-semibold text-[#3E93DE]">
                   Verification successful!
                 </div>
                 <p className="text-sm">
@@ -92,7 +92,7 @@ export default function VerifyEmailPage() {
                 <Button
                   onClick={verifyToken}
                   disabled={loading}
-                  className="bg-[#3b639a] hover:bg-[#335689] rounded-md px-6"
+                  className="bg-[#3E93DE] text-white hover:bg-[#335689] rounded-md px-6"
                 >
                   {loading ? "Loading..." : "Get Invite"}
                 </Button>

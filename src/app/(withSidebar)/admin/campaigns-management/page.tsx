@@ -210,7 +210,9 @@ export default function CampaignsPage() {
             }}
           >
             <DialogTrigger asChild>
-              <Button className="bg-[#3b639a]">Create Campaign</Button>
+              <Button className="bg-[#3E93DE] text-white">
+                Create Campaign
+              </Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader>
@@ -268,7 +270,7 @@ export default function CampaignsPage() {
               <DialogFooter>
                 <DialogClose asChild>
                   <Button
-                    className="w-full bg-[#3b639a]"
+                    className="w-full bg-[#3E93DE] text-white"
                     onClick={handleCreate}
                   >
                     Create
