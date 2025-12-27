@@ -5,6 +5,7 @@ import ScratchRevealVideo from "@/components/ScratchRevealVideo";
 import StickyWhatSqratchCreates from "@/components/StickyWhatSqratchCreates";
 import HomeCtaFlipCards from "@/components/HomeCtaFlipCards";
 import WaitlistInline from "@/components/WaitlistInline";
+import { motion } from "framer-motion";
 
 export default function HomePage() {
   return (
@@ -51,15 +52,45 @@ export default function HomePage() {
         />
 
         {/* Decorative cubes */}
-        <img
+        {/* Decorative cubes */}
+        <motion.img
           src="/assets/homepage/hero-cube-left.png"
           alt=""
           className="pointer-events-none hidden md:block absolute -left-28 bottom-36 w-64 drop-shadow-[0_0_70px_rgba(147,197,243,0.6)]"
+          initial={{ opacity: 0, rotate: -6, y: 10, scale: 0.98 }}
+          animate={{ opacity: 1, rotate: 0, y: [0, -10, 0], scale: 1 }}
+          transition={{
+            opacity: { duration: 0.45, ease: "easeOut" },
+            rotate: { duration: 0.55, ease: "easeOut" },
+            scale: { duration: 0.45, ease: "easeOut" },
+            y: {
+              duration: 5.4,
+              repeat: Infinity,
+              repeatType: "mirror",
+              ease: "easeInOut",
+            },
+            delay: 0.12,
+          }}
         />
-        <img
+
+        <motion.img
           src="/assets/homepage/hero-cube-right.png"
           alt=""
           className="pointer-events-none hidden md:block absolute -right-20 top-40 w-60 drop-shadow-[0_0_70px_rgba(244,114,182,0.85)]"
+          initial={{ opacity: 0, rotate: -6, y: 10, scale: 0.98 }}
+          animate={{ opacity: 1, rotate: 0, y: [0, -10, 0], scale: 1 }}
+          transition={{
+            opacity: { duration: 0.45, ease: "easeOut" },
+            rotate: { duration: 0.55, ease: "easeOut" },
+            scale: { duration: 0.45, ease: "easeOut" },
+            y: {
+              duration: 5.4,
+              repeat: Infinity,
+              repeatType: "mirror",
+              ease: "easeInOut",
+            },
+            delay: 0.12,
+          }}
         />
 
         {/* NAVBAR - Fixed floating header */}
@@ -99,9 +130,9 @@ export default function HomePage() {
 
         {/* HERO CONTENT */}
         <div className="relative z-10 flex flex-1 items-center">
-          <div className="mx-auto flex w-full max-w-6xl flex-col items-center px-4 sm:px-6 lg:px-8 pb-20 pt-32 text-center sm:pt-36 lg:pt-44">
+          <div className="mx-auto flex w-full max-w-6xl flex-col items-center px-4 sm:px-6 lg:px-8 pb-20 pt-32 text-center sm:pt-36 lg:pt-38">
             {/* Small pill */}
-            <div className="flex items-center justify-center rounded-full border border-white/20 bg-white/5 px-6 py-2 text-center text-[17.3345px] leading-[150%] font-normal text-[#F2F4F8] backdrop-blur-md shadow-[0_10px_40px_rgba(15,23,42,0.7)]">
+            <div className="flex items-center justify-center rounded-full border border-white/20 bg-white/5 px-6 py-1 text-center text-[14px] leading-[150%] font-normal text-[#F2F4F8] backdrop-blur-md shadow-[0_10px_40px_rgba(15,23,42,0.7)]">
               Nothing Artificial. Real Community.
             </div>
 
@@ -175,34 +206,16 @@ export default function HomePage() {
           <div className="flex items-center justify-between gap-8">
             <div className="max-w-[530px]">
               {/* Sub Title */}
-              <p className="text-[16px] font-semibold uppercase tracking-[0.05em] text-[#CDCDCD]/60">
+              <p className="text-[16px] font-semibold uppercase tracking-[0.05em] text-[#FFFFFF]/70">
                 How Sqratch works
               </p>
 
               {/* Heading */}
-              <h2 className="mt-3 text-[34px] leading-[40px] font-bold tracking-[-0.02em] text-white">
+              <h2 className="mt-3 text-[32px] leading-[40px] font-bold tracking-[-0.02em] text-white">
                 A pathway built on participation <br />
                 and choice.
               </h2>
             </div>
-
-            {/* Learn More button on the right */}
-            {/* <Link
-              href="#learn-more"
-              className="hidden sm:inline-flex h-[40px] items-center justify-center rounded-full border border-white/35 px-8 text-[17px] font-semibold leading-[120%] text-white hover:bg-white/10 transition-colors"
-            >
-              Learn More
-            </Link> */}
-          </div>
-
-          {/* Mobile Learn More (stacked) */}
-          <div className="mt-6 sm:hidden">
-            <Link
-              href="#learn-more"
-              className="inline-flex h-[40px] items-center justify-center rounded-full border border-white/35 px-8 text-[17px] font-semibold leading-[120%] text-white hover:bg-white/10 transition-colors"
-            >
-              Learn More
-            </Link>
           </div>
 
           {/* ROW 2: Steps + Card */}
@@ -216,10 +229,10 @@ export default function HomePage() {
                     <span className="text-sm font-semibold text-white">1</span>
                   </div>
                   <div>
-                    <h3 className="text-[20px] text-base font-semibold text-white">
+                    <h3 className="text-[22px] text-base font-semibold text-white">
                       Scratch
                     </h3>
-                    <p className="mt-1 text-[14px] leading-relaxed text-slate-300">
+                    <p className="mt-1 text-[16px] leading-relaxed text-slate-300">
                       Everyone in every SQRATCH community is real. No bots, no
                       AI, no machines. Each SQRATCH sticker hides a unique code
                       created for a single person. Revealing it takes intention
@@ -237,10 +250,10 @@ export default function HomePage() {
                     <span className="text-sm font-semibold text-white">2</span>
                   </div>
                   <div>
-                    <h3 className="text-[20px] text-base font-semibold text-white">
+                    <h3 className="text-[22px] text-base font-semibold text-white">
                       Scan
                     </h3>
-                    <p className="mt-1 text-[14px] leading-relaxed text-slate-300">
+                    <p className="mt-1 text-[16px] leading-relaxed text-slate-300">
                       By joining through SQRATCH, you are surrounded only by
                       real people who share the same passions as you. Scanning
                       presents a clear decision: Do you want to step into this
@@ -258,10 +271,10 @@ export default function HomePage() {
                     <span className="text-sm font-semibold text-white">3</span>
                   </div>
                   <div>
-                    <h3 className="text-[20px] text-base font-semibold text-white">
+                    <h3 className="text-[22px] text-base font-semibold text-white">
                       Enter
                     </h3>
-                    <p className="mt-1 text-[14px] leading-relaxed text-slate-300">
+                    <p className="mt-1 text-[16px] leading-relaxed text-slate-300">
                       SQRATCH Communities are about participation and belonging.
                       Everyone is equal. Accepting the invitation unlocks a
                       dedicated community shaped by shared interest, unique

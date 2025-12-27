@@ -74,7 +74,7 @@ export default function WaitlistInline({
               disabled={isLoading}
               placeholder={placeholder}
               className={[
-                "h-11 flex-1 rounded-full px-4",
+                "h-12 text-[18px] flex-1 rounded-full px-4",
                 "border border-white/25 bg-black/30 text-white placeholder:text-white/70",
                 "backdrop-blur-md outline-none transition-colors",
                 "focus:border-white/35 focus:ring-2 focus:ring-white/20",
@@ -88,7 +88,7 @@ export default function WaitlistInline({
               disabled={isLoading}
               type="submit"
               className={[
-                "h-11 shrink-0 rounded-full px-5",
+                "h-12 text-[18px] shrink-0 rounded-full px-5",
                 "border border-white text-black bg-white",
                 "backdrop-blur-md",
                 "transition",
