@@ -17,6 +17,12 @@ function requireCronSecret(req: Request) {
 }
 
 serve(async (req: Request): Promise<Response> => {
+  console.log("Caller headers:", {
+    ua: req.headers.get("user-agent"),
+    referer: req.headers.get("referer"),
+    xff: req.headers.get("x-forwarded-for"),
+    supabase: req.headers.get("x-supabase-signature"),
+  });
   try {
     console.log("📩 sendInviteEmail triggered:", new Date().toISOString());
     // console.log("📥 Headers:", Object.fromEntries(req.headers));

@@ -88,3 +88,22 @@ export async function sendInviteEmail(
 
   return transporter.sendMail(mailOptions);
 }
+
+export async function sendWelcomeEmail(email: string, name?: string) {
+  const from = process.env.ADMIN_EMAIL;
+
+  const safeName = name && name.trim() ? name.trim() : "there";
+
+  const mailOptions = {
+    from,
+    to: email,
+    subject: "Welcome to SQRATCH!",
+    html: `
+      <h1>Welcome to SQRATCH!</h1>
+      <p>Hi ${safeName} — thanks for joining SQRATCH.</p>
+      <p>You're all set.</p>
+    `,
+  };
+
+  return transporter.sendMail(mailOptions);
+}
