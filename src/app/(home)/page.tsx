@@ -11,7 +11,7 @@ export default function HomePage() {
   return (
     <div className="relative min-h-screen bg-[#020015] text-white">
       {/* ================= HERO SECTION ================= */}
-      <section className="relative min-h-screen flex flex-col">
+      <section className="relative min-h-screen flex flex-col overflow-x-hidden">
         {/* Video background wrapper */}
         <div className="absolute inset-x-0 top-0 h-[100vh] overflow-hidden">
           {/* Background video */}
@@ -39,24 +39,23 @@ export default function HomePage() {
           className="pointer-events-none absolute left-0 right-0 -top-[228px] h-[584px] bg-cover bg-center"
           style={{
             backgroundImage: `
-      radial-gradient(
-        127.88% 53.54% at 50% 49.91%,
-        rgba(24, 15, 79, 0) 0%,
-        #020121 100%
-      ),
-      url('/assets/homepage/hero-overlay-blob.png')
-    `,
+              radial-gradient(
+                127.88% 53.54% at 50% 49.91%,
+                rgba(24, 15, 79, 0) 0%,
+                #020121 100%
+              ),
+              url('/assets/homepage/hero-overlay-blob.png')
+            `,
             mixBlendMode: "lighten",
             transformOrigin: "center",
           }}
         />
 
         {/* Decorative cubes */}
-        {/* Decorative cubes */}
         <motion.img
           src="/assets/homepage/hero-cube-left.png"
           alt=""
-          className="pointer-events-none hidden md:block absolute -left-28 bottom-36 w-64 drop-shadow-[0_0_70px_rgba(147,197,243,0.6)]"
+          className="pointer-events-none hidden lg:block absolute -left-28 bottom-36 w-64 drop-shadow-[0_0_70px_rgba(147,197,243,0.6)]"
           initial={{ opacity: 0, rotate: -6, y: 10, scale: 0.98 }}
           animate={{ opacity: 1, rotate: 0, y: [0, -10, 0], scale: 1 }}
           transition={{
@@ -76,7 +75,7 @@ export default function HomePage() {
         <motion.img
           src="/assets/homepage/hero-cube-right.png"
           alt=""
-          className="pointer-events-none hidden md:block absolute -right-20 top-40 w-60 drop-shadow-[0_0_70px_rgba(244,114,182,0.85)]"
+          className="pointer-events-none hidden lg:block absolute -right-20 top-40 w-60 drop-shadow-[0_0_70px_rgba(244,114,182,0.85)]"
           initial={{ opacity: 0, rotate: -6, y: 10, scale: 0.98 }}
           animate={{ opacity: 1, rotate: 0, y: [0, -10, 0], scale: 1 }}
           transition={{
@@ -102,14 +101,15 @@ export default function HomePage() {
             shadow-[inset_0_-1px_0_rgba(0,50,53,0.2)]
           "
         >
-          <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-1 sm:px-6 lg:px-8">
+          <div className="mx-auto flex max-w-6xl items-center justify-between px-3 py-2 sm:px-6 lg:px-8">
             {/* Logo */}
             <Link href="/" className="flex items-center">
               <span
                 className="
-                  logo-text
-                  text-white 
+                  text-white font-semibold tracking-[-0.03em]
+                  text-[20px] sm:text-[22px] md:text-[24px]
                   drop-shadow-[0_0_22px_rgba(255,255,255,0.4)]
+                  whitespace-nowrap
                 "
               >
                 SQRATCH
@@ -120,7 +120,14 @@ export default function HomePage() {
             <div className="flex items-center gap-4">
               <Link
                 href="https://calendly.com/sqratch/30min"
-                className="hidden sm:inline-flex h-10 items-center justify-center rounded-full border border-[#ECECEC] bg-transparent px-5 text-[16px] leading-6 font-normal text-[#ECECEC] hover:bg-white hover:text-black transition-colors"
+                className="
+                  inline-flex items-center justify-center rounded-full
+                  border border-[#ECECEC] bg-transparent
+                  h-8 px-3 text-[12px] sm:h-9 sm:px-4 sm:text-[13px] md:h-10 md:px-5 md:text-[14px]
+                  leading-none font-normal text-[#ECECEC]
+                  hover:bg-white hover:text-black transition-colors
+                  whitespace-nowrap
+                "
               >
                 Become a Partner
               </Link>
@@ -139,61 +146,82 @@ export default function HomePage() {
             {/* Headline */}
             <h1
               className="
-                mt-16
+                mt-16 sm:mt-14 lg:mt-16
                 w-full
                 text-center
-                text-[80px]
+                text-[40px] sm:text-[56px] md:text-[60px] lg:text-[80px]
                 font-bold
-                leading-[100%]
+                leading-[105%] sm:leading-[100%]
                 tracking-[-0.03em]
                 bg-[linear-gradient(145.55deg,#ECECEC_20.35%,rgba(236,236,236,0)_128.73%)]
                 bg-clip-text
                 drop-shadow-[0_0_12px_rgba(236,236,236,0.50)]
               "
             >
-              The internet feels crowded,
-              <br />
-              but not connected.
+              {/* Mobile */}
+              <span className="sm:hidden">
+                The internet
+                <br />
+                feels crowded,
+                <br />
+                but not connected.
+              </span>
+
+              {/* Desktop / iPad */}
+              <span className="hidden sm:inline">
+                The internet feels crowded,
+                <br />
+                but not connected.
+              </span>
             </h1>
 
             {/* Body */}
-            <p className="mt-2 max-w-[700px] text-center text-[22px] font-medium leading-[160%] text-[#ECECEC]/75">
-              Every SQRATCH sticker is a tiny portal to something better.
-              <br />
-              Scratch, scan, instantly connect to a real new world.
+            <p className="mt-2 max-w-[700px] text-center text-[20px] lg:text-[22px] font-medium leading-[150%] sm:leading-[160%] text-[#ECECEC]/75">
+              <span className="sm:hidden">
+                Every SQRATCH sticker is a tiny portal to something better.
+                Scratch, scan, instantly connect to a real new world.
+              </span>
+
+              <span className="hidden sm:inline">
+                Every SQRATCH sticker is a tiny portal to something better.
+                <br />
+                Scratch, scan, instantly connect to a real new world.
+              </span>
             </p>
 
             {/* CTA buttons */}
-            <div className="mt-16 flex flex-wrap items-center justify-center gap-4">
-              <WaitlistInline
-                placeholder="Enter your email"
-                buttonLabel="Join the Waitlist"
-                onSubmit={async (email) => {
-                  try {
-                    const res = await fetch("/api/public/waitlist", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({
-                        email,
-                        source: "homepage-hero",
-                      }),
-                    });
+            <div className="mt-16 flex flex-wrap w-full items-center justify-center gap-4 sm:w-auto sm:flex-row sm:flex-wrap">
+              <div className="w-full max-w-[270px] sm:max-w-none">
+                <WaitlistInline
+                  placeholder="Enter your email"
+                  buttonLabel="Join the Waitlist"
+                  onSubmit={async (email) => {
+                    try {
+                      const res = await fetch("/api/public/waitlist", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                          email,
+                          source: "homepage-hero",
+                        }),
+                      });
 
-                    const data = await res.json();
+                      const data = await res.json();
 
-                    if (!res.ok) {
-                      throw new Error(data.error || "Something went wrong");
+                      if (!res.ok) {
+                        throw new Error(data.error || "Something went wrong");
+                      }
+
+                      // The WaitlistInline component will handle the success state UI
+                      console.log("Joined waitlist:", data);
+                    } catch (error) {
+                      // Re-throw so the component knows an error occurred
+                      console.error("Waitlist error:", error);
+                      throw error;
                     }
-
-                    // The WaitlistInline component will handle the success state UI
-                    console.log("Joined waitlist:", data);
-                  } catch (error) {
-                    // Re-throw so the component knows an error occurred
-                    console.error("Waitlist error:", error);
-                    throw error;
-                  }
-                }}
-              />
+                  }}
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -201,7 +229,7 @@ export default function HomePage() {
 
       {/* ============== HOW SQRATCH WORKS SECTION ============== */}
       <section className="bg-[#020121] py-24">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-6xl px-6 sm:px-6 lg:px-8">
           {/* ROW 1: Title + Learn More */}
           <div className="flex items-center justify-between gap-8">
             <div className="max-w-[530px]">
@@ -211,7 +239,7 @@ export default function HomePage() {
               </p>
 
               {/* Heading */}
-              <h2 className="mt-3 text-[32px] leading-[40px] font-bold tracking-[-0.02em] text-white">
+              <h2 className="mt-2 sm:mt-3 text-[28px] leading-[34px] sm:text-[32px] sm:leading-[40px] font-bold tracking-[-0.02em] text-white">
                 A pathway built on participation <br />
                 and choice.
               </h2>
@@ -221,7 +249,7 @@ export default function HomePage() {
           {/* ROW 2: Steps + Card */}
           <div className="mt-12 flex flex-col gap-12 lg:flex-row lg:items-start lg:justify-between">
             {/* LEFT: Steps */}
-            <div className="max-w-[500px] space-y-10">
+            <div className="order-2 lg:order-1 max-w-[500px] space-y-10">
               {/* Step 1 */}
               <div>
                 <div className="flex items-start gap-4">
@@ -286,7 +314,7 @@ export default function HomePage() {
             </div>
 
             {/* RIGHT: Card (Scratch-to-reveal video) */}
-            <div className="flex flex-1 justify-center lg:justify-end">
+            <div className="order-1 lg:order-2 flex flex-1 justify-center lg:justify-end">
               <div className="relative w-full max-w-[460px]">
                 {/* Background glow */}
                 <div className="absolute inset-0 rounded-[28px] shadow-[0_0_160px_rgba(59,130,246,0.55)]" />
@@ -730,20 +758,22 @@ export default function HomePage() {
 
       {/* ============== FOOTER ============== */}
       <footer className="bg-[#020121] py-16 md:py-20">
-        <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+        <div className="mx-auto max-w-6xl px-6 sm:px-6 lg:px-8">
           {/* THREE COLUMNS */}
           <div className="grid grid-cols-1 gap-12 md:grid-cols-12">
             {/* COLUMN 1 — CONTACT + CAREERS + COPYRIGHT */}
             <div className="flex flex-col gap-10 md:col-span-6 lg:col-span-6">
               {/* Contact */}
               <div className="flex flex-col gap-4">
-                <h3 className="text-[24px] font-medium leading-[29px] tracking-[-0.01em] text-white">
+                <h3 className="text-[22px] md:text-[24px] font-bold leading-[29px] tracking-[-0.01em] text-purple-300">
                   Contact
                 </h3>
 
-                <div className="flex flex-col gap-[10px] text-[18px] leading-[22px] tracking-[-0.01em] text-white">
-                  <p className="whitespace-nowrap">
-                    Press and Speaking Inquiries:{" "}
+                <div className="flex flex-col gap-[10px] text-[16px] md:text-[18px] leading-[22px] tracking-[-0.01em] text-white">
+                  <p className="whitespace-normal break-words">
+                    <span className="font-semibold">
+                      Press and Speaking Inquiries:
+                    </span>{" "}
                     <a
                       href="mailto:press@sqratch.com"
                       className="underline decoration-white/30 underline-offset-4 hover:decoration-white/70"
@@ -752,8 +782,8 @@ export default function HomePage() {
                     </a>
                   </p>
 
-                  <p className="whitespace-nowrap">
-                    Investor Relations:{" "}
+                  <p className="whitespace-normal break-words">
+                    <span className="font-semibold">Investor Relations:</span>{" "}
                     <a
                       href="mailto:investors@sqratch.com"
                       className="underline decoration-white/30 underline-offset-4 hover:decoration-white/70"
@@ -786,7 +816,7 @@ export default function HomePage() {
               </div>
 
               {/* Copyright */}
-              <p className="text-[16px] text-[#939393] tracking-[-0.01em]">
+              <p className="text-[14px] md:text-[16px] text-[#939393] tracking-[-0.01em]">
                 © 2026 Sqratch. All rights reserved.
               </p>
             </div>
@@ -795,10 +825,10 @@ export default function HomePage() {
             <div className="flex flex-col gap-10 md:col-span-4 lg:col-span-4">
               {/* Address */}
               <div className="flex flex-col gap-4">
-                <h3 className="text-[24px] font-medium leading-[29px] tracking-[-0.01em] text-white">
+                <h3 className="text-[22px] md:text-[24px] font-bold leading-[29px] tracking-[-0.01em] text-purple-300">
                   Address
                 </h3>
-                <p className="max-w-[260px] text-[18px] leading-[22px] tracking-[-0.01em] text-white">
+                <p className="max-w-[260px] text-[16px] md:text-[18px] leading-[22px] tracking-[-0.01em] text-white">
                   441 Maclaren St. Suite 310, <br />
                   Ottawa ON K2P 2H3
                 </p>
@@ -806,10 +836,10 @@ export default function HomePage() {
 
               {/* Social */}
               <div className="flex flex-col gap-4">
-                <h3 className="text-[24px] font-medium leading-[29px] tracking-[-0.01em] text-white">
+                <h3 className="text-[22px] md:text-[24px] font-bold leading-[29px] tracking-[-0.01em] text-purple-300">
                   Social
                 </h3>
-                <div className="flex flex-col gap-[6px] text-[18px] leading-[22px] tracking-[-0.01em] text-white">
+                <div className="flex flex-col gap-[6px] text-[16px] md:text-[18px] leading-[22px] tracking-[-0.01em] text-white">
                   {/* <a href="#" className="hover:text-[#CDCDCD]">
                     Twitter
                   </a> */}

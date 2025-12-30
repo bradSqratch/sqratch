@@ -15,13 +15,25 @@ export default function StickyWhatSqratchCreates() {
   const isSquareMode = activeIndex === 0 || activeIndex === 1;
   const isExpandedMode = activeIndex >= 2;
 
+  const [isDesktop, setIsDesktop] = useState(false);
+
   useEffect(() => {
+    const mq = window.matchMedia("(min-width: 1024px)");
+    const onChange = () => setIsDesktop(mq.matches);
+    onChange();
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+
+  useEffect(() => {
+    if (!isDesktop) return;
     if (!videoRef.current) return;
     videoRef.current.currentTime = 0;
     videoRef.current.play().catch(() => {});
-  }, [activeIndex]);
+  }, [activeIndex, isDesktop]);
 
   useEffect(() => {
+    if (!isDesktop) return;
     let raf = 0;
 
     const onScroll = () => {
@@ -55,13 +67,13 @@ export default function StickyWhatSqratchCreates() {
       window.removeEventListener("scroll", onScroll);
       window.removeEventListener("resize", onScroll);
     };
-  }, []);
+  }, [isDesktop]);
 
   const activeStep = activeIndex >= 0 ? steps[activeIndex] : null;
 
   return (
     <section className="relative bg-[#0C0B30] py-24">
-      <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-6xl px-6 sm:px-6 lg:px-8">
         <div className="flex flex-col lg:flex-row lg:gap-20">
           {/* LEFT: Sticky Image Column */}
           <div className="hidden lg:block lg:w-1/2 relative">
@@ -114,40 +126,64 @@ export default function StickyWhatSqratchCreates() {
             </div>
           </div>
 
-          {/* MOBILE ONLY: Inline Image */}
-          <div className="lg:hidden py-12 flex justify-center">
-            {activeStep ? (
-              <motion.div
-                className="relative overflow-hidden rounded-[30px]"
-                animate={{
-                  width: "min(420px, 90vw)",
-                  height: isExpandedMode ? "60vh" : "min(420px, 90vw)",
-                }}
-                transition={{ duration: 0.55, ease: [0.2, 0.8, 0.2, 1] }}
-              >
-                <video
-                  key={activeStep.video}
-                  src={activeStep.video}
-                  className={[
-                    "absolute inset-0 h-full w-full",
-                    isSquareMode
-                      ? "object-cover scale-x-[1.22] scale-y-[1.02]"
-                      : "object-contain",
-                  ].join(" ")}
-                  muted
-                  playsInline
-                  autoPlay
-                  loop
-                  preload="metadata"
-                />
-              </motion.div>
-            ) : (
-              <div className="h-[200px]" />
-            )}
+          {/* MOBILE ONLY: stacked (video -> text) */}
+          <div className="lg:hidden mt-12 space-y-14">
+            {steps.map((step, i) => {
+              const square = i === 0 || i === 1;
+              const expanded = i >= 2;
+
+              return (
+                <div key={i} className="space-y-6">
+                  {/* Video */}
+                  <div className="mx-auto w-full max-w-[420px] overflow-hidden rounded-[30px]">
+                    <div
+                      className={[
+                        "relative w-full",
+                        square ? "aspect-square" : "h-[60vh] max-h-[520px]",
+                      ].join(" ")}
+                    >
+                      <video
+                        src={step.video}
+                        className={[
+                          "absolute inset-0 h-full w-full",
+                          square
+                            ? "object-cover scale-x-[1.22] scale-y-[1.02]"
+                            : "object-contain",
+                        ].join(" ")}
+                        muted
+                        playsInline
+                        autoPlay
+                        loop
+                        preload="metadata"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Text */}
+                  <div>
+                    <p className="text-[14px] sm:text-[16px] font-semibold uppercase tracking-[0.30em] text-[#FFFFFF]/50">
+                      HOW SQRATCH WORKS
+                    </p>
+
+                    <h2 className="mt-6 text-[28px] sm:text-[30px] leading-[1.15] font-bold whitespace-pre-line text-[#A98DFF]">
+                      {step.title}
+                    </h2>
+
+                    <p className="mt-2 text-[16px] font-medium text-white/85">
+                      {step.subtitle}
+                    </p>
+
+                    <p className="mt-3 text-[16px] text-white max-w-[60ch]">
+                      {step.paragraph}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
-          {/* RIGHT: Scrolling Text */}
-          <div className="lg:w-1/2 lg:pl-10 lg:pt-24">
+          {/* RIGHT: Scrolling Text (DESKTOP ONLY) */}
+          <div className="hidden lg:block lg:w-1/2 lg:pl-10 lg:pt-24">
             {steps.map((step, i) => (
               <motion.div
                 key={i}

@@ -64,7 +64,11 @@ export default function WaitlistInline({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0, y: -10 }}
-            className="flex w-full max-w-[420px] items-center gap-3"
+            className="
+              flex w-full sm:w-auto
+              flex-col items-stretch gap-3
+              sm:flex-row sm:items-center
+            "
             onSubmit={handleSubmit}
           >
             <input
@@ -74,7 +78,7 @@ export default function WaitlistInline({
               disabled={isLoading}
               placeholder={placeholder}
               className={[
-                "h-12 text-[18px] flex-1 rounded-full px-4",
+                "text-[16px] sm:text-[18px] w-full flex-1 rounded-full px-4 py-3 leading-none",
                 "border border-white/25 bg-black/30 text-white placeholder:text-white/70",
                 "backdrop-blur-md outline-none transition-colors",
                 "focus:border-white/35 focus:ring-2 focus:ring-white/20",
@@ -88,11 +92,11 @@ export default function WaitlistInline({
               disabled={isLoading}
               type="submit"
               className={[
-                "h-12 text-[18px] shrink-0 rounded-full px-5",
+                "text-[16px] sm:text-[18px] shrink-0 rounded-full px-6 py-3 w-full sm:w-[180px] leading-none",
                 "border border-white text-black bg-white",
                 "backdrop-blur-md",
                 "transition",
-                "whitespace-nowrap flex items-center gap-2",
+                "whitespace-nowrap inline-flex items-center justify-center gap-2",
                 "disabled:opacity-50 disabled:cursor-not-allowed",
               ].join(" ")}
             >

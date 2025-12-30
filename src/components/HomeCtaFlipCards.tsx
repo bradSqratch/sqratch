@@ -131,7 +131,7 @@ function FlipCard({
           <div className="absolute inset-0 grid place-items-center px-8 text-center">
             <div className="group-hover:hidden">
               {/* TITLE — 32px */}
-              <h4 className="text-[32px] sm:text-4xl font-semibold tracking-wide text-white group-hover:hidden">
+              <h4 className="text-[30px] md:text-[32px] sm:text-4xl font-semibold tracking-wide text-white group-hover:hidden">
                 {title}
               </h4>
               {/* SUBTITLE — 16px, max 2 lines */}
@@ -272,7 +272,7 @@ export default function HomeCtaFlipCards() {
         subtitle: "Treat customers as participants, not targets.",
         description:
           "SQRATCH is for brands that want depth, not just reach. If you’re prepared to support a community with access, rewards, or real involvement—and treat customers as participants rather than targets—SQRATCH can help. This works best for brands willing to engage long-term, not run one-off campaigns. Explore a partnership.",
-        bgImageUrl: "/assets/homepage/FlipCard2.png",
+        bgImageUrl: "/assets/homepage/FlipCard2.mp4",
         cta: {
           type: "waitlist",
           placeholder: "Enter your email",
@@ -296,7 +296,7 @@ export default function HomeCtaFlipCards() {
 
   return (
     <section className="relative w-full py-16 sm:py-20">
-      <div className="mx-auto max-w-6xl px-4 sm:px-6 lg:px-8">
+      <div className="mx-auto max-w-6xl px-6 sm:px-6 lg:px-8">
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
           {cards.map((c) => (
             <FlipCard
