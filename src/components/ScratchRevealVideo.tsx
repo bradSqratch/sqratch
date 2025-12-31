@@ -150,6 +150,18 @@ export default function ScratchRevealVideo({
 
     setIsFinishing(true);
 
+    const vid = videoRef.current;
+    if (vid) {
+      vid.currentTime = 0;
+      const attempt = vid.play();
+      if (attempt && typeof attempt.catch === "function") {
+        attempt.catch(() => {
+          vid.muted = true;
+          vid.play().catch(() => {});
+        });
+      }
+    }
+
     // nice dissolve (fake pixelation) for ~350ms
     await pixelDissolve(10, 18, 350);
 
@@ -160,10 +172,6 @@ export default function ScratchRevealVideo({
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext("2d")!;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-    const vid = videoRef.current!;
-    vid.currentTime = 0;
-    vid.play().catch(() => {});
   }
 
   function resetAll() {
@@ -248,6 +256,7 @@ export default function ScratchRevealVideo({
 
     const onPointerDown = (e: PointerEvent) => {
       if (isRevealed) return;
+      e.preventDefault();
       isDrawingRef.current = true;
       canvas.setPointerCapture(e.pointerId);
       lastPointRef.current = getLocalPoint(e);
@@ -255,6 +264,7 @@ export default function ScratchRevealVideo({
 
     const onPointerMove = (e: PointerEvent) => {
       if (!isDrawingRef.current || isRevealed) return;
+      e.preventDefault();
       const last = lastPointRef.current;
       if (!last) return;
 
@@ -340,7 +350,7 @@ export default function ScratchRevealVideo({
         <canvas
           ref={canvasRef}
           className={[
-            "absolute inset-0 h-full w-full",
+            "absolute inset-0 h-full w-full touch-none",
             isRevealed
               ? "pointer-events-none opacity-0"
               : "cursor-grab active:cursor-grabbing",

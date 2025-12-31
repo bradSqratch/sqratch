@@ -29,7 +29,7 @@ const montserrat = Montserrat({
 export const metadata: Metadata = {
   title: "Sqratch",
   description:
-    "Signup with your email and acccess private community in Minds.com",
+    "SQRATCH empowers brands and builders to create private, real-person communities.",
 };
 
 export default function RootLayout({

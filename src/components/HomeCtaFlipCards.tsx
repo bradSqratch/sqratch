@@ -85,7 +85,7 @@ function FlipCard({
             <div
               className={[
                 "absolute inset-0",
-                "bg-black/80",
+                "bg-black/60 lg:bg-black/80",
                 "transition-opacity duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)]",
                 "group-hover:opacity-0",
               ].join(" ")}
@@ -210,7 +210,7 @@ function FlipCard({
           {/* Dark overlay tint (stronger for readability) */}
           <div
             className={[
-              "pointer-events-none absolute inset-0 bg-black/80",
+              "pointer-events-none absolute inset-0 bg-black/60 lg:bg-black/80",
             ].join(" ")}
           />
 
@@ -262,7 +262,7 @@ export default function HomeCtaFlipCards() {
         bgImageUrl: "/assets/homepage/FlipCard1.mp4",
         cta: {
           type: "link",
-          label: "Become a Partner",
+          label: "Build a Community",
           href: "https://calendly.com/sqratch/30min",
         },
       },
@@ -274,18 +274,9 @@ export default function HomeCtaFlipCards() {
           "SQRATCH is for brands that want depth, not just reach. If you’re prepared to support a community with access, rewards, or real involvement—and treat customers as participants rather than targets—SQRATCH can help. This works best for brands willing to engage long-term, not run one-off campaigns. Explore a partnership.",
         bgImageUrl: "/assets/homepage/FlipCard2.mp4",
         cta: {
-          type: "waitlist",
-          placeholder: "Enter your email",
-          buttonLabel: "Join the Waitlist",
-          onSubmit: async (email) => {
-            const res = await fetch("/api/public/waitlist", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ email, source: "flip-card-fans" }),
-            });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data.error || "Something went wrong");
-          },
+          type: "link",
+          label: "Become A Brand Partner",
+          href: "https://calendly.com/sqratch/sqratch-for-brands",
         },
       },
     ],

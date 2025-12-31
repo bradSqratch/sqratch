@@ -110,14 +110,18 @@ export default function HomePage() {
                   text-[20px] sm:text-[22px] md:text-[24px]
                   drop-shadow-[0_0_22px_rgba(255,255,255,0.4)]
                   whitespace-nowrap
+                  flex items-start gap-1
                 "
               >
-                SQRATCH
+                <span>SQRATCH</span>
+                <sup className="relative top-1.5 md:top-2 -left-1 text-[7px] sm:text-[8px] md:text-[9px] leading-none">
+                  TM
+                </sup>
               </span>
             </Link>
 
             {/* Actions */}
-            <div className="flex items-center gap-4">
+            {/* <div className="flex items-center gap-4">
               <Link
                 href="https://calendly.com/sqratch/30min"
                 className="
@@ -131,7 +135,7 @@ export default function HomePage() {
               >
                 Become a Partner
               </Link>
-            </div>
+            </div> */}
           </div>
         </header>
 
@@ -249,7 +253,7 @@ export default function HomePage() {
           {/* ROW 2: Steps + Card */}
           <div className="mt-12 flex flex-col gap-12 lg:flex-row lg:items-start lg:justify-between">
             {/* LEFT: Steps */}
-            <div className="order-2 lg:order-1 max-w-[500px] space-y-10">
+            <div className="order-2 lg:order-1 max-w-[500px] space-y-10 mx-auto lg:mx-0 mt-2 md:mt-14 lg:mt-0">
               {/* Step 1 */}
               <div>
                 <div className="flex items-start gap-4">
@@ -341,524 +345,106 @@ export default function HomePage() {
       {/* ============== CTA FLIP CARDS SECTION ============== */}
       <HomeCtaFlipCards />
 
-      {/* ============== MEMBER EXPERIENCE SECTION ============== */}
-      {false && (
-        <section className="bg-[##0C0B30] py-24">
-          <div className="mx-auto flex max-w-6xl flex-col items-center px-4">
-            {/* Top title block */}
-            <div className="max-w-[800px] text-center">
-              <p className="text-[18px] font-semibold uppercase tracking-[0.05em] text-[#CDCDCD]/60">
-                Member Experience
-              </p>
-
-              <h2 className="mt-4 text-[32px] leading-[1.4] font-semibold text-white sm:text-[40px]">
-                Life, but enhanced through
-                <br />
-                rewarding moments.
-              </h2>
-
-              <p className="mt-4 text-[18px] leading-[1.6] text-[#CDCDCD]">
-                A private space feels different when everyone chose to be there.
-              </p>
-            </div>
-
-            {/* Icon grid */}
-            <div className="mt-16 grid w-full max-w-[1140px] gap-10 sm:grid-cols-2 lg:grid-cols-3">
-              {/* Card 1 */}
-              <div className="flex flex-col items-center gap-5 px-4 py-10 text-center lg:border-b lg:border-r lg:border-slate-800/70">
-                <div className="flex h-15 w-15 items-center justify-center rounded-full bg-[linear-gradient(146.43deg,#C518C5_17.21%,#4200FF_94.41%)]">
-                  <img
-                    src="/assets/homepage/activity-icon-dummy.svg"
-                    alt=""
-                    className="h-7 w-7"
-                  />
-                </div>
-                <h3 className="text-[24px] font-semibold leading-[1.4] text-white">
-                  Instant Unlocks
-                </h3>
-                <p className="max-w-[290px] text-[16px] leading-[1.6] text-[#CDCDCD]">
-                  Scratch, scan, and access something meaningful right away.
-                </p>
-              </div>
-
-              {/* Card 2 */}
-              <div className="flex flex-col items-center gap-5 px-4 py-10 text-center lg:border-b lg:border-r lg:border-slate-800/70">
-                <div className="flex h-15 w-15 items-center justify-center rounded-full bg-[linear-gradient(146.43deg,#C518C5_17.21%,#4200FF_94.41%)]">
-                  <img
-                    src="/assets/homepage/activity-icon-dummy.svg"
-                    alt=""
-                    className="h-7 w-7"
-                  />
-                </div>
-                <h3 className="text-[24px] font-semibold leading-[1.4] text-white">
-                  Private Communities
-                </h3>
-                <p className="max-w-[290px] text-[16px] leading-[1.6] text-[#CDCDCD]">
-                  Enter spaces curated around the interests you care about,
-                  guided by real practitioners.
-                </p>
-              </div>
-
-              {/* Card 3 */}
-              <div className="flex flex-col items-center gap-5 px-4 py-10 text-center lg:border-b lg:border-slate-800/70">
-                <div className="flex h-15 w-15 items-center justify-center rounded-full bg-[linear-gradient(146.43deg,#C518C5_17.21%,#4200FF_94.41%)]">
-                  <img
-                    src="/assets/homepage/activity-icon-dummy.svg"
-                    alt=""
-                    className="h-7 w-7"
-                  />
-                </div>
-                <h3 className="text-[24px] font-semibold leading-[1.4] text-white">
-                  Personalized Access
-                </h3>
-                <p className="max-w-[290px] text-[16px] leading-[1.6] text-[#CDCDCD]">
-                  Behind-the-scenes content, early drops, digital collectibles,
-                  guided experiences, surprise perks.
-                </p>
-              </div>
-
-              {/* Card 4 */}
-              <div className="flex flex-col items-center gap-5 px-4 py-10 text-center lg:border-r lg:border-slate-800/70">
-                <div className="flex h-15 w-15 items-center justify-center rounded-full bg-[linear-gradient(146.43deg,#C518C5_17.21%,#4200FF_94.41%)]">
-                  <img
-                    src="/assets/homepage/activity-icon-dummy.svg"
-                    alt=""
-                    className="h-7 w-7"
-                  />
-                </div>
-                <h3 className="text-[24px] font-semibold leading-[1.4] text-white">
-                  Interactive Experience
-                </h3>
-                <p className="max-w-[290px] text-[16px] leading-[1.6] text-[#CDCDCD]">
-                  Not a broadcast. Not a feed. A focused tribe built around your
-                  passions.
-                </p>
-              </div>
-
-              {/* Card 5 */}
-              <div className="flex flex-col items-center gap-5 px-4 py-10 text-center lg:border-r lg:border-slate-800/70">
-                <div className="flex h-15 w-15 items-center justify-center rounded-full bg-[linear-gradient(146.43deg,#C518C5_17.21%,#4200FF_94.41%)]">
-                  <img
-                    src="/assets/homepage/activity-icon-dummy.svg"
-                    alt=""
-                    className="h-7 w-7"
-                  />
-                </div>
-                <h3 className="text-[24px] font-semibold leading-[1.4] text-white">
-                  Physical to Digital
-                </h3>
-                <p className="max-w-[290px] text-[16px] leading-[1.6] text-[#CDCDCD]">
-                  A small action on a product opens a rich digital experience
-                  connected to it.
-                </p>
-              </div>
-
-              {/* Card 6 */}
-              <div className="flex flex-col items-center gap-5 px-4 py-10 text-center">
-                <div className="flex h-15 w-15 items-center justify-center rounded-full bg-[linear-gradient(146.43deg,#C518C5_17.21%,#4200FF_94.41%)]">
-                  <img
-                    src="/assets/homepage/activity-icon-dummy.svg"
-                    alt=""
-                    className="h-7 w-7"
-                  />
-                </div>
-                <h3 className="text-[24px] font-semibold leading-[1.4] text-white">
-                  Rewards With Real Value
-                </h3>
-                <p className="max-w-[290px] text-[16px] leading-[1.6] text-[#CDCDCD]">
-                  Engaging, fun, and worth your time. This is a true community
-                  shaped by purpose.
-                </p>
-              </div>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* ============== BRAND EXPERIENCE SECTION ============== */}
-      {false && (
-        <section className="relative bg-[#04041B] py-24">
-          {/* soft glow behind heading */}
-          <div className="pointer-events-none absolute left-1/2 top-0 -z-10 h-64 w-full -translate-x-1/2 bg-[radial-gradient(circle_at_top,#4c1d95_0,transparent_60%)] opacity-70" />
-
-          <div className="mx-auto flex max-w-6xl flex-col items-center px-4">
-            {/* TITLE BLOCK */}
-            <div className="max-w-[800px] text-center">
-              <p className="text-[18px] font-semibold uppercase tracking-[0.05em] text-[#CDCDCD]/60">
-                Brand Experience
-              </p>
-
-              <h2 className="mt-4 text-[32px] font-semibold leading-[1.4] text-white sm:text-[40px] md:text-[48px]">
-                Deliver something
-                <br className="hidden md:block" /> people truly appreciate.
-              </h2>
-
-              <p className="mt-4 text-[18px] leading-[1.6] text-[#CDCDCD]">
-                Private entry creates a higher-quality community.
-                <br className="hidden md:block" />A higher-quality community
-                keeps people engaged.
-              </p>
-            </div>
-
-            {/* TOP ROW – 2 CARDS */}
-            <div className="mt-16 grid w-full gap-8 md:grid-cols-2">
-              {/* Card 1 – Analytics Dashboard */}
-              <div className="flex h-full flex-col rounded-[20px] bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0))] p-10 sm:p-12 shadow-[0_-2px_10px_rgba(233,223,255,0.3),0_-2px_40px_rgba(187,155,255,0.15)] ring-[0.5px] ring-white/50">
-                {/* Icon */}
-                <div className="mb-6 flex h-[50px] w-[50px] items-center justify-center rounded-2xl bg-[radial-gradient(circle_at_top,#f973ff_0,#7c3aed_40%,#312e81_100%)] shadow-[0_0_36px_rgba(89,29,221,0.75)]">
-                  <img
-                    src="/assets/homepage/activity-icon-dummy.svg"
-                    alt=""
-                    className="h-6 w-6"
-                  />
-                </div>
-
-                {/* Content */}
-                <div className="flex flex-1 flex-col gap-4 max-w-[464px]">
-                  <h3 className="text-[28px] md:text-[32px] font-medium leading-[1.3] tracking-[-0.01em] text-[#ECECEC]">
-                    Analytics Dashboard
-                  </h3>
-                  <p className="text-[14px] leading-[1.5] text-[#ECECEC]">
-                    Our Analytics Dashboard provides a clear and intuitive
-                    interface to easily track and analyze your data. From
-                    customizable charts to real-time updates, it gives you the
-                    insights you need to make confident, data-driven decisions.
-                  </p>
-                </div>
-
-                {/* Action */}
-                <div className="mt-6">
-                  <button className="text-[16px] font-medium leading-[1.5] text-white underline">
-                    View dashboard
-                  </button>
-                </div>
-              </div>
-
-              {/* Card 2 – Digital Credit Tokens */}
-              <div className="flex h-full flex-col rounded-[20px] bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0))] p-10 sm:p-12 shadow-[0_-2px_10px_rgba(233,223,255,0.3),0_-2px_40px_rgba(187,155,255,0.15)] ring-[0.5px] ring-white/50">
-                {/* Icon */}
-                <div className="mb-6 flex h-[50px] w-[50px] items-center justify-center rounded-2xl bg-[radial-gradient(circle_at_top,#fb3bff_0,#a855f7_35%,#4c1d95_100%)] shadow-[0_0_36px_rgba(149,37,201,0.75)]">
-                  <img
-                    src="/assets/homepage/activity-icon-dummy.svg"
-                    alt=""
-                    className="h-6 w-6"
-                  />
-                </div>
-
-                {/* Content */}
-                <div className="flex flex-1 flex-col gap-4 max-w-[464px]">
-                  <h3 className="text-[28px] md:text-[32px] font-medium leading-[1.3] tracking-[-0.01em] text-[#ECECEC]">
-                    Digital Credit Tokens
-                  </h3>
-                  <p className="text-[14px] leading-[1.5] text-[#ECECEC]">
-                    Reward your customers and incentivize engagement with
-                    innovative digital credit tokens. Customize them to match
-                    your branding and use them as a flexible, scalable way to
-                    drive loyalty and repeat business.
-                  </p>
-                </div>
-
-                {/* Action */}
-                <div className="mt-6">
-                  <button className="text-[16px] font-medium leading-[1.5] text-white underline">
-                    View tokens
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {/* MIDDLE ROW – TEXT + IMAGE CARD */}
-            <div className="mt-10 w-full rounded-[20px] bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0))] p-8 sm:p-10 md:p-12 shadow-[0_-2px_10px_rgba(233,223,255,0.3),0_-2px_40px_rgba(187,155,255,0.15)] ring-[0.5px] ring-white/50">
-              <div className="flex flex-col gap-10 md:flex-row md:items-start md:justify-between">
-                {/* Left card content */}
-                <div className="max-w-[460px]">
-                  <div className="mb-6 flex h-[50px] w-[50px] items-center justify-center rounded-2xl bg-[radial-gradient(circle_at_top,#fb3bff_0,#a855f7_35%,#4c1d95_100%)] shadow-[0_0_36px_rgba(201,37,171,0.75)]">
-                    <img
-                      src="/assets/homepage/activity-icon-dummy.svg"
-                      alt=""
-                      className="h-6 w-6"
-                    />
-                  </div>
-
-                  <h3 className="text-[28px] md:text-[32px] font-medium leading-[1.3] tracking-[-0.01em] text-[#ECECEC]">
-                    Campaign Collaboration
-                  </h3>
-                  <p className="mt-4 text-[14px] leading-[1.5] text-[#ECECEC]">
-                    Our advanced code-synchronization technology keeps your data
-                    accurate and up-to-date, no matter where it’s coming from.
-                    Whether you’re integrating multiple sources or working
-                    across teams, it’s easy to collaborate and ensure every
-                    campaign stays aligned.
-                  </p>
-
-                  <button className="mt-6 text-[16px] font-medium leading-[1.5] text-white underline">
-                    View code collaboration
-                  </button>
-                </div>
-
-                {/* Right image block */}
-                <div className="flex w-full items-center justify-center md:w-[467px]">
-                  <div className="h-[260px] w-full max-w-[467px] rounded-[20px] bg-black shadow-[0_-2px_10px_rgba(233,223,255,0.3),0_-2px_40px_rgba(187,155,255,0.15),0_0_0_2.3px_rgba(0,0,0,0.05),0_0_0_1.1px_rgba(255,255,255,0.1)] ring-[0.5px] ring-white/50 md:h-[300px]">
-                    {/* swap this div for an <img> once you have the real asset */}
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* BOTTOM CTA CARD */}
-            <div className="mt-10 w-full rounded-[20px] bg-[linear-gradient(180deg,rgba(255,255,255,0.05),rgba(255,255,255,0))] p-10 sm:p-12 md:p-16 text-center shadow-[0_-2px_10px_rgba(233,223,255,0.3),0_-2px_40px_rgba(187,155,255,0.15)] ring-[0.5px] ring-white/50">
-              <div className="mx-auto flex max-w-[768px] flex-col items-center gap-6">
-                <h3 className="text-[30px] md:text-[40px] leading-[1.2] font-bold text-[#ECECEC]">
-                  Our powerful analytics
-                  <br className="hidden md:block" />
-                  provides invaluable insights.
-                </h3>
-                <p className="text-[16px] md:text-[18px] leading-[1.5] text-[#ECECEC]">
-                  Unlock the power of data with our cutting-edge analytics
-                  product. Get instant insights with our user-friendly Analytics
-                  Dashboard, and use digital credit tokens to reward your
-                  customers and incentivize engagement.
-                </p>
-
-                <div className="mt-4">
-                  <button className="inline-flex items-center justify-center rounded-full border border-[#ECECEC] px-6 py-3 text-[16px] font-normal text-[#ECECEC]">
-                    Download the app
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-      )}
-
-      {/* ============== TESTIMONIALS SECTION ============== */}
-      {false && (
-        <section className="bg-[#0B0B30] py-24">
-          <div className="mx-auto max-w-6xl px-4">
-            {/* TITLE ROW */}
-            <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
-              <div className="max-w-[530px]">
-                <p className="text-[18px] font-semibold uppercase tracking-[0.05em] text-[#CDCDCD]/60">
-                  Testimonials
-                </p>
-                <h2 className="mt-4 text-[40px] leading-[1.3] font-semibold text-white sm:text-[48px]">
-                  What They Say About
-                  <br />
-                  Sqartch
-                </h2>
-              </div>
-
-              {/* See All button */}
-              <button className="inline-flex h-[56px] items-center justify-center rounded-full border border-white px-8 text-[17px] font-semibold text-white">
-                See All
-              </button>
-            </div>
-
-            {/* CARDS ROW */}
-            <div className="mt-12 grid gap-8 md:grid-cols-3">
-              {/* Card 1 */}
-              <div className="min-h-[394px] rounded-[30px] bg-[radial-gradient(54.52%_54.52%_at_50%_0%,rgba(131,172,240,0.25)_0.27%,rgba(131,172,240,0)_100%),linear-gradient(180deg,#3E3CA3_0%,#0C0B30_100%)] shadow-[0_25px_80px_rgba(0,0,0,0.85)]">
-                <div className="flex h-full flex-col px-10 pb-10 pt-10">
-                  {/* Avatar */}
-                  <div className="h-20 w-20 rounded-full bg-[#181826]" />
-
-                  {/* Quote */}
-                  <div className="mt-8 space-y-3">
-                    <h3 className="text-[20px] font-semibold leading-[1.4] text-white">
-                      “Secure and Transparent
-                      <br />
-                      Transactions”
-                    </h3>
-                    <p className="text-[16px] leading-[1.6] text-[#CDCDCD]">
-                      Massa malesuada aliquam fames senectus vitae ornare.
-                      Fringilla sit varius mattis ultricies sed nulla.
-                    </p>
-                  </div>
-
-                  {/* Divider + name */}
-                  <div className="mt-auto pt-8">
-                    <div className="h-px w-full bg-white/10" />
-                    <div className="mt-4 space-y-1">
-                      <p className="text-[16px] font-medium text-white">
-                        James Reynolds
-                      </p>
-                      <p className="text-[14px] font-medium text-[#CDCDCD]">
-                        Cybersecurity Consultant
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Card 2 */}
-              <div className="min-h-[394px] rounded-[30px] bg-[radial-gradient(54.52%_54.52%_at_50%_0%,rgba(131,172,240,0.25)_0.27%,rgba(131,172,240,0)_100%),linear-gradient(180deg,#3E3CA3_0%,#0C0B30_100%)] shadow-[0_25px_80px_rgba(0,0,0,0.85)]">
-                <div className="flex h-full flex-col px-10 pb-10 pt-10">
-                  <div className="h-20 w-20 rounded-full bg-[#181826]" />
-
-                  <div className="mt-8 space-y-3">
-                    <h3 className="text-[20px] font-semibold leading-[1.4] text-white">
-                      “Revolutionary DeFi
-                      <br />
-                      Platform!”
-                    </h3>
-                    <p className="text-[16px] leading-[1.6] text-[#CDCDCD]">
-                      Massa malesuada aliquam fames senectus vitae ornare.
-                      Fringilla sit varius mattis ultricies sed nulla.
-                    </p>
-                  </div>
-
-                  <div className="mt-auto pt-8">
-                    <div className="h-px w-full bg-white/10" />
-                    <div className="mt-4 space-y-1">
-                      <p className="text-[16px] font-medium text-white">
-                        Sarah Thompson
-                      </p>
-                      <p className="text-[14px] font-medium text-[#CDCDCD]">
-                        Financial Analyst
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Card 3 */}
-              <div className="min-h-[394px] rounded-[30px] bg-[radial-gradient(54.52%_54.52%_at_50%_0%,rgba(131,172,240,0.25)_0.27%,rgba(131,172,240,0)_100%),linear-gradient(180deg,#3E3CA3_0%,#0C0B30_100%)] shadow-[0_25px_80px_rgba(0,0,0,0.85)]">
-                <div className="flex h-full flex-col px-10 pb-10 pt-10">
-                  <div className="h-20 w-20 rounded-full bg-[#181826]" />
-
-                  <div className="mt-8 space-y-3">
-                    <h3 className="text-[20px] font-semibold leading-[1.4] text-white">
-                      “Empowering Financial
-                      <br />
-                      Independence”
-                    </h3>
-                    <p className="text-[16px] leading-[1.6] text-[#CDCDCD]">
-                      Massa malesuada aliquam fames senectus vitae ornare.
-                      Fringilla sit varius mattis ultricies sed nulla.
-                    </p>
-                  </div>
-
-                  <div className="mt-auto pt-8">
-                    <div className="h-px w-full bg-white/10" />
-                    <div className="mt-4 space-y-1">
-                      <p className="text-[16px] font-medium text-white">
-                        Michael Rodriguez
-                      </p>
-                      <p className="text-[14px] font-medium text-[#CDCDCD]">
-                        Entrepreneur
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </section>
-      )}
-
       {/* ============== FOOTER ============== */}
       <footer className="bg-[#020121] py-16 md:py-20">
         <div className="mx-auto max-w-6xl px-6 sm:px-6 lg:px-8">
-          {/* THREE COLUMNS */}
-          <div className="grid grid-cols-1 gap-12 md:grid-cols-12">
-            {/* COLUMN 1 — CONTACT + CAREERS + COPYRIGHT */}
-            <div className="flex flex-col gap-10 md:col-span-6 lg:col-span-6">
-              {/* Contact */}
-              <div className="flex flex-col gap-4">
-                <h3 className="text-[22px] md:text-[24px] font-bold leading-[29px] tracking-[-0.01em] text-purple-300">
-                  Contact
-                </h3>
+          <div className="flex flex-col gap-12">
+            {/* First row: Contact + Address & Social */}
+            <div className="flex flex-col gap-12 md:grid md:grid-cols-2 md:gap-12">
+              <div className="flex flex-col gap-6">
+                <div className="flex flex-col gap-4">
+                  <h3 className="text-[22px] md:text-[24px] font-bold leading-[29px] tracking-[-0.01em] text-purple-300">
+                    Contact
+                  </h3>
 
-                <div className="flex flex-col gap-[10px] text-[16px] md:text-[18px] leading-[22px] tracking-[-0.01em] text-white">
-                  <p className="whitespace-normal break-words">
-                    <span className="font-semibold">
-                      Press and Speaking Inquiries:
-                    </span>{" "}
-                    <a
-                      href="mailto:press@sqratch.com"
-                      className="underline decoration-white/30 underline-offset-4 hover:decoration-white/70"
-                    >
-                      press@sqratch.com
-                    </a>
-                  </p>
+                  <div className="flex flex-col gap-[10px] text-[16px] md:text-[18px] leading-[22px] tracking-[-0.01em] text-white">
+                    <p className="whitespace-normal break-words">
+                      <span className="font-semibold">
+                        Press and Speaking Inquiries:
+                      </span>{" "}
+                      <a
+                        href="mailto:press@sqratch.com"
+                        className="underline decoration-white/30 underline-offset-4 hover:decoration-white/70"
+                      >
+                        press@sqratch.com
+                      </a>
+                    </p>
 
-                  <p className="whitespace-normal break-words">
-                    <span className="font-semibold">Investor Relations:</span>{" "}
-                    <a
-                      href="mailto:investors@sqratch.com"
-                      className="underline decoration-white/30 underline-offset-4 hover:decoration-white/70"
-                    >
-                      investors@sqratch.com
-                    </a>
-                  </p>
+                    <p className="whitespace-normal break-words">
+                      <span className="font-semibold">Investor Relations:</span>{" "}
+                      <a
+                        href="mailto:investors@sqratch.com"
+                        className="underline decoration-white/30 underline-offset-4 hover:decoration-white/70"
+                      >
+                        investors@sqratch.com
+                      </a>
+                    </p>
 
-                  <p>
-                    To inquire about creating a custom SQRATCH campaign for your
-                    retail or consumer packaged goods brand, please contact{" "}
-                    <a
-                      href="mailto:campaigns@sqratch.com"
-                      className="underline decoration-white/30 underline-offset-4 hover:decoration-white/70"
+                    <p>
+                      To inquire about creating a custom SQRATCH campaign for
+                      your retail or consumer packaged goods brand, please
+                      contact{" "}
+                      <a
+                        href="mailto:campaigns@sqratch.com"
+                        className="underline decoration-white/30 underline-offset-4 hover:decoration-white/70"
+                      >
+                        campaigns@sqratch.com
+                      </a>{" "}
+                      or book a half hour discovery session on{" "}
+                      <a
+                        href="https://calendly.com/sqratch/30min"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="underline decoration-white/30 underline-offset-4 hover:decoration-white/70"
+                      >
+                        Calendly here
+                      </a>
+                      .
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-10 md:max-w-sm pl-0 md:pl-20">
+                <div className="flex flex-col gap-2">
+                  <h3 className="text-[22px] md:text-[24px] font-bold leading-[29px] tracking-[-0.01em] text-purple-300">
+                    Address
+                  </h3>
+                  <div className="flex flex-col gap-0">
+                    <Link
+                      href="https://www.sqratch.com/"
+                      className="text-[22px] font-semibold tracking-[-0.03em] text-[#ECECEC] whitespace-nowrap hover:text-white transition"
                     >
-                      campaigns@sqratch.com
-                    </a>{" "}
-                    or book a half hour discovery session on{" "}
+                      Sqratch Inc.
+                    </Link>
+                    <p className="max-w-[260px] text-[16px] md:text-[18px] leading-[22px] tracking-[-0.01em] text-white">
+                      441 Maclaren St. Suite 310, <br />
+                      Ottawa ON K2P 2H3
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-col gap-4">
+                  <h3 className="text-[22px] md:text-[24px] font-bold leading-[29px] tracking-[-0.01em] text-purple-300">
+                    Social
+                  </h3>
+                  <div className="flex flex-col gap-[6px] text-[16px] md:text-[18px] leading-[22px] tracking-[-0.01em] text-white">
                     <a
-                      href="https://calendly.com/sqratch/30min"
+                      href="https://www.instagram.com/getsqratch"
                       target="_blank"
                       rel="noreferrer"
-                      className="underline decoration-white/30 underline-offset-4 hover:decoration-white/70"
+                      className="hover:text-[#CDCDCD]"
                     >
-                      Calendly here
+                      Instagram
                     </a>
-                    .
-                  </p>
+                  </div>
                 </div>
               </div>
-
-              {/* Copyright */}
-              <p className="text-[14px] md:text-[16px] text-[#939393] tracking-[-0.01em]">
-                © 2026 Sqratch. All rights reserved.
-              </p>
             </div>
 
-            {/* COLUMN 2 — ADDRESS + SOCIAL + TERMS */}
-            <div className="flex flex-col gap-10 md:col-span-4 lg:col-span-4">
-              {/* Address */}
-              <div className="flex flex-col gap-4">
-                <h3 className="text-[22px] md:text-[24px] font-bold leading-[29px] tracking-[-0.01em] text-purple-300">
-                  Address
-                </h3>
-                <p className="max-w-[260px] text-[16px] md:text-[18px] leading-[22px] tracking-[-0.01em] text-white">
-                  441 Maclaren St. Suite 310, <br />
-                  Ottawa ON K2P 2H3
-                </p>
-              </div>
-
-              {/* Social */}
-              <div className="flex flex-col gap-4">
-                <h3 className="text-[22px] md:text-[24px] font-bold leading-[29px] tracking-[-0.01em] text-purple-300">
-                  Social
-                </h3>
-                <div className="flex flex-col gap-[6px] text-[16px] md:text-[18px] leading-[22px] tracking-[-0.01em] text-white">
-                  {/* <a href="#" className="hover:text-[#CDCDCD]">
-                    Twitter
-                  </a> */}
-                  <a
-                    href="https://www.instagram.com/getsqratch"
-                    target="_blank"
-                    rel="noreferrer"
-                    className="hover:text-[#CDCDCD]"
-                  >
-                    Instagram
-                  </a>
-                  {/* <a href="#" className="hover:text-[#CDCDCD]">
-                    TikTok
-                  </a> */}
-                </div>
-              </div>
-
-              {/* Terms + Privacy */}
-              <div className="flex flex-row gap-4 text-[16px] text-[#939393] tracking-[-0.01em]">
+            {/* Second row: Terms & Privacy + Copyright */}
+            <div className="flex flex-col gap-6 md:gap-12 border-t border-white/10 pt-8 md:grid md:grid-cols-2 md:items-center">
+              <div className="flex flex-row gap-4 text-[14px] md:text-[16px] text-[#939393] tracking-[-0.01em]">
                 <Link href="/terms" className="hover:text-[#ECECEC]">
                   Terms of Service
                 </Link>
@@ -867,22 +453,10 @@ export default function HomePage() {
                   Privacy Policy
                 </Link>
               </div>
-            </div>
 
-            {/* COLUMN 3 — EMPTY SPACER WITH LOGO AT BOTTOM */}
-            <div className="flex flex-col justify-between md:col-span-2 lg:col-span-2">
-              {/* top stays empty */}
-              <div />
-
-              {/* bottom-right logo text */}
-              <div className="flex justify-end">
-                <Link
-                  href="https://www.sqratch.com/"
-                  className="text-[22px] font-semibold tracking-[-0.03em] text-[#ECECEC] whitespace-nowrap hover:text-white transition"
-                >
-                  Sqratch Inc.
-                </Link>
-              </div>
+              <p className="text-[14px] md:text-[16px] text-[#939393] tracking-[-0.01em] text-left pl-0 md:pl-20">
+                © 2026 Sqratch. All rights reserved.
+              </p>
             </div>
           </div>
         </div>
