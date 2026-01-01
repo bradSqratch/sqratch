@@ -130,7 +130,7 @@ export default function CommunitiesPage() {
                 <span className="hidden sm:inline">Create Community</span>
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="sm:max-w-[480px] bg-[#05050f]/35 text-white border border-white/10 backdrop-blur-md">
               <DialogHeader>
                 <DialogTitle>Create Community</DialogTitle>
               </DialogHeader>
@@ -215,7 +215,7 @@ export default function CommunitiesPage() {
         </CardContent>
 
         <Dialog open={editOpen} onOpenChange={setEditOpen}>
-          <DialogContent>
+          <DialogContent className="sm:max-w-[480px] bg-[#05050f]/35 text-white border border-white/10 backdrop-blur-md">
             <DialogHeader>
               <DialogTitle>Edit Community</DialogTitle>
             </DialogHeader>

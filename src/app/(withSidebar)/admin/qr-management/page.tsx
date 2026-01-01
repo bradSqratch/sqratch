@@ -634,10 +634,12 @@ export default function QRManagementPage() {
       )}
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-[520px] bg-[#05050f]/35 text-white border border-white/10 backdrop-blur-md">
           <DialogHeader>
             <DialogTitle>Edit QR Code</DialogTitle>
-            <DialogDescription>Update the QR code details.</DialogDescription>
+            <DialogDescription className="text-white/70">
+              Update the QR code details.
+            </DialogDescription>
           </DialogHeader>
 
           {selectedQRCode && (
@@ -646,7 +648,8 @@ export default function QRManagementPage() {
                 <img
                   src={selectedQRCode.imageUrl}
                   alt="QR"
-                  className="w-40 h-40 object-contain border rounded"
+                  className="w-40 h-40 object-contain border rounded bg-white p-2"
+                  style={{ filter: "invert(1)" }}
                 />
               </div>
 

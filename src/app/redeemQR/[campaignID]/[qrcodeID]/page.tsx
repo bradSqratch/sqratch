@@ -7,7 +7,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
-import PublicHeader from "@/components/publicHeader";
+import CommonNavbar from "@/components/commonNavbar";
 
 export default function QRRedemptionPage() {
   const params = useParams();
@@ -106,18 +106,21 @@ export default function QRRedemptionPage() {
   };
 
   const SubmittedCard = () => {
+    const sharedCardClasses =
+      "w-full max-w-md rounded-2xl border border-white/10 bg-white/5 backdrop-blur text-white shadow-inner";
+
     if (qrStatus === "DIRECT_INVITE") {
       return (
-        <Card className="w-full max-w-md">
+        <Card className={sharedCardClasses}>
           <CardHeader className="text-center">
-            <CardTitle>Invite Sent!</CardTitle>
+            <CardTitle className="text-white">Invite Sent!</CardTitle>
           </CardHeader>
           <CardContent className="text-center space-y-4">
-            <div className="text-green-600 font-medium">
+            <div className="text-emerald-300 font-medium">
               Great news! Your community invite has been sent directly to your
               email.
             </div>
-            <p className="text-gray-600">
+            <p className="text-white/70">
               Check your inbox for the community invite link. You're all set!
             </p>
           </CardContent>
@@ -127,16 +130,18 @@ export default function QRRedemptionPage() {
 
     if (qrStatus === "VERIFY_FIRST") {
       return (
-        <Card className="w-full max-w-md">
+        <Card className={sharedCardClasses}>
           <CardHeader className="text-center">
-            <CardTitle>Email Verification Required</CardTitle>
+            <CardTitle className="text-white">
+              Email Verification Required
+            </CardTitle>
           </CardHeader>
           <CardContent className="text-center space-y-4">
-            <div className="text-orange-600 font-medium">
+            <div className="text-amber-300 font-medium">
               We found an account with your email, but it needs verification
               first.
             </div>
-            <p className="text-gray-600">
+            <p className="text-white/70">
               Please complete your email verification using the mail you
               received by scanning a QR code earlier. Once verified, you can
               scan this QR code again.
@@ -146,24 +151,25 @@ export default function QRRedemptionPage() {
       );
     }
 
-    // Default SUBMITTED state
     return (
-      <Card className="w-full max-w-md">
+      <Card className={sharedCardClasses}>
         <CardHeader className="text-center">
-          <CardTitle>Check your email for a verification link.</CardTitle>
+          <CardTitle className="text-white">
+            Check your email for a verification link.
+          </CardTitle>
         </CardHeader>
         <CardContent className="text-center space-y-4">
-          <div className="text-green-600 font-medium">
+          <div className="text-emerald-300 font-medium">
             Thank you for your submission!
           </div>
-          <p className="text-gray-600">
+          <p className="text-white/70">
             Click on the link in your email to complete your redemption, where
             you will receive an exclusive one‑time invite
             {campaignName ? (
               <>
                 {" "}
                 to{" "}
-                <span className="font-extrabold">
+                <span className="font-extrabold text-white">
                   &quot;{campaignName}&quot;
                 </span>
                 .
@@ -235,23 +241,22 @@ export default function QRRedemptionPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-[url('/assets/homepage/home_bg.jpeg')] bg-cover bg-center">
-      <PublicHeader />
+    <div className="min-h-screen flex flex-col bg-[url('/assets/homepage/home_bg.jpeg')] bg-cover bg-center text-white">
+      <CommonNavbar />
 
-      <main className="flex-1 flex items-center justify-center p-4">
-        <Card className=" w-[90%] md:w-[35%] bg-white shadow-2xl z-10">
-          <CardHeader className="flex justify-center">
+      <main className="flex-1 flex items-center justify-center px-4 py-12">
+        <Card className="w-full max-w-lg rounded-xl border border-white/10 bg-[linear-gradient(180deg,rgba(9,17,48,0.95)_0%,rgba(3,6,20,0.95)_100%)] text-white shadow-[0_25px_80px_rgba(0,0,0,0.65)]">
+          <CardHeader className="text-center border-b border-white/10 pb-4">
             {qrStatus === "SUBMITTED" ||
             qrStatus === "DIRECT_INVITE" ||
             qrStatus === "VERIFY_FIRST" ? (
-              // Use logo instead of text
               <img
                 src="/sqratchLogo.png"
                 alt="SQRATCH"
-                className="h-6 w-auto"
+                className="h-8 w-auto mx-auto"
               />
             ) : (
-              <CardTitle className="text-[#3E93DE] text-center">
+              <CardTitle className="text-2xl font-semibold text-white">
                 {qrStatus === "NEW"
                   ? "Redeem Your SQRATCH Code"
                   : qrStatus === "INVALID"
@@ -263,7 +268,7 @@ export default function QRRedemptionPage() {
             )}
           </CardHeader>
 
-          <CardContent>{renderCardContent()}</CardContent>
+          <CardContent className="pt-2">{renderCardContent()}</CardContent>
         </Card>
       </main>
     </div>

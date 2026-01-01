@@ -2,7 +2,6 @@
 "use client";
 
 import React, { useEffect } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { signIn, useSession, getSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
@@ -16,6 +15,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import CommonNavbar from "@/components/commonNavbar";
 
 type Message = { type: "error" | "success"; text: string };
 
@@ -174,16 +174,7 @@ export default function LoginPage() {
 
       {/* content layer */}
       <div className="relative z-10 flex min-h-screen flex-col">
-        {/* Logo */}
-        <div className="pt-8 flex justify-center">
-          <Link href="/" className="inline-flex">
-            <img
-              src="/sqratchLogo.png"
-              alt="SQRATCH"
-              className="h-10 w-auto mx-auto translate-x-[0.15rem] sm:translate-x-0"
-            />
-          </Link>
-        </div>
+        <CommonNavbar />
 
         {/* Login Form (centered) */}
         <div className="flex flex-1 items-center justify-center px-4 mx-4">

@@ -214,7 +214,7 @@ export default function CampaignsPage() {
                 Create Campaign
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="sm:max-w-[480px] bg-[#05050f]/35 text-white border border-white/10 backdrop-blur-md">
               <DialogHeader>
                 <DialogTitle>Create Campaign</DialogTitle>
                 <DialogDescription>All fields required</DialogDescription>
@@ -343,7 +343,7 @@ export default function CampaignsPage() {
         </CardContent>
 
         <Dialog open={editOpen} onOpenChange={setEditOpen}>
-          <DialogContent>
+          <DialogContent className="sm:max-w-[480px] bg-[#05050f]/35 text-white border border-white/10 backdrop-blur-md">
             <DialogHeader>
               <DialogTitle>Edit Campaign</DialogTitle>
               <DialogDescription>

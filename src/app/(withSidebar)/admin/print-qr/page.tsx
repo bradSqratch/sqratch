@@ -296,7 +296,11 @@ export default function PrintQRPage() {
                 }}
               />
               <img src="/sqratchLogo.png" alt="Logo" className="w-20" />
-              <img src={qr.imageUrl} alt="QR Code" className="w-32 h-32" />
+              <img
+                src={qr.imageUrl}
+                alt="QR Code"
+                className="w-32 h-32 bg-white"
+              />
               <div className="text-center text-sm">
                 <div>{qr.campaignName}</div>
                 <div>{format(new Date(qr.createdAt), "PPP")}</div>
