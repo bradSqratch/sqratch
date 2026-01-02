@@ -45,6 +45,7 @@ function FlipCard({
         className={[
           "relative h-[520px] w-full rounded-[28px]",
           "transition-transform duration-700 ease-[cubic-bezier(0.2,0.8,0.2,1)]",
+          "will-change-transform",
           "[transform-style:preserve-3d]",
           isOpen ? "[transform:rotateY(180deg)]" : "[transform:rotateY(0deg)]",
         ].join(" ")}
@@ -56,7 +57,9 @@ function FlipCard({
             "border border-white/15 hover:border-white",
             "transition-colors duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)]",
             "shadow-[0_30px_80px_rgba(0,0,0,0.6)]",
-            "[backface-visibility:hidden]",
+            "[backface-visibility:hidden] [-webkit-backface-visibility:hidden]",
+            "[transform-style:preserve-3d]",
+            "[transform:rotateY(0deg)_translateZ(0.1px)]",
           ].join(" ")}
         >
           {/* Background (video OR image OR nothing) */}
@@ -109,7 +112,7 @@ function FlipCard({
             onClick={onToggle}
             aria-label={`Open ${title}`}
             className={[
-              "absolute left-1/2 top-7 z-20 -translate-x-1/2",
+              "absolute left-1/2 top-7 -translate-x-1/2",
               "h-12 w-12 rounded-full border border-white/25 bg-black/30",
               "grid place-items-center text-white",
               "cursor-pointer select-none",
@@ -117,6 +120,8 @@ function FlipCard({
               "active:scale-[0.98]",
               "transition",
               "focus:outline-none focus:ring-2 focus:ring-white/30",
+              "[backface-visibility:hidden] [-webkit-backface-visibility:hidden]",
+              "[transform:translateZ(1px)]",
             ].join(" ")}
           >
             <IterationCcw
@@ -150,7 +155,7 @@ function FlipCard({
           </div>
 
           {/* CTA area */}
-          <div className="absolute bottom-8 left-1/2 z-20 w-[92%] max-w-[420px] -translate-x-1/2">
+          <div className="absolute bottom-8 left-1/2 w-[92%] max-w-[420px] -translate-x-1/2 [backface-visibility:hidden] [-webkit-backface-visibility:hidden] [transform:translateZ(1px)]">
             {cta.type === "link" ? (
               <motion.a
                 whileHover={{ scale: 1.03 }}
@@ -186,7 +191,8 @@ function FlipCard({
           className={[
             "absolute inset-0 rounded-[28px] overflow-hidden",
             "border border-white shadow-[0_30px_80px_rgba(0,0,0,0.65)]",
-            "[backface-visibility:hidden] [transform:rotateY(180deg)]",
+            "[backface-visibility:hidden] [-webkit-backface-visibility:hidden]",
+            "[transform-style:preserve-3d] [transform:rotateY(180deg)_translateZ(0.1px)]",
           ].join(" ")}
         >
           {/* Background (video OR image) */}
@@ -220,11 +226,13 @@ function FlipCard({
             onClick={onToggle}
             aria-label={`Close ${title}`}
             className={[
-              "absolute left-1/2 top-7 z-20 -translate-x-1/2",
+              "absolute left-1/2 top-7 -translate-x-1/2",
               "h-12 w-12 rounded-full border border-white/25 bg-black/35",
               "grid place-items-center text-white",
               "hover:bg-black/55 hover:border-white/35 transition",
               "focus:outline-none focus:ring-2 focus:ring-white/30",
+              "[backface-visibility:hidden] [-webkit-backface-visibility:hidden]",
+              "[transform:translateZ(1px)]",
             ].join(" ")}
           >
             <X

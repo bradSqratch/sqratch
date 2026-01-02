@@ -342,7 +342,7 @@ export default function ScratchRevealVideo({
           src={videoSrc}
           playsInline
           preload="metadata"
-          muted={false}
+          muted={true}
           controls={false}
         />
 

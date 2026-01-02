@@ -1,5 +1,9 @@
 // src/helpers/mailer.ts
 import nodemailer from "nodemailer";
+import {
+  buildWelcomeEmailHtml,
+  buildInviteEmailHtml,
+} from "@/helpers/emailTemplates";
 
 function createTransport() {
   const host = process.env.MAILTRAP_HOST;
@@ -54,55 +58,55 @@ export async function sendVerificationEmail(
 }
 
 /**
- * Sends a simple invite email that contains the campaign invite URL.
- * Used in the "default" (non-BetterMode) branch after email verification.
+ * Sends a invite email that contains the campaign invite URL.
  */
 export async function sendInviteEmail(
   email: string,
   inviteUrl: string,
-  campaignName: string
+  campaignName: string,
+  name?: string
 ) {
   const from = process.env.ADMIN_EMAIL;
 
-  const mailOptions = {
+  const html = buildInviteEmailHtml({
+    name,
+    campaignName,
+    inviteUrl,
+    heroImageUrl: "https://sqratch.com/assets/homepage/home_bg.jpeg",
+  });
+
+  const text =
+    `You're invited to join ${campaignName} on SQRATCH.\n\n` +
+    `Join here: ${inviteUrl}\n\n` +
+    `If you didn’t request this, ignore this email.\n`;
+
+  return transporter.sendMail({
     from,
     to: email,
     subject: `You're invited to join ${campaignName}!`,
-    html: `
-      <h1>Welcome to ${campaignName}!</h1>
-      <p>Click the button below to join this exciting new exclusive community!</p>
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0" align="start">
-        <tr>
-          <td align="start" bgcolor="#3E93DE" style="border-radius:8px;">
-            <a href="${inviteUrl}"
-              target="_blank"
-              style="display:inline-block; padding:12px 24px; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
-                    font-size:16px; font-weight:600; color:#ffffff; text-decoration:none; border-radius:8px;">
-              Join ${campaignName}
-            </a>
-          </td>
-        </tr>
-      </table>
-    `,
-  };
-
-  return transporter.sendMail(mailOptions);
+    html,
+    text,
+  });
 }
 
+/**
+ * Sends a welcome email to a new user with signup link 30 to 90 minutes from when he has redeemed a QR code.
+ */
 export async function sendWelcomeEmail(email: string, name?: string) {
   const from = process.env.ADMIN_EMAIL;
 
   const safeName = name && name.trim() ? name.trim() : "there";
 
+  const html = buildWelcomeEmailHtml({
+    name: safeName,
+    ctaUrl: "https://sqratch.com/signup",
+  });
   const mailOptions = {
     from,
     to: email,
     subject: "Welcome to SQRATCH!",
-    html: `
-      <h1>Welcome to SQRATCH!</h1>
-      <p>Hi ${safeName} — thanks for joining SQRATCH.</p>
-      <p>You're all set.</p>
-    `,
+    html,
+    text: `Welcome to SQRATCH!\n\nHi ${safeName},\nYou found a SQRATCH sticker. You scratched it. You scanned it. Now you're in. From here, you can keep collecting SQRATCH by scanning more stickers-each one adds to your balance and unlocks new drops, rewards, and access. The more you collect, the more your membership grows across participating brands and communities.\nComplete your setup: https://sqratch.com/signup\n`,
   };
 
   return transporter.sendMail(mailOptions);
