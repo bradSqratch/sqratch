@@ -1,185 +1,176 @@
+// src/app/(auth)/signup/page.tsx
 "use client";
-import Link from "next/link";
+
 import React, { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import axios from "axios";
-import { useSession, signIn } from "next-auth/react";
-import { useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
+  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { toast } from "sonner";
+import CommonNavbar from "@/components/commonNavbar";
+import Link from "next/link";
+
+type Message = { type: "error" | "success"; text: React.ReactNode };
 
 export default function SignupPage() {
   const router = useRouter();
 
-  const { data: session, status } = useSession(); // Fetch session data
-
   const [user, setUser] = React.useState({
+    name: "",
     email: "",
     password: "",
-    name: "",
   });
-  const [buttonDisabled, setButtonDisabled] = React.useState(false);
+
+  const [buttonDisabled, setButtonDisabled] = React.useState(true);
   const [loading, setLoading] = React.useState(false);
+  const [message, setMessage] = React.useState<Message | null>(null);
 
   const onSignup = async () => {
+    setMessage(null);
+
+    if (!user.name || !user.email || !user.password) {
+      setMessage({ type: "error", text: "All fields are required." });
+      return;
+    }
+
+    setLoading(true);
     try {
-      setLoading(true);
-      const response = await axios.post("/api/users/signup", {
-        ...user,
+      const res = await axios.post("/api/users/signup", user);
+
+      setMessage({
+        type: "success",
+        text: res.data?.message || "Signup successful! Redirecting…",
       });
-      console.log("Signup success", response.data);
-      toast.success("Success", {
-        description: "Signup successful!",
-      });
-      // Normal flow: redirect to login page
-      router.push("/login");
+
+      setTimeout(() => router.push("/login"), 600);
     } catch (error: any) {
-      console.log("Signup failed", error.message);
-      toast.error("Error", {
-        description: error.message,
-      });
-    } finally {
+      const msg =
+        error?.response?.data?.error || error.message || "Signup failed";
+      setMessage({ type: "error", text: msg });
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (
-      user.email.length > 0 &&
-      user.password.length > 0 &&
-      user.name.length > 0
-    ) {
-      setButtonDisabled(false);
-    } else {
-      setButtonDisabled(true);
-    }
+    setButtonDisabled(!(user.name && user.email && user.password));
   }, [user]);
 
   return (
-    <section className="position-relative bg-[url('/assets/homepage/home_bg.jpeg')] bg-center bg-cover">
-      <div className="absolute inset-0 bg-black opacity-75"></div>
-      <div className="container-fluid relative">
-        <div className="grid grid-cols-1">
-          <div className="lg:col-span-4">
-            <div className="flex flex-col min-h-screen md:px-12 py-12 px-3">
-              {/* <!-- Start Logo --> */}
-              <div className="text-center mx-auto">
-                <Link href="/">
-                  <div className="flex justify-center mb-4 bg-transparent">
-                    <Avatar
-                      style={{
-                        height: "4rem",
-                        width: "12rem",
-                        padding: "0.3rem",
-                        borderRadius: "2rem",
-                      }}
-                    >
-                      <AvatarImage src="/sqratchLogo.png" alt="Logo" />
-                      <AvatarFallback>SQRATCH</AvatarFallback>
-                    </Avatar>
-                  </div>
-                </Link>
-              </div>
-              {/* <!-- End Logo --> */}
+    <section className="relative min-h-screen bg-[url('/assets/homepage/home_bg.jpeg')] bg-cover bg-center">
+      {/* dark overlay */}
+      <div className="absolute inset-0 bg-black/75" />
 
-              {/* <!-- Start Content --> */}
-              <div className="my-auto">
-                <div className="grid grid-cols-1 w-full max-w-sm m-auto px-6 py-4">
-                  <Card className="w-[350px]">
-                    <CardHeader>
-                      <CardTitle className="text-3xl text-center">
-                        {loading ? "Processing" : "Signup"}
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent>
-                      <form>
-                        <div className="grid w-full items-center gap-4">
-                          <div className="flex flex-col space-y-1.5">
-                            <Label htmlFor="name">Name</Label>
-                            <Input
-                              className="p-2 border border-gray-300 rounded-lg mb-4 focus:outline-none focus:border-gray-600 text-black"
-                              id="name"
-                              type="text"
-                              autoComplete="name"
-                              value={user.name}
-                              onChange={(e) =>
-                                setUser({ ...user, name: e.target.value })
-                              }
-                              placeholder="Name"
-                            />
-                          </div>
-                          <div className="flex flex-col space-y-1.5">
-                            <Label htmlFor="email">Email</Label>
-                            <Input
-                              className="p-2 border border-gray-300 rounded-lg mb-4 focus:outline-none focus:border-gray-600 text-black"
-                              id="email"
-                              type="text"
-                              autoComplete="email"
-                              value={user.email}
-                              onChange={(e) =>
-                                setUser({ ...user, email: e.target.value })
-                              }
-                              placeholder="Email"
-                            />
-                          </div>
-                          <div className="flex flex-col space-y-1.5">
-                            <Label htmlFor="password">Password</Label>
-                            <Input
-                              className="p-2 border border-gray-300 rounded-lg mb-4 focus:outline-none focus:border-gray-600 text-black"
-                              id="password"
-                              type="password"
-                              autoComplete="current-password"
-                              value={user.password}
-                              onChange={(e) =>
-                                setUser({ ...user, password: e.target.value })
-                              }
-                              placeholder="Password"
-                            />
-                          </div>
-                        </div>
-                      </form>
-                    </CardContent>
-                    <CardFooter className="flex flex-col">
-                      <Button
-                        onClick={onSignup}
-                        disabled={buttonDisabled || loading}
-                        className="w-full bg-green-600 text-white rounded-full py-3 hover:bg-green-700 transition-colors animate-none hover:animate-bounceHover"
-                      >
-                        {loading ? "Signing up..." : "Signup"}
-                      </Button>
-                      <Button
-                        variant="link"
-                        asChild
-                        className="text-blue-500 hover:underline mt-5"
-                      >
-                        <Link href="/login">
-                          Already have an account? Login here
-                        </Link>
-                      </Button>
-                    </CardFooter>
-                  </Card>
-                </div>
-              </div>
-              {/* <!-- End Content --> */}
-
-              {/* <!-- Start Footer --> */}
-              <div className="text-center">
-                <p className="text-gray-400">
-                  © {new Date().getFullYear()} SQRATCH. All rights reserved.
-                </p>
-              </div>
-            </div>
+      {/* Loader overlay */}
+      {loading && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
+          <div className="flex flex-col items-center gap-4">
+            <div className="h-12 w-12 animate-spin rounded-full border-4 border-white border-t-transparent" />
+            <p className="text-lg text-white">Creating your account...</p>
           </div>
+        </div>
+      )}
+
+      {/* content layer */}
+      <div className="relative z-10 flex min-h-screen flex-col">
+        <CommonNavbar />
+
+        <div className="flex flex-1 items-center justify-center px-4 mx-4">
+          <Card className="w-full max-w-sm rounded-2xl shadow-2xl">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                onSignup();
+              }}
+            >
+              <CardHeader>
+                <CardTitle className="text-center text-3xl font-bold">
+                  Signup
+                </CardTitle>
+
+                <CardDescription>
+                  {message && (
+                    <div
+                      className={`mt-2 text-center ${
+                        message.type === "error"
+                          ? "text-red-500"
+                          : "text-green-500"
+                      }`}
+                    >
+                      {message.text}
+                    </div>
+                  )}
+                </CardDescription>
+              </CardHeader>
+
+              <CardContent className="space-y-5">
+                <div>
+                  <Label htmlFor="name">Name</Label>
+                  <Input
+                    id="name"
+                    type="text"
+                    autoComplete="name"
+                    value={user.name}
+                    onChange={(e) => setUser({ ...user, name: e.target.value })}
+                    className="mt-1"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="email">Email</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    autoComplete="email"
+                    value={user.email}
+                    onChange={(e) =>
+                      setUser({ ...user, email: e.target.value })
+                    }
+                    className="mt-1"
+                  />
+                </div>
+
+                <div>
+                  <Label htmlFor="password">Password</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    autoComplete="new-password"
+                    value={user.password}
+                    onChange={(e) =>
+                      setUser({ ...user, password: e.target.value })
+                    }
+                    className="mt-1"
+                  />
+                </div>
+              </CardContent>
+
+              <CardFooter className="flex flex-col mt-6 gap-3">
+                <Button
+                  type="submit"
+                  disabled={buttonDisabled || loading}
+                  className="w-full bg-[#3E93DE] text-white rounded-full py-3 hover:bg-[#6388bb] transition-colors"
+                >
+                  Signup
+                </Button>
+
+                <Button variant="link" asChild className="text-blue-500">
+                  <Link href="/login">Already have an account? Login</Link>
+                </Button>
+              </CardFooter>
+            </form>
+          </Card>
+        </div>
+
+        <div className="pb-6 text-center text-gray-400">
+          © {new Date().getFullYear()} SQRATCH. All rights reserved.
         </div>
       </div>
     </section>

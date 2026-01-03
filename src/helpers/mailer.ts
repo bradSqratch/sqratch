@@ -67,12 +67,14 @@ export async function sendInviteEmail(
   name?: string
 ) {
   const from = process.env.ADMIN_EMAIL;
+  const safeName = (name ?? "").trim() || "there";
 
   const html = buildInviteEmailHtml({
-    name,
+    name: safeName,
     campaignName,
     inviteUrl,
-    heroImageUrl: "https://sqratch.com/assets/homepage/home_bg.jpeg",
+    heroImageUrl:
+      "https://sqratch.com/assets/homepage/email_template_header.jpg",
   });
 
   const text =

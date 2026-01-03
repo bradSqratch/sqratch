@@ -124,7 +124,7 @@ export function AppSidebar() {
                     <SidebarMenuItem key={item.title}>
                       <SidebarMenuButton
                         asChild
-                        className="text-white/90 hover:!text-white hover:!bg-white/10 hover:backdrop-blur-sm hover:border hover:border-white/20 hover:shadow-lg hover:shadow-blue-500/10 rounded-lg transition-all duration-200 group"
+                        className="text-white/90 hover:text-white hover:bg-blue-950/40 hover:backdrop-blur-sm hover:border hover:border-white/20 hover:shadow-lg hover:shadow-blue-600/20 rounded-lg transition-all duration-200 group"
                       >
                         <a
                           href={item.url}
@@ -153,7 +153,7 @@ export function AppSidebar() {
                     <SidebarMenuItem key={item.title}>
                       <SidebarMenuButton
                         asChild
-                        className="text-white/90 hover:!text-white hover:!bg-white/10 hover:backdrop-blur-sm hover:border hover:border-white/20 hover:shadow-lg hover:shadow-blue-500/10 rounded-lg transition-all duration-200 group"
+                        className="text-white/90 hover:text-white hover:bg-blue-950/40 hover:backdrop-blur-sm hover:border hover:border-white/20 hover:shadow-lg hover:shadow-blue-600/20 rounded-lg transition-all duration-200 group"
                       >
                         <a
                           href={item.url}

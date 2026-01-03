@@ -11,9 +11,9 @@ export async function middleware(request: NextRequest) {
   const token = await getToken({ req: request }).catch(() => null);
 
   // Redirect /signup to /login
-  if (url.pathname === "/signup") {
-    return NextResponse.redirect(new URL("/login", request.url));
-  }
+  // if (url.pathname === "/signup") {
+  //   return NextResponse.redirect(new URL("/login", request.url));
+  // }
 
   // Allow access to the scanner route for everyone (no redirects)
   // if (url.pathname.startsWith("/qr-scanner")) {
@@ -37,7 +37,7 @@ export async function middleware(request: NextRequest) {
   if (
     token &&
     (url.pathname.startsWith("/login") ||
-      // url.pathname.startsWith("/sign-up") ||
+      url.pathname.startsWith("/sign-up") ||
       url.pathname.startsWith("/verify-email"))
   ) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
@@ -66,6 +66,7 @@ export const config = {
     "/qr-scanner",
     "/login",
     "/signup",
+    "/verify-email",
     "/(admin|dashboard|generateQR|control-panel|view-all-songs|user-management|qr-management)(/:path*)?",
   ],
 };
