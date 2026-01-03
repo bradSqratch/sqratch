@@ -2,7 +2,7 @@
 "use client";
 
 import React, { useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import axios from "axios";
 import { Button } from "@/components/ui/button";
 import {
@@ -22,6 +22,7 @@ type Message = { type: "error" | "success"; text: React.ReactNode };
 
 export default function SignupPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [user, setUser] = React.useState({
     name: "",
@@ -32,6 +33,13 @@ export default function SignupPage() {
   const [buttonDisabled, setButtonDisabled] = React.useState(true);
   const [loading, setLoading] = React.useState(false);
   const [message, setMessage] = React.useState<Message | null>(null);
+
+  useEffect(() => {
+    const invitedEmail = searchParams.get("registeredemail");
+    if (invitedEmail) {
+      setUser((u) => ({ ...u, email: invitedEmail }));
+    }
+  }, [searchParams]);
 
   const onSignup = async () => {
     setMessage(null);

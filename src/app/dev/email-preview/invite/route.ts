@@ -14,7 +14,8 @@ export async function GET(req: Request) {
     campaignName,
     inviteUrl,
     // optional override
-    heroImageUrl: "https://sqratch.com/assets/homepage/home_bg.jpeg",
+    heroImageUrl:
+      "https://sqratch.com/assets/homepage/email_template_header.jpg",
   });
 
   return new NextResponse(html, {

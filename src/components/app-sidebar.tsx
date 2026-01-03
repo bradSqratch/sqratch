@@ -175,7 +175,7 @@ export function AppSidebar() {
             <SidebarMenuItem key="logout">
               <SidebarMenuButton
                 onClick={logout}
-                className="text-red-300 hover:!text-red-100 hover:!bg-red-500/20 hover:backdrop-blur-sm hover:border hover:border-red-400/30 hover:shadow-lg hover:shadow-red-500/20 rounded-lg transition-all duration-200 cursor-pointer group"
+                className="text-red-300 hover:text-red-100 hover:bg-red-500/20 hover:backdrop-blur-sm hover:border hover:border-red-400/30 hover:shadow-lg hover:shadow-red-500/20 rounded-lg transition-all duration-200 cursor-pointer group"
               >
                 <LogOut className="w-5 h-5 group-hover:scale-110 transition-transform duration-200" />
                 <span className="font-medium">Logout</span>

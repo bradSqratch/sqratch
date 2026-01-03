@@ -148,20 +148,7 @@ export function buildInviteEmailHtml(params: InviteTemplateParams) {
                  box-shadow:0 18px 60px rgba(0,0,0,0.45);
                  border:1px solid rgba(255,255,255,0.10);">
 
-          <!-- LOGO -->
-          <tr>
-            <td align="center" style="padding:26px 28px 10px;">
-              <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
-                <div style="font-size:22px; font-weight:800; letter-spacing:-0.5px; color:#ffffff;">
-                  SQRATCH<span style="opacity:0.6;">™</span>
-                </div>
-                <div style="margin-top:6px; font-size:12px; letter-spacing:0.9px;
-                            text-transform:uppercase; color:#7a8299;">
-                  POWERED BY PEOPLE WHO SHOW UP
-                </div>
-              </div>
-            </td>
-          </tr>
+        
 
           <!-- IMAGE (INSIDE CARD, NOT BACKGROUND) -->
           <tr>
@@ -171,10 +158,10 @@ export function buildInviteEmailHtml(params: InviteTemplateParams) {
                   heroImageUrl ??
                   "https://sqratch.com/assets/homepage/email_template_header.jpg"
                 }"
-                width="504"
-                height="280"
+                width="720"
+                height="270"
                 alt="SQRATCH Invitation"
-                style="display:block; width:504px; height:280px;
+                style="display:block; width:720px; height:270px;
                        object-fit:cover; border-radius:14px;
                        border:1px solid rgba(11,16,32,0.10);"
               />

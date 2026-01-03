@@ -98,10 +98,13 @@ export async function sendWelcomeEmail(email: string, name?: string) {
   const from = process.env.ADMIN_EMAIL;
 
   const safeName = name && name.trim() ? name.trim() : "there";
+  const ctaUrl = `https://sqratch.com/signup?registeredemail=${encodeURIComponent(
+    email
+  )}`;
 
   const html = buildWelcomeEmailHtml({
     name: safeName,
-    ctaUrl: "https://sqratch.com/signup",
+    ctaUrl,
   });
   const mailOptions = {
     from,
