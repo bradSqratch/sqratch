@@ -37,7 +37,7 @@ export default function ContactPage() {
         <div className="absolute inset-0 bg-[radial-gradient(900px_500px_at_15%_25%,rgba(236,72,153,0.20),rgba(2,0,21,0)_60%)]" />
         <div className="absolute inset-0 bg-[radial-gradient(900px_500px_at_85%_30%,rgba(34,211,238,0.18),rgba(2,0,21,0)_60%)]" />
         {/* bottom fade into #020121 */}
-        <div className="absolute inset-x-0 bottom-0 h-64 bg-gradient-to-b from-transparent to-[#020121]" />
+        <div className="absolute inset-x-0 bottom-0 h-64 bg-linear-to-b from-transparent to-[#020121]" />
       </div>
 
       {/* Navbar */}
@@ -76,7 +76,7 @@ export default function ContactPage() {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ duration: 0.5, ease: "easeOut", delay: 0.12 }}
-          className="mt-3 max-w-[760px] text-center text-[16px] sm:text-[18px] leading-[160%] text-[#ECECEC]/75"
+          className="mt-3 max-w-3xl text-center text-[16px] sm:text-[18px] leading-[160%] text-[#ECECEC]/75"
         >
           If you’re reaching out for press inquiries, use the email below. For
           official correspondence, use the address listed.
@@ -88,10 +88,10 @@ export default function ContactPage() {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           transition={{ duration: 0.55, ease: "easeOut", delay: 0.18 }}
           className="
-            mt-10 w-full max-w-[820px]
+            mt-10 w-full max-w-3xl
             rounded-[28px]
             border border-white/15
-            bg-white/[0.06]
+            bg-white/6
             backdrop-blur-xl
             shadow-[0_30px_90px_rgba(0,0,0,0.55)]
             overflow-hidden
@@ -217,12 +217,6 @@ export default function ContactPage() {
                   </a>
                 </div>
               </div>
-
-              <p className="mt-4 text-[13px] leading-relaxed text-white/55">
-                For anything not press-related, route users through your product
-                flows (waitlist / calendly). Don’t invite spam with a generic
-                “contact us” inbox unless you’re staffed for it.
-              </p>
             </div>
           </div>
 

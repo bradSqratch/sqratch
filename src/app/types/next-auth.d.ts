@@ -6,7 +6,7 @@ declare module "next-auth" {
     isEmailVerified?: boolean;
     email?: string;
     isTemporary?: boolean;
-    role?: "USER" | "ADMIN";
+    role?: "USER" | "ADMIN" | "EXTERNAL";
   }
 
   interface Session {
@@ -15,7 +15,7 @@ declare module "next-auth" {
       isEmailVerified?: boolean;
       email?: string;
       isTemporary?: boolean;
-      role?: "USER" | "ADMIN";
+      role?: "USER" | "ADMIN" | "EXTERNAL";
     } & DefaultSession["user"];
   }
 }
@@ -25,6 +25,6 @@ declare module "next-auth/jwt" {
     id?: string;
     isEmailVerified?: boolean;
     email?: string;
-    role?: "USER" | "ADMIN";
+    role?: "USER" | "ADMIN" | "EXTERNAL";
   }
 }

@@ -18,12 +18,12 @@ export function buildWelcomeEmailHtml(params: WelcomeTemplateParams) {
             <meta name="x-apple-disable-message-reformatting" />
             <title>Welcome to SQRATCH</title>
         </head>
-        <body style="margin:0; padding:0; background:#0b1020;">
+        <body style="margin:0; padding:0; background:transparent;">
             <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:transparent;">
                 Welcome to SQRATCH — scratch, scan, and connect to real people.
             </div>
 
-            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#0b1020;">
+            <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:transparent;">
                 <tr>
                 <td align="center" style="padding:28px 14px;">
                     <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="560"
@@ -133,12 +133,12 @@ export function buildInviteEmailHtml(params: InviteTemplateParams) {
   <title>You’re invited to ${escapeHtml(campaignName)}</title>
 </head>
 
-<body style="margin:0; padding:0; background:#0b1020;">
+<body style="margin:0; padding:0; background:transparent;">
   <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:transparent;">
     You’re invited to join ${escapeHtml(campaignName)} on SQRATCH.
   </div>
 
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0b1020;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:transparent;">
     <tr>
       <td align="center" style="padding:28px 14px;">
 
@@ -148,7 +148,20 @@ export function buildInviteEmailHtml(params: InviteTemplateParams) {
                  box-shadow:0 18px 60px rgba(0,0,0,0.45);
                  border:1px solid rgba(255,255,255,0.10);">
 
-        
+          <!-- LOGO -->
+          <tr>
+            <td align="center" style="padding:26px 28px 10px;">
+              <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+                <div style="font-size:22px; font-weight:800; letter-spacing:-0.5px; color:#ffffff;">
+                  SQRATCH<span style="opacity:0.6;">™</span>
+                </div>
+                <div style="margin-top:6px; font-size:12px; letter-spacing:0.9px;
+                            text-transform:uppercase; color:#7a8299;">
+                  POWERED BY PEOPLE WHO SHOW UP
+                </div>
+              </div>
+            </td>
+          </tr>
 
           <!-- IMAGE (INSIDE CARD, NOT BACKGROUND) -->
           <tr>
@@ -158,10 +171,10 @@ export function buildInviteEmailHtml(params: InviteTemplateParams) {
                   heroImageUrl ??
                   "https://sqratch.com/assets/homepage/email_template_header.jpg"
                 }"
-                width="720"
-                height="270"
+                width="504"
+                height="280"
                 alt="SQRATCH Invitation"
-                style="display:block; width:720px; height:270px;
+                style="display:block; width:504px; height:280px;
                        object-fit:cover; border-radius:14px;
                        border:1px solid rgba(11,16,32,0.10);"
               />

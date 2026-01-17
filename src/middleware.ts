@@ -1,13 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-export { default } from "next-auth/middleware";
+// export { default } from "next-auth/middleware";
 import { getToken } from "next-auth/jwt";
 
 export async function middleware(request: NextRequest) {
   const url = request.nextUrl;
   console.log("Middleware invoked for:", url.pathname);
-  // Handle language cookie first
-  const localeCookie = request.cookies.get("NEXT_LOCALE");
-
   const token = await getToken({ req: request }).catch(() => null);
 
   // Redirect /signup to /login
@@ -33,28 +30,37 @@ export async function middleware(request: NextRequest) {
   //   return NextResponse.redirect(new URL("/my-scanned-qrs", request.url));
   // }
 
-  // Redirect logged-in users away from login or signup pages
-  if (
-    token &&
-    (url.pathname.startsWith("/login") ||
-      url.pathname.startsWith("/sign-up") ||
-      url.pathname.startsWith("/verify-email"))
-  ) {
+  const isAuthPage =
+    url.pathname.startsWith("/login") ||
+    url.pathname.startsWith("/signup") ||
+    url.pathname.startsWith("/verify-email");
+
+  const isAdminRoute = url.pathname.startsWith("/admin");
+  const isProtectedRoute =
+    isAdminRoute ||
+    url.pathname.startsWith("/dashboard") ||
+    url.pathname.startsWith("/generateQR") ||
+    url.pathname.startsWith("/control-panel") ||
+    url.pathname.startsWith("/view-all-songs") ||
+    url.pathname.startsWith("/user-management") ||
+    url.pathname.startsWith("/qr-management");
+
+  // 1) If logged in, keep them out of auth pages
+  if (token && isAuthPage) {
     return NextResponse.redirect(new URL("/dashboard", request.url));
   }
 
-  // Redirect unauthenticated users trying to access protected routes
-  if (
-    !token &&
-    (url.pathname.startsWith("/admin") ||
-      url.pathname.startsWith("/dashboard") ||
-      url.pathname.startsWith("/generateQR") ||
-      url.pathname.startsWith("/control-panel") ||
-      url.pathname.startsWith("/view-all-songs") ||
-      url.pathname.startsWith("/user-management") ||
-      url.pathname.startsWith("/qr-management"))
-  ) {
+  // 2) If not logged in, block protected routes
+  if (!token && isProtectedRoute) {
     return NextResponse.redirect(new URL("/login", request.url));
+  }
+
+  // 3) If logged in but NOT admin, block /admin/*
+  if (token && isAdminRoute) {
+    const role = (token as any).role; // must exist in token (see section 2)
+    if (role !== "ADMIN") {
+      return NextResponse.redirect(new URL("/dashboard", request.url));
+    }
   }
 
   // Allow access to public pages (e.g., home, about, signup)
@@ -63,10 +69,16 @@ export async function middleware(request: NextRequest) {
 // See "Matching Paths" below to learn more
 export const config = {
   matcher: [
-    "/qr-scanner",
     "/login",
     "/signup",
+    "/sign-up",
     "/verify-email",
-    "/(admin|dashboard|generateQR|control-panel|view-all-songs|user-management|qr-management)(/:path*)?",
+    "/admin/:path*",
+    "/dashboard/:path*",
+    "/generateQR/:path*",
+    "/control-panel/:path*",
+    "/view-all-songs/:path*",
+    "/user-management/:path*",
+    "/qr-management/:path*",
   ],
 };

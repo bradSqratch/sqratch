@@ -5,7 +5,7 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
 
   const name = url.searchParams.get("name") ?? "there";
-  const campaignName = url.searchParams.get("campaignName") ?? "Demo Campaign";
+  const campaignName = url.searchParams.get("campaignName") ?? "SQRATCH";
   const inviteUrl =
     url.searchParams.get("inviteUrl") ?? "https://sqratch.com/invite/demo123";
 

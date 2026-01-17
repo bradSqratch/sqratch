@@ -33,10 +33,12 @@ import {
   TableCell,
 } from "@/components/ui/table";
 
+type CommunityType = "BETTERMODE" | "DISCORD" | "GENERIC" | "SKOOL";
+
 type Community = {
   id: string;
   name: string;
-  type: "BETTERMODE" | "GENERIC";
+  type: CommunityType;
   createdAt: string;
 };
 
@@ -48,7 +50,7 @@ export default function CommunitiesPage() {
   const [form, setForm] = useState<{
     id?: string;
     name: string;
-    type: "BETTERMODE" | "GENERIC";
+    type: CommunityType;
   }>({ name: "", type: "GENERIC" });
 
   const fetchAll = async () => {
@@ -130,7 +132,7 @@ export default function CommunitiesPage() {
                 <span className="hidden sm:inline">Create Community</span>
               </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[480px] bg-[#05050f]/35 text-white border border-white/10 backdrop-blur-md">
+            <DialogContent className="sm:max-w-120 bg-[#05050f]/35 text-white border border-white/10 backdrop-blur-md">
               <DialogHeader>
                 <DialogTitle>Create Community</DialogTitle>
               </DialogHeader>
@@ -156,6 +158,9 @@ export default function CommunitiesPage() {
                         BetterMode (Zapier)
                       </SelectItem>
                       <SelectItem value="DISCORD">Discord (Invite)</SelectItem>
+                      <SelectItem value="SKOOL">
+                        Skool (Webhook Invite)
+                      </SelectItem>
                       <SelectItem value="GENERIC">
                         Generic (Email Invite)
                       </SelectItem>
@@ -215,7 +220,7 @@ export default function CommunitiesPage() {
         </CardContent>
 
         <Dialog open={editOpen} onOpenChange={setEditOpen}>
-          <DialogContent className="sm:max-w-[480px] bg-[#05050f]/35 text-white border border-white/10 backdrop-blur-md">
+          <DialogContent className="sm:max-w-120 bg-[#05050f]/35 text-white border border-white/10 backdrop-blur-md">
             <DialogHeader>
               <DialogTitle>Edit Community</DialogTitle>
             </DialogHeader>
@@ -241,6 +246,9 @@ export default function CommunitiesPage() {
                       BetterMode (Zapier)
                     </SelectItem>
                     <SelectItem value="DISCORD">Discord (Invite)</SelectItem>
+                    <SelectItem value="SKOOL">
+                      Skool (Webhook Invite)
+                    </SelectItem>
                     <SelectItem value="GENERIC">
                       Generic (Email Invite)
                     </SelectItem>

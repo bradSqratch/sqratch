@@ -24,7 +24,10 @@ export const authOptions: NextAuthOptions = {
       },
       async authorize(credentials: any): Promise<any> {
         try {
-          const { email, password } = credentials;
+          const email = String(credentials?.email || "")
+            .trim()
+            .toLowerCase();
+          const password = String(credentials?.password || "");
 
           // Find user in database
           const user = await prisma.user.findUnique({
@@ -47,7 +50,13 @@ export const authOptions: NextAuthOptions = {
           );
 
           if (isPasswordCorrect) {
-            return user;
+            return {
+              id: user.id,
+              email: user.email,
+              name: user.name,
+              role: user.role,
+              isEmailVerified: user.isEmailVerified,
+            };
           } else {
             throw new Error("Invalid email or password");
           }

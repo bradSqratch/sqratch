@@ -58,7 +58,12 @@ export default function SignupPage() {
 
       setLoading(true);
       try {
-        const res = await axios.post("/api/users/signup", user);
+        const normalizedUser = {
+          ...user,
+          email: user.email.trim().toLowerCase(),
+        };
+
+        const res = await axios.post("/api/users/signup", normalizedUser);
 
         setMessage({
           type: "success",
@@ -148,7 +153,10 @@ export default function SignupPage() {
                       autoComplete="email"
                       value={user.email}
                       onChange={(e) =>
-                        setUser({ ...user, email: e.target.value })
+                        setUser({
+                          ...user,
+                          email: e.target.value.toLowerCase(),
+                        })
                       }
                       className="mt-1"
                     />

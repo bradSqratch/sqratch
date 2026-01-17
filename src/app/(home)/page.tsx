@@ -14,7 +14,7 @@ export default function HomePage() {
       {/* ================= HERO SECTION ================= */}
       <section className="relative min-h-screen flex flex-col overflow-x-hidden">
         {/* Video background wrapper */}
-        <div className="absolute inset-x-0 top-0 h-[100vh] overflow-hidden">
+        <div className="absolute inset-x-0 top-0 h-screen overflow-hidden">
           {/* Background video */}
           <video
             className="absolute inset-0 h-full w-full object-cover"
@@ -32,12 +32,12 @@ export default function HomePage() {
               opacity: 0.8,
             }}
           />
-          <div className="absolute bottom-0 h-62 w-full bg-gradient-to-b from-transparent to-[#020121]" />{" "}
+          <div className="absolute bottom-0 h-62 w-full bg-linear-to-b from-transparent to-[#020121]" />
         </div>
 
         {/* Figma Background: radial gradient + image, blend lighten, flipped vertically */}
         <div
-          className="pointer-events-none absolute left-0 right-0 -top-[228px] h-[584px] bg-cover bg-center"
+          className="pointer-events-none absolute left-0 right-0 -top-57 h-146 bg-cover bg-center"
           style={{
             backgroundImage: `
               radial-gradient(
@@ -137,7 +137,7 @@ export default function HomePage() {
             </h1>
 
             {/* Body */}
-            <p className="mt-2 max-w-[700px] text-center text-[20px] lg:text-[22px] font-medium leading-[150%] sm:leading-[160%] text-[#ECECEC]/75">
+            <p className="mt-2 max-w-175 text-center text-[20px] lg:text-[22px] font-medium leading-[150%] sm:leading-[160%] text-[#ECECEC]/75">
               <span className="sm:hidden">
                 Every SQRATCH sticker is a tiny portal to something better.
                 Scratch, scan, instantly connect to a real new world.
@@ -152,7 +152,7 @@ export default function HomePage() {
 
             {/* CTA buttons */}
             <div className="mt-16 flex flex-wrap w-full items-center justify-center gap-4 sm:w-auto sm:flex-row sm:flex-wrap">
-              <div className="w-full max-w-[270px] sm:max-w-none">
+              <div className="w-full max-w-67.5 sm:max-w-none">
                 <WaitlistInline
                   placeholder="Enter your email"
                   buttonLabel="Join the Waitlist"
@@ -193,14 +193,14 @@ export default function HomePage() {
         <div className="mx-auto max-w-6xl px-6 sm:px-6 lg:px-8">
           {/* ROW 1: Title + Learn More */}
           <div className="flex items-center justify-between gap-8">
-            <div className="max-w-[530px]">
+            <div className="max-w-132.5">
               {/* Sub Title */}
               <p className="text-[16px] font-semibold uppercase tracking-[0.30em] text-[#FFFFFF]/50">
                 How Sqratch works
               </p>
 
               {/* Heading */}
-              <h2 className="mt-2 sm:mt-3 text-[28px] leading-[34px] sm:text-[32px] sm:leading-[40px] font-bold tracking-[-0.02em] text-white">
+              <h2 className="mt-2 sm:mt-3 text-[28px] leading-8.5 sm:text-[32px] sm:leading-10 font-bold tracking-[-0.02em] text-white">
                 A pathway built on participation <br />
                 and choice.
               </h2>
@@ -210,11 +210,11 @@ export default function HomePage() {
           {/* ROW 2: Steps + Card */}
           <div className="mt-12 flex flex-col gap-12 lg:flex-row lg:items-start lg:justify-between">
             {/* LEFT: Steps */}
-            <div className="order-2 lg:order-1 max-w-[500px] space-y-10 mx-auto lg:mx-0 mt-2 md:mt-14 lg:mt-0">
+            <div className="order-2 lg:order-1 max-w-125 space-y-10 mx-auto lg:mx-0 mt-2 md:mt-14 lg:mt-0">
               {/* Step 1 */}
               <div>
                 <div className="flex items-start gap-4">
-                  <div className="mt-1 flex h-10 w-10 flex-none shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#4f46e5] via-[#8b5cf6] to-[#f97316] shadow-[0_15px_45px_rgba(129,140,248,0.9)]">
+                  <div className="mt-1 flex h-10 w-10 flex-none shrink-0 items-center justify-center rounded-xl bg-linear-to-br from-[#4f46e5] via-[#8b5cf6] to-[#f97316] shadow-[0_15px_45px_rgba(129,140,248,0.9)]">
                     <span className="text-sm font-semibold text-white">1</span>
                   </div>
                   <div>
@@ -235,7 +235,7 @@ export default function HomePage() {
               {/* Step 2 */}
               <div>
                 <div className="flex items-start gap-4">
-                  <div className="mt-1 flex h-10 w-10 flex-none shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#22d3ee] via-[#6366f1] to-[#a855f7] shadow-[0_15px_45px_rgba(56,189,248,0.9)]">
+                  <div className="mt-1 flex h-10 w-10 flex-none shrink-0 items-center justify-center rounded-xl bg-linear-to-br from-[#22d3ee] via-[#6366f1] to-[#a855f7] shadow-[0_15px_45px_rgba(56,189,248,0.9)]">
                     <span className="text-sm font-semibold text-white">2</span>
                   </div>
                   <div>
@@ -256,7 +256,7 @@ export default function HomePage() {
               {/* Step 3 */}
               <div>
                 <div className="flex items-start gap-4">
-                  <div className="mt-1 flex h-10 w-10 flex-none shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-[#f97316] via-[#ec4899] to-[#22d3ee] shadow-[0_15px_45px_rgba(248,113,113,0.9)]">
+                  <div className="mt-1 flex h-10 w-10 flex-none shrink-0 items-center justify-center rounded-xl bg-linear-to-br from-[#f97316] via-[#ec4899] to-[#22d3ee] shadow-[0_15px_45px_rgba(248,113,113,0.9)]">
                     <span className="text-sm font-semibold text-white">3</span>
                   </div>
                   <div>
@@ -276,7 +276,7 @@ export default function HomePage() {
 
             {/* RIGHT: Card (Scratch-to-reveal video) */}
             <div className="order-1 lg:order-2 flex flex-1 justify-center lg:justify-end">
-              <div className="relative w-full max-w-[460px]">
+              <div className="relative w-full max-w-115">
                 {/* Background glow */}
                 <div className="absolute inset-0 rounded-[28px] shadow-[0_0_160px_rgba(59,130,246,0.55)]" />
 
@@ -310,12 +310,12 @@ export default function HomePage() {
             <div className="flex flex-col gap-12 md:grid md:grid-cols-2 md:gap-12">
               <div className="flex flex-col gap-6">
                 <div className="flex flex-col gap-4">
-                  <h3 className="text-[22px] md:text-[24px] font-bold leading-[29px] tracking-[-0.01em] text-purple-300">
+                  <h3 className="text-[22px] md:text-[24px] font-bold leading-7.25 tracking-[-0.01em] text-purple-300">
                     Contact
                   </h3>
 
-                  <div className="flex flex-col gap-[10px] text-[16px] md:text-[18px] leading-[22px] tracking-[-0.01em] text-white">
-                    <p className="whitespace-normal break-words">
+                  <div className="flex flex-col gap-2.5 text-[16px] md:text-[18px] leading-5.5 tracking-[-0.01em] text-white">
+                    <p className="whitespace-normal wrap-break-word">
                       <span className="font-semibold">
                         Press and Speaking Inquiries:
                       </span>{" "}
@@ -327,7 +327,7 @@ export default function HomePage() {
                       </a>
                     </p>
 
-                    <p className="whitespace-normal break-words">
+                    <p className="whitespace-normal wrap-break-word">
                       <span className="font-semibold">Investor Relations:</span>{" "}
                       <a
                         href="mailto:investors@sqratch.com"
@@ -364,7 +364,7 @@ export default function HomePage() {
 
               <div className="flex flex-col gap-10 md:max-w-sm pl-0 md:pl-20">
                 <div className="flex flex-col gap-2">
-                  <h3 className="text-[22px] md:text-[24px] font-bold leading-[29px] tracking-[-0.01em] text-purple-300">
+                  <h3 className="text-[22px] md:text-[24px] font-bold leading-7.25 tracking-[-0.01em] text-purple-300">
                     Address
                   </h3>
                   <div className="flex flex-col gap-0">
@@ -374,7 +374,7 @@ export default function HomePage() {
                     >
                       Sqratch Inc.
                     </Link>
-                    <p className="max-w-[260px] text-[16px] md:text-[18px] leading-[22px] tracking-[-0.01em] text-white">
+                    <p className="max-w-65 text-[16px] md:text-[18px] leading-5.5 tracking-[-0.01em] text-white">
                       441 Maclaren St. Suite 310, <br />
                       Ottawa ON K2P 2H3
                     </p>
@@ -382,10 +382,10 @@ export default function HomePage() {
                 </div>
 
                 <div className="flex flex-col gap-4">
-                  <h3 className="text-[22px] md:text-[24px] font-bold leading-[29px] tracking-[-0.01em] text-purple-300">
+                  <h3 className="text-[22px] md:text-[24px] font-bold leading-7.25 tracking-[-0.01em] text-purple-300">
                     Social
                   </h3>
-                  <div className="flex flex-col gap-[6px] text-[16px] md:text-[18px] leading-[22px] tracking-[-0.01em] text-white">
+                  <div className="flex flex-col gap-1.5 text-[16px] md:text-[18px] leading-5.5 tracking-[-0.01em] text-white">
                     <a
                       href="https://www.instagram.com/getsqratch"
                       target="_blank"

@@ -35,8 +35,7 @@ export async function POST(request: NextRequest) {
     if (existingUser.role !== "EXTERNAL") {
       return NextResponse.json(
         {
-          error:
-            "You are not an user who has been invited to claim an account.",
+          error: "You are not an invited user who can claim an account.",
         },
         { status: 400 }
       );
@@ -54,18 +53,46 @@ export async function POST(request: NextRequest) {
     const salt = await bcryptjs.genSalt(10);
     const hashedPassword = await bcryptjs.hash(password, salt);
 
-    const updated = await prisma.user.update({
-      where: { email: normalizedEmail },
+    const now = new Date();
+
+    const result = await prisma.user.updateMany({
+      where: {
+        email: normalizedEmail,
+        role: "EXTERNAL",
+        password: null, // only claim if not claimed yet
+      },
       data: {
         name: cleanName,
         password: hashedPassword,
         isEmailVerified: true,
-        emailVerifiedAt: new Date(),
+        emailVerifiedAt: now,
         isActive: true,
-        role: "USER", // optional: promote role after claim
       },
+    });
+
+    if (result.count === 0) {
+      // Means: not invited, not EXTERNAL anymore, or already claimed (password already set)
+      return NextResponse.json(
+        {
+          error:
+            "You are already registered or not eligible to claim this account.",
+        },
+        { status: 400 }
+      );
+    }
+
+    // optional: fetch the user to return id/email (since updateMany doesn't return the row)
+    const updated = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
       select: { id: true, email: true },
     });
+
+    if (!updated) {
+      return NextResponse.json(
+        { error: "User not found after update." },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json(
       { message: "Account activated. Please log in.", user: updated },

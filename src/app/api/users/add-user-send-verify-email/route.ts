@@ -37,6 +37,24 @@ async function createDiscordOneTimeInvite(): Promise<string> {
   return `https://discord.gg/${json.code}`;
 }
 
+async function sendSkoolInvite(webhookBaseUrl: string, email: string) {
+  if (!webhookBaseUrl) throw new Error("Skool webhook URL missing");
+
+  // Basic SSRF guard: ONLY allow Skool webhook host
+  if (!webhookBaseUrl.startsWith("https://api2.skool.com/")) {
+    throw new Error("Invalid Skool webhook URL host");
+  }
+
+  const joiner = webhookBaseUrl.includes("?") ? "&" : "?";
+  const url = `${webhookBaseUrl}${joiner}email=${encodeURIComponent(email)}`;
+
+  const res = await fetch(url, { method: "POST" }); // if this fails, try GET
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Skool webhook failed: ${res.status} ${text}`);
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const reqBody = await request.json();
@@ -138,6 +156,13 @@ export async function POST(request: NextRequest) {
             break;
           }
 
+          case "SKOOL": {
+            if (!campaign.inviteUrl)
+              throw new Error("Campaign inviteUrl (Skool webhook) missing");
+            await sendSkoolInvite(campaign.inviteUrl, existingUser.email);
+            break;
+          }
+
           case "GENERIC":
           default: {
             if (campaign.inviteUrl && existingUser.email) {
@@ -191,12 +216,13 @@ export async function POST(request: NextRequest) {
     }
 
     // Case: Email doesn't exist - modified flow (skip verification, send invite directly)
-    // Create new user (already verified)
+    // Create new user
     const user = await prisma.user.create({
       data: {
         name,
         email,
         isEmailVerified: false,
+        role: "EXTERNAL",
       },
     });
 
@@ -243,6 +269,13 @@ export async function POST(request: NextRequest) {
           if (user.email) {
             await sendInviteEmail(user.email, oneTimeInviteUrl, campaign.name);
           }
+          break;
+        }
+
+        case "SKOOL": {
+          if (!campaign.inviteUrl)
+            throw new Error("Campaign inviteUrl (Skool webhook) missing");
+          await sendSkoolInvite(campaign.inviteUrl, user.email);
           break;
         }
 
