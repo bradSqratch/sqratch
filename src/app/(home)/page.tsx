@@ -101,7 +101,7 @@ export default function HomePage() {
           <div className="mx-auto flex w-full max-w-6xl flex-col items-center px-4 sm:px-6 lg:px-8 pb-20 pt-32 text-center sm:pt-36 lg:pt-38">
             {/* Small pill */}
             <div className="flex items-center justify-center rounded-full border border-white/20 bg-white/5 px-6 py-1 text-center text-[14px] leading-[150%] font-normal text-[#F2F4F8] backdrop-blur-md shadow-[0_10px_40px_rgba(15,23,42,0.7)]">
-              Nothing Artificial. Real Community.
+              Learn from SQRATCH
             </div>
 
             {/* Headline */}
@@ -121,32 +121,33 @@ export default function HomePage() {
             >
               {/* Mobile */}
               <span className="sm:hidden">
-                The internet
+                Modern products promise outcomes.
                 <br />
-                feels crowded,
+                SQRATCH delivers the learning
                 <br />
-                but not connected.
+                that makes them real.
               </span>
 
               {/* Desktop / iPad */}
               <span className="hidden sm:inline">
-                The internet feels crowded,
+                Learn From SQRATCH
                 <br />
-                but not connected.
               </span>
             </h1>
 
             {/* Body */}
             <p className="mt-2 max-w-175 text-center text-[20px] lg:text-[22px] font-medium leading-[150%] sm:leading-[160%] text-[#ECECEC]/75">
+              {/* visible on Mobile */}
               <span className="sm:hidden">
-                Every SQRATCH sticker is a tiny portal to something better.
-                Scratch, scan, instantly connect to a real new world.
+                SQRATCH is the trusted learning layer for physical products —
+                private, expert education at the moment it matters.
               </span>
 
+              {/* visible on Desktop */}
               <span className="hidden sm:inline">
-                Every SQRATCH sticker is a tiny portal to something better.
+                SQRATCH is the trusted learning layer for physical products —
                 <br />
-                Scratch, scan, instantly connect to a real new world.
+                private, expert education at the moment it matters.
               </span>
             </p>
 
@@ -155,7 +156,7 @@ export default function HomePage() {
               <div className="w-full max-w-67.5 sm:max-w-none">
                 <WaitlistInline
                   placeholder="Enter your email"
-                  buttonLabel="Join the Waitlist"
+                  buttonLabel=" Explore How It Works"
                   onSubmit={async (email) => {
                     try {
                       const res = await fetch("/api/public/waitlist", {
@@ -311,7 +312,7 @@ export default function HomePage() {
               <div className="flex flex-col gap-6">
                 <div className="flex flex-col gap-4">
                   <h3 className="text-[22px] md:text-[24px] font-bold leading-7.25 tracking-[-0.01em] text-purple-300">
-                    Contact
+                    Get in Touch — Partners, Press, & Collaborations
                   </h3>
 
                   <div className="flex flex-col gap-2.5 text-[16px] md:text-[18px] leading-5.5 tracking-[-0.01em] text-white">
@@ -328,7 +329,9 @@ export default function HomePage() {
                     </p>
 
                     <p className="whitespace-normal wrap-break-word">
-                      <span className="font-semibold">Investor Relations:</span>{" "}
+                      <span className="font-semibold">
+                        Investor & Partner Inquiries:
+                      </span>{" "}
                       <a
                         href="mailto:investors@sqratch.com"
                         className="underline decoration-white/30 underline-offset-4 hover:decoration-white/70"
@@ -412,7 +415,7 @@ export default function HomePage() {
               </div>
 
               <p className="text-[14px] md:text-[16px] text-[#939393] tracking-[-0.01em] text-left pl-0 md:pl-20">
-                © {new Date().getFullYear()} Sqratch. All rights reserved.
+                © {new Date().getFullYear()} SQRATCH Inc. All rights reserved.
               </p>
             </div>
           </div>

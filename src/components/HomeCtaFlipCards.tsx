@@ -40,14 +40,14 @@ function FlipCard({
   cta: CardData["cta"];
 }) {
   return (
-    <div className="relative w-full [perspective:1200px]">
+    <div className="relative w-full perspective-distant">
       <div
         className={[
-          "relative h-[520px] w-full rounded-[28px]",
+          "relative h-130 w-full rounded-[28px]",
           "transition-transform duration-700 ease-[cubic-bezier(0.2,0.8,0.2,1)]",
           "will-change-transform",
-          "[transform-style:preserve-3d]",
-          isOpen ? "[transform:rotateY(180deg)]" : "[transform:rotateY(0deg)]",
+          "transform-3d",
+          isOpen ? "transform-[rotateY(180deg)]" : "transform-[rotateY(0deg)]",
         ].join(" ")}
       >
         {/* FRONT */}
@@ -57,9 +57,10 @@ function FlipCard({
             "border border-white/15 hover:border-white",
             "transition-colors duration-500 ease-[cubic-bezier(0.2,0.8,0.2,1)]",
             "shadow-[0_30px_80px_rgba(0,0,0,0.6)]",
-            "[backface-visibility:hidden] [-webkit-backface-visibility:hidden]",
-            "[transform-style:preserve-3d]",
-            "[transform:rotateY(0deg)_translateZ(0.1px)]",
+            "backface-hidden [-webkit-backface-visibility:hidden]",
+            "transform-3d",
+            "transform-[rotateY(0deg)]",
+            isOpen ? "pointer-events-none" : "pointer-events-auto",
           ].join(" ")}
         >
           {/* Background (video OR image OR nothing) */}
@@ -112,7 +113,7 @@ function FlipCard({
             onClick={onToggle}
             aria-label={`Open ${title}`}
             className={[
-              "absolute left-1/2 top-7 -translate-x-1/2",
+              "absolute left-1/2 top-7 -translate-x-1/2 z-20",
               "h-12 w-12 rounded-full border border-white/25 bg-black/30",
               "grid place-items-center text-white",
               "cursor-pointer select-none",
@@ -120,8 +121,8 @@ function FlipCard({
               "active:scale-[0.98]",
               "transition",
               "focus:outline-none focus:ring-2 focus:ring-white/30",
-              "[backface-visibility:hidden] [-webkit-backface-visibility:hidden]",
-              "[transform:translateZ(1px)]",
+              "backface-hidden [-webkit-backface-visibility:hidden]",
+              "transform-[translateZ(1px)]",
             ].join(" ")}
           >
             <IterationCcw
@@ -155,7 +156,7 @@ function FlipCard({
           </div>
 
           {/* CTA area */}
-          <div className="absolute bottom-8 left-1/2 w-[92%] max-w-[420px] -translate-x-1/2 [backface-visibility:hidden] [-webkit-backface-visibility:hidden] [transform:translateZ(1px)]">
+          <div className="absolute bottom-8 left-1/2 w-[92%] max-w-105 -translate-x-1/2 backface-hidden [-webkit-backface-visibility:hidden] transform-[translateZ(1px)]">
             {cta.type === "link" ? (
               <motion.a
                 whileHover={{ scale: 1.03 }}
@@ -191,8 +192,9 @@ function FlipCard({
           className={[
             "absolute inset-0 rounded-[28px] overflow-hidden",
             "border border-white shadow-[0_30px_80px_rgba(0,0,0,0.65)]",
-            "[backface-visibility:hidden] [-webkit-backface-visibility:hidden]",
-            "[transform-style:preserve-3d] [transform:rotateY(180deg)_translateZ(0.1px)]",
+            "backface-hidden [-webkit-backface-visibility:hidden]",
+            "transform-3d transform-[rotateY(180deg)]",
+            isOpen ? "pointer-events-auto" : "pointer-events-none",
           ].join(" ")}
         >
           {/* Background (video OR image) */}
@@ -226,13 +228,13 @@ function FlipCard({
             onClick={onToggle}
             aria-label={`Close ${title}`}
             className={[
-              "absolute left-1/2 top-7 -translate-x-1/2",
+              "absolute left-1/2 top-7 -translate-x-1/2 z-20",
               "h-12 w-12 rounded-full border border-white/25 bg-black/35",
               "grid place-items-center text-white",
               "hover:bg-black/55 hover:border-white/35 transition",
               "focus:outline-none focus:ring-2 focus:ring-white/30",
-              "[backface-visibility:hidden] [-webkit-backface-visibility:hidden]",
-              "[transform:translateZ(1px)]",
+              "backface-hidden [-webkit-backface-visibility:hidden]",
+              "transform-[translateZ(1px)]",
             ].join(" ")}
           >
             <X
@@ -264,9 +266,10 @@ export default function HomeCtaFlipCards() {
       {
         key: "creators",
         title: <>COMMUNITY BUILDERS</>,
-        subtitle: "Build a space designed for real connection.",
+        subtitle:
+          "Create private, trust-anchored learning communities rooted in real expertise.",
         description:
-          "SQRATCH is for experts with demonstrated experience and subject-matter knowledge who want to build intentional communities. If you’re interested in creating a focused, brand-supported space where members participate, learn, and connect directly, we’d like to hear from you. Apply to build with SQRATCH.",
+          "SQRATCH helps experts turn real-world knowledge into private, structured learning environments where users ask questions, learn deeply, and participate with purpose.",
         bgImageUrl: "/assets/homepage/FlipCard1.mp4",
         cta: {
           type: "link",
@@ -277,9 +280,9 @@ export default function HomeCtaFlipCards() {
       {
         key: "fans",
         title: <>FOR BRANDS</>,
-        subtitle: "Treat customers as participants, not targets.",
+        subtitle: "Post-purchase education that builds trust — not noise.",
         description:
-          "SQRATCH is for brands that want depth, not just reach. If you’re prepared to support a community with access, rewards, or real involvement—and treat customers as participants rather than targets—SQRATCH can help. This works best for brands willing to engage long-term, not run one-off campaigns. Explore a partnership.",
+          "For brands that want to reduce misuse, increase product satisfaction, and build real, long-term engagement through contextual learning — not advertising.",
         bgImageUrl: "/assets/homepage/FlipCard2.mp4",
         cta: {
           type: "link",

@@ -52,7 +52,7 @@ export default function WaitlistInline({
             key="success"
             initial={{ opacity: 0, y: 10, scale: 0.95 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
-            className="flex h-11 w-auto min-w-[180px] items-center justify-center gap-2 rounded-full border border-green-500/30 bg-green-500/10 text-green-100 backdrop-blur-md px-6 shadow-[0_0_20px_rgba(34,197,94,0.2)]"
+            className="flex h-11 w-auto min-w-45 items-center justify-center gap-2 rounded-full border border-green-500/30 bg-green-500/10 text-green-100 backdrop-blur-md px-6 shadow-[0_0_20px_rgba(34,197,94,0.2)]"
           >
             <Check className="h-4 w-4" />
             <span className="font-medium">You're on the list!</span>
@@ -92,7 +92,7 @@ export default function WaitlistInline({
               disabled={isLoading}
               type="submit"
               className={[
-                "text-[16px] sm:text-[18px] shrink-0 rounded-full px-6 py-3 w-full sm:w-[180px] leading-none",
+                "text-[16px] sm:text-[18px] shrink-0 rounded-full px-6 py-3 w-full sm:w-50 leading-none",
                 "border border-white text-black bg-white",
                 "backdrop-blur-md",
                 "transition",

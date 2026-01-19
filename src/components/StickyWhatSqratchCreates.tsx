@@ -135,11 +135,11 @@ export default function StickyWhatSqratchCreates() {
               return (
                 <div key={i} className="space-y-6">
                   {/* Video */}
-                  <div className="mx-auto w-full max-w-[420px] overflow-hidden rounded-[30px]">
+                  <div className="mx-auto w-full max-w-105 overflow-hidden rounded-[30px]">
                     <div
                       className={[
                         "relative w-full",
-                        square ? "aspect-square" : "h-[60vh] max-h-[520px]",
+                        square ? "aspect-square" : "h-[60vh] max-h-130",
                       ].join(" ")}
                     >
                       <video
@@ -207,7 +207,7 @@ export default function StickyWhatSqratchCreates() {
                 // === CHANGE END ===
               >
                 <p className="mt-8 text-[16px] font-semibold uppercase tracking-[0.30em] text-[#FFFFFF]/50">
-                  HOW SQRATCH WORKS
+                  How SQRATCH Works — From Product to Learning to Ownership
                 </p>
 
                 <h2 className="mt-10 text-[32px] leading-[1.2] font-bold whitespace-pre-line text-[#A98DFF] sm:text-[40px]">
