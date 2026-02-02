@@ -4,6 +4,7 @@ import { Geist, Geist_Mono, Lexend_Giga, Montserrat } from "next/font/google";
 import "./globals.css";
 import AuthProvider from "@/context/AuthProvider";
 import GoogleAnalytics from "@/components/GoogleAnalytics";
+import { Suspense } from "react";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -66,7 +67,9 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} ${lexendGiga.variable} ${montserrat.variable} font-sans antialiased app-bg`}
       >
         <AuthProvider>
-          <GoogleAnalytics />
+          <Suspense fallback={null}>
+            <GoogleAnalytics />
+          </Suspense>
           {children}
         </AuthProvider>
       </body>
