@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import { Geist, Geist_Mono, Lexend_Giga, Montserrat } from "next/font/google";
 import "./globals.css";
 import AuthProvider from "@/context/AuthProvider";
+import GoogleAnalytics from "@/components/GoogleAnalytics";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -37,15 +39,37 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const GA_ID = process.env.NEXT_PUBLIC_GA_ID;
+
   return (
     <html lang="en" className="dark">
-      <AuthProvider>
-        <body
-          className={`${geistSans.variable} ${geistMono.variable} ${lexendGiga.variable} ${montserrat.variable} font-sans antialiased app-bg`}
-        >
+      <head>
+        {GA_ID && (
+          <>
+            <Script
+              src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`}
+              strategy="afterInteractive"
+            />
+            <Script id="ga-init" strategy="afterInteractive">
+              {`
+                window.dataLayer = window.dataLayer || [];
+                function gtag(){dataLayer.push(arguments);}
+                gtag('js', new Date());
+                gtag('config', '${GA_ID}', { send_page_view: false });
+              `}
+            </Script>
+          </>
+        )}
+      </head>
+
+      <body
+        className={`${geistSans.variable} ${geistMono.variable} ${lexendGiga.variable} ${montserrat.variable} font-sans antialiased app-bg`}
+      >
+        <AuthProvider>
+          <GoogleAnalytics />
           {children}
-        </body>
-      </AuthProvider>
+        </AuthProvider>
+      </body>
     </html>
   );
 }

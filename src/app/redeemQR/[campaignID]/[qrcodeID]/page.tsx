@@ -8,6 +8,8 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import CommonNavbar from "@/components/commonNavbar";
+import { gaEvent } from "@/lib/googleAnalytics";
+import { useRef } from "react";
 
 export default function QRRedemptionPage() {
   const params = useParams();
@@ -35,6 +37,27 @@ export default function QRRedemptionPage() {
   const showEmailError = form.confirmEmail && !emailsMatch;
   const isFormValid =
     form.name && form.email && form.confirmEmail && emailsMatch;
+
+  // GA: log redeem_view event
+  useEffect(() => {
+    gaEvent("redeem_view", {
+      campaign_id: campaignId,
+      qr_code_id: qrCodeId,
+    });
+  }, [campaignId, qrCodeId]);
+
+  // GA: log redeem_form_start event
+  const startedRef = useRef(false);
+
+  const trackFormStart = () => {
+    if (startedRef.current) return;
+    startedRef.current = true;
+
+    gaEvent("redeem_form_start", {
+      campaign_id: campaignId,
+      qr_code_id: qrCodeId,
+    });
+  };
 
   // Load QR status, and also try to get the campaign name
   useEffect(() => {
@@ -73,6 +96,11 @@ export default function QRRedemptionPage() {
     e.preventDefault();
     setSubmitting(true);
     try {
+      gaEvent("redeem_submit_click", {
+        campaign_id: campaignId,
+        qr_code_id: qrCodeId,
+      });
+
       const response = await axios.post(
         "/api/users/add-user-send-verify-email",
         {
@@ -84,6 +112,15 @@ export default function QRRedemptionPage() {
 
       // Check the response message to determine which card to show
       const message = response.data.message;
+      gaEvent("redeem_submit_success", {
+        campaign_id: campaignId,
+        qr_code_id: qrCodeId,
+        mode:
+          message === "Invite sent directly to your email!"
+            ? "direct_invite"
+            : "verify_email",
+      });
+
       if (message === "Invite sent directly to your email!") {
         toast.success(message);
         setQrStatus("DIRECT_INVITE");
@@ -94,6 +131,12 @@ export default function QRRedemptionPage() {
       }
     } catch (err: any) {
       const errorMessage = err.response?.data?.error || "Failed to register.";
+      gaEvent("redeem_submit_error", {
+        campaign_id: campaignId,
+        qr_code_id: qrCodeId,
+        reason: errorMessage,
+      });
+
       toast.error(errorMessage);
 
       // Check if it's the "verify first" error
@@ -200,6 +243,7 @@ export default function QRRedemptionPage() {
               placeholder="Your Name"
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              onFocus={trackFormStart}
               required
             />
             <Input
@@ -209,6 +253,7 @@ export default function QRRedemptionPage() {
               onChange={(e) =>
                 setForm((f) => ({ ...f, email: e.target.value }))
               }
+              onFocus={trackFormStart}
               required
             />
             <Input
@@ -218,6 +263,7 @@ export default function QRRedemptionPage() {
               onChange={(e) =>
                 setForm((f) => ({ ...f, confirmEmail: e.target.value }))
               }
+              onFocus={trackFormStart}
               required
               className={showEmailError ? "border-red-500" : ""}
             />
