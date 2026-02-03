@@ -162,7 +162,7 @@ export default function StickyWhatSqratchCreates() {
                   {/* Text */}
                   <div>
                     <p className="text-[14px] sm:text-[16px] font-semibold uppercase tracking-[0.30em] text-[#FFFFFF]/50">
-                      HOW SQRATCH WORKS
+                      How SQRATCH Works — Turn Products Into Better Experiences
                     </p>
 
                     <h2 className="mt-6 text-[28px] sm:text-[30px] leading-[1.15] font-bold whitespace-pre-line text-[#A98DFF]">

@@ -139,13 +139,7 @@ export default function HomePage() {
               "
             >
               {/* Mobile */}
-              <span className="sm:hidden">
-                Modern products promise outcomes.
-                <br />
-                SQRATCH delivers the learning
-                <br />
-                that makes them real.
-              </span>
+              <span className="sm:hidden">Learn From SQRATCH</span>
 
               {/* Desktop / iPad */}
               <span className="hidden sm:inline">
