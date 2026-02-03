@@ -349,17 +349,22 @@ export default function QRRedemptionPage() {
               lg:whitespace-nowrap
             "
             >
-              {qrStatus === "NEW"
-                ? "Redeem Your SQRATCH Code"
-                : qrStatus === "INVALID"
-                ? "Invalid QR"
-                : qrStatus === "REDEEMED"
-                ? "QR Code Info"
-                : qrStatus === "SUBMITTED" ||
-                  qrStatus === "DIRECT_INVITE" ||
-                  qrStatus === "VERIFY_FIRST"
-                ? "Check Your Email"
-                : "Loading..."}
+              {qrStatus === "NEW" ? (
+                <>
+                  <span className="block leading-[1.1]">Redeem Your</span>
+                  <span className="block leading-none">SQRATCH Code</span>
+                </>
+              ) : qrStatus === "INVALID" ? (
+                "Invalid QR"
+              ) : qrStatus === "REDEEMED" ? (
+                "QR Code Info"
+              ) : qrStatus === "SUBMITTED" ||
+                qrStatus === "DIRECT_INVITE" ||
+                qrStatus === "VERIFY_FIRST" ? (
+                "Check Your Email"
+              ) : (
+                "Loading..."
+              )}
             </h1>
 
             <p className="mt-3 text-[16px] sm:text-[18px] leading-[160%] text-[#ECECEC]/75">
