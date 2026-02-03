@@ -265,24 +265,25 @@ export default function HomeCtaFlipCards() {
     () => [
       {
         key: "creators",
-        title: <>COMMUNITY BUILDERS</>,
+        title: <>FOR EXPERTS</>,
         subtitle:
-          "Create private, trust-anchored learning communities rooted in real expertise.",
+          "Turn your experience into lasting value by teaching people who genuinely want to learn.",
         description:
-          "SQRATCH helps experts turn real-world knowledge into private, structured learning environments where users ask questions, learn deeply, and participate with purpose.",
+          "Work with responsible brands who fund your expertise — so you can focus on teaching, not chasing followers or sponsors.",
         bgImageUrl: "/assets/homepage/FlipCard1.mp4",
         cta: {
           type: "link",
-          label: "Build a Community",
+          label: "Apply As An Expert",
           href: "https://calendly.com/sqratch/30min",
         },
       },
       {
         key: "fans",
         title: <>FOR BRANDS</>,
-        subtitle: "Post-purchase education that builds trust — not noise.",
+        subtitle:
+          "Turn every purchase into a better experience through clear guidance and trusted education.",
         description:
-          "For brands that want to reduce misuse, increase product satisfaction, and build real, long-term engagement through contextual learning — not advertising.",
+          "For brands that choose education over persuasion — and trust over tactics.",
         bgImageUrl: "/assets/homepage/FlipCard2.mp4",
         cta: {
           type: "link",

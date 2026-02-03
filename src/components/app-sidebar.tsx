@@ -105,7 +105,7 @@ export function AppSidebar() {
 
   return (
     <>
-      <Sidebar className="border-r border-white/10 bg-[#0C1117]">
+      <Sidebar className="border-r border-white/10 bg-[#070A1A]/75 backdrop-blur-xl">
         <SidebarHeader
           onClick={() => router.push("/dashboard")}
           className="transition-all duration-200 text-white bg-transparent cursor-pointer hover:bg-white/5 rounded-lg mx-2 mt-2"
@@ -124,7 +124,7 @@ export function AppSidebar() {
                     <SidebarMenuItem key={item.title}>
                       <SidebarMenuButton
                         asChild
-                        className="text-white/90 hover:text-white hover:bg-blue-950/40 hover:backdrop-blur-sm hover:border hover:border-white/20 hover:shadow-lg hover:shadow-blue-600/20 rounded-lg transition-all duration-200 group"
+                        className="text-white/90 hover:text-white hover:bg-blue-950/10 hover:backdrop-blur-sm hover:border hover:border-white/20 hover:shadow-lg hover:shadow-blue-600/20 rounded-lg transition-all duration-200 group"
                       >
                         <a
                           href={item.url}

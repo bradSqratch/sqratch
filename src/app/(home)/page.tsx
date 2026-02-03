@@ -100,9 +100,28 @@ export default function HomePage() {
         <div className="relative z-10 flex flex-1 items-center">
           <div className="mx-auto flex w-full max-w-6xl flex-col items-center px-4 sm:px-6 lg:px-8 pb-20 pt-32 text-center sm:pt-36 lg:pt-38">
             {/* Small pill */}
-            <div className="flex items-center justify-center rounded-full border border-white/20 bg-white/5 px-6 py-1 text-center text-[14px] leading-[150%] font-normal text-[#F2F4F8] backdrop-blur-md shadow-[0_10px_40px_rgba(15,23,42,0.7)]">
-              Learn from SQRATCH
-            </div>
+            <Link href="/about" className="inline-block">
+              <div
+                className="
+                  flex items-center justify-center
+                  rounded-full
+                  border border-white/20
+                  bg-white/5
+                  px-6 py-1
+                  text-center text-[14px] leading-[150%] font-normal
+                  text-[#F2F4F8]
+                  backdrop-blur-md
+                  shadow-[0_10px_40px_rgba(15,23,42,0.7)]
+                  transition
+                  hover:bg-white/10 hover:border-white/30
+                  hover:shadow-[0_10px_50px_rgba(99,102,241,0.35)]
+                  active:scale-[0.98]
+                  cursor-pointer
+                "
+              >
+                About SQRATCH
+              </div>
+            </Link>
 
             {/* Headline */}
             <h1
@@ -134,7 +153,6 @@ export default function HomePage() {
                 <br />
               </span>
             </h1>
-
             {/* Body */}
             <p className="mt-2 max-w-175 text-center text-[20px] lg:text-[22px] font-medium leading-[150%] sm:leading-[160%] text-[#ECECEC]/75">
               {/* visible on Mobile */}
@@ -150,7 +168,6 @@ export default function HomePage() {
                 private, expert education at the moment it matters.
               </span>
             </p>
-
             {/* CTA buttons */}
             <div className="mt-16 flex flex-wrap w-full items-center justify-center gap-4 sm:w-auto sm:flex-row sm:flex-wrap">
               <div className="w-full max-w-67.5 sm:max-w-none">
@@ -223,10 +240,8 @@ export default function HomePage() {
                       Scratch
                     </h3>
                     <p className="mt-1 text-[16px] leading-relaxed text-slate-300">
-                      Everyone in every SQRATCH community is real. No bots, no
-                      AI, no machines. Each SQRATCH sticker hides a unique code
-                      created for a single person. Revealing it takes intention
-                      — a gesture that automated systems cannot imitate.
+                      A SQRATCH sticker opens the door to what your product can
+                      really do. Scratch to reveal your private access code.
                     </p>
                   </div>
                 </div>
@@ -244,10 +259,8 @@ export default function HomePage() {
                       Scan
                     </h3>
                     <p className="mt-1 text-[16px] leading-relaxed text-slate-300">
-                      By joining through SQRATCH, you are surrounded only by
-                      real people who share the same passions as you. Scanning
-                      presents a clear decision: Do you want to step into this
-                      private space designed for people who care?
+                      Scan to learn from people who know the product — how to
+                      use it better, why it matters, and how to enjoy it more.
                     </p>
                   </div>
                 </div>
@@ -262,13 +275,12 @@ export default function HomePage() {
                   </div>
                   <div>
                     <h3 className="text-[22px] text-base font-semibold text-white">
-                      Enter
+                      Learn
                     </h3>
                     <p className="mt-1 text-[16px] leading-relaxed text-slate-300">
-                      SQRATCH Communities are about participation and belonging.
-                      Everyone is equal. Accepting the invitation unlocks a
-                      dedicated community shaped by shared interest, unique
-                      expertise and genuine participation.
+                      Skiers learn new tricks. Wine lovers discover what’s in
+                      their glass. Every product becomes more useful and more
+                      rewarding.
                     </p>
                   </div>
                 </div>

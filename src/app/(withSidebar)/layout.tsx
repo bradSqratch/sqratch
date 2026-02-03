@@ -28,8 +28,19 @@ export default function DashboardLayout({
         {/* SidebarInset to contain breadcrumbs and main content */}
         <SidebarInset className="flex flex-col w-full">
           {/* Header with Sticky Styling */}
-          <header className="flex h-16 shrink-0 items-center justify-between transition-[width,height] ease-linear group-has-[[data-collapsible=icon]]/sidebar-wrapper:h-12 bg-transparent backdrop-blur-md border-b border-white/10">
-            {" "}
+          <header
+            className="
+              sticky top-0 z-30
+              flex h-16 shrink-0 items-center justify-between
+              bg-[linear-gradient(180deg,rgba(7,10,26,0.85)_0%,rgba(7,10,26,0.55)_100%)]
+              backdrop-blur-xl
+              border-b border-white/10
+              shadow-[0_8px_30px_rgba(0,0,0,0.35)]
+              transition-[width,height]
+              ease-linear
+              group-has-data-[collapsible=icon]/sidebar-wrapper:h-12
+            "
+          >
             {/* Added styling classes from new code. */}
             <div className="flex items-center gap-3 px-4 sm:px-6">
               {" "}

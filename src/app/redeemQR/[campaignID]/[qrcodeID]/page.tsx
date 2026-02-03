@@ -150,7 +150,7 @@ export default function QRRedemptionPage() {
 
   const SubmittedCard = () => {
     const sharedCardClasses =
-      "w-full max-w-md rounded-2xl border border-white/10 bg-white/5 backdrop-blur text-white shadow-inner";
+      "relative w-full max-w-md rounded-[28px] border border-white/15 bg-white/6 backdrop-blur-xl text-white shadow-[0_30px_90px_rgba(0,0,0,0.55)]";
 
     if (qrStatus === "DIRECT_INVITE") {
       return (
@@ -238,8 +238,17 @@ export default function QRRedemptionPage() {
         return <SubmittedCard />;
       case "NEW":
         return (
-          <form className="space-y-4" onSubmit={handleSubmit}>
+          <form className="space-y-6" onSubmit={handleSubmit}>
             <Input
+              className="
+                rounded-2xl
+                border-white/10
+                bg-black/40
+                text-white
+                placeholder:text-white/50
+                focus-visible:ring-0
+                focus-visible:border-white/25
+              "
               placeholder="Your Name"
               value={form.name}
               onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
@@ -247,6 +256,15 @@ export default function QRRedemptionPage() {
               required
             />
             <Input
+              className="
+              rounded-2xl
+              border-white/10
+              bg-black/40
+              text-white
+              placeholder:text-white/50
+              focus-visible:ring-0
+              focus-visible:border-white/25
+            "
               placeholder="Your Email"
               type="email"
               value={form.email}
@@ -265,7 +283,9 @@ export default function QRRedemptionPage() {
               }
               onFocus={trackFormStart}
               required
-              className={showEmailError ? "border-red-500" : ""}
+              className={`${
+                showEmailError ? "border-red-500" : "border-white/10"
+              } rounded-2xl bg-black/40 text-white placeholder:text-white/50 focus-visible:ring-0 focus-visible:border-white/25`}
             />
             {showEmailError && (
               <p className="text-red-500 text-sm">
@@ -275,7 +295,13 @@ export default function QRRedemptionPage() {
             <Button
               type="submit"
               disabled={submitting || !isFormValid}
-              className="bg-[#3E93DE] text-white hover:bg-[#335689] disabled:opacity-50 disabled:cursor-not-allowed"
+              className="
+                w-full rounded-full py-6
+                border border-white bg-white text-black
+                hover:scale-[1.01] active:scale-[0.99]
+                transition
+                disabled:opacity-50 disabled:cursor-not-allowed
+              "
             >
               {submitting ? "Sending..." : "Submit"}
             </Button>
@@ -287,36 +313,91 @@ export default function QRRedemptionPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col bg-[url('/assets/homepage/home_bg.jpeg')] bg-cover bg-center text-white">
-      <CommonNavbar />
+    <div className="relative min-h-screen bg-[#020015] text-white overflow-hidden">
+      <div className="pointer-events-none absolute inset-0">
+        {/* Primary glow behind hero */}
+        <div className="absolute inset-0 bg-[radial-gradient(1100px_600px_at_50%_10%,rgba(99,102,241,0.30),rgba(2,0,21,0)_70%)]" />
 
-      <main className="flex-1 flex items-center justify-center px-4 py-12">
-        <Card className="w-full max-w-lg rounded-xl border border-white/10 bg-[linear-gradient(180deg,rgba(9,17,48,0.95)_0%,rgba(3,6,20,0.95)_100%)] text-white shadow-[0_25px_80px_rgba(0,0,0,0.65)]">
-          <CardHeader className="text-center border-b border-white/10 pb-4">
-            {qrStatus === "SUBMITTED" ||
-            qrStatus === "DIRECT_INVITE" ||
-            qrStatus === "VERIFY_FIRST" ? (
-              <img
-                src="/sqratchLogo.png"
-                alt="SQRATCH"
-                className="h-8 w-auto mx-auto"
-              />
-            ) : (
-              <CardTitle className="text-2xl font-semibold text-white">
-                {qrStatus === "NEW"
-                  ? "Redeem Your SQRATCH Code"
-                  : qrStatus === "INVALID"
-                  ? "Invalid QR"
-                  : qrStatus === "REDEEMED"
-                  ? "QR Code Info"
-                  : "Check Your Email"}
-              </CardTitle>
-            )}
-          </CardHeader>
+        {/* Secondary glow behind the card (centered slightly lower) */}
+        <div className="absolute inset-0 bg-[radial-gradient(900px_520px_at_50%_55%,rgba(99,102,241,0.13),rgba(2,0,21,0)_65%)]" />
 
-          <CardContent className="pt-2">{renderCardContent()}</CardContent>
-        </Card>
-      </main>
+        {/* One accent only (pink), bottom-left for depth */}
+        <div className="absolute inset-0 bg-[radial-gradient(900px_600px_at_10%_90%,rgba(236,72,153,0.10),rgba(2,0,21,0)_65%)]" />
+
+        {/* Subtle vignette to darken edges */}
+        <div className="absolute inset-0 bg-[radial-gradient(1200px_900px_at_50%_50%,rgba(2,0,21,0)_35%,rgba(2,0,21,0.85)_100%)]" />
+
+        {/* Bottom fade */}
+        <div className="absolute inset-x-0 bottom-0 h-64 bg-linear-to-b from-transparent to-[#020121]" />
+      </div>
+
+      {/* content layer (match Signup) */}
+      <div className="relative z-10 flex min-h-screen flex-col">
+        <CommonNavbar />
+
+        <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col items-center justify-center px-6 pt-28 pb-12 sm:pt-32">
+          {/* Hero heading (Signup-style) */}
+          <div className="w-full max-w-5xl text-center">
+            <h1
+              className="
+              mt-2
+              text-[40px] sm:text-[56px] lg:text-[64px]
+              font-bold leading-[105%] tracking-[-0.03em]
+              bg-[linear-gradient(145.55deg,#ECECEC_20.35%,rgba(236,236,236,0)_128.73%)]
+              bg-clip-text text-transparent
+              drop-shadow-[0_0_12px_rgba(236,236,236,0.50)]
+              lg:whitespace-nowrap
+            "
+            >
+              {qrStatus === "NEW"
+                ? "Redeem Your SQRATCH Code"
+                : qrStatus === "INVALID"
+                ? "Invalid QR"
+                : qrStatus === "REDEEMED"
+                ? "QR Code Info"
+                : qrStatus === "SUBMITTED" ||
+                  qrStatus === "DIRECT_INVITE" ||
+                  qrStatus === "VERIFY_FIRST"
+                ? "Check Your Email"
+                : "Loading..."}
+            </h1>
+
+            <p className="mt-3 text-[16px] sm:text-[18px] leading-[160%] text-[#ECECEC]/75">
+              {qrStatus === "NEW"
+                ? "Enter your details to claim your one-time invite."
+                : qrStatus === "INVALID"
+                ? "This QR code is invalid or expired."
+                : qrStatus === "REDEEMED"
+                ? "This QR code has already been redeemed."
+                : qrStatus === "SUBMITTED" ||
+                  qrStatus === "DIRECT_INVITE" ||
+                  qrStatus === "VERIFY_FIRST"
+                ? "Follow the instructions sent to your email."
+                : "Checking your code..."}
+            </p>
+          </div>
+
+          <Card
+            className="
+            relative mt-10 w-full max-w-md
+            rounded-[28px]
+            border border-white/15
+            bg-white/6
+            backdrop-blur-xl
+            shadow-[0_30px_90px_rgba(0,0,0,0.55)]
+            overflow-hidden
+          "
+          >
+            <div className="pointer-events-none absolute inset-0 rounded-[28px] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]" />
+
+            <CardContent className="pt-2">{renderCardContent()}</CardContent>
+          </Card>
+        </main>
+        {/* Footer (match Signup) */}
+        <div className="pb-6 text-center text-white/55">
+          © {new Date().getFullYear()} SQRATCH. All rights reserved.
+        </div>
+      </div>
     </div>
   );
 }

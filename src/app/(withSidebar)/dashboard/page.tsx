@@ -6,6 +6,7 @@ import axios from "axios";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
 import Papa from "papaparse";
 
 // Types
@@ -42,7 +43,7 @@ function GradientStatCard({
   return (
     <div
       className={[
-        "relative rounded-[24px] p-[1.25px]",
+        "relative rounded-3xl p-[1.25px]",
         // Border gradient: bright TL -> darker BR (like ref)
         "bg-[linear-gradient(135deg,rgba(255,255,255,0.28)_0%,rgba(255,255,255,0.10)_28%,rgba(0,0,0,0.55)_100%)]",
         "shadow-[0_26px_80px_rgba(0,0,0,0.45)]",
@@ -101,7 +102,7 @@ function CampaignCard({
   colorVar?: string;
 }) {
   return (
-    <GradientStatCard colorVar={colorVar} className="min-h-[140px]">
+    <GradientStatCard colorVar={colorVar} className="min-h-35">
       <div className="p-6 text-white">
         <div className="text-[15px] font-semibold text-white/95">
           {c.campaignName}
@@ -223,46 +224,55 @@ export default function DashboardPage() {
     );
   }
 
-  // EXTERNAL (unchanged from your latest)
+  // EXTERNAL (match Signup/Redeem background + card styling)
   if (session?.user.role === "EXTERNAL" && userData) {
     return (
-      <div className="relative min-h-screen overflow-hidden">
-        <video
-          className="pointer-events-none absolute inset-0 h-full w-full object-cover opacity-65"
-          src="/assets/dashboard/purple-lines.mp4"
-          autoPlay
-          loop
-          muted
-          playsInline
-        />
-        <div className="pointer-events-none absolute inset-0 bg-black/35" />
+      <div className="relative min-h-screen bg-[#020015] text-white overflow-hidden">
+        {/* Background (same style as redeemQR) */}
+        <div className="pointer-events-none absolute inset-0">
+          {/* Primary glow behind hero */}
+          <div className="absolute inset-0 bg-[radial-gradient(1100px_600px_at_50%_10%,rgba(99,102,241,0.30),rgba(2,0,21,0)_70%)]" />
 
-        <div className="relative z-10 flex min-h-screen items-center justify-center px-6">
-          <div
-            className={[
-              "relative",
-              "w-[min(860px,92vw)]",
-              "h-[min(420px,60vh)]",
-              "rounded-[28px]",
-              "backdrop-blur-3xl",
-              "border border-white/15",
-              "shadow-[0_30px_90px_rgba(0,0,0,0.55)]",
-              "overflow-hidden",
-              "grid place-items-center",
-            ].join(" ")}
-          >
-            <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(to_bottom_right,rgba(190,220,255,0.14)_0%,rgba(190,220,255,0.06)_35%,rgba(190,220,255,0.00)_100%)]" />
-            <div className="pointer-events-none absolute inset-0 rounded-[28px] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.10)]" />
+          {/* Secondary glow behind the card */}
+          <div className="absolute inset-0 bg-[radial-gradient(900px_520px_at_50%_55%,rgba(99,102,241,0.13),rgba(2,0,21,0)_65%)]" />
 
-            <div className="relative text-center">
-              <div className="text-[84px] sm:text-[220px] font-semibold tracking-[-0.04em] text-white drop-shadow-[0_10px_60px_rgba(168,85,247,0.35)]">
-                {userData.points}
-              </div>
-              <div className="mt-2 text-[14px] sm:text-[16px] font-semibold tracking-[0.22em] text-white/70">
-                YOUR SQRATCH POINTS
-              </div>
-            </div>
-          </div>
+          {/* Accent (pink) */}
+          <div className="absolute inset-0 bg-[radial-gradient(900px_600px_at_10%_90%,rgba(236,72,153,0.10),rgba(2,0,21,0)_65%)]" />
+
+          {/* Vignette */}
+          <div className="absolute inset-0 bg-[radial-gradient(1200px_900px_at_50%_50%,rgba(2,0,21,0)_35%,rgba(2,0,21,0.85)_100%)]" />
+
+          {/* Bottom fade */}
+          <div className="absolute inset-x-0 bottom-0 h-64 bg-linear-to-b from-transparent to-[#020121]" />
+        </div>
+
+        {/* Content layer */}
+        <div className="relative z-10 flex min-h-screen flex-col">
+          <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col items-center justify-center px-6 pt-28 pb-12 sm:pt-32">
+            <Card
+              className={[
+                // Same “Signup card” styling
+                "relative w-full max-w-215",
+                "rounded-[28px] border border-white/15 bg-white/6 backdrop-blur-xl",
+                "shadow-[0_30px_90px_rgba(0,0,0,0.55)] overflow-hidden",
+                // Keep your old sizing feel
+                "min-h-80 sm:min-h-105",
+                "grid place-items-center",
+              ].join(" ")}
+            >
+              <div className="pointer-events-none absolute inset-0 rounded-[28px] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]" />
+
+              <CardContent className="relative z-10 text-center py-10">
+                <div className="text-[84px] sm:text-[220px] font-semibold tracking-[-0.04em] text-white drop-shadow-[0_10px_60px_rgba(168,85,247,0.25)]">
+                  {userData.points}
+                </div>
+
+                <div className="mt-2 text-[14px] sm:text-[16px] font-semibold tracking-[0.22em] text-white/70">
+                  YOUR SQRATCH POINTS
+                </div>
+              </CardContent>
+            </Card>
+          </main>
         </div>
       </div>
     );
@@ -283,7 +293,7 @@ export default function DashboardPage() {
               {loading ? "Refreshing…" : "Refresh"}
             </Button>
             <Button
-              className="ml-4 bg-[var(--card-colour-1)] text-white"
+              className="ml-4 bg-[--card-colour-1] text-white"
               onClick={handleExport}
             >
               Export Reports

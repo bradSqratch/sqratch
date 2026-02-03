@@ -2,30 +2,30 @@
 export const whatSqratchCreatesSteps = [
   {
     video: "/assets/homepage/sticky-vid-1.mp4",
-    title: "Start with a\nSQRATCH sticker.",
+    title: "Start with a\nSQRATCH sticker",
     subtitle: "",
     paragraph:
-      "A SQRATCH sticker unlocks access to something more than what’s on the shelf. It signals access to a space you can enter, people you can connect with, and value that only appears when you choose to engage.",
+      "Every SQRATCH sticker links your product to practical knowledge, guidance, and real experience.",
   },
   {
     video: "/assets/homepage/sticky-vid-2.mp4",
-    title: "Scratch to reveal\nthe code.",
+    title: "Scratch to reveal\nthe code",
     subtitle: "",
     paragraph:
-      "You scratch the sticker to reveal a unique QR code, confirming a real person chose to participate. That small physical action creates a clear boundary - only people who show up in the real world can get in.",
+      "Scratch to unlock a one-time access code that leads to relevant  information and a trustworthy community.",
   },
   {
     video: "/assets/homepage/sticky-vid-3.mp4",
     title: "Scan and you’re in.",
     subtitle: "",
     paragraph:
-      "Scanning the code brings you into a private digital space. Everyone inside arrived the same way you did, which sets a different tone from the start.",
+      "Scanning connects you to a private space built around that product and how to use it well.",
   },
   {
     video: "/assets/homepage/sticky-vid-4.mp4",
-    title: "Connect directly.",
+    title: "Learn from experts",
     subtitle: "",
     paragraph:
-      "Inside, you interact directly with experts and community members—without feeds, algorithms, or amplification. These spaces are for real connection, not playing to an audience.",
+      "Inside, you learn from professionals and experienced users. No algorithms. No noise. Just useful information.",
   },
 ];

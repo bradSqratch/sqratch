@@ -207,7 +207,7 @@ export default function StickyWhatSqratchCreates() {
                 // === CHANGE END ===
               >
                 <p className="mt-8 text-[16px] font-semibold uppercase tracking-[0.30em] text-[#FFFFFF]/50">
-                  How SQRATCH Works — From Product to Learning to Ownership
+                  How SQRATCH Works — Turn Products Into Better Experiences
                 </p>
 
                 <h2 className="mt-10 text-[32px] leading-[1.2] font-bold whitespace-pre-line text-[#A98DFF] sm:text-[40px]">
