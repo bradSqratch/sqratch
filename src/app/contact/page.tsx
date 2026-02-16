@@ -8,8 +8,8 @@ import CommonNavbar from "@/components/commonNavbar";
 import { Copy, Check, Mail, MapPin } from "lucide-react";
 
 const COMPANY = "Sqratch Inc.";
-const ADDRESS_LINE_1 = "441 Maclaren St. Suite 310";
-const ADDRESS_LINE_2 = "Ottawa ON K2P 2H3";
+const ADDRESS_LINE_1 = "280 Albert Street, Suite 707";
+const ADDRESS_LINE_2 = "Ottawa ON K1P 5P3";
 const PRESS_EMAIL = "press@sqratch.com";
 
 export default function ContactPage() {

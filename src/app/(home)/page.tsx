@@ -384,8 +384,8 @@ export default function HomePage() {
                       Sqratch Inc.
                     </Link>
                     <p className="max-w-65 text-[16px] md:text-[18px] leading-5.5 tracking-[-0.01em] text-white">
-                      441 Maclaren St. Suite 310, <br />
-                      Ottawa ON K2P 2H3
+                      280 Albert Street, Suite 707, <br />
+                      Ottawa ON K1P 5P3
                     </p>
                   </div>
                 </div>

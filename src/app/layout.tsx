@@ -30,7 +30,10 @@ const montserrat = Montserrat({
 });
 
 export const metadata: Metadata = {
-  title: "Sqratch",
+  title: {
+    default: "SQRATCH",
+    template: "%s — SQRATCH",
+  },
   description:
     "SQRATCH empowers brands and builders to create private, real-person communities.",
 };
@@ -42,10 +45,12 @@ export default function RootLayout({
 }>) {
   const GA_ID = process.env.NEXT_PUBLIC_GA_ID;
 
+  const isProd = process.env.NODE_ENV === "production";
+
   return (
     <html lang="en" className="dark">
       <head>
-        {GA_ID && (
+        {isProd && GA_ID && (
           <>
             <Script
               src={`https://www.googletagmanager.com/gtag/js?id=${GA_ID}`}
@@ -67,9 +72,11 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} ${lexendGiga.variable} ${montserrat.variable} font-sans antialiased app-bg`}
       >
         <AuthProvider>
-          <Suspense fallback={null}>
-            <GoogleAnalytics />
-          </Suspense>
+          {isProd && GA_ID && (
+            <Suspense fallback={null}>
+              <GoogleAnalytics />
+            </Suspense>
+          )}
           {children}
         </AuthProvider>
       </body>

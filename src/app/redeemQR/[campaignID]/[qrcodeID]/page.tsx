@@ -43,6 +43,7 @@ export default function QRRedemptionPage() {
     gaEvent("redeem_view", {
       campaign_id: campaignId,
       qr_code_id: qrCodeId,
+      page_path: window.location.pathname + window.location.search,
     });
   }, [campaignId, qrCodeId]);
 
@@ -56,6 +57,7 @@ export default function QRRedemptionPage() {
     gaEvent("redeem_form_start", {
       campaign_id: campaignId,
       qr_code_id: qrCodeId,
+      page_path: window.location.pathname + window.location.search,
     });
   };
 
@@ -99,6 +101,7 @@ export default function QRRedemptionPage() {
       gaEvent("redeem_submit_click", {
         campaign_id: campaignId,
         qr_code_id: qrCodeId,
+        page_path: window.location.pathname + window.location.search,
       });
 
       const response = await axios.post(
@@ -115,6 +118,7 @@ export default function QRRedemptionPage() {
       gaEvent("redeem_submit_success", {
         campaign_id: campaignId,
         qr_code_id: qrCodeId,
+        page_path: window.location.pathname + window.location.search,
         mode:
           message === "Invite sent directly to your email!"
             ? "direct_invite"
@@ -134,6 +138,7 @@ export default function QRRedemptionPage() {
       gaEvent("redeem_submit_error", {
         campaign_id: campaignId,
         qr_code_id: qrCodeId,
+        page_path: window.location.pathname + window.location.search,
         reason: errorMessage,
       });
 

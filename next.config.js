@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   images: {
-    domains: ["your-domain.com"],
+    domains: ["sqratch.com"],
     unoptimized: process.env.NODE_ENV !== "production",
   },
   // Handle any polyfills needed

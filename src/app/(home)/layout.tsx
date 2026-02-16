@@ -1,7 +1,8 @@
+import type { Metadata } from "next";
 import React from "react";
 
-export const metadata = {
-  title: "Home - SQRATCH",
+export const metadata: Metadata = {
+  title: "Home",
 };
 
 export default function HomeLayout({
@@ -9,5 +10,5 @@ export default function HomeLayout({
 }: {
   children: React.ReactNode;
 }) {
-  return <div className="bootstrap-scoped">{children}</div>;
+  return <div>{children}</div>;
 }
