@@ -192,7 +192,7 @@ export default function AdminUsersPage() {
                 Create User
               </Button>
             </DialogTrigger>
-            <DialogContent className="sm:max-w-[480px] bg-[#05050f]/35 text-white border border-white/10 backdrop-blur-md">
+            <DialogContent className="sm:max-w-120 bg-[#05050f]/35 text-white border border-white/10 backdrop-blur-md">
               <DialogHeader>
                 <DialogTitle>Create User</DialogTitle>
                 <DialogDescription>
@@ -306,7 +306,7 @@ export default function AdminUsersPage() {
 
         {/* Edit Dialog */}
         <Dialog open={editOpen} onOpenChange={setEditOpen}>
-          <DialogContent className="sm:max-w-[480px] bg-[#05050f]/35 text-white border border-white/10 backdrop-blur-md">
+          <DialogContent className="sm:max-w-120 bg-[#05050f]/35 text-white border border-white/10 backdrop-blur-md">
             <DialogHeader>
               <DialogTitle>Edit Admin User</DialogTitle>
             </DialogHeader>

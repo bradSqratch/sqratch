@@ -383,7 +383,7 @@ export default function QRManagementPage() {
         </div>
       )}
 
-      <Card className="mx-auto max-w-6xl bg-white/[0.02] backdrop-blur-sm border border-white/10">
+      <Card className="mx-auto max-w-6xl bg-white/2 backdrop-blur-sm border border-white/10">
         <CardHeader className="flex flex-col md:flex-row md:items-center md:justify-between gap-4 border-b border-white/10">
           <CardTitle className="text-white">QR Code Management</CardTitle>
 
@@ -396,7 +396,7 @@ export default function QRManagementPage() {
                 value={selectedCampaignId}
                 onValueChange={(val) => setSelectedCampaignId(val)}
               >
-                <SelectTrigger className="w-[200px] bg-white/10 border-white/20 text-white">
+                <SelectTrigger className="w-50 bg-white/10 border-white/20 text-white">
                   <SelectValue placeholder="Select Campaign" />
                 </SelectTrigger>
                 <SelectContent>
@@ -541,7 +541,7 @@ export default function QRManagementPage() {
                 value={String(pageSize)}
                 onValueChange={(v) => setPageSize(Number(v))}
               >
-                <SelectTrigger className="w-[140px]">
+                <SelectTrigger className="w-35">
                   <SelectValue placeholder="Rows per page" />
                 </SelectTrigger>
                 <SelectContent>
@@ -634,7 +634,7 @@ export default function QRManagementPage() {
       )}
 
       <Dialog open={editOpen} onOpenChange={setEditOpen}>
-        <DialogContent className="sm:max-w-[520px] bg-[#05050f]/35 text-white border border-white/10 backdrop-blur-md">
+        <DialogContent className="sm:max-w-130 bg-[#05050f]/35 text-white border border-white/10 backdrop-blur-md">
           <DialogHeader>
             <DialogTitle>Edit QR Code</DialogTitle>
             <DialogDescription className="text-white/70">
@@ -789,7 +789,7 @@ export default function QRManagementPage() {
                   <SelectContent className="max-h-60 overflow-auto">
                     {campaigns.map((c) => (
                       <SelectItem key={c.id} value={c.id} title={c.name}>
-                        <span className="block max-w-[250px] truncate">
+                        <span className="block max-w-62.5 truncate">
                           {c.name}
                         </span>
                       </SelectItem>

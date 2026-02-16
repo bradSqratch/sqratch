@@ -1,7 +1,8 @@
+import type { Metadata } from "next";
 import { Toaster } from "@/components/ui/sonner";
 
-export const metadata = {
-  title: "Signup - SQRATCH",
+export const metadata: Metadata = {
+  title: "Signup",
 };
 
 export default function SignupLayout({

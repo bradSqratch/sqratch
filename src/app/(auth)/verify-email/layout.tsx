@@ -1,7 +1,8 @@
+import type { Metadata } from "next";
 import React, { Suspense } from "react";
 
-export const metadata = {
-  title: "Verify Email - SQRATCH",
+export const metadata: Metadata = {
+  title: "Verify Email",
 };
 
 export default function VerifyEmailLayout({

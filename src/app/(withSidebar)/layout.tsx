@@ -1,3 +1,4 @@
+import type { Metadata } from "next";
 import React, { Suspense } from "react";
 import Link from "next/link"; // Import Link for navigation.
 import { SidebarProvider } from "@/components/ui/sidebar";
@@ -12,8 +13,8 @@ import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
 
-export const metadata = {
-  title: "Admin Panel - SQRATCH",
+export const metadata: Metadata = {
+  title: "Dashboard",
 };
 
 export default function DashboardLayout({
