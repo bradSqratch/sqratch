@@ -1,0 +1,248 @@
+import { NextRequest, NextResponse } from "next/server";
+import QRCode from "qrcode";
+import { v2 as cloudinary } from "cloudinary";
+import prisma from "@/lib/prisma";
+import { getBrandAdminContext } from "@/lib/brand-auth";
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+  secure: true,
+});
+
+function extractCloudinaryPublicId(imageUrl: string) {
+  const url = new URL(imageUrl);
+  const uploadIndex = url.pathname.indexOf("/upload/");
+
+  if (uploadIndex === -1) {
+    return null;
+  }
+
+  const afterUpload = url.pathname.slice(uploadIndex + "/upload/".length);
+  const afterVersion = afterUpload.replace(/^v\d+\//, "");
+  return afterVersion.replace(/\.[^.]+$/, "");
+}
+
+export async function PATCH(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const context = await getBrandAdminContext();
+
+    if (!context?.membership?.brand) {
+      return NextResponse.json(
+        { error: "Brand admin access required." },
+        { status: 403 },
+      );
+    }
+
+    const { id } = await params;
+    const body = await request.json().catch(() => null);
+    const campaignId = String(body?.campaignId || "").trim();
+    const status = String(body?.status || "").trim().toUpperCase();
+    const nextStatus = status === "USED" ? "USED" : status === "NEW" ? "NEW" : null;
+    const usedBy = String(body?.usedBy || "").trim();
+    const usedAt = String(body?.usedAt || "").trim();
+
+    if (!campaignId || !nextStatus) {
+      return NextResponse.json(
+        { error: "campaignId and a valid status are required." },
+        { status: 400 },
+      );
+    }
+
+    const existingQRCode = await prisma.qRCode.findFirst({
+      where: {
+        id,
+        campaign: {
+          brandId: context.membership.brand.id,
+        },
+      },
+      select: {
+        id: true,
+        qrCodeData: true,
+        qrCodeUrl: true,
+        campaignId: true,
+      },
+    });
+
+    if (!existingQRCode) {
+      return NextResponse.json({ error: "QR code not found." }, { status: 404 });
+    }
+
+    const targetCampaign = await prisma.campaign.findFirst({
+      where: {
+        id: campaignId,
+        brandId: context.membership.brand.id,
+      },
+      select: {
+        id: true,
+        name: true,
+      },
+    });
+
+    if (!targetCampaign) {
+      return NextResponse.json(
+        { error: "Target campaign not found." },
+        { status: 404 },
+      );
+    }
+
+    let redeemedById: string | null = null;
+    let email: string | null = null;
+
+    if (usedBy) {
+      const user = await prisma.user.findUnique({
+        where: { email: usedBy },
+        select: { id: true, email: true },
+      });
+
+      if (!user) {
+        return NextResponse.json({ error: "User not found." }, { status: 400 });
+      }
+
+      redeemedById = user.id;
+      email = user.email;
+    }
+
+    let newImageUrl = existingQRCode.qrCodeUrl;
+    const campaignChanged = campaignId !== existingQRCode.campaignId;
+
+    if (campaignChanged) {
+      if (existingQRCode.qrCodeUrl) {
+        try {
+          const publicId = extractCloudinaryPublicId(existingQRCode.qrCodeUrl);
+          if (publicId) {
+            await cloudinary.uploader.destroy(publicId, {
+              resource_type: "image",
+            });
+          }
+        } catch (error) {
+          console.error("[brand/qr-codes][PATCH] Cloudinary deletion failed:", error);
+        }
+      }
+
+      const scanUrl = `${(
+        process.env.DOMAIN ||
+        process.env.NEXT_PUBLIC_APP_URL ||
+        process.env.NEXTAUTH_URL ||
+        request.nextUrl.origin
+      ).replace(/\/$/, "")}/q/${existingQRCode.qrCodeData}`;
+
+      const buffer = await QRCode.toBuffer(scanUrl, {
+        type: "png",
+        width: 500,
+        color: {
+          dark: "#000000",
+          light: "#ffffff",
+        },
+      });
+
+      const targetFolder = `qrCodes/${targetCampaign.name.replace(/[\\/]/g, "-")}`;
+      try {
+        await cloudinary.api.create_folder(targetFolder);
+      } catch (error: unknown) {
+        const cloudinaryError = error as { http_code?: number; message?: string };
+        if (
+          !(
+            cloudinaryError?.http_code === 409 ||
+            /already exists/i.test(cloudinaryError?.message || "")
+          )
+        ) {
+          console.warn(
+            "[brand/qr-codes][PATCH] Cloudinary create_folder warning:",
+            cloudinaryError?.message || error,
+          );
+        }
+      }
+
+      const uploadResult = await cloudinary.uploader.upload(
+        `data:image/png;base64,${buffer.toString("base64")}`,
+        {
+          folder: targetFolder,
+          public_id: `qr_${existingQRCode.qrCodeData}`,
+          overwrite: true,
+          resource_type: "image",
+        },
+      );
+
+      newImageUrl = uploadResult.secure_url;
+    }
+
+    await prisma.qRCode.update({
+      where: { id },
+      data: {
+        campaignId,
+        status: nextStatus,
+        usedAt: usedAt ? new Date(usedAt) : null,
+        redeemedById,
+        email,
+        qrCodeUrl: newImageUrl,
+      },
+    });
+
+    return NextResponse.json({ data: { success: true } });
+  } catch (error) {
+    console.error("[brand/qr-codes][PATCH] Error:", error);
+    return NextResponse.json(
+      { error: "Failed to update QR code." },
+      { status: 500 },
+    );
+  }
+}
+
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  try {
+    const context = await getBrandAdminContext();
+
+    if (!context?.membership?.brand) {
+      return NextResponse.json(
+        { error: "Brand admin access required." },
+        { status: 403 },
+      );
+    }
+
+    const { id } = await params;
+    const record = await prisma.qRCode.findFirst({
+      where: {
+        id,
+        campaign: {
+          brandId: context.membership.brand.id,
+        },
+      },
+      select: {
+        id: true,
+        qrCodeUrl: true,
+      },
+    });
+
+    if (!record) {
+      return NextResponse.json({ error: "QR code not found." }, { status: 404 });
+    }
+
+    if (record.qrCodeUrl) {
+      try {
+        const publicId = extractCloudinaryPublicId(record.qrCodeUrl);
+        if (publicId) {
+          await cloudinary.uploader.destroy(publicId, { resource_type: "image" });
+        }
+      } catch (error) {
+        console.error("[brand/qr-codes][DELETE] Cloudinary deletion error:", error);
+      }
+    }
+
+    await prisma.qRCode.delete({ where: { id } });
+    return NextResponse.json({ data: { success: true } });
+  } catch (error) {
+    console.error("[brand/qr-codes][DELETE] Error:", error);
+    return NextResponse.json(
+      { error: "Failed to delete QR code." },
+      { status: 500 },
+    );
+  }
+}

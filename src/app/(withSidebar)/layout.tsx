@@ -1,27 +1,36 @@
 import type { Metadata } from "next";
 import React, { Suspense } from "react";
 import Link from "next/link"; // Import Link for navigation.
+import { redirect } from "next/navigation";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
-import {
-  Breadcrumb,
-  BreadcrumbItem,
-  BreadcrumbLink,
-  BreadcrumbList,
-} from "@/components/ui/breadcrumb";
 import { Separator } from "@/components/ui/separator";
 import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar";
 import { Toaster } from "@/components/ui/sonner";
+import { DashboardTopbarUser } from "@/components/dashboard-topbar-user";
+import { hasPendingApproval } from "@/lib/approval-gating";
 
 export const metadata: Metadata = {
   title: "Dashboard",
 };
 
-export default function DashboardLayout({
+export default async function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
+  const session = await getServerSession(authOptions);
+
+  if (
+    session?.user?.id &&
+    session.user.role !== "ADMIN" &&
+    (await hasPendingApproval(session.user.id))
+  ) {
+    redirect("/approval-pending");
+  }
+
   return (
     <SidebarProvider>
       <div className="flex h-screen w-full">
@@ -71,12 +80,17 @@ export default function DashboardLayout({
                 </h1>
               </Link>
             </div>
-            <div className="pr-4 text-white"></div>
+            {/* NEW: user name + role + guard */}
+            <div className="pr-4">
+              <DashboardTopbarUser />
+            </div>
           </header>
 
           {/* Main Content Area */}
           <div className="flex-1 bg-transparent">
-            <Suspense fallback={<div>Loading...</div>}>
+            <Suspense
+              fallback={<div className="p-6 text-white/70">Loading...</div>}
+            >
               <main>{children}</main>
               <Toaster richColors />
             </Suspense>

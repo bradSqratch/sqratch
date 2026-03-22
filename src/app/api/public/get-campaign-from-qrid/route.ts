@@ -1,34 +1,37 @@
-// src/app/api/public/campaign-from-qr/route.ts
-import { NextRequest, NextResponse } from "next/server";
+import { NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
 import prisma from "@/lib/prisma";
+import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 
-// GET /api/public/campaign-from-qr?qrcodeID=...
-export async function GET(req: NextRequest) {
+export async function GET() {
   try {
-    const qrcodeID = req.nextUrl.searchParams.get("qrcodeID");
-    if (!qrcodeID) {
-      return NextResponse.json({ error: "Missing qrcodeID" }, { status: 400 });
+    const session = await getServerSession(authOptions);
+
+    if (!session || !session.user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const qr = await prisma.qRCode.findFirst({
-      where: { qrCodeData: qrcodeID },
+    const user = await prisma.user.findUnique({
+      where: { id: session.user.id },
       select: {
-        campaign: {
-          select: {
-            name: true,
-            inviteUrl: true,
-            community: { select: { name: true, type: true } },
-          },
-        },
+        id: true,
+        name: true,
+        email: true,
+        points: true,
+        role: true,
       },
     });
 
-    if (!qr?.campaign) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (!user) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
 
-    return NextResponse.json({ data: { name: qr.campaign.name } });
-  } catch {
-    return NextResponse.json({ error: "Server error" }, { status: 500 });
+    return NextResponse.json({ data: user });
+  } catch (error) {
+    console.error("Error fetching user data:", error);
+    return NextResponse.json(
+      { error: "Internal Server Error" },
+      { status: 500 },
+    );
   }
 }

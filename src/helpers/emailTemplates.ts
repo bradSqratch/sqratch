@@ -119,6 +119,12 @@ type InviteTemplateParams = {
   heroImageUrl?: string;
 };
 
+type ApprovalTemplateParams = {
+  name: string;
+  accountTypeLabel: string;
+  loginUrl: string;
+};
+
 export function buildInviteEmailHtml(params: InviteTemplateParams) {
   const { name, campaignName, inviteUrl, heroImageUrl } = params;
 
@@ -244,6 +250,133 @@ export function buildInviteEmailHtml(params: InviteTemplateParams) {
         </table>
         <!-- /CARD -->
 
+      </td>
+    </tr>
+  </table>
+</body>
+</html>`;
+}
+
+export function buildApprovalEmailHtml(params: ApprovalTemplateParams) {
+  const { name, accountTypeLabel, loginUrl } = params;
+  const year = new Date().getFullYear();
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width" />
+  <meta name="x-apple-disable-message-reformatting" />
+  <title>Your SQRATCH account has been approved</title>
+</head>
+<body style="margin:0; padding:0; background:transparent;">
+  <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:transparent;">
+    Your ${escapeHtml(accountTypeLabel)} account has been approved and is ready to access SQRATCH.
+  </div>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:transparent;">
+    <tr>
+      <td align="center" style="padding:28px 14px;">
+        <table role="presentation" width="560" cellpadding="0" cellspacing="0"
+          style="width:560px; background:#020121; border-radius:18px; overflow:hidden;
+                 box-shadow:0 18px 60px rgba(0,0,0,0.45);
+                 border:1px solid rgba(255,255,255,0.10);">
+
+          <tr>
+            <td align="center" style="padding:26px 28px 10px;">
+              <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+                <div style="font-size:22px; font-weight:800; letter-spacing:-0.5px; color:#ffffff;">
+                  SQRATCH<span style="opacity:0.6;">™</span>
+                </div>
+                <div style="margin-top:6px; font-size:12px; letter-spacing:0.9px;
+                            text-transform:uppercase; color:#7a8299;">
+                  ACCESS CONFIRMED
+                </div>
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding:14px 28px 0;">
+              <img
+                src="https://sqratch.com/assets/homepage/email_template_header.jpg"
+                width="504"
+                height="280"
+                alt="SQRATCH account approved"
+                style="display:block; width:504px; height:280px;
+                       object-fit:cover; border-radius:14px;
+                       border:1px solid rgba(11,16,32,0.10);"
+              />
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding:22px 28px 0;">
+              <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
+                <div style="font-size:28px; font-weight:800; line-height:1.15; color:#ffffff;">
+                  Your account has been approved
+                </div>
+                <div style="margin:12px auto 0; width:44px; height:3px;
+                            background:#3b82f6; border-radius:999px;"></div>
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding:16px 28px 0;">
+              <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
+                          color:#d6d9e6; font-size:15px; line-height:1.7; text-align:center;">
+                <div style="color:#ffffff; font-weight:700; font-size:16px; margin-bottom:8px;">
+                  Hi ${escapeHtml(name)},
+                </div>
+                Your ${escapeHtml(
+                  accountTypeLabel,
+                )} account request for SQRATCH has been reviewed and approved.
+                You can now sign in and continue setting up your account.
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding:22px 28px 0;">
+              <a
+                href="${escapeAttr(loginUrl)}"
+                target="_blank"
+                rel="noreferrer"
+                style="display:inline-block; width:320px; text-align:center;
+                       font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
+                       font-size:15px; font-weight:700; color:#ffffff;
+                       text-decoration:none; background:#3b82f6;
+                       padding:14px 22px; border-radius:999px;
+                       box-shadow:0 14px 32px rgba(59,130,246,0.30);">
+                Go to Login
+              </a>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding:16px 28px 0;">
+              <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
+                          color:#7a8299; font-size:13px; line-height:1.55; text-align:center;">
+                If the button above does not work, copy and paste this link into your browser:<br />
+                <span style="color:#d6d9e6;">${escapeHtml(loginUrl)}</span>
+              </div>
+            </td>
+          </tr>
+
+          <tr>
+            <td align="center" style="padding:18px 28px 22px;">
+              <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;
+                          color:#7a8299; font-size:13px; line-height:1.55; text-align:center;">
+                If you did not request access to SQRATCH, you can safely ignore this email.
+                <div style="margin-top:14px; font-size:11px; color:#b0b7c9;">
+                  © ${year} SQRATCH Inc. All rights reserved.
+                </div>
+              </div>
+            </td>
+          </tr>
+
+        </table>
       </td>
     </tr>
   </table>

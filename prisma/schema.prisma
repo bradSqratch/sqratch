@@ -15,136 +15,507 @@ model User {
   createdAt               DateTime                 @default(now())
   updatedAt               DateTime                 @updatedAt
   password                String?
-  bettermodeMemberId      String?
-  emailVerificationTokens EmailVerificationToken[] // Reverse relation for EmailVerificationToken
-  qrRedemptions           QRCode[]                 @relation("QRCodeRedeemedByUser")
-  qrCodesCreated          QRCode[]                 @relation("QRCodeCreatedByUser")
-  campaigns               Campaign[]               @relation("CampaignCreatedByUser")
-  role                    Role                     @default(EXTERNAL)
+  role                    Role                     @default(USER)
   isActive                Boolean                  @default(true)
-  // Gamification
-  points                  Int                      @default(0) // quick lookup total
-  pointTransactions       PointTransaction[] // full history
+  points                  Int                      @default(0)
+  imageUrl                String?
+  analyticsEvents         AnalyticsEvent[]
+  brandMembers            BrandMember[]
+  reviewedBrandRequests   BrandRequest[]           @relation("BrandRequestReviewer")
+  brandRequests           BrandRequest[]           @relation("BrandRequestOwner")
+  campaigns               Campaign[]               @relation("CampaignCreatedByUser")
+  campaignUnlocks         CampaignUnlock[]
+  creatorProfile          CreatorProfile?
+  reviewedCreatorRequests CreatorRequest[]         @relation("CreatorRequestReviewer")
+  creatorRequests         CreatorRequest[]         @relation("CreatorRequestOwner")
   emailQueue              EmailQueue[]
+  emailVerificationTokens EmailVerificationToken[]
+  lessonProgress          LessonProgress[]
+  pointTransactions       PointTransaction[]
+  postComments            PostComment[]
+  qrCodesCreated          QRCode[]                 @relation("QRCodeCreatedByUser")
+  qrRedemptions           QRCode[]                 @relation("QRCodeRedeemedByUser")
+  questions               Question[]
+  questionAnswers         QuestionAnswer[]
+  sessions                UserSession[]
 }
 
-model Community {
-  id        String        @id @default(cuid())
-  name      String        @unique
-  type      CommunityType @default(GENERIC)
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
+model CreatorRequest {
+  id           String         @id @default(cuid())
+  userId       String
+  status       ApprovalStatus @default(PENDING)
+  reason       String?
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  reviewedById String?
+  reviewedBy   User?          @relation("CreatorRequestReviewer", fields: [reviewedById], references: [id])
+  user         User           @relation("CreatorRequestOwner", fields: [userId], references: [id], onDelete: Cascade)
+}
 
-  campaigns Campaign[]
+model BrandRequest {
+  id                String         @id @default(cuid())
+  userId            String
+  status            ApprovalStatus @default(PENDING)
+  reason            String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  proposedBrandName String?
+  proposedStoreUrl  String?
+  reviewedById      String?
+  reviewedBy        User?          @relation("BrandRequestReviewer", fields: [reviewedById], references: [id])
+  user              User           @relation("BrandRequestOwner", fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model CreatorProfile {
+  id          String       @id @default(cuid())
+  userId      String       @unique
+  displayName String?
+  bio         String?
+  avatarUrl   String?
+  isActive    Boolean      @default(true)
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  experiences Experience[]
+}
+
+model Brand {
+  id                                    String                  @id @default(cuid())
+  name                                  String                  @unique
+  slug                                  String                  @unique
+  bio                                   String?
+  websiteUrl                            String?
+  logoUrl                               String?
+  isActive                              Boolean                 @default(true)
+  shopifyShopDomain                     String?                 @unique
+  shopifyStorefrontAccessTokenEncrypted String?
+  shopifyInstalledAt                    DateTime?
+  createdAt                             DateTime                @default(now())
+  updatedAt                             DateTime                @updatedAt
+  coverImageUrl                         String?
+  shopifyLastProductSyncAt              DateTime?
+  analyticsEvents                       AnalyticsEvent[]
+  members                               BrandMember[]
+  campaigns                             Campaign[]
+  experienceProductLinks                ExperienceProductLink[]
+  lessonProductLinks                    LessonProductLink[]
+}
+
+model BrandMember {
+  id        String          @id @default(cuid())
+  brandId   String
+  userId    String
+  role      BrandMemberRole @default(ADMIN)
+  createdAt DateTime        @default(now())
+  brand     Brand           @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  user      User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([brandId, userId])
+  @@index([userId])
+  @@index([brandId])
 }
 
 model Campaign {
-  id          String   @id @default(cuid())
-  name        String   @unique
-  description String?
-  inviteUrl   String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  isActive    Boolean  @default(true)
+  id              String               @id @default(cuid())
+  name            String               @unique
+  description     String?
+  inviteUrl       String?
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+  createdById     String
+  isActive        Boolean              @default(true)
+  brandId         String?
+  slug            String               @unique
+  analyticsEvents AnalyticsEvent[]
+  brand           Brand?               @relation(fields: [brandId], references: [id])
+  createdBy       User                 @relation("CampaignCreatedByUser", fields: [createdById], references: [id])
+  experiences     CampaignExperience[]
+  unlocks         CampaignUnlock[]
+  qrCodes         QRCode[]
+  qrBatches       QRCodeBatch[]
+  userSessions    UserSession[]
 
-  createdById String
-  createdBy   User   @relation("CampaignCreatedByUser", fields: [createdById], references: [id])
+  @@index([brandId])
+}
 
-  communityId String?
-  community   Community? @relation(fields: [communityId], references: [id])
+model QRCodeBatch {
+  id            String    @id @default(cuid())
+  name          String
+  notes         String?
+  printedAt     DateTime?
+  isActive      Boolean   @default(true)
+  campaignId    String?
+  createdAt     DateTime  @default(now())
+  csvExportedAt DateTime?
+  qrCodes       QRCode[]
+  campaign      Campaign? @relation(fields: [campaignId], references: [id])
 
-  qrCodes QRCode[]
+  @@index([campaignId])
 }
 
 model QRCode {
-  id         String    @id @default(cuid())
-  qrCodeData String    @unique // This will hold the random part in URL
-  status     QRStatus  @default(NEW)
-  qrCodeUrl  String? // Can hold the full landing URL if needed
-  email      String? // Optional: Track which email used it
-  usedAt     DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-  isActive   Boolean   @default(true)
-
-  // Relations
+  id                  String             @id @default(cuid())
+  qrCodeData          String             @unique
+  status              QRStatus           @default(NEW)
+  qrCodeUrl           String?
+  email               String?
+  usedAt              DateTime?
+  createdAt           DateTime           @default(now())
+  updatedAt           DateTime           @updatedAt
   campaignId          String
-  campaign            Campaign @relation(fields: [campaignId], references: [id])
+  redeemedById        String?
+  createdById         String
+  isActive            Boolean            @default(true)
   deletedCampaignName String?
+  batchId             String?
+  analyticsEvents     AnalyticsEvent[]
+  unlocks             CampaignUnlock[]
+  pointTransactions   PointTransaction[]
+  batch               QRCodeBatch?       @relation(fields: [batchId], references: [id])
+  campaign            Campaign           @relation(fields: [campaignId], references: [id])
+  createdBy           User               @relation("QRCodeCreatedByUser", fields: [createdById], references: [id])
+  redeemedBy          User?              @relation("QRCodeRedeemedByUser", fields: [redeemedById], references: [id])
+  userSessions        UserSession[]
 
-  redeemedById String? // optional, to support anonymous scans too
-  redeemedBy   User?   @relation("QRCodeRedeemedByUser", fields: [redeemedById], references: [id])
+  @@index([campaignId])
+  @@index([batchId])
+  @@index([redeemedById])
+}
 
-  createdById       String
-  createdBy         User               @relation("QRCodeCreatedByUser", fields: [createdById], references: [id])
-  // Gamification link
-  pointTransactions PointTransaction[]
+model CampaignUnlock {
+  id         String   @id @default(cuid())
+  campaignId String
+  userId     String?
+  qrCodeId   String?
+  anonKey    String?
+  createdAt  DateTime @default(now())
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  qrCode     QRCode?  @relation(fields: [qrCodeId], references: [id])
+  user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, userId])
+  @@index([campaignId])
+  @@index([userId])
+  @@index([anonKey])
+}
+
+model Experience {
+  id                   String                  @id @default(cuid())
+  title                String
+  slug                 String                  @unique
+  description          String?
+  coverImageUrl        String?
+  isActive             Boolean                 @default(true)
+  creatorId            String
+  createdAt            DateTime                @default(now())
+  updatedAt            DateTime                @updatedAt
+  qaDailyQuestionLimit Int                     @default(1)
+  analyticsEvents      AnalyticsEvent[]
+  campaigns            CampaignExperience[]
+  courses              Course[]
+  creator              CreatorProfile          @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  shopLinks            ExperienceProductLink[]
+  posts                Post[]
+  questions            Question[]
+
+  @@index([creatorId])
+}
+
+model CampaignExperience {
+  id           String     @id @default(cuid())
+  campaignId   String
+  experienceId String
+  sortOrder    Int        @default(0)
+  createdAt    DateTime   @default(now())
+  campaign     Campaign   @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  experience   Experience @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+
+  @@unique([campaignId, experienceId])
+  @@index([campaignId])
+  @@index([experienceId])
+}
+
+model Course {
+  id              String           @id @default(cuid())
+  experienceId    String
+  title           String
+  description     String?
+  access          CourseAccess     @default(PUBLIC)
+  sortOrder       Int              @default(0)
+  isActive        Boolean          @default(true)
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+  analyticsEvents AnalyticsEvent[]
+  experience      Experience       @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+  lessons         Lesson[]
+
+  @@index([experienceId])
+  @@index([access])
+}
+
+model Lesson {
+  id              String              @id @default(cuid())
+  courseId        String
+  title           String
+  description     String?
+  sortOrder       Int                 @default(0)
+  isActive        Boolean             @default(true)
+  videoSource     LessonVideoSource   @default(YOUTUBE)
+  youtubeUrl      String?
+  videoUploadUrl  String?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  analyticsEvents AnalyticsEvent[]
+  course          Course              @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  productLinks    LessonProductLink[]
+  progress        LessonProgress[]
+
+  @@index([courseId])
+}
+
+model LessonProgress {
+  id                  String       @id @default(cuid())
+  userId              String?
+  lessonId            String
+  isCompleted         Boolean      @default(false)
+  lastPositionSeconds Int          @default(0)
+  updatedAt           DateTime     @updatedAt
+  createdAt           DateTime     @default(now())
+  sessionId           String?
+  lesson              Lesson       @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  session             UserSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user                User?        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, lessonId])
+  @@unique([sessionId, lessonId])
+  @@index([lessonId])
+  @@index([userId])
+  @@index([sessionId])
+}
+
+model Post {
+  id           String        @id @default(cuid())
+  experienceId String
+  title        String?
+  body         String
+  isPinned     Boolean       @default(false)
+  isActive     Boolean       @default(true)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  experience   Experience    @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+  comments     PostComment[]
+
+  @@index([experienceId])
+}
+
+model PostComment {
+  id        String   @id @default(cuid())
+  postId    String
+  userId    String
+  body      String
+  createdAt DateTime @default(now())
+  post      Post     @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([postId])
+  @@index([userId])
+}
+
+model Question {
+  id           String           @id @default(cuid())
+  experienceId String
+  askedById    String
+  body         String
+  status       QuestionStatus   @default(OPEN)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  askedBy      User             @relation(fields: [askedById], references: [id], onDelete: Cascade)
+  experience   Experience       @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+  answers      QuestionAnswer[]
+
+  @@index([experienceId])
+  @@index([askedById])
+}
+
+model QuestionAnswer {
+  id           String   @id @default(cuid())
+  questionId   String
+  answeredById String
+  body         String
+  createdAt    DateTime @default(now())
+  answeredBy   User     @relation(fields: [answeredById], references: [id], onDelete: Cascade)
+  question     Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([questionId])
+  @@index([answeredById])
+}
+
+model ExperienceProductLink {
+  id           String     @id @default(cuid())
+  experienceId String
+  productUrl   String
+  title        String?
+  imageUrl     String?
+  priceText    String?
+  currency     String?
+  brandId      String?
+  createdAt    DateTime   @default(now())
+  brand        Brand?     @relation(fields: [brandId], references: [id])
+  experience   Experience @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+
+  @@index([experienceId])
+  @@index([brandId])
+}
+
+model LessonProductLink {
+  id         String   @id @default(cuid())
+  lessonId   String
+  productUrl String
+  title      String?
+  imageUrl   String?
+  priceText  String?
+  currency   String?
+  brandId    String?
+  createdAt  DateTime @default(now())
+  brand      Brand?   @relation(fields: [brandId], references: [id])
+  lesson     Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  @@index([lessonId])
+  @@index([brandId])
+}
+
+model UserSession {
+  id              String           @id
+  createdAt       DateTime         @default(now())
+  lastSeenAt      DateTime         @default(now())
+  userId          String?
+  anonKey         String?          @unique
+  campaignId      String?
+  qrCodeId        String?
+  analyticsEvents AnalyticsEvent[]
+  lessonProgress  LessonProgress[]
+  campaign        Campaign?        @relation(fields: [campaignId], references: [id])
+  qrCode          QRCode?          @relation(fields: [qrCodeId], references: [id])
+  user            User?            @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([anonKey])
+  @@index([campaignId])
+  @@index([qrCodeId])
+}
+
+model AnalyticsEvent {
+  id           String       @id @default(cuid())
+  name         String
+  createdAt    DateTime     @default(now())
+  brandId      String?
+  campaignId   String?
+  qrCodeId     String?
+  experienceId String?
+  courseId     String?
+  lessonId     String?
+  userId       String?
+  sessionId    String?
+  pagePath     String?
+  referrer     String?
+  userAgent    String?
+  ipHash       String?
+  country      String?
+  region       String?
+  city         String?
+  data         Json?
+  brand        Brand?       @relation(fields: [brandId], references: [id])
+  campaign     Campaign?    @relation(fields: [campaignId], references: [id])
+  course       Course?      @relation(fields: [courseId], references: [id])
+  experience   Experience?  @relation(fields: [experienceId], references: [id])
+  lesson       Lesson?      @relation(fields: [lessonId], references: [id])
+  qrCode       QRCode?      @relation(fields: [qrCodeId], references: [id])
+  session      UserSession? @relation(fields: [sessionId], references: [id])
+  user         User?        @relation(fields: [userId], references: [id])
+
+  @@index([name, createdAt])
+  @@index([brandId])
+  @@index([campaignId])
+  @@index([qrCodeId])
+  @@index([experienceId])
+  @@index([lessonId])
+  @@index([userId])
+  @@index([sessionId])
 }
 
 model EmailVerificationToken {
   id               String   @id @default(cuid())
   userId           String
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   emailVerifyToken String   @unique
   expires          DateTime
   createdAt        DateTime @default(now())
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model TokenStore {
-  service   String   @id // e.g., "bettermode"
-  token     String // the OAuth access token
-  expiresAt DateTime // when the token expires
-  updatedAt DateTime @updatedAt // helpful for debugging or logs
+  service   String   @id
+  token     String
+  expiresAt DateTime
+  updatedAt DateTime @updatedAt
 }
 
-model PointTransaction {
-  id     String @id @default(cuid())
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+model EmailQueue {
+  id        BigInt        @id @default(autoincrement())
+  userId    String
+  email     String
+  status    EmailStatus   @default(PENDING)
+  attempts  Int           @default(0)
+  lastError String?
+  createdAt DateTime      @default(now())
+  sentAt    DateTime?
+  template  EmailTemplate
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  points   Int // e.g. +1 for a scan
-  reason   PointReason // enum "QR_SCAN", "BONUS", "REFERRAL"
-  qrCodeId String? // link back to the QRCode scanned
-  qrCode   QRCode?     @relation(fields: [qrCodeId], references: [id])
-
-  createdAt DateTime @default(now())
-
-  @@unique([userId, qrCodeId]) // prevents multiple transactions for same QR by same user
-  @@index([userId])
-  @@index([qrCodeId])
+  @@unique([userId, template], name: "uq_email_queue_user_template")
+  @@index([status, createdAt], map: "idx_email_queue_status_created")
 }
 
 model WaitlistEntry {
   id        String   @id @default(cuid())
   email     String   @unique
-  source    String? // optional: "homepage", "cta-card", etc.
-  ip        String? // For spam protection
+  source    String?
+  ip        String?
   createdAt DateTime @default(now())
 }
 
-model EmailQueue {
-  id     BigInt @id @default(autoincrement())
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+model PointTransaction {
+  id        String      @id @default(cuid())
+  userId    String
+  points    Int
+  reason    PointReason
+  qrCodeId  String?
+  createdAt DateTime    @default(now())
+  qrCode    QRCode?     @relation(fields: [qrCodeId], references: [id])
+  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  email    String
-  template EmailTemplate
-
-  status    EmailStatus @default(PENDING)
-  attempts  Int         @default(0)
-  lastError String?
-
-  createdAt DateTime  @default(now())
-  sentAt    DateTime?
-
-  @@unique([userId, template], name: "uq_email_queue_user_template")
-  @@index([status, createdAt], name: "idx_email_queue_status_created")
+  @@unique([userId, qrCodeId])
+  @@index([userId])
+  @@index([qrCodeId])
 }
 
 enum Role {
   USER
   ADMIN
   EXTERNAL
+  CREATOR
+  BRAND_ADMIN
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum BrandMemberRole {
+  ADMIN
+  MANAGER
+  VIEWER
 }
 
 enum QRStatus {
@@ -153,17 +524,20 @@ enum QRStatus {
   INVALID
 }
 
-enum CommunityType {
-  BETTERMODE // special handling (Zapier)
-  GENERIC // everything else (email invite flow)
-  DISCORD // special handling
-  SKOOL // special handling (Zapier)
+enum CourseAccess {
+  PUBLIC
+  PRIVATE
 }
 
-enum PointReason {
-  QR_SCAN
-  BONUS
-  REFERRAL
+enum LessonVideoSource {
+  YOUTUBE
+  UPLOAD
+}
+
+enum QuestionStatus {
+  OPEN
+  ANSWERED
+  CLOSED
 }
 
 enum EmailTemplate {
@@ -175,4 +549,10 @@ enum EmailStatus {
   SENDING
   SENT
   FAILED
+}
+
+enum PointReason {
+  QR_SCAN
+  BONUS
+  REFERRAL
 }

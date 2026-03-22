@@ -86,7 +86,7 @@ export default function LoginPage() {
 
   const ReSendVerificationEmail = async (email: string) => {
     try {
-      const res = await fetch("/api/auth/send-verification", {
+      const res = await fetch("/api/auth/send-email-verification", {
         method: "POST",
         body: JSON.stringify({ email }),
         headers: { "Content-Type": "application/json" },
@@ -142,6 +142,15 @@ export default function LoginPage() {
       //   setLoading(false);
       //   return;
       // }
+
+      try {
+        await fetch("/api/progress/merge", {
+          method: "POST",
+          credentials: "include",
+        });
+      } catch (mergeError) {
+        console.error("Failed to merge anonymous progress:", mergeError);
+      }
 
       setMessage({ type: "success", text: "Login successful! Redirecting…" });
       setTimeout(() => {

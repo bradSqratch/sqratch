@@ -1,12 +1,14 @@
 import "next-auth";
 
 declare module "next-auth" {
+  type AppRole = "USER" | "CREATOR" | "BRAND_ADMIN" | "ADMIN" | "EXTERNAL";
+
   interface User {
     id?: string;
     isEmailVerified?: boolean;
     email?: string;
     isTemporary?: boolean;
-    role?: "USER" | "ADMIN" | "EXTERNAL";
+    role?: AppRole;
   }
 
   interface Session {
@@ -15,7 +17,7 @@ declare module "next-auth" {
       isEmailVerified?: boolean;
       email?: string;
       isTemporary?: boolean;
-      role?: "USER" | "ADMIN" | "EXTERNAL";
+      role?: AppRole;
     } & DefaultSession["user"];
   }
 }
@@ -25,6 +27,6 @@ declare module "next-auth/jwt" {
     id?: string;
     isEmailVerified?: boolean;
     email?: string;
-    role?: "USER" | "ADMIN" | "EXTERNAL";
+    role?: "USER" | "CREATOR" | "BRAND_ADMIN" | "ADMIN" | "EXTERNAL";
   }
 }

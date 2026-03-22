@@ -24,6 +24,7 @@ async function main() {
   const campaign = await prisma.campaign.create({
     data: {
       name: "launch2024",
+      slug: "launch2024",
       description: "Early Access Launch Campaign",
       inviteUrl: "https://minds.com/invite/launch2024",
       createdById: admin.id,

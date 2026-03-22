@@ -1,6 +1,7 @@
 // src/helpers/mailer.ts
 import nodemailer from "nodemailer";
 import {
+  buildApprovalEmailHtml,
   buildWelcomeEmailHtml,
   buildInviteEmailHtml,
 } from "@/helpers/emailTemplates";
@@ -24,34 +25,60 @@ function createTransport() {
 
 const transporter = createTransport();
 
+function getAppBaseUrl() {
+  const domain = String(process.env.DOMAIN || "").trim();
+
+  if (domain) {
+    return domain.startsWith("http") ? domain : `https://${domain}`;
+  }
+
+  return "http://localhost:3000";
+}
+
 /**
- * Sends the verification email with a link to /verify-email
+ * Sends a 6-digit OTP verification email
  */
-export async function sendVerificationEmail(
-  email: string,
-  emailVerifyToken: string,
-  qrCodeId?: string
-) {
-  const domain = process.env.DOMAIN;
-
-  const verificationUrl = `${domain}/verify-email?token=${emailVerifyToken}${
-    qrCodeId ? `&qrcodeID=${encodeURIComponent(qrCodeId)}` : ""
-  }`;
-
+export async function sendVerificationEmail(email: string, otpCode: string) {
   const from = process.env.ADMIN_EMAIL;
 
   const mailOptions = {
     from,
     to: email,
-    subject: "Verify Your Email Address",
+    subject: "Your SQRATCH verification code",
     html: `
-      <h1>Welcome to SQRATCH!</h1>
-      <p>Please click the link below to verify your email address:</p>
-      <a href="${verificationUrl}" style="padding:10px 20px;color:#fff;background:#3b82f6;text-decoration:none;border-radius:6px;">
-        Verify Email
-      </a>
-      <p>If you did not sign up, you can safely ignore this email.</p>
+      <div style="font-family: Arial, sans-serif; color: #111; line-height: 1.6;">
+        <h1 style="margin-bottom: 12px;">Verify Your Email</h1>
+        <p style="margin: 0 0 16px;">
+          Use the 6-digit code below to verify your email address:
+        </p>
+
+        <div
+          style="
+            display: inline-block;
+            padding: 14px 22px;
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: 8px;
+            background: #f3f4f6;
+            border: 1px solid #d1d5db;
+            border-radius: 10px;
+            color: #111827;
+            margin: 8px 0 20px;
+          "
+        >
+          ${otpCode}
+        </div>
+
+        <p style="margin: 0 0 12px;">
+          This code will expire in 10 minutes.
+        </p>
+
+        <p style="margin: 0; color: #4b5563;">
+          If you did not request this, you can safely ignore this email.
+        </p>
+      </div>
     `,
+    text: `Your SQRATCH verification code is: ${otpCode}\n\nThis code expires in 10 minutes.\n\nIf you did not request this, you can ignore this email.`,
   };
 
   return transporter.sendMail(mailOptions);
@@ -64,7 +91,7 @@ export async function sendInviteEmail(
   email: string,
   inviteUrl: string,
   campaignName: string,
-  name?: string
+  name?: string,
 ) {
   const from = process.env.ADMIN_EMAIL;
   const safeName = (name ?? "").trim() || "there";
@@ -99,7 +126,7 @@ export async function sendWelcomeEmail(email: string, name?: string) {
 
   const safeName = name && name.trim() ? name.trim() : "there";
   const ctaUrl = `https://sqratch.com/signup?registeredemail=${encodeURIComponent(
-    email
+    email,
   )}`;
 
   const html = buildWelcomeEmailHtml({
@@ -115,4 +142,36 @@ export async function sendWelcomeEmail(email: string, name?: string) {
   };
 
   return transporter.sendMail(mailOptions);
+}
+
+export async function sendApprovalEmail(
+  email: string,
+  accountType: "creator" | "brand",
+  name?: string,
+) {
+  const from = process.env.ADMIN_EMAIL;
+  const safeName = name && name.trim() ? name.trim() : "there";
+  const loginUrl = `${getAppBaseUrl().replace(/\/+$/, "")}/login`;
+  const accountTypeLabel =
+    accountType === "creator" ? "creator" : "brand administrator";
+
+  const html = buildApprovalEmailHtml({
+    name: safeName,
+    accountTypeLabel,
+    loginUrl,
+  });
+
+  const text =
+    `Hello ${safeName},\n\n` +
+    `Your SQRATCH ${accountTypeLabel} account request has been approved.\n` +
+    `You can now log in here: ${loginUrl}\n\n` +
+    `If you did not request access to SQRATCH, you can safely ignore this email.\n`;
+
+  return transporter.sendMail({
+    from,
+    to: email,
+    subject: "Your SQRATCH account has been approved",
+    html,
+    text,
+  });
 }

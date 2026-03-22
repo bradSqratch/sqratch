@@ -1,59 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import crypto from "crypto";
-import { sendVerificationEmail, sendInviteEmail } from "@/helpers/mailer";
-
-// Helper function to create Discord invite (copied from verify-email route)
-async function createDiscordOneTimeInvite(): Promise<string> {
-  const token = process.env.DISCORD_BOT_TOKEN;
-  const channelId = process.env.DISCORD_CHANNEL_ID;
-  if (!token || !channelId) {
-    throw new Error("DISCORD_BOT_TOKEN or DISCORD_CHANNEL_ID not set");
-  }
-
-  const res = await fetch(
-    `https://discord.com/api/v10/channels/${channelId}/invites`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bot ${token}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        max_uses: 1,
-        max_age: 172800,
-        temporary: false,
-        unique: true,
-      }),
-    }
-  );
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Discord invite creation failed: ${res.status} ${text}`);
-  }
-
-  const json = (await res.json()) as { code: string };
-  return `https://discord.gg/${json.code}`;
-}
-
-async function sendSkoolInvite(webhookBaseUrl: string, email: string) {
-  if (!webhookBaseUrl) throw new Error("Skool webhook URL missing");
-
-  // Basic SSRF guard: ONLY allow Skool webhook host
-  if (!webhookBaseUrl.startsWith("https://api2.skool.com/")) {
-    throw new Error("Invalid Skool webhook URL host");
-  }
-
-  const joiner = webhookBaseUrl.includes("?") ? "&" : "?";
-  const url = `${webhookBaseUrl}${joiner}email=${encodeURIComponent(email)}`;
-
-  const res = await fetch(url, { method: "POST" }); // if this fails, try GET
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`Skool webhook failed: ${res.status} ${text}`);
-  }
-}
+import { sendInviteEmail } from "@/helpers/mailer";
 
 export async function POST(request: NextRequest) {
   try {
@@ -63,7 +10,7 @@ export async function POST(request: NextRequest) {
     if (!name || !email || !qrCodeId || !campaignId) {
       return NextResponse.json(
         { error: "Name, email, campaign and QR code are required." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -71,22 +18,18 @@ export async function POST(request: NextRequest) {
     const qr = await prisma.qRCode.findFirst({
       where: {
         qrCodeData: qrCodeId,
-        campaignId: campaignId,
+        campaignId,
         status: "NEW",
       },
       include: {
-        campaign: {
-          include: {
-            community: true,
-          },
-        },
+        campaign: true,
       },
     });
 
     if (!qr) {
       return NextResponse.json(
         { error: "Invalid or already redeemed QR code." },
-        { status: 400 }
+        { status: 400 },
       );
     }
 
@@ -119,61 +62,14 @@ export async function POST(request: NextRequest) {
 
       // Send invite based on community type (logic from verify-email route)
       const { campaign } = qr;
-      const communityType = campaign.community?.type ?? "GENERIC";
 
       try {
-        switch (communityType) {
-          case "BETTERMODE": {
-            const hook = process.env.ZAPIER_WEBHOOK_URL;
-            if (hook) {
-              const payload = {
-                action: "EMAIL_VERIFIED",
-                source: "nextjs",
-                userEmail: existingUser.email,
-                userName: existingUser.name,
-                campaignName: campaign.name,
-                inviteUrl: campaign.inviteUrl,
-                qrcodeID: qrCodeId,
-              };
-              await fetch(hook, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload),
-              });
-            }
-            break;
-          }
-
-          case "DISCORD": {
-            const oneTimeInviteUrl = await createDiscordOneTimeInvite();
-            if (existingUser.email) {
-              await sendInviteEmail(
-                existingUser.email,
-                oneTimeInviteUrl,
-                campaign.name
-              );
-            }
-            break;
-          }
-
-          case "SKOOL": {
-            if (!campaign.inviteUrl)
-              throw new Error("Campaign inviteUrl (Skool webhook) missing");
-            await sendSkoolInvite(campaign.inviteUrl, existingUser.email);
-            break;
-          }
-
-          case "GENERIC":
-          default: {
-            if (campaign.inviteUrl && existingUser.email) {
-              await sendInviteEmail(
-                existingUser.email,
-                campaign.inviteUrl,
-                campaign.name
-              );
-            }
-            break;
-          }
+        if (campaign?.inviteUrl && existingUser.email) {
+          await sendInviteEmail(
+            existingUser.email,
+            campaign.inviteUrl,
+            campaign.name,
+          );
         }
       } catch (inviteError) {
         console.error("Failed to send invite:", inviteError);
@@ -182,7 +78,7 @@ export async function POST(request: NextRequest) {
             error:
               "QR code redeemed but failed to send invite. Please contact support.",
           },
-          { status: 500 }
+          { status: 500 },
         );
       }
 
@@ -211,7 +107,7 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json(
         { message: "Invite sent directly to your email!" },
-        { status: 200 }
+        { status: 200 },
       );
     }
 
@@ -239,57 +135,10 @@ export async function POST(request: NextRequest) {
 
     // Send invite based on community type (same logic as existing user flow)
     const { campaign } = qr;
-    const communityType = campaign.community?.type ?? "GENERIC";
 
     try {
-      switch (communityType) {
-        case "BETTERMODE": {
-          const hook = process.env.ZAPIER_WEBHOOK_URL;
-          if (hook) {
-            const payload = {
-              action: "EMAIL_VERIFIED",
-              source: "nextjs",
-              userEmail: user.email,
-              userName: user.name,
-              campaignName: campaign.name,
-              inviteUrl: campaign.inviteUrl,
-              qrcodeID: qrCodeId,
-            };
-            await fetch(hook, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(payload),
-            });
-          }
-          break;
-        }
-
-        case "DISCORD": {
-          const oneTimeInviteUrl = await createDiscordOneTimeInvite();
-          if (user.email) {
-            await sendInviteEmail(user.email, oneTimeInviteUrl, campaign.name);
-          }
-          break;
-        }
-
-        case "SKOOL": {
-          if (!campaign.inviteUrl)
-            throw new Error("Campaign inviteUrl (Skool webhook) missing");
-          await sendSkoolInvite(campaign.inviteUrl, user.email);
-          break;
-        }
-
-        case "GENERIC":
-        default: {
-          if (campaign.inviteUrl && user.email) {
-            await sendInviteEmail(
-              user.email,
-              campaign.inviteUrl,
-              campaign.name
-            );
-          }
-          break;
-        }
+      if (campaign?.inviteUrl && user.email) {
+        await sendInviteEmail(user.email, campaign.inviteUrl, campaign.name);
       }
     } catch (inviteError) {
       console.error("Failed to send invite:", inviteError);
@@ -298,7 +147,7 @@ export async function POST(request: NextRequest) {
           error:
             "QR code redeemed but failed to send invite. Please contact support.",
         },
-        { status: 500 }
+        { status: 500 },
       );
     }
 
@@ -327,13 +176,13 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(
       { message: "Invite sent directly to your email!" },
-      { status: 200 }
+      { status: 200 },
     );
   } catch (err: any) {
     console.error("Signup with QR error:", err);
     return NextResponse.json(
       { error: "Server error. Please try again." },
-      { status: 500 }
+      { status: 500 },
     );
   }
 }

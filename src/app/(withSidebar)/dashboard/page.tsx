@@ -1,7 +1,6 @@
-// src/app/(withSidebar)/dashboard/page.tsx
 "use client";
 
-import React, { useEffect, useState, useCallback } from "react";
+import React, { useEffect, useState, useCallback, useMemo } from "react";
 import axios from "axios";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
@@ -9,7 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import Papa from "papaparse";
 
-// Types
+// --------------------
+// Types (existing + new)
+// --------------------
+type Role = "ADMIN" | "BRAND_ADMIN" | "CREATOR" | "USER" | "EXTERNAL";
+
 type CampaignStats = {
   campaignId: string;
   campaignName: string;
@@ -31,8 +34,18 @@ type UserData = {
   role: string;
 };
 
+type DashboardSummary = {
+  role: Role;
+  user: { name: string | null; email: string | null };
+  cards: Record<string, any>;
+  recentActivity?: Array<{ label: string; detail?: string; at?: string }>;
+};
+
+// --------------------
+// Existing UI helpers (unchanged)
+// --------------------
 function GradientStatCard({
-  colorVar, // e.g. "var(--card-colour-1)"
+  colorVar,
   children,
   className = "",
 }: {
@@ -44,7 +57,6 @@ function GradientStatCard({
     <div
       className={[
         "relative rounded-3xl p-[1.25px]",
-        // Border gradient: bright TL -> darker BR (like ref)
         "bg-[linear-gradient(135deg,rgba(255,255,255,0.28)_0%,rgba(255,255,255,0.10)_28%,rgba(0,0,0,0.55)_100%)]",
         "shadow-[0_26px_80px_rgba(0,0,0,0.45)]",
         className,
@@ -57,16 +69,9 @@ function GradientStatCard({
         ].join(" ")}
         style={{ backgroundColor: colorVar }}
       >
-        {/* top-left shine */}
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_140%_at_0%_0%,rgba(255,255,255,0.42)_0%,rgba(255,255,255,0.18)_30%,rgba(255,255,255,0.00)_60%)]" />
-
-        {/* bottom-right falloff (key) */}
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_140%_at_100%_100%,rgba(0,0,0,0.74)_0%,rgba(0,0,0,0.40)_36%,rgba(0,0,0,0.00)_70%)]" />
-
-        {/* subtle diagonal depth */}
         <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.05)_0%,rgba(0,0,0,0.00)_42%,rgba(0,0,0,0.22)_100%)]" />
-
-        {/* tiny vignette to avoid flat look */}
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(80%_80%_at_50%_20%,rgba(255,255,255,0.08)_0%,rgba(255,255,255,0.00)_60%)]" />
 
         <div className="relative z-10">{children}</div>
@@ -123,44 +128,91 @@ function CampaignCard({
   );
 }
 
+// --------------------
+// NEW: small reusable card
+// --------------------
+function SimpleOverviewCard({
+  title,
+  value,
+  hint,
+}: {
+  title: string;
+  value: React.ReactNode;
+  hint?: string;
+}) {
+  const textValue = typeof value === "string" ? value : null;
+  const isLongText = textValue ? textValue.length > 10 : false;
+  const valueClassName = textValue
+    ? `mt-3 ${isLongText ? "text-lg" : "text-xl"} font-semibold leading-snug text-white break-words`
+    : "mt-3 text-3xl font-bold tracking-tight text-white";
+
+  return (
+    <Card className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_20px_70px_rgba(0,0,0,0.35)]">
+      <CardContent className="p-6">
+        <div className="text-sm font-semibold text-white/75">{title}</div>
+        <div className={valueClassName}>{value}</div>
+        {hint ? <div className="mt-2 text-xs text-white/55">{hint}</div> : null}
+      </CardContent>
+    </Card>
+  );
+}
+
 export default function DashboardPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
 
+  // Existing ADMIN stats
   const [currentMonthStats, setCurrentMonthStats] =
     useState<DashboardStats | null>(null);
   const [allTimeStats, setAllTimeStats] = useState<DashboardStats | null>(null);
+
+  // Existing EXTERNAL userData (points)
   const [userData, setUserData] = useState<UserData | null>(null);
+
+  // NEW: unified summary
+  const [summary, setSummary] = useState<DashboardSummary | null>(null);
+
   const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const role = (session?.user as any)?.role as Role | undefined;
 
   const fetchStats = useCallback(async () => {
-    setLoading(true);
     try {
       const currentMonthRes = await axios.get<{ data: DashboardStats }>(
-        "/api/dashboard-stats?scope=current-month"
+        "/api/dashboard-stats?scope=current-month",
       );
       const allTimeRes = await axios.get<{ data: DashboardStats }>(
-        "/api/dashboard-stats?scope=all"
+        "/api/dashboard-stats?scope=all",
       );
 
       setCurrentMonthStats(currentMonthRes.data.data);
       setAllTimeStats(allTimeRes.data.data);
     } catch (err) {
       console.error("Failed to load dashboard stats", err);
-    } finally {
-      setLoading(false);
+      setErrorMsg("Failed to load admin analytics cards.");
     }
   }, []);
 
   const fetchUserData = useCallback(async () => {
-    setLoading(true);
     try {
       const res = await axios.get<{ data: UserData }>("/api/user/me");
       setUserData(res.data.data);
     } catch (err) {
       console.error("Failed to load user data", err);
-    } finally {
-      setLoading(false);
+      setErrorMsg("Failed to load user data.");
+    }
+  }, []);
+
+  const fetchSummary = useCallback(async () => {
+    try {
+      const res = await axios.get<{ data: DashboardSummary }>(
+        "/api/me/dashboard-summary",
+      );
+      setSummary(res.data.data);
+    } catch (err) {
+      console.error("Failed to load dashboard summary", err);
+      setErrorMsg("Failed to load dashboard summary.");
     }
   }, []);
 
@@ -171,16 +223,36 @@ export default function DashboardPage() {
       return;
     }
 
-    if (session.user.role === "ADMIN") {
-      fetchStats();
-      const iv = setInterval(fetchStats, 45_000);
-      return () => clearInterval(iv);
-    } else if (session.user.role === "EXTERNAL") {
-      fetchUserData();
-    } else {
-      setLoading(false);
+    setLoading(true);
+    setErrorMsg(null);
+
+    // What we load depends on role
+    const jobs: Array<Promise<any>> = [];
+
+    // Always load summary for unified cards (all roles)
+    jobs.push(fetchSummary());
+
+    // Keep your existing behavior:
+    // - ADMIN loads stats (plus summary)
+    // - EXTERNAL loads userData (plus summary)
+    if (role === "ADMIN") {
+      jobs.push(fetchStats());
     }
-  }, [status, session, router, fetchStats, fetchUserData]);
+    if (role === "EXTERNAL") {
+      jobs.push(fetchUserData());
+    }
+
+    Promise.allSettled(jobs).finally(() => setLoading(false));
+
+    // Keep your refresh for ADMIN stats only
+    if (role === "ADMIN") {
+      const iv = setInterval(() => {
+        fetchStats();
+        fetchSummary();
+      }, 45_000);
+      return () => clearInterval(iv);
+    }
+  }, [status, session, router, role, fetchStats, fetchUserData, fetchSummary]);
 
   const handleExport = () => {
     if (!allTimeStats || !currentMonthStats) return;
@@ -216,46 +288,45 @@ export default function DashboardPage() {
     document.body.removeChild(link);
   };
 
+  const summaryCards = useMemo(() => summary?.cards ?? {}, [summary]);
+
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
+      <div className="flex items-center justify-center min-h-screen text-white/80">
         <p>Loading dashboard...</p>
       </div>
     );
   }
 
-  // EXTERNAL (match Signup/Redeem background + card styling)
-  if (session?.user.role === "EXTERNAL" && userData) {
+  if (!session || !role) {
+    return (
+      <div className="flex items-center justify-center min-h-screen text-white/80">
+        <p>Unauthorized</p>
+      </div>
+    );
+  }
+
+  // --------------------
+  // EXTERNAL: keep your points page first, then add unified cards below if summary exists
+  // --------------------
+  if (role === "EXTERNAL" && userData) {
     return (
       <div className="relative min-h-screen bg-[#020015] text-white overflow-hidden">
-        {/* Background (same style as redeemQR) */}
         <div className="pointer-events-none absolute inset-0">
-          {/* Primary glow behind hero */}
           <div className="absolute inset-0 bg-[radial-gradient(1100px_600px_at_50%_10%,rgba(99,102,241,0.30),rgba(2,0,21,0)_70%)]" />
-
-          {/* Secondary glow behind the card */}
           <div className="absolute inset-0 bg-[radial-gradient(900px_520px_at_50%_55%,rgba(99,102,241,0.13),rgba(2,0,21,0)_65%)]" />
-
-          {/* Accent (pink) */}
           <div className="absolute inset-0 bg-[radial-gradient(900px_600px_at_10%_90%,rgba(236,72,153,0.10),rgba(2,0,21,0)_65%)]" />
-
-          {/* Vignette */}
           <div className="absolute inset-0 bg-[radial-gradient(1200px_900px_at_50%_50%,rgba(2,0,21,0)_35%,rgba(2,0,21,0.85)_100%)]" />
-
-          {/* Bottom fade */}
           <div className="absolute inset-x-0 bottom-0 h-64 bg-linear-to-b from-transparent to-[#020121]" />
         </div>
 
-        {/* Content layer */}
         <div className="relative z-10 flex min-h-screen flex-col">
           <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col items-center justify-center px-6 pt-28 pb-12 sm:pt-32">
             <Card
               className={[
-                // Same “Signup card” styling
                 "relative w-full max-w-215",
                 "rounded-[28px] border border-white/15 bg-white/6 backdrop-blur-xl",
                 "shadow-[0_30px_90px_rgba(0,0,0,0.55)] overflow-hidden",
-                // Keep your old sizing feel
                 "min-h-80 sm:min-h-105",
                 "grid place-items-center",
               ].join(" ")}
@@ -272,21 +343,52 @@ export default function DashboardPage() {
                 </div>
               </CardContent>
             </Card>
+
+            {/* NEW unified cards (below points card) */}
+            {summary ? (
+              <div className="w-full max-w-215 mt-10">
+                {errorMsg ? (
+                  <div className="mb-4 text-sm text-red-300">{errorMsg}</div>
+                ) : null}
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <SimpleOverviewCard
+                    title="Unlocked Campaigns"
+                    value={summaryCards.unlockedCampaignsCount ?? 0}
+                  />
+                  <SimpleOverviewCard
+                    title="Continue Watching"
+                    value={summaryCards.continueWatchingLessonsCount ?? 0}
+                  />
+                  <SimpleOverviewCard
+                    title="Recent Activity"
+                    value={summaryCards.recentActivityCount ?? 0}
+                  />
+                </div>
+              </div>
+            ) : null}
           </main>
         </div>
       </div>
     );
   }
 
-  // ADMIN (all cards upgraded)
-  if (session?.user.role === "ADMIN" && currentMonthStats && allTimeStats) {
+  // --------------------
+  // ADMIN: keep your existing cards, add unified cards below them
+  // --------------------
+  if (role === "ADMIN" && currentMonthStats && allTimeStats) {
     return (
-      <div className="min-h-screen p-8 space-y-10">
+      <div className="min-h-screen p-8 space-y-10 text-white">
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-semibold">Admin Dashboard</h1>
           <div>
             <Button
-              onClick={fetchStats}
+              onClick={async () => {
+                setLoading(true);
+                setErrorMsg(null);
+                await Promise.allSettled([fetchStats(), fetchSummary()]);
+                setLoading(false);
+              }}
               disabled={loading}
               className="bg-[#3E93DE] text-white"
             >
@@ -301,7 +403,11 @@ export default function DashboardPage() {
           </div>
         </div>
 
-        {/* All-Time Section */}
+        {errorMsg ? (
+          <div className="text-sm text-red-300">{errorMsg}</div>
+        ) : null}
+
+        {/* All-Time Section (UNCHANGED) */}
         <section>
           <h2 className="text-2xl font-semibold mb-4">All Time Stats</h2>
 
@@ -332,7 +438,7 @@ export default function DashboardPage() {
           </div>
         </section>
 
-        {/* Current Month Section */}
+        {/* Current Month Section (UNCHANGED) */}
         <section>
           <h2 className="text-2xl font-semibold mb-4">Current Month Stats</h2>
 
@@ -350,7 +456,9 @@ export default function DashboardPage() {
           </div>
 
           <div className="mt-8">
-            <h3 className="text-xl font-semibold mb-3">Campaign Breakdown</h3>
+            <h3 className="text-xl font-semibold mb-3">
+              Current Month Campaign Breakdown
+            </h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
               {currentMonthStats.campaignStats.map((c) => (
                 <CampaignCard
@@ -362,12 +470,162 @@ export default function DashboardPage() {
             </div>
           </div>
         </section>
+
+        {/* NEW: Unified role cards BELOW existing cards */}
+        {summary ? (
+          <section className="pt-2">
+            <h2 className="text-2xl font-semibold mb-4">Overview</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+              <SimpleOverviewCard
+                title="Approvals Pending"
+                value={summaryCards.approvalsPending ?? 0}
+              />
+              <SimpleOverviewCard
+                title="Total Brands"
+                value={summaryCards.totalBrands ?? 0}
+              />
+              <SimpleOverviewCard
+                title="Total Campaigns"
+                value={summaryCards.totalCampaigns ?? 0}
+              />
+              <SimpleOverviewCard
+                title="Recent Scans"
+                value={summaryCards.recentScans ?? 0}
+              />
+            </div>
+          </section>
+        ) : null}
+      </div>
+    );
+  }
+
+  // --------------------
+  // BRAND_ADMIN / CREATOR / USER unified pages
+  // --------------------
+  if (summary) {
+    return (
+      <div className="min-h-screen p-8 space-y-8 text-white">
+        <div className="flex items-center justify-between">
+          <h1 className="text-3xl font-semibold">Dashboard</h1>
+          <Button
+            onClick={async () => {
+              setLoading(true);
+              setErrorMsg(null);
+              await Promise.allSettled([fetchSummary()]);
+              setLoading(false);
+            }}
+            className="bg-[#3E93DE] text-white"
+          >
+            Refresh
+          </Button>
+        </div>
+
+        {errorMsg ? (
+          <div className="text-sm text-red-300">{errorMsg}</div>
+        ) : null}
+
+        {/* Role-based overview cards */}
+        {summary.role === "BRAND_ADMIN" ? (
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+            <SimpleOverviewCard
+              title="Campaigns"
+              value={summaryCards.campaignsCount ?? 0}
+            />
+            <SimpleOverviewCard
+              title="QR Batches"
+              value={summaryCards.qrBatchCount ?? 0}
+            />
+            <SimpleOverviewCard
+              title="Product Sync"
+              value={summaryCards.productSyncStatus ?? "—"}
+              hint="Shopify connection + catalog status"
+            />
+            <SimpleOverviewCard
+              title="Recent Scans"
+              value={summaryCards.recentScans ?? 0}
+            />
+          </div>
+        ) : null}
+
+        {summary.role === "CREATOR" ? (
+          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+            <SimpleOverviewCard
+              title="Experiences"
+              value={summaryCards.experiencesCount ?? 0}
+            />
+            <SimpleOverviewCard
+              title="Drafts"
+              value={summaryCards.draftsCount ?? 0}
+            />
+            <SimpleOverviewCard
+              title="Unanswered Q&A"
+              value={summaryCards.unansweredQACount ?? 0}
+            />
+            <SimpleOverviewCard title="Views" value={summaryCards.views ?? 0} />
+          </div>
+        ) : null}
+
+        {summary.role === "USER" || summary.role === "EXTERNAL" ? (
+          <>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <SimpleOverviewCard
+                title="Unlocked Campaigns"
+                value={summaryCards.unlockedCampaignsCount ?? 0}
+              />
+              <SimpleOverviewCard
+                title="Continue Watching"
+                value={summaryCards.continueWatchingLessonsCount ?? 0}
+              />
+              <SimpleOverviewCard
+                title="Recent Activity"
+                value={summaryCards.recentActivityCount ?? 0}
+              />
+            </div>
+
+            {/* Recent activity list */}
+            <Card className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl">
+              <CardContent className="p-6">
+                <div className="text-sm font-semibold text-white/75">
+                  Recent Activity
+                </div>
+                <div className="mt-4 space-y-3">
+                  {(summary.recentActivity ?? []).length === 0 ? (
+                    <div className="text-sm text-white/55">
+                      No activity yet.
+                    </div>
+                  ) : (
+                    (summary.recentActivity ?? []).map((a, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-start justify-between gap-4 rounded-xl border border-white/10 bg-white/5 px-4 py-3"
+                      >
+                        <div>
+                          <div className="text-sm font-medium text-white">
+                            {a.label}
+                          </div>
+                          {a.detail ? (
+                            <div className="text-xs text-white/60">
+                              {a.detail}
+                            </div>
+                          ) : null}
+                        </div>
+                        {a.at ? (
+                          <div className="text-xs text-white/55">{a.at}</div>
+                        ) : null}
+                      </div>
+                    ))
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          </>
+        ) : null}
       </div>
     );
   }
 
   return (
-    <div className="flex items-center justify-center min-h-screen">
+    <div className="flex items-center justify-center min-h-screen text-white/80">
       <p>Access Denied or Unknown Role</p>
     </div>
   );

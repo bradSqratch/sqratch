@@ -21,48 +21,70 @@ export async function GET(request: Request) {
     dateFilter = { gte: firstDay };
   }
 
-  const [totalRedemptions, activeCampaigns, campaigns] = await Promise.all([
+  const [totalRedemptions, qrTotals, qrRedeemed] = await Promise.all([
     prisma.qRCode.count({
       where: {
         usedAt: dateFilter ? dateFilter : { not: null },
       },
     }),
-    prisma.campaign.count({
+    prisma.qRCode.groupBy({
+      by: ["campaignId"],
       where: {
-        qrCodes: {
-          some: dateFilter ? { createdAt: dateFilter } : {},
-        },
+        ...(dateFilter ? { createdAt: dateFilter } : {}),
+      },
+      _count: {
+        campaignId: true,
       },
     }),
-    prisma.campaign.findMany({
-      include: {
-        qrCodes: dateFilter
-          ? {
-              where: { createdAt: dateFilter },
-              select: { status: true },
-            }
-          : {
-              select: { status: true },
-            },
+    prisma.qRCode.groupBy({
+      by: ["campaignId"],
+      where: {
+        status: "USED",
+        ...(dateFilter ? { createdAt: dateFilter } : {}),
+      },
+      _count: {
+        campaignId: true,
       },
     }),
   ]);
 
-  const campaignStats = campaigns.map((c) => {
-    const totalQRCodes = c.qrCodes.length;
-    const redeemedCount = c.qrCodes.filter((q) => q.status === "USED").length;
-    return {
-      campaignId: c.id,
-      campaignName: c.name,
-      totalQRCodes,
-      redeemedCount,
-    };
-  });
+  const campaignIds = qrTotals.map((item) => item.campaignId);
+
+  const campaigns = campaignIds.length
+    ? await prisma.campaign.findMany({
+        where: {
+          id: {
+            in: campaignIds,
+          },
+        },
+        select: {
+          id: true,
+          name: true,
+        },
+      })
+    : [];
+
+  const campaignNameMap = new Map(
+    campaigns.map((campaign) => [campaign.id, campaign.name]),
+  );
+  const redeemedMap = new Map(
+    qrRedeemed.map((item) => [item.campaignId, item._count.campaignId || 0]),
+  );
+
+  const campaignStats = qrTotals
+    .map((item) => ({
+      campaignId: item.campaignId,
+      campaignName:
+        campaignNameMap.get(item.campaignId) || "Unknown campaign",
+      totalQRCodes: item._count.campaignId || 0,
+      redeemedCount: redeemedMap.get(item.campaignId) || 0,
+    }))
+    .sort((a, b) => b.totalQRCodes - a.totalQRCodes);
 
   return NextResponse.json({
     data: {
       totalRedemptions,
-      activeCampaigns,
+      activeCampaigns: qrTotals.length,
       campaignStats,
     },
   });

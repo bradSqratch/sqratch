@@ -3,6 +3,7 @@ import CredentialsProvider from "next-auth/providers/credentials";
 import { PrismaAdapter } from "@next-auth/prisma-adapter";
 import prisma from "@/lib/prisma"; // Your Prisma client setup
 import bcrypt from "bcryptjs";
+import { hasPendingApproval } from "@/lib/approval-gating";
 
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma),
@@ -22,7 +23,9 @@ export const authOptions: NextAuthOptions = {
           placeholder: "your-awesome-password",
         },
       },
-      async authorize(credentials: any): Promise<any> {
+      async authorize(
+        credentials?: Record<"email" | "password", string> | undefined,
+      ) {
         try {
           const email = String(credentials?.email || "")
             .trim()
@@ -43,6 +46,12 @@ export const authOptions: NextAuthOptions = {
             throw new Error("Please verify your email address first.");
           }
 
+          if (user.role !== "ADMIN" && (await hasPendingApproval(user.id))) {
+            throw new Error(
+              "Wait for your approval from the admin. You will be notified via email once approved.",
+            );
+          }
+
           // Verify password
           const isPasswordCorrect = await bcrypt.compare(
             password,
@@ -56,12 +65,17 @@ export const authOptions: NextAuthOptions = {
               name: user.name,
               role: user.role,
               isEmailVerified: user.isEmailVerified,
+              imageUrl: user.imageUrl,
             };
           } else {
             throw new Error("Invalid email or password");
           }
-        } catch (err: any) {
-          throw new Error(err.message);
+        } catch (error: unknown) {
+          const message =
+            error instanceof Error
+              ? error.message
+              : "Unable to complete sign in.";
+          throw new Error(message);
         }
       },
     }),
@@ -82,6 +96,7 @@ export const authOptions: NextAuthOptions = {
         token.role = user.role;
         token.isEmailVerified = user.isEmailVerified;
         token.email = user.email;
+        token.imageUrl = user.imageUrl;
         token.isTemporary = user.isTemporary; // Add isTemporary field
       }
       return token;
@@ -93,6 +108,8 @@ export const authOptions: NextAuthOptions = {
         session.user.role = token.role;
         session.user.isEmailVerified = token.isEmailVerified;
         session.user.email = token.email;
+        session.user.imageUrl = token.imageUrl;
+        session.user.image = token.imageUrl || session.user.image;
         session.user.isTemporary = token.isTemporary; // Add isTemporary field
       }
       return session;

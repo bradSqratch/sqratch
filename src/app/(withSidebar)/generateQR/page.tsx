@@ -18,7 +18,7 @@ import {
 import { toast } from "sonner";
 
 export default function GenerateQRPage() {
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const router = useRouter();
 
   const [campaigns, setCampaigns] = useState<{ id: string; name: string }[]>(
@@ -31,8 +31,17 @@ export default function GenerateQRPage() {
   useEffect(() => {
     if (status === "authenticated") {
       axios
-        .get("/api/admin/get-all-campaigns")
-        .then((res) => setCampaigns(res.data.data))
+        .get("/api/admin/campaigns")
+        .then((res) =>
+          setCampaigns(
+            (res.data.data?.campaigns || []).map(
+              (campaign: { id: string; name: string }) => ({
+                id: campaign.id,
+                name: campaign.name,
+              }),
+            ),
+          ),
+        )
         .catch(() => toast.error("Failed to fetch campaigns"));
     }
   }, [status]);
@@ -49,8 +58,8 @@ export default function GenerateQRPage() {
         quantity,
       });
       toast.success("QR Codes Generated");
-      router.push("/admin/qr-management");
-    } catch (err) {
+      router.push("/dashboard/admin/campaigns");
+    } catch {
       toast.error("Generation failed");
     } finally {
       setBlocking(false);

@@ -1,97 +1,179 @@
-// src/app/api/admin/user-management/update-or-delete-users/[id]/route.ts
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { deleteStorageObjectByUrl } from "@/lib/storage-upload";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import { Role } from "@prisma/client";
 
 export async function PATCH(
   request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  { params }: { params: Promise<{ id: string }> },
 ) {
-  if (request.method !== "PATCH") {
-    return NextResponse.json(
-      { error: "Method not allowed. Only PATCH" },
-      { status: 405 }
-    );
-  }
-
   const session = await getServerSession(authOptions);
   if (!session || session.user.role !== "ADMIN") {
     return NextResponse.json(
       { error: "Access denied. Admins only." },
-      { status: 403 }
+      { status: 403 },
     );
   }
 
-  // **await** the params object before reading its .id
   const { id } = await params;
 
-  let body: { name?: string; email?: string; role?: Role };
+  let body: {
+    name?: string;
+    email?: string;
+    role?: Role;
+    isActive?: boolean;
+  };
+
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const { name, email, role } = body;
-  if (!name || !email || !role) {
+  const name = String(body.name || "").trim();
+  const email = String(body.email || "").trim();
+  const role = body.role;
+  const isActive =
+    typeof body.isActive === "boolean" ? body.isActive : undefined;
+
+  if (!name || !email || !role || isActive === undefined) {
     return NextResponse.json(
-      { error: "Name, email & role are required" },
-      { status: 400 }
+      { error: "Name, email, role, and active status are required" },
+      { status: 400 },
     );
   }
 
   try {
-    const updated = await prisma.user.update({
-      where: { id },
-      data: { name, email, role },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        role: true,
-        points: true,
-        createdAt: true,
+    const updated = await prisma.$transaction(async (tx) => {
+      const existingUser = await tx.user.findUnique({
+        where: { id },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+        },
+      });
+
+      if (!existingUser) {
+        throw new Error("USER_NOT_FOUND");
+      }
+
+      const user = await tx.user.update({
+        where: { id },
+        data: { name, email, role, isActive },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          role: true,
+          createdAt: true,
+          isActive: true,
+          creatorProfile: {
+            select: {
+              id: true,
+            },
+          },
+          brandMembers: {
+            select: {
+              id: true,
+              role: true,
+              brand: {
+                select: {
+                  id: true,
+                  name: true,
+                  slug: true,
+                },
+              },
+            },
+            take: 3,
+            orderBy: {
+              createdAt: "asc",
+            },
+          },
+        },
+      });
+
+      if (role === "CREATOR") {
+        await tx.creatorProfile.upsert({
+          where: { userId: id },
+          update: {
+            displayName: name || existingUser.name?.trim() || email.split("@")[0],
+            isActive: true,
+          },
+          create: {
+            userId: id,
+            displayName: name || existingUser.name?.trim() || email.split("@")[0],
+            isActive: true,
+          },
+        });
+      }
+
+      return user;
+    });
+
+    return NextResponse.json({
+      data: {
+        id: updated.id,
+        name: updated.name,
+        email: updated.email,
+        role: updated.role,
+        createdAt: updated.createdAt,
+        isActive: updated.isActive,
+        hasCreatorProfile: Boolean(updated.creatorProfile),
+        brands: updated.brandMembers.map((member) => ({
+          id: member.brand.id,
+          name: member.brand.name,
+          slug: member.brand.slug,
+          membershipRole: member.role,
+        })),
       },
     });
-    return NextResponse.json({ data: updated });
-  } catch (err: any) {
-    // handle unique‐constraint violation on email
+  } catch (error: unknown) {
+    if (error instanceof Error && error.message === "USER_NOT_FOUND") {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+
+    const err = error as { code?: string; meta?: { target?: string[] } };
+
     if (err.code === "P2002" && err.meta?.target?.includes("email")) {
       return NextResponse.json(
         { error: "Email already in use" },
-        { status: 409 }
+        { status: 409 },
       );
     }
+
     return NextResponse.json({ error: "Update failed" }, { status: 500 });
   }
 }
 
 export async function DELETE(
-  request: Request,
-  { params }: { params: Promise<{ id: string }> }
+  _request: Request,
+  { params }: { params: Promise<{ id: string }> },
 ) {
-  if (request.method !== "DELETE") {
-    return NextResponse.json(
-      { error: "Method not allowed. Only DELETE" },
-      { status: 405 }
-    );
-  }
-
   const session = await getServerSession(authOptions);
   if (!session || session.user.role !== "ADMIN") {
     return NextResponse.json(
       { error: "Access denied. Admins only." },
-      { status: 403 }
+      { status: 403 },
     );
   }
 
-  // **await** the params object before reading its .id
   const { id } = await params;
 
   try {
+    const user = await prisma.user.findUnique({
+      where: { id },
+      select: { imageUrl: true },
+    });
+
     await prisma.user.delete({ where: { id } });
+
+    if (user?.imageUrl) {
+      await deleteStorageObjectByUrl(user.imageUrl);
+    }
+
     return NextResponse.json({});
   } catch {
     return NextResponse.json({ error: "Delete failed" }, { status: 500 });
