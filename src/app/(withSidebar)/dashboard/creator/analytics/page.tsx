@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useEffectEvent, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { CreatorPageShell } from "@/components/creator/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
@@ -43,7 +43,7 @@ export default function CreatorAnalyticsPage() {
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useEffectEvent(async () => {
+  const load = useCallback(async () => {
     setError(null);
 
     try {
@@ -66,11 +66,11 @@ export default function CreatorAnalyticsPage() {
     } catch (loadError) {
       setError(getErrorMessage(loadError, "Failed to load analytics."));
     }
-  });
+  }, [filters]);
 
   useEffect(() => {
     void load();
-  }, [filters, load]);
+  }, [load]);
 
   return (
     <CreatorPageShell

@@ -1,5 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { getServerSession } from "next-auth";
+import type { Session } from "next-auth";
 import type { NextRequest } from "next/server";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
@@ -38,7 +39,7 @@ type ExperienceAccessBase = {
 };
 
 export type ViewerContext = {
-  session: Awaited<ReturnType<typeof getServerSession>>;
+  session: Session | null;
   userId: string | null;
   sessionId: string | null;
 };

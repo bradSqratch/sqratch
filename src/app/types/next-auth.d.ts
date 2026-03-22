@@ -1,3 +1,4 @@
+import type { DefaultSession } from "next-auth";
 import "next-auth";
 
 declare module "next-auth" {
@@ -9,6 +10,7 @@ declare module "next-auth" {
     email?: string;
     isTemporary?: boolean;
     role?: AppRole;
+    imageUrl?: string | null;
   }
 
   interface Session {
@@ -18,6 +20,7 @@ declare module "next-auth" {
       email?: string;
       isTemporary?: boolean;
       role?: AppRole;
+      imageUrl?: string | null;
     } & DefaultSession["user"];
   }
 }
@@ -28,5 +31,7 @@ declare module "next-auth/jwt" {
     isEmailVerified?: boolean;
     email?: string;
     role?: "USER" | "CREATOR" | "BRAND_ADMIN" | "ADMIN" | "EXTERNAL";
+    imageUrl?: string | null;
+    isTemporary?: boolean;
   }
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useEffectEvent, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ErrorView,
   ExperienceShell,
@@ -57,7 +57,7 @@ export function ExperienceShopClient({
   const [shopError, setShopError] = useState<string | null>(null);
   const [clickingId, setClickingId] = useState<string | null>(null);
 
-  const loadProducts = useEffectEvent(async () => {
+  const loadProducts = useCallback(async () => {
     setShopLoading(true);
     setShopError(null);
 
@@ -71,7 +71,7 @@ export function ExperienceShopClient({
     } finally {
       setShopLoading(false);
     }
-  });
+  }, [experienceSlug]);
 
   useEffect(() => {
     if (!data) {

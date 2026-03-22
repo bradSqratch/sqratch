@@ -122,7 +122,7 @@ export default function LoginPage() {
             <>
               Your email is not verified.{" "}
               <button
-                onClick={() => ReSendVerificationEmail(email)}
+                onClick={() => email && ReSendVerificationEmail(email)}
                 className="text-blue-500 underline"
               >
                 Click here to resend verification email.
