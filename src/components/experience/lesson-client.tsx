@@ -68,13 +68,6 @@ type LessonResponse = {
     videoSource: "YOUTUBE" | "UPLOAD";
     youtubeUrl: string | null;
     videoAssetUrl: string | null;
-    resources: Array<{
-      id: string;
-      productUrl: string;
-      title: string | null;
-      imageUrl: string | null;
-      priceText: string | null;
-    }>;
   };
   previousLesson: {
     id: string;
@@ -99,6 +92,18 @@ type LessonProgressResponse = {
     totalLessons: number;
     completedLessons: number;
     progressPercent: number;
+  }>;
+};
+
+type LessonProductsResponse = {
+  items: Array<{
+    id: string;
+    productUrl: string;
+    title: string | null;
+    imageUrl: string | null;
+    priceText: string | null;
+    currency: string | null;
+    brandId: string | null;
   }>;
 };
 
@@ -161,6 +166,10 @@ export function ExperienceLessonClient({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [progress, setProgress] = useState<LessonProgressResponse | null>(null);
+  const [products, setProducts] = useState<LessonProductsResponse["items"]>([]);
+  const [productsLoading, setProductsLoading] = useState(false);
+  const [productsError, setProductsError] = useState<string | null>(null);
+  const [clickingProductId, setClickingProductId] = useState<string | null>(null);
   const ytPlayerRef = useRef<YouTubePlayer | null>(null);
   const ytPollRef = useRef<number | null>(null);
   const playerId = useId();
@@ -195,6 +204,35 @@ export function ExperienceLessonClient({
 
     load();
   }, [experienceSlug, lessonId]);
+
+  useEffect(() => {
+    if (!data?.canAccess) {
+      setProducts([]);
+      setProductsError(null);
+      setProductsLoading(false);
+      return;
+    }
+
+    async function loadProducts() {
+      setProductsLoading(true);
+      setProductsError(null);
+
+      try {
+        const result = await fetchJson<LessonProductsResponse>(
+          `/api/public/experience/${experienceSlug}/lessons/${lessonId}/products`,
+        );
+        setProducts(result.items);
+      } catch (error) {
+        setProductsError(
+          getErrorMessage(error, "Failed to load lesson products."),
+        );
+      } finally {
+        setProductsLoading(false);
+      }
+    }
+
+    void loadProducts();
+  }, [data?.canAccess, experienceSlug, lessonId]);
 
   const sendProgress = useCallback(async (
     seconds: number,
@@ -279,6 +317,31 @@ export function ExperienceLessonClient({
       completedSentRef.current = true;
     }
   }, [sendProgress]);
+
+  function handleOpenProduct(product: LessonProductsResponse["items"][number]) {
+    setClickingProductId(product.id);
+    window.open(product.productUrl, "_blank", "noopener,noreferrer");
+
+    fetch(
+      `/api/public/experience/${experienceSlug}/lessons/${lessonId}/products`,
+      {
+        method: "POST",
+        credentials: "include",
+        keepalive: true,
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          productLinkId: product.id,
+          productUrl: product.productUrl,
+        }),
+      },
+    ).finally(() => {
+      setClickingProductId((current) =>
+        current === product.id ? null : current,
+      );
+    });
+  }
 
   useEffect(() => {
     if (!data?.canAccess) {
@@ -529,26 +592,29 @@ export function ExperienceLessonClient({
             </PageCard>
 
             <PageCard>
-              <h3 className="text-xl font-semibold">Resources</h3>
+              <h3 className="text-xl font-semibold">Related Products</h3>
               <div className="mt-5 space-y-4">
-                {data.lesson.resources.length === 0 ? (
+                {productsLoading ? (
                   <p className="text-sm text-white/65">
-                    No resources attached to this lesson yet.
+                    Loading lesson products...
+                  </p>
+                ) : productsError ? (
+                  <p className="text-sm text-red-300">{productsError}</p>
+                ) : products.length === 0 ? (
+                  <p className="text-sm text-white/65">
+                    No products are linked to this lesson yet.
                   </p>
                 ) : (
-                  data.lesson.resources.map((resource) => (
-                    <a
-                      key={resource.id}
-                      href={resource.productUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="block rounded-3xl border border-white/10 bg-black/20 p-4 transition hover:border-white/25 hover:bg-black/30"
+                  products.map((product) => (
+                    <div
+                      key={product.id}
+                      className="rounded-3xl border border-white/10 bg-black/20 p-4"
                     >
                       <div className="flex items-center gap-4">
-                        {resource.imageUrl ? (
+                        {product.imageUrl ? (
                           <Image
-                            src={resource.imageUrl}
-                            alt={resource.title || "Lesson resource"}
+                            src={product.imageUrl}
+                            alt={product.title || "Lesson product"}
                             width={64}
                             height={64}
                             className="h-16 w-16 rounded-2xl object-cover"
@@ -560,16 +626,27 @@ export function ExperienceLessonClient({
                         )}
                         <div>
                           <p className="font-medium">
-                            {resource.title || "Resource link"}
+                            {product.title || "Shop product"}
                           </p>
-                          {resource.priceText && (
+                          {product.priceText && (
                             <p className="mt-1 text-sm text-white/55">
-                              {resource.priceText}
+                              {product.priceText}
                             </p>
                           )}
                         </div>
                       </div>
-                    </a>
+
+                      <Button
+                        type="button"
+                        onClick={() => handleOpenProduct(product)}
+                        disabled={clickingProductId === product.id}
+                        className="mt-4 w-full rounded-full border border-white bg-white text-black"
+                      >
+                        {clickingProductId === product.id
+                          ? "Opening..."
+                          : "View on Shopify"}
+                      </Button>
+                    </div>
                   ))
                 )}
               </div>

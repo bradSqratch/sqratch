@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { getBrandAdminContext } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
 import {
+  buildShopifyDashboardRedirect,
   createOauthState,
+  getShopifyAppUrl,
   isValidShopDomain,
   SHOPIFY_SCOPES,
 } from "@/lib/shopify";
@@ -12,18 +14,22 @@ export async function GET(request: NextRequest) {
     const context = await getBrandAdminContext();
 
     if (!context?.membership?.brand) {
-      return NextResponse.json(
-        { error: "Brand admin access required." },
-        { status: 403 },
+      return NextResponse.redirect(
+        buildShopifyDashboardRedirect({
+          origin: request.nextUrl.origin,
+          error: "brand_access_required",
+        }),
       );
     }
 
     const apiKey = process.env.SHOPIFY_API_KEY;
 
     if (!apiKey) {
-      return NextResponse.json(
-        { error: "Missing SHOPIFY_API_KEY." },
-        { status: 500 },
+      return NextResponse.redirect(
+        buildShopifyDashboardRedirect({
+          origin: request.nextUrl.origin,
+          error: "missing_shopify_api_key",
+        }),
       );
     }
 
@@ -36,18 +42,19 @@ export async function GET(request: NextRequest) {
       .toLowerCase();
 
     if (!isValidShopDomain(shop)) {
-      return NextResponse.json(
-        { error: "A valid .myshopify.com domain is required." },
-        { status: 400 },
+      return NextResponse.redirect(
+        buildShopifyDashboardRedirect({
+          origin: request.nextUrl.origin,
+          error: "invalid_shop_domain",
+        }),
       );
     }
 
     const state = createOauthState();
-    const redirectUri = `${
-      process.env.NEXT_PUBLIC_APP_URL ||
-      process.env.NEXTAUTH_URL ||
-      request.nextUrl.origin
-    }/api/shopify/oauth/callback`;
+    const redirectUri = new URL(
+      "/api/shopify/oauth/callback",
+      getShopifyAppUrl(request.nextUrl.origin),
+    ).toString();
 
     await prisma.tokenStore.create({
       data: {
@@ -70,9 +77,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.redirect(url);
   } catch (error) {
     console.error("[shopify/oauth/start][GET] Error:", error);
-    return NextResponse.json(
-      { error: "Failed to start Shopify OAuth." },
-      { status: 500 },
+    return NextResponse.redirect(
+      buildShopifyDashboardRedirect({
+        origin: request.nextUrl.origin,
+        error: "oauth_start_failed",
+      }),
     );
   }
 }

@@ -71,6 +71,22 @@ export async function GET(request: NextRequest) {
         videoSource: true,
         youtubeUrl: true,
         videoUploadUrl: true,
+        productLinks: {
+          orderBy: {
+            createdAt: "desc",
+          },
+          select: {
+            id: true,
+            lessonId: true,
+            productUrl: true,
+            title: true,
+            imageUrl: true,
+            priceText: true,
+            currency: true,
+            brandId: true,
+            createdAt: true,
+          },
+        },
       },
     });
 
@@ -85,6 +101,7 @@ export async function GET(request: NextRequest) {
           videoSource: lesson.videoSource,
           youtubeUrl: lesson.youtubeUrl,
           videoAssetUrl: lesson.videoUploadUrl,
+          productLinks: lesson.productLinks,
         })),
       },
     });

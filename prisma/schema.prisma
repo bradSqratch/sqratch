@@ -88,7 +88,7 @@ model Brand {
   logoUrl                               String?
   isActive                              Boolean                 @default(true)
   shopifyShopDomain                     String?                 @unique
-  shopifyStorefrontAccessTokenEncrypted String?
+  shopifyAdminAccessTokenEncrypted      String?
   shopifyInstalledAt                    DateTime?
   createdAt                             DateTime                @default(now())
   updatedAt                             DateTime                @updatedAt

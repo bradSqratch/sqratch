@@ -42,11 +42,24 @@ export default function BrandShopifyPage() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
     async function load() {
       setLoading(true);
       setError(null);
+      setMessage(null);
+
+      const connected = searchParams.get("connected");
+      const oauthError = searchParams.get("error");
+
+      if (connected === "1") {
+        setMessage("Shopify connected successfully.");
+      }
+
+      if (oauthError) {
+        setError(`Shopify connection failed: ${oauthError.replaceAll("_", " ")}`);
+      }
 
       try {
         const brandData = await fetchJson<BrandProfileResponse>("/api/brand/profile");
@@ -149,6 +162,7 @@ export default function BrandShopifyPage() {
             </div>
 
             {error && <p className="text-sm text-red-300">{error}</p>}
+            {message && <p className="text-sm text-emerald-300">{message}</p>}
           </div>
         )}
       </PageCard>

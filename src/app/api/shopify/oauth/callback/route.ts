@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { encryptSecret } from "@/lib/crypto";
 import prisma from "@/lib/prisma";
-import { buildShopifyHmac, isValidShopDomain } from "@/lib/shopify";
+import {
+  buildShopifyDashboardRedirect,
+  buildShopifyHmac,
+  isValidShopDomain,
+} from "@/lib/shopify";
 
 export async function GET(request: NextRequest) {
   try {
@@ -9,9 +13,11 @@ export async function GET(request: NextRequest) {
     const apiSecret = process.env.SHOPIFY_API_SECRET;
 
     if (!apiKey || !apiSecret) {
-      return NextResponse.json(
-        { error: "Missing Shopify OAuth credentials." },
-        { status: 500 },
+      return NextResponse.redirect(
+        buildShopifyDashboardRedirect({
+          origin: request.nextUrl.origin,
+          error: "missing_shopify_credentials",
+        }),
       );
     }
 
@@ -23,18 +29,22 @@ export async function GET(request: NextRequest) {
     const hmac = String(request.nextUrl.searchParams.get("hmac") || "").trim();
 
     if (!shop || !code || !state || !hmac || !isValidShopDomain(shop)) {
-      return NextResponse.json(
-        { error: "Invalid Shopify callback parameters." },
-        { status: 400 },
+      return NextResponse.redirect(
+        buildShopifyDashboardRedirect({
+          origin: request.nextUrl.origin,
+          error: "invalid_callback_params",
+        }),
       );
     }
 
     const expectedHmac = buildShopifyHmac(request.nextUrl.searchParams, apiSecret);
 
     if (expectedHmac !== hmac) {
-      return NextResponse.json(
-        { error: "Invalid Shopify HMAC." },
-        { status: 400 },
+      return NextResponse.redirect(
+        buildShopifyDashboardRedirect({
+          origin: request.nextUrl.origin,
+          error: "invalid_hmac",
+        }),
       );
     }
 
@@ -45,9 +55,11 @@ export async function GET(request: NextRequest) {
     });
 
     if (!stateRecord || stateRecord.expiresAt < new Date()) {
-      return NextResponse.json(
-        { error: "Expired or missing OAuth state." },
-        { status: 400 },
+      return NextResponse.redirect(
+        buildShopifyDashboardRedirect({
+          origin: request.nextUrl.origin,
+          error: "expired_oauth_state",
+        }),
       );
     }
 
@@ -58,9 +70,11 @@ export async function GET(request: NextRequest) {
     };
 
     if (payload.shop !== shop) {
-      return NextResponse.json(
-        { error: "OAuth state does not match shop domain." },
-        { status: 400 },
+      return NextResponse.redirect(
+        buildShopifyDashboardRedirect({
+          origin: request.nextUrl.origin,
+          error: "shop_mismatch",
+        }),
       );
     }
 
@@ -82,9 +96,11 @@ export async function GET(request: NextRequest) {
     const tokenJson = await tokenResponse.json().catch(() => null);
 
     if (!tokenResponse.ok || !tokenJson?.access_token) {
-      return NextResponse.json(
-        { error: tokenJson?.error || "Failed to exchange Shopify token." },
-        { status: 500 },
+      return NextResponse.redirect(
+        buildShopifyDashboardRedirect({
+          origin: request.nextUrl.origin,
+          error: "token_exchange_failed",
+        }),
       );
     }
 
@@ -95,7 +111,7 @@ export async function GET(request: NextRequest) {
         },
         data: {
           shopifyShopDomain: shop,
-          shopifyStorefrontAccessTokenEncrypted: encryptSecret(
+          shopifyAdminAccessTokenEncrypted: encryptSecret(
             tokenJson.access_token,
           ),
           shopifyInstalledAt: new Date(),
@@ -109,16 +125,18 @@ export async function GET(request: NextRequest) {
       });
     });
 
-    const redirectUrl = new URL(
-      "/dashboard/brand/shopify?connected=1",
-      request.nextUrl.origin,
-    );
+    const redirectUrl = buildShopifyDashboardRedirect({
+      origin: request.nextUrl.origin,
+      connected: "1",
+    });
     return NextResponse.redirect(redirectUrl);
   } catch (error) {
     console.error("[shopify/oauth/callback][GET] Error:", error);
-    return NextResponse.json(
-      { error: "Failed to complete Shopify OAuth." },
-      { status: 500 },
+    return NextResponse.redirect(
+      buildShopifyDashboardRedirect({
+        origin: request.nextUrl.origin,
+        error: "oauth_callback_failed",
+      }),
     );
   }
 }

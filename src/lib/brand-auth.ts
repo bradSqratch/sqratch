@@ -7,19 +7,19 @@ export type BrandAdminContext = {
   membership: {
     id: string;
     role: "ADMIN" | "MANAGER" | "VIEWER";
-    brand: {
-      id: string;
-      name: string;
-      slug: string;
-      bio: string | null;
-      websiteUrl: string | null;
-      logoUrl: string | null;
-      coverImageUrl: string | null;
-      shopifyShopDomain: string | null;
-      shopifyStorefrontAccessTokenEncrypted: string | null;
-      shopifyInstalledAt: Date | null;
-      shopifyLastProductSyncAt: Date | null;
-    };
+      brand: {
+        id: string;
+        name: string;
+        slug: string;
+        bio: string | null;
+        websiteUrl: string | null;
+        logoUrl: string | null;
+        coverImageUrl: string | null;
+        shopifyShopDomain: string | null;
+        shopifyAdminAccessTokenEncrypted: string | null;
+        shopifyInstalledAt: Date | null;
+        shopifyLastProductSyncAt: Date | null;
+      };
   } | null;
 };
 
@@ -57,7 +57,7 @@ export async function getBrandAdminContext(options?: {
           logoUrl: true,
           coverImageUrl: true,
           shopifyShopDomain: true,
-          shopifyStorefrontAccessTokenEncrypted: true,
+          shopifyAdminAccessTokenEncrypted: true,
           shopifyInstalledAt: true,
           shopifyLastProductSyncAt: true,
         },

@@ -36,16 +36,6 @@ export async function GET(
         videoSource: true,
         youtubeUrl: true,
         videoUploadUrl: true,
-        productLinks: {
-          orderBy: { createdAt: "asc" },
-          select: {
-            id: true,
-            productUrl: true,
-            title: true,
-            imageUrl: true,
-            priceText: true,
-          },
-        },
         course: {
           select: {
             id: true,
@@ -120,7 +110,6 @@ export async function GET(
           videoSource: lesson.videoSource,
           youtubeUrl: canAccess ? lesson.youtubeUrl : null,
           videoAssetUrl: canAccess ? lesson.videoUploadUrl : null,
-          resources: canAccess ? lesson.productLinks : [],
         },
         previousLesson,
         nextLesson,

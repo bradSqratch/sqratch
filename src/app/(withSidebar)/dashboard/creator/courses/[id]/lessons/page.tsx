@@ -1,6 +1,10 @@
 "use client";
 
 import { use, useCallback, useEffect, useState } from "react";
+import {
+  LessonProductLinksSection,
+  type LessonProductLinkItem,
+} from "@/components/creator/lesson-product-links-section";
 import { CreatorPageShell } from "@/components/creator/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
@@ -16,6 +20,7 @@ type Lesson = {
   videoSource: "YOUTUBE" | "UPLOAD";
   youtubeUrl: string | null;
   videoAssetUrl: string | null;
+  productLinks: LessonProductLinkItem[];
 };
 
 type LessonsResponse = {
@@ -178,7 +183,7 @@ export default function CreatorCourseLessonsPage({
   return (
     <CreatorPageShell
       title={data ? `${data.course.title} Lessons` : "Manage Lessons"}
-      description="Choose between YouTube and uploaded video sources for each lesson, then update the lesson metadata inline."
+      description="Choose between YouTube and uploaded video sources for each lesson, update the lesson metadata inline, and attach Shopify products that should appear on the public lesson page."
     >
       <PageCard>
         <h2 className="text-xl font-semibold">Add lesson</h2>
@@ -215,6 +220,7 @@ export default function CreatorCourseLessonsPage({
               lesson={lesson}
               saving={savingId === lesson.id}
               onSave={updateLesson}
+              onRefresh={load}
             />
           ))}
         </div>
@@ -227,10 +233,12 @@ function EditableLessonCard({
   lesson,
   saving,
   onSave,
+  onRefresh,
 }: {
   lesson: Lesson;
   saving: boolean;
   onSave: (id: string, lessonDraft: LessonDraft) => Promise<void>;
+  onRefresh: () => Promise<void>;
 }) {
   const [draft, setDraft] = useState<LessonDraft>({
     title: lesson.title,
@@ -256,12 +264,19 @@ function EditableLessonCard({
 
   return (
     <PageCard>
-      <LessonEditor
-        draft={draft}
-        onChange={setDraft}
-        submitLabel={saving ? "Saving..." : "Save lesson"}
-        onSubmit={() => void onSave(lesson.id, draft)}
-      />
+      <div className="space-y-5">
+        <LessonEditor
+          draft={draft}
+          onChange={setDraft}
+          submitLabel={saving ? "Saving..." : "Save lesson"}
+          onSubmit={() => void onSave(lesson.id, draft)}
+        />
+        <LessonProductLinksSection
+          lessonId={lesson.id}
+          linkedProducts={lesson.productLinks}
+          onChanged={onRefresh}
+        />
+      </div>
     </PageCard>
   );
 }

@@ -85,7 +85,7 @@ async function getBrandAdminCards(userId: string) {
         select: {
           id: true,
           shopifyShopDomain: true,
-          shopifyStorefrontAccessTokenEncrypted: true,
+          shopifyAdminAccessTokenEncrypted: true,
           shopifyLastProductSyncAt: true,
         },
       },
@@ -128,7 +128,7 @@ async function getBrandAdminCards(userId: string) {
   ]);
 
   const hasShopifyConnection = Boolean(
-    brand.shopifyShopDomain && brand.shopifyStorefrontAccessTokenEncrypted,
+    brand.shopifyShopDomain && brand.shopifyAdminAccessTokenEncrypted,
   );
   const syncWindow = getStartOfLastDays(7);
   const productSyncStatus = !hasShopifyConnection

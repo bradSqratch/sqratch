@@ -24,3 +24,33 @@ export function buildShopifyHmac(searchParams: URLSearchParams, secret: string) 
 export function createOauthState() {
   return crypto.randomBytes(24).toString("hex");
 }
+
+export function getShopifyAppUrl(origin?: string) {
+  return (
+    process.env.NEXT_PUBLIC_APP_URL ||
+    process.env.NEXTAUTH_URL ||
+    origin ||
+    "http://localhost:3000"
+  );
+}
+
+export function buildShopifyDashboardRedirect(options?: {
+  origin?: string;
+  connected?: string;
+  error?: string;
+}) {
+  const url = new URL(
+    "/dashboard/brand/shopify",
+    getShopifyAppUrl(options?.origin),
+  );
+
+  if (options?.connected) {
+    url.searchParams.set("connected", options.connected);
+  }
+
+  if (options?.error) {
+    url.searchParams.set("error", options.error);
+  }
+
+  return url;
+}

@@ -179,7 +179,7 @@ export async function GET(
             name: true,
             slug: true,
             shopifyShopDomain: true,
-            shopifyStorefrontAccessTokenEncrypted: true,
+            shopifyAdminAccessTokenEncrypted: true,
           },
         })
       : [];
@@ -196,12 +196,12 @@ export async function GET(
         const handle = getProductHandle(link.productUrl);
         const shopifyProduct =
           linkedBrand?.shopifyShopDomain &&
-          linkedBrand.shopifyStorefrontAccessTokenEncrypted &&
+          linkedBrand.shopifyAdminAccessTokenEncrypted &&
           handle
             ? await fetchProductByHandle({
                 shopDomain: linkedBrand.shopifyShopDomain,
                 encryptedToken:
-                  linkedBrand.shopifyStorefrontAccessTokenEncrypted,
+                  linkedBrand.shopifyAdminAccessTokenEncrypted,
                 handle,
               })
             : null;
@@ -269,11 +269,11 @@ export async function GET(
     if (
       linkedProducts.length === 0 &&
       primaryBrand?.shopifyShopDomain &&
-      primaryBrand.shopifyStorefrontAccessTokenEncrypted
+      primaryBrand.shopifyAdminAccessTokenEncrypted
     ) {
       const products = await fetchCampaignProducts({
         shopDomain: primaryBrand.shopifyShopDomain,
-        encryptedToken: primaryBrand.shopifyStorefrontAccessTokenEncrypted,
+        encryptedToken: primaryBrand.shopifyAdminAccessTokenEncrypted,
       });
 
       campaignProducts = products.map((product) => ({
