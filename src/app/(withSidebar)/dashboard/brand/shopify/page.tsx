@@ -43,6 +43,9 @@ export default function BrandShopifyPage() {
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const isConnected = Boolean(
+    brand?.shopifyInstalledAt && brand?.shopifyShopDomain,
+  );
 
   useEffect(() => {
     async function load() {
@@ -144,10 +147,10 @@ export default function BrandShopifyPage() {
                     shopDomain,
                   )}`;
                 }}
-                disabled={!shopDomain.trim()}
+                disabled={!shopDomain.trim() || isConnected}
                 className="rounded-full border border-white bg-white text-black"
               >
-                Connect Shopify
+                {isConnected ? "Shopify Connected" : "Connect Shopify"}
               </Button>
 
               <Button
