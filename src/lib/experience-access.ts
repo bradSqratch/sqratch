@@ -28,6 +28,9 @@ type ExperienceAccessBase = {
     campaign: {
       id: string;
       name: string;
+      whyVideoSource: "YOUTUBE" | "UPLOAD" | null;
+      whyYoutubeUrl: string | null;
+      whyVideoUploadUrl: string | null;
       brand: {
         id: string;
         name: string;
@@ -106,6 +109,9 @@ export async function getExperienceAccessContext(
             select: {
               id: true,
               name: true,
+              whyVideoSource: true,
+              whyYoutubeUrl: true,
+              whyVideoUploadUrl: true,
               brand: {
                 select: {
                   id: true,

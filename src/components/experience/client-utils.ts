@@ -31,3 +31,29 @@ export function getErrorMessage(error: unknown, fallback: string) {
 
   return fallback;
 }
+
+export async function deleteUploadedAsset(url: string) {
+  if (!url) {
+    return false;
+  }
+
+  try {
+    const response = await fetch("/api/uploads/storage-object", {
+      method: "DELETE",
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ url }),
+    });
+
+    if (!response.ok) {
+      return false;
+    }
+
+    const json = await response.json().catch(() => null);
+    return Boolean(json?.data?.deleted);
+  } catch {
+    return false;
+  }
+}

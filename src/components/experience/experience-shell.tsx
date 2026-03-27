@@ -1,12 +1,18 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import {
+  BookOpen,
+  HelpCircle,
+  ShoppingBag,
+  Sparkles,
+  SquarePen,
+  type LucideIcon,
+} from "lucide-react";
 import { ReactNode } from "react";
 import CommonNavbar from "@/components/commonNavbar";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import type { ExperienceShellData } from "@/components/experience/use-experience";
 
@@ -17,6 +23,7 @@ type ExperienceShellProps = {
   activeTab: ExperienceTab;
   children: ReactNode;
   actions?: ReactNode;
+  hero?: ReactNode;
 };
 
 const tabHrefMap: Record<ExperienceTab, (slug: string) => string> = {
@@ -27,11 +34,24 @@ const tabHrefMap: Record<ExperienceTab, (slug: string) => string> = {
   shop: (slug) => `/x/${slug}/shop`,
 };
 
+const experienceTabs: Array<{
+  key: ExperienceTab;
+  label: string;
+  icon: LucideIcon;
+}> = [
+  { key: "hub", label: "WHY", icon: Sparkles },
+  { key: "learn", label: "Learn", icon: BookOpen },
+  { key: "posts", label: "Posts", icon: SquarePen },
+  { key: "qa", label: "Q&A", icon: HelpCircle },
+  { key: "shop", label: "Shop", icon: ShoppingBag },
+];
+
 export function ExperienceShell({
   experience,
   activeTab,
   children,
   actions,
+  hero,
 }: ExperienceShellProps) {
   return (
     <div className="relative min-h-screen overflow-hidden bg-[#020015] text-white">
@@ -46,157 +66,151 @@ export function ExperienceShell({
       <div className="relative z-10 flex min-h-screen flex-col">
         <CommonNavbar />
 
-        <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col px-6 pb-12 pt-28 sm:pt-32">
-          <section className="grid gap-6 lg:grid-cols-[1.25fr_0.75fr]">
-            <Card className="overflow-hidden rounded-[32px] border border-white/15 bg-white/6 text-white backdrop-blur-xl">
-              <CardContent className="p-0">
-                <div className="relative min-h-[280px]">
-                  {experience.coverImageUrl ? (
-                    <img
-                      src={experience.coverImageUrl}
-                      alt={experience.title}
-                      className="absolute inset-0 h-full w-full object-cover"
-                    />
-                  ) : (
-                    <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(99,102,241,0.25),rgba(236,72,153,0.18),rgba(2,0,21,0.4))]" />
-                  )}
+        <main
+          className={cn(
+            "mx-auto flex w-full max-w-6xl flex-1 flex-col px-6 pb-40 sm:pb-40 lg:pb-44",
+            hero ? "pt-[44px] sm:pt-[52px]" : "pt-28 sm:pt-32",
+          )}
+        >
+          {hero ? (
+            <section>{hero}</section>
+          ) : (
+            <section className="grid gap-6 lg:grid-cols-[1.25fr_0.75fr]">
+              <Card className="overflow-hidden rounded-[32px] border border-white/15 bg-white/6 text-white backdrop-blur-xl">
+                <CardContent className="p-0">
+                  <div className="relative min-h-[280px]">
+                    {experience.coverImageUrl ? (
+                      <img
+                        src={experience.coverImageUrl}
+                        alt={experience.title}
+                        className="absolute inset-0 h-full w-full object-cover"
+                      />
+                    ) : (
+                      <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(99,102,241,0.25),rgba(236,72,153,0.18),rgba(2,0,21,0.4))]" />
+                    )}
 
-                  <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(2,0,21,0.1),rgba(2,0,21,0.82))]" />
+                    <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(2,0,21,0.1),rgba(2,0,21,0.82))]" />
 
-                  <div className="relative flex h-full flex-col justify-end gap-5 p-8">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <StatusPill label="Experience" />
-                      {experience.canAccessPrivate && (
-                        <StatusPill
-                          label="Private content unlocked"
-                          tone="success"
-                        />
-                      )}
-                      {experience.canInteract && (
-                        <StatusPill label="Posts + Q&A live" tone="info" />
-                      )}
+                    <div className="relative flex h-full flex-col justify-end gap-5 p-8">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <StatusPill label="Experience" />
+                        {experience.canAccessPrivate && (
+                          <StatusPill
+                            label="Private content unlocked"
+                            tone="success"
+                          />
+                        )}
+                        {experience.canInteract && (
+                          <StatusPill label="Posts + Q&A live" tone="info" />
+                        )}
+                      </div>
+
+                      <div className="space-y-3">
+                        <h1 className="text-4xl font-bold leading-tight tracking-[-0.03em] sm:text-5xl">
+                          {experience.title}
+                        </h1>
+                        {experience.description && (
+                          <p className="max-w-3xl text-base leading-7 text-white/75 sm:text-lg">
+                            {experience.description}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card className="rounded-[32px] border border-white/15 bg-white/6 text-white backdrop-blur-xl">
+                <CardContent className="flex h-full flex-col justify-between gap-6 p-8">
+                  <div className="space-y-4">
+                    <div>
+                      <p className="text-xs uppercase tracking-[0.28em] text-white/45">
+                        Creator
+                      </p>
+                      <h2 className="mt-2 text-2xl font-semibold">
+                        {experience.creator.displayName}
+                      </h2>
                     </div>
 
-                    <div className="space-y-3">
-                      <h1 className="text-4xl font-bold leading-tight tracking-[-0.03em] sm:text-5xl">
-                        {experience.title}
-                      </h1>
-                      {experience.description && (
-                        <p className="max-w-3xl text-base leading-7 text-white/75 sm:text-lg">
-                          {experience.description}
-                        </p>
-                      )}
+                    {experience.creator.bio && (
+                      <p className="text-sm leading-6 text-white/70">
+                        {experience.creator.bio}
+                      </p>
+                    )}
+
+                    <div className="space-y-2 text-sm text-white/65">
+                      <p>{experience.isLoggedIn ? "Logged in" : "Guest session"}</p>
+                      <p>
+                        {experience.hasUnlockedCampaign
+                          ? "Campaign unlocked"
+                          : "Campaign unlock required for private content"}
+                      </p>
                     </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
 
-            <Card className="rounded-[32px] border border-white/15 bg-white/6 text-white backdrop-blur-xl">
-              <CardContent className="flex h-full flex-col justify-between gap-6 p-8">
-                <div className="space-y-4">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.28em] text-white/45">
-                      Creator
-                    </p>
-                    <h2 className="mt-2 text-2xl font-semibold">
-                      {experience.creator.displayName}
-                    </h2>
-                  </div>
-
-                  {experience.creator.bio && (
-                    <p className="text-sm leading-6 text-white/70">
-                      {experience.creator.bio}
-                    </p>
-                  )}
-
-                  <div className="space-y-2 text-sm text-white/65">
-                    <p>{experience.isLoggedIn ? "Logged in" : "Guest session"}</p>
-                    <p>
-                      {experience.hasUnlockedCampaign
-                        ? "Campaign unlocked"
-                        : "Campaign unlock required for private content"}
-                    </p>
-                  </div>
-                </div>
-
-                {actions}
-              </CardContent>
-            </Card>
-          </section>
-
-          <ExperienceTabsNav
-            activeTab={activeTab}
-            experienceSlug={experience.slug}
-            className="mt-8"
-          />
+                  {actions}
+                </CardContent>
+              </Card>
+            </section>
+          )}
 
           <div className="mt-8">{children}</div>
         </main>
 
-        <div className="pb-6 text-center text-white/55">
+        <div className="pb-36 text-center text-white/55 sm:pb-36 lg:pb-40">
           © {new Date().getFullYear()} SQRATCH. All rights reserved.
         </div>
+
+        <StickyExperienceTabsNav
+          activeTab={activeTab}
+          experienceSlug={experience.slug}
+        />
       </div>
     </div>
   );
 }
 
-export function ExperienceTabsNav({
+function StickyExperienceTabsNav({
   activeTab,
   experienceSlug,
-  className,
 }: {
   activeTab: ExperienceTab;
   experienceSlug: string;
-  className?: string;
 }) {
-  const router = useRouter();
-
   return (
-    <Tabs
-      value={activeTab}
-      onValueChange={(value) =>
-        router.push(tabHrefMap[value as ExperienceTab](experienceSlug))
-      }
-      className={className}
-    >
-      <TabsList
-        variant="line"
-        className="rounded-full border border-white/10 bg-white/6 p-1"
-      >
-        <TabsTrigger
-          value="hub"
-          className="rounded-full px-5 data-[state=active]:bg-white data-[state=active]:text-black"
-        >
-          Hub
-        </TabsTrigger>
-        <TabsTrigger
-          value="learn"
-          className="rounded-full px-5 data-[state=active]:bg-white data-[state=active]:text-black"
-        >
-          Learn
-        </TabsTrigger>
-        <TabsTrigger
-          value="posts"
-          className="rounded-full px-5 data-[state=active]:bg-white data-[state=active]:text-black"
-        >
-          Posts
-        </TabsTrigger>
-        <TabsTrigger
-          value="qa"
-          className="rounded-full px-5 data-[state=active]:bg-white data-[state=active]:text-black"
-        >
-          Q&amp;A
-        </TabsTrigger>
-        <TabsTrigger
-          value="shop"
-          className="rounded-full px-5 data-[state=active]:bg-white data-[state=active]:text-black"
-        >
-          Shop
-        </TabsTrigger>
-      </TabsList>
-    </Tabs>
+    <div className="fixed inset-x-0 bottom-0 z-30 px-4 pb-[calc(env(safe-area-inset-bottom)+1rem)] pt-3 sm:px-6 lg:px-8">
+      <div className="pointer-events-none absolute inset-x-0 bottom-0 h-32 bg-[linear-gradient(180deg,rgba(2,0,21,0),rgba(2,0,21,0.96))]" />
+      <div className="relative mx-auto max-w-xl rounded-[28px] border border-white/12 bg-[linear-gradient(180deg,rgba(14,16,36,0.96),rgba(8,10,24,0.98))] p-2 shadow-[0_-18px_70px_rgba(2,0,21,0.55)] backdrop-blur-2xl sm:max-w-2xl lg:max-w-3xl">
+        <div className="grid grid-cols-5 gap-1.5 sm:gap-2">
+          {experienceTabs.map(({ key: tabKey, label, icon: Icon }) => {
+            const isActive = activeTab === tabKey;
+
+            return (
+              <Link
+                key={tabKey}
+                href={tabHrefMap[tabKey](experienceSlug)}
+                className={cn(
+                  "flex min-h-[72px] flex-col items-center justify-center gap-1.5 rounded-[20px] px-2 text-center text-[11px] font-semibold tracking-[0.04em] transition sm:min-h-[82px] sm:gap-2 sm:text-[12px]",
+                  isActive
+                    ? "bg-white/12 text-white shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]"
+                    : "text-white/52 hover:bg-white/6 hover:text-white/78",
+                )}
+                aria-current={isActive ? "page" : undefined}
+              >
+                <Icon
+                  className={cn(
+                    "h-[18px] w-[18px] sm:h-[20px] sm:w-[20px]",
+                    isActive ? "text-white" : "text-white/70",
+                  )}
+                  strokeWidth={2.1}
+                />
+                <span>{label}</span>
+              </Link>
+            );
+          })}
+        </div>
+      </div>
+    </div>
   );
 }
 

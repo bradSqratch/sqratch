@@ -17,42 +17,47 @@ import { ExperienceShell, GatePanel, LoadingView, ErrorView, PageCard } from "@/
 import type { ExperienceShellData } from "@/components/experience/use-experience";
 import { Button } from "@/components/ui/button";
 
-type YouTubePlayer = {
+type LessonYouTubePlayer = {
   getCurrentTime: () => number;
   getDuration: () => number;
   seekTo: (seconds: number, allowSeekAhead: boolean) => void;
+  playVideo?: () => void;
+  pauseVideo?: () => void;
+  getPlayerState?: () => number;
   destroy?: () => void;
 };
 
-type YouTubePlayerState = {
+type LessonYouTubePlayerState = {
   PLAYING: number;
   PAUSED: number;
   ENDED: number;
 };
 
-type YouTubePlayerFactory = new (
+type LessonYouTubePlayerFactory = new (
   elementId: string,
   options: {
     videoId: string;
     playerVars?: Record<string, string | number>;
     events?: {
-      onReady?: (event: { target: YouTubePlayer }) => void;
-      onStateChange?: (event: { target: YouTubePlayer; data: number }) => void;
+      onReady?: (event: { target: LessonYouTubePlayer }) => void;
+      onStateChange?: (event: {
+        target: LessonYouTubePlayer;
+        data: number;
+      }) => void;
     };
   },
-) => YouTubePlayer;
+) => LessonYouTubePlayer;
 
-type YouTubeNamespace = {
-  Player: YouTubePlayerFactory;
-  PlayerState?: YouTubePlayerState;
+type LessonYouTubeNamespace = {
+  Player: LessonYouTubePlayerFactory;
+  PlayerState?: LessonYouTubePlayerState;
 };
 
-declare global {
-  interface Window {
-    YT?: YouTubeNamespace;
+type LessonWindow = Window &
+  typeof globalThis & {
+    YT?: LessonYouTubeNamespace;
     onYouTubeIframeAPIReady?: () => void;
-  }
-}
+  };
 
 type LessonResponse = {
   experience: ExperienceShellData;
@@ -108,8 +113,10 @@ type LessonProductsResponse = {
 };
 
 async function loadYouTubeApi() {
-  if (window.YT?.Player) {
-    return window.YT;
+  const lessonWindow = window as LessonWindow;
+
+  if (lessonWindow.YT?.Player) {
+    return lessonWindow.YT;
   }
 
   await new Promise<void>((resolve) => {
@@ -122,18 +129,18 @@ async function loadYouTubeApi() {
       document.body.appendChild(script);
     }
 
-    const previousReady = window.onYouTubeIframeAPIReady;
-    window.onYouTubeIframeAPIReady = () => {
+    const previousReady = lessonWindow.onYouTubeIframeAPIReady;
+    lessonWindow.onYouTubeIframeAPIReady = () => {
       previousReady?.();
       resolve();
     };
 
-    if (window.YT?.Player) {
+    if (lessonWindow.YT?.Player) {
       resolve();
     }
   });
 
-  return window.YT;
+  return (window as LessonWindow).YT;
 }
 
 function extractYouTubeId(url: string) {
@@ -170,8 +177,9 @@ export function ExperienceLessonClient({
   const [productsLoading, setProductsLoading] = useState(false);
   const [productsError, setProductsError] = useState<string | null>(null);
   const [clickingProductId, setClickingProductId] = useState<string | null>(null);
-  const ytPlayerRef = useRef<YouTubePlayer | null>(null);
+  const ytPlayerRef = useRef<LessonYouTubePlayer | null>(null);
   const ytPollRef = useRef<number | null>(null);
+  const resumePositionRef = useRef(0);
   const playerId = useId();
   const startedSentRef = useRef(false);
   const completedSentRef = useRef(false);
@@ -179,6 +187,22 @@ export function ExperienceLessonClient({
   const submittingRef = useRef(false);
 
   const currentLessonProgress = progress?.lessonProgress[0] || null;
+
+  useEffect(() => {
+    resumePositionRef.current = currentLessonProgress?.lastPositionSeconds || 0;
+  }, [currentLessonProgress?.lastPositionSeconds]);
+
+  useEffect(() => {
+    startedSentRef.current = false;
+    completedSentRef.current = false;
+    lastProgressSentAtRef.current = 0;
+    resumePositionRef.current = 0;
+
+    if (ytPollRef.current) {
+      window.clearInterval(ytPollRef.current);
+      ytPollRef.current = null;
+    }
+  }, [lessonId]);
 
   useEffect(() => {
     async function load() {
@@ -374,17 +398,21 @@ export function ExperienceLessonClient({
         playerVars: {
           rel: 0,
           modestbranding: 1,
+          playsinline: 1,
         },
         events: {
-          onReady: (event: { target: YouTubePlayer }) => {
-            const resumeAt = currentLessonProgress?.lastPositionSeconds || 0;
+          onReady: (event: { target: LessonYouTubePlayer }) => {
+            const resumeAt = resumePositionRef.current;
             if (resumeAt > 0) {
               event.target.seekTo(resumeAt, true);
             }
           },
-          onStateChange: (event: { target: YouTubePlayer; data: number }) => {
+          onStateChange: (event: {
+            target: LessonYouTubePlayer;
+            data: number;
+          }) => {
             const player = event.target;
-            const playerState = window.YT?.PlayerState;
+            const playerState = (window as LessonWindow).YT?.PlayerState;
 
             if (event.data === playerState?.PLAYING) {
               if (!startedSentRef.current) {
@@ -409,12 +437,20 @@ export function ExperienceLessonClient({
             }
 
             if (event.data === playerState?.PAUSED) {
+              if (ytPollRef.current) {
+                window.clearInterval(ytPollRef.current);
+                ytPollRef.current = null;
+              }
               const currentTime = player.getCurrentTime();
               const duration = player.getDuration();
               maybeSendProgress(currentTime, duration, true);
             }
 
             if (event.data === playerState?.ENDED && !completedSentRef.current) {
+              if (ytPollRef.current) {
+                window.clearInterval(ytPollRef.current);
+                ytPollRef.current = null;
+              }
               completedSentRef.current = true;
               void sendProgress(
                 player.getDuration(),
@@ -432,11 +468,20 @@ export function ExperienceLessonClient({
       cancelled = true;
       if (ytPollRef.current) {
         window.clearInterval(ytPollRef.current);
+        ytPollRef.current = null;
       }
       ytPlayerRef.current?.destroy?.();
       ytPlayerRef.current = null;
     };
-  }, [currentLessonProgress, data, lessonId, maybeSendProgress, playerId, sendProgress]);
+  }, [
+    data?.canAccess,
+    data?.lesson.videoSource,
+    data?.lesson.youtubeUrl,
+    lessonId,
+    maybeSendProgress,
+    playerId,
+    sendProgress,
+  ]);
 
   if (loading) {
     return <LoadingView label="Loading lesson..." />;

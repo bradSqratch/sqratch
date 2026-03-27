@@ -1,6 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getBrandAdminContext, getOwnedBrandCampaign, slugifyValue } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
+import { deleteStorageObjectByUrl } from "@/lib/storage-upload";
+
+function normalizeVideoSource(value: unknown) {
+  const normalized = String(value || "")
+    .trim()
+    .toUpperCase();
+
+  if (normalized === "UPLOAD") {
+    return "UPLOAD" as const;
+  }
+
+  if (normalized === "YOUTUBE") {
+    return "YOUTUBE" as const;
+  }
+
+  return null;
+}
 
 export async function GET(
   _request: NextRequest,
@@ -65,10 +82,27 @@ export async function PATCH(
     const slug = slugifyValue(String(body?.slug || "").trim() || name || existing.slug);
     const description = String(body?.description || "").trim();
     const isActive = Boolean(body?.isActive);
+    const whyVideoSource = normalizeVideoSource(body?.whyVideoSource);
+    const whyYoutubeUrl = String(body?.whyYoutubeUrl || "").trim();
+    const whyVideoAssetUrl = String(body?.whyVideoAssetUrl || "").trim();
 
     if (!name || !slug) {
       return NextResponse.json(
         { error: "Campaign name and slug are required." },
+        { status: 400 },
+      );
+    }
+
+    if (whyVideoSource === "YOUTUBE" && !whyYoutubeUrl) {
+      return NextResponse.json(
+        { error: "whyYoutubeUrl is required for YouTube campaign videos." },
+        { status: 400 },
+      );
+    }
+
+    if (whyVideoSource === "UPLOAD" && !whyVideoAssetUrl) {
+      return NextResponse.json(
+        { error: "whyVideoAssetUrl is required for uploaded campaign videos." },
         { status: 400 },
       );
     }
@@ -97,6 +131,10 @@ export async function PATCH(
         slug,
         description: description || null,
         isActive,
+        whyVideoSource,
+        whyYoutubeUrl: whyVideoSource === "YOUTUBE" ? whyYoutubeUrl : null,
+        whyVideoUploadUrl:
+          whyVideoSource === "UPLOAD" ? whyVideoAssetUrl : null,
       },
       select: {
         id: true,
@@ -104,8 +142,18 @@ export async function PATCH(
         slug: true,
         description: true,
         isActive: true,
+        whyVideoSource: true,
+        whyYoutubeUrl: true,
+        whyVideoUploadUrl: true,
       },
     });
+
+    if (
+      existing.whyVideoUploadUrl &&
+      existing.whyVideoUploadUrl !== campaign.whyVideoUploadUrl
+    ) {
+      await deleteStorageObjectByUrl(existing.whyVideoUploadUrl);
+    }
 
     return NextResponse.json({ data: campaign });
   } catch (error) {

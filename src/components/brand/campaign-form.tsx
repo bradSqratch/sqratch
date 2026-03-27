@@ -3,7 +3,11 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
+import {
+  deleteUploadedAsset,
+  fetchJson,
+  getErrorMessage,
+} from "@/components/experience/client-utils";
 import { BrandPageShell } from "@/components/brand/page-shell";
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
@@ -15,6 +19,9 @@ type CampaignForm = {
   slug: string;
   description: string;
   isActive: boolean;
+  whyVideoSource: "" | "YOUTUBE" | "UPLOAD";
+  whyYoutubeUrl: string;
+  whyVideoAssetUrl: string;
 };
 
 function slugifyValue(value: string) {
@@ -39,7 +46,11 @@ export function BrandCampaignForm({
     slug: "",
     description: "",
     isActive: true,
+    whyVideoSource: "",
+    whyYoutubeUrl: "",
+    whyVideoAssetUrl: "",
   });
+  const [pendingVideoFile, setPendingVideoFile] = useState<File | null>(null);
   const [slugTouched, setSlugTouched] = useState(false);
   const [loading, setLoading] = useState(mode === "edit");
   const [saving, setSaving] = useState(false);
@@ -61,6 +72,9 @@ export function BrandCampaignForm({
           slug: string;
           description: string | null;
           isActive: boolean;
+          whyVideoSource: "YOUTUBE" | "UPLOAD" | null;
+          whyYoutubeUrl: string | null;
+          whyVideoUploadUrl: string | null;
         }>(`/api/brand/campaigns/${campaignId}`);
 
         setForm({
@@ -68,8 +82,11 @@ export function BrandCampaignForm({
           slug: data.slug,
           description: data.description || "",
           isActive: data.isActive,
+          whyVideoSource: data.whyVideoSource || "",
+          whyYoutubeUrl: data.whyYoutubeUrl || "",
+          whyVideoAssetUrl: data.whyVideoUploadUrl || "",
         });
-        setSlugTouched(true);
+        setSlugTouched(data.slug !== slugifyValue(data.name));
       } catch (loadError) {
         setError(getErrorMessage(loadError, "Failed to load campaign."));
       } finally {
@@ -97,7 +114,48 @@ export function BrandCampaignForm({
     setSaving(true);
     setError(null);
 
+    let whyVideoAssetUrl = form.whyVideoAssetUrl.trim();
+    let uploadedWhyVideoAssetUrl: string | null = null;
+
     try {
+      if (form.whyVideoSource === "YOUTUBE" && !form.whyYoutubeUrl.trim()) {
+        throw new Error("A YouTube URL is required for campaign videos.");
+      }
+
+      if (form.whyVideoSource === "UPLOAD") {
+        if (pendingVideoFile) {
+          const formData = new FormData();
+          formData.append("file", pendingVideoFile);
+          formData.append("campaignSlug", form.slug);
+
+          if (campaignId) {
+            formData.append("campaignId", campaignId);
+          }
+
+          const uploadResponse = await fetch("/api/uploads/campaign-video", {
+            method: "POST",
+            body: formData,
+            credentials: "include",
+          });
+
+          const uploadJson = await uploadResponse.json().catch(() => null);
+
+          if (!uploadResponse.ok) {
+            throw new Error(uploadJson?.error || "Failed to upload campaign video.");
+          }
+
+          whyVideoAssetUrl =
+            uploadJson?.data?.fileUrl ||
+            uploadJson?.fileUrl ||
+            "";
+          uploadedWhyVideoAssetUrl = whyVideoAssetUrl;
+        }
+
+        if (!whyVideoAssetUrl) {
+          throw new Error("An uploaded campaign video file is required.");
+        }
+      }
+
       const url =
         mode === "create"
           ? "/api/brand/campaigns"
@@ -109,8 +167,17 @@ export function BrandCampaignForm({
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          ...form,
+          whyVideoSource: form.whyVideoSource || null,
+          whyYoutubeUrl:
+            form.whyVideoSource === "YOUTUBE" ? form.whyYoutubeUrl.trim() : "",
+          whyVideoAssetUrl:
+            form.whyVideoSource === "UPLOAD" ? whyVideoAssetUrl : "",
+        }),
       });
+
+      setPendingVideoFile(null);
 
       router.push(
         mode === "create"
@@ -118,6 +185,10 @@ export function BrandCampaignForm({
           : "/dashboard/brand/campaigns",
       );
     } catch (submitError) {
+      if (uploadedWhyVideoAssetUrl) {
+        await deleteUploadedAsset(uploadedWhyVideoAssetUrl);
+      }
+
       setError(getErrorMessage(submitError, "Failed to save campaign."));
     } finally {
       setSaving(false);
@@ -189,6 +260,96 @@ export function BrandCampaignForm({
               />
             </div>
 
+            <div className="grid gap-5 lg:grid-cols-2">
+              <div className="space-y-2">
+                <label className="text-sm text-white/70">Campaign video source</label>
+                <select
+                  value={form.whyVideoSource}
+                  onChange={(event) => {
+                    setPendingVideoFile(null);
+                    return (
+                    setForm((current) => ({
+                      ...current,
+                      whyVideoSource: event.target.value as
+                        | ""
+                        | "YOUTUBE"
+                        | "UPLOAD",
+                      whyYoutubeUrl:
+                        event.target.value === "YOUTUBE"
+                          ? current.whyYoutubeUrl
+                          : "",
+                      whyVideoAssetUrl:
+                        event.target.value === "UPLOAD"
+                          ? current.whyVideoAssetUrl
+                          : "",
+                    }))
+                    );
+                  }}
+                  className="flex h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white outline-none"
+                >
+                  <option value="" disabled className="bg-[#111527]">
+                    Select source
+                  </option>
+                  <option value="YOUTUBE" className="bg-[#111527]">
+                    YouTube
+                  </option>
+                  <option value="UPLOAD" className="bg-[#111527]">
+                    Upload from device
+                  </option>
+                </select>
+              </div>
+            </div>
+
+            {form.whyVideoSource === "YOUTUBE" ? (
+              <div className="space-y-2">
+                <label className="text-sm text-white/70">YouTube URL</label>
+                <Input
+                  value={form.whyYoutubeUrl}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      whyYoutubeUrl: event.target.value,
+                    }))
+                  }
+                  className="border-white/10 bg-black/20 text-white"
+                  placeholder="https://www.youtube.com/watch?v=..."
+                />
+              </div>
+            ) : null}
+
+            {form.whyVideoSource === "UPLOAD" ? (
+              <div className="space-y-3">
+                <div className="space-y-2">
+                  <label className="text-sm text-white/70">Campaign video file</label>
+                  <Input
+                    type="file"
+                    accept=".mp4,.mov,.webm,.m4v,video/mp4,video/quicktime,video/webm,video/x-m4v"
+                    onChange={(event) =>
+                      setPendingVideoFile(event.target.files?.[0] || null)
+                    }
+                    className="border-white/10 bg-black/20 text-white file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-black"
+                  />
+                </div>
+
+                <p className="text-sm text-white/55">
+                  MP4, MOV, WEBM, M4V up to 250 MB. The file uploads only after
+                  you click Save Changes.
+                </p>
+
+                {pendingVideoFile ? (
+                  <p className="text-sm text-white/65">
+                    Pending file: {pendingVideoFile.name}
+                  </p>
+                ) : null}
+
+                {form.whyVideoAssetUrl ? (
+                  <p className="text-sm text-white/55">
+                    Current asset: {form.whyVideoAssetUrl}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
             <label className="flex items-center gap-3 text-sm text-white/70">
               <input
                 type="checkbox"
@@ -207,10 +368,27 @@ export function BrandCampaignForm({
 
             <Button
               type="submit"
-              disabled={saving || !form.name.trim() || !form.slug.trim()}
+              disabled={
+                saving ||
+                !form.name.trim() ||
+                !form.slug.trim() ||
+                (mode === "create" && !form.whyVideoSource) ||
+                (form.whyVideoSource === "YOUTUBE" &&
+                  !form.whyYoutubeUrl.trim()) ||
+                (form.whyVideoSource === "UPLOAD" &&
+                  !form.whyVideoAssetUrl.trim() &&
+                  !pendingVideoFile)
+              }
               className="rounded-full border border-white bg-white text-black"
             >
-              {submitLabel}
+              {saving ? (
+                <span className="flex items-center gap-2">
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  {submitLabel}
+                </span>
+              ) : (
+                submitLabel
+              )}
             </Button>
           </form>
         )}

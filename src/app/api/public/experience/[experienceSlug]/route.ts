@@ -40,10 +40,82 @@ export async function GET(
         sortOrder: true,
         lessons: {
           where: { isActive: true },
-          select: { id: true },
+          orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
+          select: {
+            id: true,
+            title: true,
+            sortOrder: true,
+            videoSource: true,
+            youtubeUrl: true,
+            videoUploadUrl: true,
+          },
         },
       },
     });
+
+    const campaignsWithVideo = access.experience.campaigns.filter(
+      (item) =>
+        (item.campaign.whyVideoSource === "YOUTUBE" &&
+          item.campaign.whyYoutubeUrl) ||
+        (item.campaign.whyVideoSource === "UPLOAD" &&
+          item.campaign.whyVideoUploadUrl),
+    );
+
+    const primaryCampaign =
+      campaignsWithVideo[0] || access.experience.campaigns[0];
+
+    const orderedCampaigns = primaryCampaign
+      ? [
+          primaryCampaign,
+          ...access.experience.campaigns.filter(
+            (item) => item.campaignId !== primaryCampaign.campaignId,
+          ),
+        ]
+      : access.experience.campaigns;
+
+    const playableLessons = courses
+      .flatMap((course) =>
+        course.lessons.map((lesson) => ({
+          id: `lesson:${lesson.id}`,
+          lessonId: lesson.id,
+          kind: "LESSON" as const,
+          title: lesson.title,
+          sortOrder: lesson.sortOrder,
+          courseTitle: course.title,
+          videoSource: lesson.videoSource,
+          youtubeUrl: lesson.youtubeUrl,
+          videoAssetUrl: lesson.videoUploadUrl,
+        })),
+      )
+      .filter(
+        (lesson) =>
+          (lesson.videoSource === "YOUTUBE" && lesson.youtubeUrl) ||
+          (lesson.videoSource === "UPLOAD" && lesson.videoAssetUrl),
+      );
+
+    const primaryCampaignVideo = primaryCampaign?.campaign
+      ? {
+          id: `campaign:${primaryCampaign.campaign.id}`,
+          lessonId: null,
+          kind: "CAMPAIGN" as const,
+          title: primaryCampaign.campaign.name,
+          courseTitle: null,
+          videoSource: primaryCampaign.campaign.whyVideoSource,
+          youtubeUrl: primaryCampaign.campaign.whyYoutubeUrl,
+          videoAssetUrl: primaryCampaign.campaign.whyVideoUploadUrl,
+        }
+      : null;
+
+    const featuredStory = primaryCampaignVideo &&
+      ((primaryCampaignVideo.videoSource === "YOUTUBE" &&
+        primaryCampaignVideo.youtubeUrl) ||
+        (primaryCampaignVideo.videoSource === "UPLOAD" &&
+          primaryCampaignVideo.videoAssetUrl))
+      ? primaryCampaignVideo
+      :
+      playableLessons.find((lesson) => lesson.sortOrder === 3) ||
+      playableLessons[0] ||
+      null;
 
     const [publicCourseCount, privateCourseCount, postsCount, questionsCount] =
       await Promise.all([
@@ -74,7 +146,6 @@ export async function GET(
         }),
       ]);
 
-    const primaryCampaign = access.experience.campaigns[0];
     const sessionId =
       access.viewer.sessionId ||
       (await ensureViewerSession({
@@ -115,11 +186,12 @@ export async function GET(
           bio: access.experience.creator.bio,
           avatarUrl: access.experience.creator.avatarUrl,
         },
-        campaigns: access.experience.campaigns.map((item) => ({
+        campaigns: orderedCampaigns.map((item) => ({
           id: item.campaign.id,
           name: item.campaign.name,
           brand: item.campaign.brand,
         })),
+        featuredStory,
         courses: courses.map((course) => ({
           id: course.id,
           title: course.title,

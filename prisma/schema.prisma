@@ -120,6 +120,9 @@ model Campaign {
   name            String               @unique
   description     String?
   inviteUrl       String?
+  whyVideoSource  CampaignVideoSource?
+  whyYoutubeUrl   String?
+  whyVideoUploadUrl String?
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
   createdById     String
@@ -530,6 +533,11 @@ enum CourseAccess {
 }
 
 enum LessonVideoSource {
+  YOUTUBE
+  UPLOAD
+}
+
+enum CampaignVideoSource {
   YOUTUBE
   UPLOAD
 }

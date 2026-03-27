@@ -37,6 +37,16 @@ export type ExperienceShellData = {
 };
 
 export type PublicExperienceData = ExperienceShellData & {
+  featuredStory: {
+    id: string;
+    lessonId: string | null;
+    kind: "CAMPAIGN" | "LESSON";
+    title: string;
+    courseTitle: string | null;
+    videoSource: "YOUTUBE" | "UPLOAD";
+    youtubeUrl: string | null;
+    videoAssetUrl: string | null;
+  } | null;
   courses: Array<{
     id: string;
     title: string;

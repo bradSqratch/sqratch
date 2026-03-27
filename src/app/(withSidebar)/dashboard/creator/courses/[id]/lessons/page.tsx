@@ -6,7 +6,11 @@ import {
   type LessonProductLinkItem,
 } from "@/components/creator/lesson-product-links-section";
 import { CreatorPageShell } from "@/components/creator/page-shell";
-import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
+import {
+  deleteUploadedAsset,
+  fetchJson,
+  getErrorMessage,
+} from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -115,11 +119,16 @@ export default function CreatorCourseLessonsPage({
     setSaving(true);
     setError(null);
 
+    let uploadedVideoAssetUrl: string | null = null;
+
     try {
       const videoAssetUrl =
         draft.videoSource === "UPLOAD" && draft.file
           ? await uploadVideo(draft.file)
           : draft.videoAssetUrl;
+
+      uploadedVideoAssetUrl =
+        draft.videoSource === "UPLOAD" && draft.file ? videoAssetUrl : null;
 
       await fetchJson("/api/creator/lessons", {
         method: "POST",
@@ -140,6 +149,9 @@ export default function CreatorCourseLessonsPage({
       setDraft(emptyLessonDraft);
       await load();
     } catch (saveError) {
+      if (uploadedVideoAssetUrl) {
+        await deleteUploadedAsset(uploadedVideoAssetUrl);
+      }
       setError(getErrorMessage(saveError, "Failed to create lesson."));
     } finally {
       setSaving(false);
@@ -150,11 +162,18 @@ export default function CreatorCourseLessonsPage({
     setSavingId(id);
     setError(null);
 
+    let uploadedVideoAssetUrl: string | null = null;
+
     try {
       const videoAssetUrl =
         lessonDraft.videoSource === "UPLOAD" && lessonDraft.file
           ? await uploadVideo(lessonDraft.file)
           : lessonDraft.videoAssetUrl;
+
+      uploadedVideoAssetUrl =
+        lessonDraft.videoSource === "UPLOAD" && lessonDraft.file
+          ? videoAssetUrl
+          : null;
 
       await fetchJson("/api/creator/lessons", {
         method: "PATCH",
@@ -174,6 +193,9 @@ export default function CreatorCourseLessonsPage({
 
       await load();
     } catch (saveError) {
+      if (uploadedVideoAssetUrl) {
+        await deleteUploadedAsset(uploadedVideoAssetUrl);
+      }
       setError(getErrorMessage(saveError, "Failed to update lesson."));
     } finally {
       setSavingId(null);

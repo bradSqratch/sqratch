@@ -166,6 +166,22 @@ export default function LoginPage() {
     setButtonDisabled(!(user.email && user.password));
   }, [user]);
 
+  const handleEnterSubmit = (
+    event: React.KeyboardEvent<HTMLInputElement>,
+  ) => {
+    if (event.key !== "Enter" || event.nativeEvent.isComposing) {
+      return;
+    }
+
+    event.preventDefault();
+
+    if (buttonDisabled || loading) {
+      return;
+    }
+
+    void onLogin();
+  };
+
   return (
     <div className="relative min-h-screen bg-[#020015] text-white overflow-hidden">
       {/* Contact-page style background */}
@@ -262,6 +278,7 @@ export default function LoginPage() {
                         type="email"
                         autoComplete="email"
                         value={user.email}
+                        onKeyDown={handleEnterSubmit}
                         onChange={(e) =>
                           setUser({ ...user, email: e.target.value })
                         }
@@ -283,6 +300,7 @@ export default function LoginPage() {
                         type="password"
                         autoComplete="current-password"
                         value={user.password}
+                        onKeyDown={handleEnterSubmit}
                         onChange={(e) =>
                           setUser({ ...user, password: e.target.value })
                         }
