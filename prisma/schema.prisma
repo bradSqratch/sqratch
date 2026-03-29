@@ -200,6 +200,7 @@ model CampaignUnlock {
   @@index([campaignId])
   @@index([userId])
   @@index([anonKey])
+  @@index([anonKey, campaignId])
 }
 
 model Experience {
@@ -236,6 +237,7 @@ model CampaignExperience {
   @@unique([campaignId, experienceId])
   @@index([campaignId])
   @@index([experienceId])
+  @@index([experienceId, sortOrder])
 }
 
 model Course {
@@ -254,6 +256,8 @@ model Course {
 
   @@index([experienceId])
   @@index([access])
+  @@index([experienceId, isActive, sortOrder, createdAt])
+  @@index([experienceId, isActive, access, sortOrder, createdAt])
 }
 
 model Lesson {
@@ -274,6 +278,7 @@ model Lesson {
   progress        LessonProgress[]
 
   @@index([courseId])
+  @@index([courseId, isActive, sortOrder, createdAt])
 }
 
 model LessonProgress {
@@ -309,6 +314,7 @@ model Post {
   comments     PostComment[]
 
   @@index([experienceId])
+  @@index([experienceId, isActive])
 }
 
 model PostComment {

@@ -1,12 +1,5 @@
 "use client";
 
-export async function ensurePublicSession() {
-  await fetch("/api/public/session", {
-    method: "POST",
-    credentials: "include",
-  });
-}
-
 export async function fetchJson<T>(
   input: string,
   init?: RequestInit,
@@ -30,6 +23,35 @@ export function getErrorMessage(error: unknown, fallback: string) {
   }
 
   return fallback;
+}
+
+export function postBeacon(url: string, body?: Record<string, unknown>) {
+  const payload = body ? JSON.stringify(body) : undefined;
+
+  if (typeof navigator !== "undefined" && typeof navigator.sendBeacon === "function") {
+    if (payload) {
+      return navigator.sendBeacon(
+        url,
+        new Blob([payload], { type: "application/json" }),
+      );
+    }
+
+    return navigator.sendBeacon(url);
+  }
+
+  void fetch(url, {
+    method: "POST",
+    credentials: "include",
+    keepalive: true,
+    headers: payload
+      ? {
+          "Content-Type": "application/json",
+        }
+      : undefined,
+    body: payload,
+  });
+
+  return false;
 }
 
 export async function deleteUploadedAsset(url: string) {

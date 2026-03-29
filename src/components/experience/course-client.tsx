@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import { ExperienceShell, GatePanel, LoadingView, ErrorView, PageCard, ProgressBar } from "@/components/experience/experience-shell";
-import type { ExperienceShellData } from "@/components/experience/use-experience";
+import type { ExperienceShellData } from "@/components/experience/types";
 import { Button } from "@/components/ui/button";
 
 type CourseResponse = {

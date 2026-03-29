@@ -11,10 +11,10 @@ import {
 } from "lucide-react";
 import { ReactNode } from "react";
 import CommonNavbar from "@/components/commonNavbar";
+import type { ExperienceShellData } from "@/components/experience/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
-import type { ExperienceShellData } from "@/components/experience/use-experience";
 
 type ExperienceTab = "hub" | "learn" | "posts" | "qa" | "shop";
 

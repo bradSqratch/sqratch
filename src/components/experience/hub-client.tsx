@@ -9,6 +9,8 @@ import {
   ErrorView,
   PageCard,
 } from "@/components/experience/experience-shell";
+import { postBeacon } from "@/components/experience/client-utils";
+import type { PublicExperienceData } from "@/components/experience/types";
 import { useExperience } from "@/components/experience/use-experience";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -117,11 +119,27 @@ function formatPlaybackTime(totalSeconds: number) {
 
 export function ExperienceHubClient({
   experienceSlug,
+  initialData = null,
 }: {
   experienceSlug: string;
+  initialData?: PublicExperienceData | null;
 }) {
-  const { data, loading, error } = useExperience(experienceSlug);
+  const { data, loading, error } = useExperience(experienceSlug, initialData);
   const [activeTab, setActiveTab] = useState("learn");
+  const trackedViewSlugRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!data) {
+      return;
+    }
+
+    if (trackedViewSlugRef.current === experienceSlug) {
+      return;
+    }
+
+    trackedViewSlugRef.current = experienceSlug;
+    postBeacon(`/api/public/experience/${experienceSlug}`);
+  }, [data, experienceSlug]);
 
   if (loading) {
     return <LoadingView label="Loading experience..." />;

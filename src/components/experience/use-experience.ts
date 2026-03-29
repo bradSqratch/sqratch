@@ -1,75 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import {
-  ensurePublicSession,
-  fetchJson,
-  getErrorMessage,
-} from "@/components/experience/client-utils";
+import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
+import type { PublicExperienceData } from "@/components/experience/types";
 
-export type ExperienceShellData = {
-  id: string;
-  slug: string;
-  title: string;
-  description: string | null;
-  coverImageUrl: string | null;
-  creator: {
-    id?: string;
-    displayName: string;
-    bio: string | null;
-    avatarUrl: string | null;
-  };
-  campaigns: Array<{
-    id: string;
-    name: string;
-    brand: {
-      id: string;
-      name: string;
-      slug: string;
-      logoUrl: string | null;
-    } | null;
-  }>;
-  canAccessPrivate: boolean;
-  canInteract: boolean;
-  isLoggedIn: boolean;
-  hasUnlockedCampaign: boolean;
-  isCreatorOwner: boolean;
-};
-
-export type PublicExperienceData = ExperienceShellData & {
-  featuredStory: {
-    id: string;
-    lessonId: string | null;
-    kind: "CAMPAIGN" | "LESSON";
-    title: string;
-    courseTitle: string | null;
-    videoSource: "YOUTUBE" | "UPLOAD";
-    youtubeUrl: string | null;
-    videoAssetUrl: string | null;
-  } | null;
-  courses: Array<{
-    id: string;
-    title: string;
-    description: string | null;
-    access: "PUBLIC" | "PRIVATE";
-    lessonCount: number;
-  }>;
-  courseSummary: {
-    visibleCourseCount: number;
-    visibleLessonCount: number;
-    publicCourseCount: number;
-    privateCourseCount: number;
-  };
-  counts: {
-    posts: number;
-    questions: number;
-  };
-  qaDailyQuestionLimit: number;
-};
-
-export function useExperience(experienceSlug: string) {
-  const [data, setData] = useState<PublicExperienceData | null>(null);
-  const [loading, setLoading] = useState(true);
+export function useExperience(
+  experienceSlug: string,
+  initialData: PublicExperienceData | null = null,
+) {
+  const [data, setData] = useState<PublicExperienceData | null>(initialData);
+  const [loading, setLoading] = useState(!initialData);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -77,7 +17,6 @@ export function useExperience(experienceSlug: string) {
     setError(null);
 
     try {
-      await ensurePublicSession();
       const result = await fetchJson<PublicExperienceData>(
         `/api/public/experience/${experienceSlug}`,
       );
@@ -90,12 +29,22 @@ export function useExperience(experienceSlug: string) {
   }, [experienceSlug]);
 
   useEffect(() => {
+    setData(initialData);
+    setLoading(!initialData);
+    setError(null);
+  }, [experienceSlug, initialData]);
+
+  useEffect(() => {
     if (!experienceSlug) {
       return;
     }
 
+    if (initialData) {
+      return;
+    }
+
     void load();
-  }, [experienceSlug, load]);
+  }, [experienceSlug, initialData, load]);
 
   return {
     data,
