@@ -68,8 +68,7 @@ export default function AboutPage() {
             </h1>
 
             <p className="mt-3 text-[16px] sm:text-[18px] leading-[160%] text-[#ECECEC]/75">
-              A single, consistent source of product knowledge — for customers
-              and retail teams.
+              MORE THAN A LABEL
             </p>
           </div>
 
@@ -92,17 +91,16 @@ export default function AboutPage() {
               {/* Lead */}
               <div className="space-y-4 text-[15px] sm:text-[16px] leading-[1.9] text-white/80">
                 <p className="text-white/85">
-                  SQRATCH provides a single, consistent source of product
-                  knowledge for both customers and retail teams.
+                  Most products hold more than a label can ever say.
                 </p>
                 <p>
-                  With SQRATCH, each product links to clear, well-produced
-                  videos made by real experts and experienced storytellers.
+                  There is usually a story behind them, but much of it is lost
+                  in the noise of consumer packaging.
                 </p>
               </div>
 
               {/* Feature list (better than a wall of text) */}
-              <div className="mt-8 grid gap-4">
+              {/* <div className="mt-8 grid gap-4">
                 <FeatureRow
                   title="One product → one trusted source"
                   description="Each product points to a clear set of videos and guidance, so customers and staff aren’t guessing, searching, or relying on random content."
@@ -115,29 +113,32 @@ export default function AboutPage() {
                   title="Simple, respectful access"
                   description="No accounts. No sign-ups. No forced email capture. Just scan and learn."
                 />
-              </div>
+              </div> */}
 
               {/* Privacy callout */}
               <div className="mt-8">
                 <Callout>
-                  <span className="text-white font-semibold">
-                    Privacy isn’t a feature — it’s the default.
-                  </span>{" "}
-                  Access is simple and respectful, with no accounts, sign-ups,
-                  or tracking required. Customers get useful information without
-                  sacrificing privacy or providing an email address.
+                  <span className="text-white font-semibold">SQRATCH</span> adds
+                  that missing layer back by turning the package into a small
+                  piece of media. A miniature cinema for story, knowledge, and
+                  experience.
                 </Callout>
               </div>
 
               {/* Secondary emphasis card */}
               <div className="mt-8 rounded-2xl border border-white/10 bg-black/25 p-6 backdrop-blur-xl">
-                <div className="text-white/90 font-semibold">
+                {/* <div className="text-white/90 font-semibold">
                   Built for the real world
+                </div> */}
+                <div className="text-white/75 leading-[1.85]">
+                  It also gives brands a new kind of reach. Through an
+                  integrated ecommerce layer with location aware ecommerce,
+                  SQRATCH can connect consumers to relevant buying options
+                  wherever the product is sold.
                 </div>
                 <div className="mt-2 text-white/75 leading-[1.85]">
-                  SQRATCH works at the moment it matters — after purchase, in
-                  the home, or on the retail floor — giving people the knowledge
-                  they need to use a product properly and confidently.
+                  That makes the product itself more engaging, more useful, and
+                  more rewarding for everyone.
                 </div>
               </div>
 

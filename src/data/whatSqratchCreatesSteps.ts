@@ -5,27 +5,27 @@ export const whatSqratchCreatesSteps = [
     title: "Start with a\nSQRATCH sticker",
     subtitle: "",
     paragraph:
-      "Every SQRATCH sticker links your product to practical knowledge, guidance, and real experience.",
+      "A SQRATCH sticker is like a little cinema on every product. Each sticker connects a product to knowledge, guidance, and lived experience.",
   },
   {
     video: "/assets/homepage/sticky-vid-2.mp4",
-    title: "Scratch to reveal\nthe code",
+    title: "Scan to access \nthe experience",
     subtitle: "",
     paragraph:
-      "Scratch to unlock a one-time access code that leads to relevant  information and a trustworthy community.",
+      "Scan to unlock a one time code that opens the door to trusted information and meaning. ",
   },
   {
     video: "/assets/homepage/sticky-vid-3.mp4",
-    title: "Scan and you’re in.",
+    title: "The WHY \nof the Product",
     subtitle: "",
     paragraph:
-      "Scanning connects you to a private space built around that product and how to use it well.",
+      "Access a private space where the story, history, and deeper value of the product come into focus.",
   },
   {
     video: "/assets/homepage/sticky-vid-4.mp4",
-    title: "Learn from experts",
+    title: "Dive Deeper",
     subtitle: "",
     paragraph:
-      "Inside, you learn from professionals and experienced users. No algorithms. No noise. Just useful information.",
+      "Go further with expert guidance, practical knowledge, and thoughtful insight.",
   },
 ];

@@ -151,15 +151,14 @@ export default function HomePage() {
             <p className="mt-2 max-w-175 text-center text-[20px] lg:text-[22px] font-medium leading-[150%] sm:leading-[160%] text-[#ECECEC]/75">
               {/* visible on Mobile */}
               <span className="sm:hidden">
-                SQRATCH is the trusted learning layer for physical products —
-                private, expert education at the moment it matters.
+                SQRATCH turns products into direct, meaningful, and rewarding
+                experiences.
               </span>
 
               {/* visible on Desktop */}
               <span className="hidden sm:inline">
-                SQRATCH is the trusted learning layer for physical products —
-                <br />
-                private, expert education at the moment it matters.
+                SQRATCH turns products into direct, meaningful,
+                <br /> and rewarding experiences.
               </span>
             </p>
             {/* CTA buttons */}
@@ -213,8 +212,8 @@ export default function HomePage() {
 
               {/* Heading */}
               <h2 className="mt-2 sm:mt-3 text-[28px] leading-8.5 sm:text-[32px] sm:leading-10 font-bold tracking-[-0.02em] text-white">
-                A pathway built on participation <br />
-                and choice.
+                Discover the story, craft, <br />
+                and soul of a product.
               </h2>
             </div>
           </div>
@@ -226,16 +225,20 @@ export default function HomePage() {
               {/* Step 1 */}
               <div>
                 <div className="flex items-start gap-4">
-                  <div className="mt-1 flex h-10 w-10 flex-none shrink-0 items-center justify-center rounded-xl bg-linear-to-br from-[#4f46e5] via-[#8b5cf6] to-[#f97316] shadow-[0_15px_45px_rgba(129,140,248,0.9)]">
-                    <span className="text-sm font-semibold text-white">1</span>
+                  <div className="relative mt-1 h-11 w-11 flex-none shrink-0">
+                    <div className="pointer-events-none absolute -inset-2 rounded-[16px] bg-linear-to-br from-[#5B6BFF] via-[#8A5CFF] to-[#D95CFF] opacity-80 blur-md" />
+                    <div className="relative flex h-11 w-11 items-center justify-center rounded-[14px] border border-white/25 bg-linear-to-br from-[#5B6BFF] via-[#8A5CFF] to-[#D95CFF] shadow-[0_10px_28px_rgba(126,108,255,0.66)]">
+                      <span className="tabular-nums text-[15px] font-bold tracking-[-0.02em] text-white [text-shadow:0_0_12px_rgba(255,255,255,0.7)]">
+                        1
+                      </span>
+                    </div>
                   </div>
                   <div>
                     <h3 className="text-[22px] text-base font-semibold text-white">
-                      Scratch
+                      Find a SQRATCH sticker
                     </h3>
                     <p className="mt-1 text-[16px] leading-relaxed text-slate-300">
-                      A SQRATCH sticker opens the door to what your product can
-                      really do. Scratch to reveal your private access code.
+                      A sign that there is more to this product.
                     </p>
                   </div>
                 </div>
@@ -245,16 +248,20 @@ export default function HomePage() {
               {/* Step 2 */}
               <div>
                 <div className="flex items-start gap-4">
-                  <div className="mt-1 flex h-10 w-10 flex-none shrink-0 items-center justify-center rounded-xl bg-linear-to-br from-[#22d3ee] via-[#6366f1] to-[#a855f7] shadow-[0_15px_45px_rgba(56,189,248,0.9)]">
-                    <span className="text-sm font-semibold text-white">2</span>
+                  <div className="relative mt-1 h-11 w-11 flex-none shrink-0">
+                    <div className="pointer-events-none absolute -inset-2 rounded-[16px] bg-linear-to-br from-[#7D5CFF] via-[#C65CFF] to-[#FF6EA8] opacity-80 blur-md" />
+                    <div className="relative flex h-11 w-11 items-center justify-center rounded-[14px] border border-white/25 bg-linear-to-br from-[#7D5CFF] via-[#C65CFF] to-[#FF6EA8] shadow-[0_10px_28px_rgba(198,92,255,0.62)]">
+                      <span className="tabular-nums text-[15px] font-bold tracking-[-0.02em] text-white [text-shadow:0_0_12px_rgba(255,255,255,0.7)]">
+                        2
+                      </span>
+                    </div>
                   </div>
                   <div>
                     <h3 className="text-[22px] text-base font-semibold text-white">
-                      Scan
+                      Unlock a new world
                     </h3>
                     <p className="mt-1 text-[16px] leading-relaxed text-slate-300">
-                      Scan to learn from people who know the product — how to
-                      use it better, why it matters, and how to enjoy it more.
+                      Scan to access new experiences built around the product.
                     </p>
                   </div>
                 </div>
@@ -264,17 +271,45 @@ export default function HomePage() {
               {/* Step 3 */}
               <div>
                 <div className="flex items-start gap-4">
-                  <div className="mt-1 flex h-10 w-10 flex-none shrink-0 items-center justify-center rounded-xl bg-linear-to-br from-[#f97316] via-[#ec4899] to-[#22d3ee] shadow-[0_15px_45px_rgba(248,113,113,0.9)]">
-                    <span className="text-sm font-semibold text-white">3</span>
+                  <div className="relative mt-1 h-11 w-11 flex-none shrink-0">
+                    <div className="pointer-events-none absolute -inset-2 rounded-[16px] bg-linear-to-br from-[#A15CFF] via-[#FF5EA8] to-[#FF7A7A] opacity-80 blur-md" />
+                    <div className="relative flex h-11 w-11 items-center justify-center rounded-[14px] border border-white/25 bg-linear-to-br from-[#A15CFF] via-[#FF5EA8] to-[#FF7A7A] shadow-[0_10px_28px_rgba(255,94,168,0.6)]">
+                      <span className="tabular-nums text-[15px] font-bold tracking-[-0.02em] text-white [text-shadow:0_0_12px_rgba(255,255,255,0.7)]">
+                        3
+                      </span>
+                    </div>
                   </div>
                   <div>
                     <h3 className="text-[22px] text-base font-semibold text-white">
-                      Learn
+                      Learn why it matters
                     </h3>
                     <p className="mt-1 text-[16px] leading-relaxed text-slate-300">
-                      Skiers learn new tricks. Wine lovers discover what’s in
-                      their glass. Every product becomes more useful and more
-                      rewarding.
+                      Explore the product’s story, history, craft, and
+                      intention.
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-6 h-px w-full bg-white/5" />
+              </div>
+
+              {/* Step 4 */}
+              <div>
+                <div className="flex items-start gap-4">
+                  <div className="relative mt-1 h-11 w-11 flex-none shrink-0">
+                    <div className="pointer-events-none absolute -inset-2 rounded-[16px] bg-linear-to-br from-[#37D0FF] via-[#5E8BFF] to-[#9A6BFF] opacity-80 blur-md" />
+                    <div className="relative flex h-11 w-11 items-center justify-center rounded-[14px] border border-white/25 bg-linear-to-br from-[#37D0FF] via-[#5E8BFF] to-[#9A6BFF] shadow-[0_10px_28px_rgba(94,139,255,0.66)]">
+                      <span className="tabular-nums text-[15px] font-bold tracking-[-0.02em] text-white [text-shadow:0_0_12px_rgba(255,255,255,0.7)]">
+                        4
+                      </span>
+                    </div>
+                  </div>
+                  <div>
+                    <h3 className="text-[22px] text-base font-semibold text-white">
+                      Go deeper
+                    </h3>
+                    <p className="mt-1 text-[16px] leading-relaxed text-slate-300">
+                      Access expert guidance, practical knowledge, and ways to
+                      buy.
                     </p>
                   </div>
                 </div>

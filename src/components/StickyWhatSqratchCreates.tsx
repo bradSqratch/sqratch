@@ -162,7 +162,7 @@ export default function StickyWhatSqratchCreates() {
                   {/* Text */}
                   <div>
                     <p className="text-[14px] sm:text-[16px] font-semibold uppercase tracking-[0.30em] text-[#FFFFFF]/50">
-                      How SQRATCH Works — Turn Products Into Better Experiences
+                      Connect More Deeply To Products You Love
                     </p>
 
                     <h2 className="mt-6 text-[28px] sm:text-[30px] leading-[1.15] font-bold whitespace-pre-line text-[#A98DFF]">
@@ -207,7 +207,7 @@ export default function StickyWhatSqratchCreates() {
                 // === CHANGE END ===
               >
                 <p className="mt-8 text-[16px] font-semibold uppercase tracking-[0.30em] text-[#FFFFFF]/50">
-                  How SQRATCH Works — Turn Products Into Better Experiences
+                  Connect More Deeply To Products You Love
                 </p>
 
                 <h2 className="mt-10 text-[32px] leading-[1.2] font-bold whitespace-pre-line text-[#A98DFF] sm:text-[40px]">

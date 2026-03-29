@@ -266,10 +266,9 @@ export default function HomeCtaFlipCards() {
       {
         key: "creators",
         title: <>FOR EXPERTS</>,
-        subtitle:
-          "Turn your experience into lasting value by teaching people who genuinely want to learn.",
+        subtitle: "Be the ultimate subject matter expert.",
         description:
-          "Work with responsible brands who fund your expertise — so you can focus on teaching, not chasing followers or sponsors.",
+          "Turn your channel into part of the product experience, so people discover your expertise through the products they use.",
         bgImageUrl: "/assets/homepage/FlipCard1.mp4",
         cta: {
           type: "link",
@@ -281,9 +280,9 @@ export default function HomeCtaFlipCards() {
         key: "fans",
         title: <>FOR BRANDS</>,
         subtitle:
-          "Turn every purchase into a better experience through clear guidance and trusted education.",
+          "SQRATCH provides the closest connection a brand can have with consumers.",
         description:
-          "For brands that choose education over persuasion — and trust over tactics.",
+          "Extend the reach of your product through meaningful consumer engagement that drives deeper learning, greater use, stronger sharing, and more repeat purchase.",
         bgImageUrl: "/assets/homepage/FlipCard2.mp4",
         cta: {
           type: "link",
@@ -292,7 +291,7 @@ export default function HomeCtaFlipCards() {
         },
       },
     ],
-    []
+    [],
   );
 
   const [openKey, setOpenKey] = useState<string | null>(null);
