@@ -459,7 +459,7 @@ function ExperienceWhyHero({
     duration > 0 ? Math.min((currentTime / duration) * 100, 100) : 0;
 
   return (
-    <div className="-mx-6 sm:-mx-8 lg:-mx-10">
+    <div className="-mx-6 -mt-1 sm:-mx-8 sm:mt-0 lg:-mx-10">
       <div className="lg:mt-4 lg:grid lg:grid-cols-[minmax(0,3fr)_minmax(280px,1fr)] lg:gap-6">
         <div className="relative overflow-hidden bg-black lg:rounded-[36px] lg:border lg:border-white/10">
           <div className="relative h-[calc(100svh-52px)] min-h-[calc(100svh-52px)] sm:h-[calc(100svh-60px)] sm:min-h-[calc(100svh-60px)] lg:h-[min(calc(100svh-10rem),920px)] lg:min-h-[890px]">
@@ -475,12 +475,12 @@ function ExperienceWhyHero({
                   <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(120,48,24,0.45),rgba(2,0,21,0.92)_72%)]" />
                 )}
 
-                <div className="absolute inset-x-4 top-4 bottom-[calc(env(safe-area-inset-bottom)+4.5rem)] sm:inset-x-6 sm:top-6 sm:bottom-12 lg:inset-0">
+                <div className="absolute inset-0">
                   {featuredStory.videoSource === "UPLOAD" &&
                   featuredStory.videoAssetUrl ? (
                     <video
                       ref={videoRef}
-                      className="absolute inset-0 h-full w-full bg-transparent object-contain object-bottom"
+                      className="absolute inset-0 h-full w-full bg-transparent object-cover object-center lg:object-contain lg:object-bottom"
                       src={featuredStory.videoAssetUrl}
                       playsInline
                       preload="auto"
