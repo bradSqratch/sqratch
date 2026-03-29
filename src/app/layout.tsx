@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Script from "next/script";
 import { Geist, Geist_Mono, Lexend_Giga, Montserrat } from "next/font/google";
+import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import "./globals.css";
 import AuthProvider from "@/context/AuthProvider";
@@ -79,6 +80,7 @@ export default function RootLayout({
             </Suspense>
           )}
           {children}
+          <Analytics />
           <SpeedInsights />
         </AuthProvider>
       </body>
