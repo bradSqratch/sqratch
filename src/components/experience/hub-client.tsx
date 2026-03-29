@@ -516,9 +516,6 @@ function ExperienceWhyHero({
               <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(40,12,20,0.7),rgba(2,0,21,0.35),rgba(2,0,21,0.92))]" />
             )}
 
-            <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(3,4,15,0.18),rgba(3,4,15,0.24)_28%,rgba(3,4,15,0.58)_68%,rgba(3,4,15,0.94))]" />
-            <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.02),rgba(2,0,21,0.08)_42%,rgba(2,0,21,0.52)_100%)]" />
-
             {featuredStory ? (
               <button
                 type="button"
