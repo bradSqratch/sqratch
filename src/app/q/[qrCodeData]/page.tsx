@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import CommonNavbar from "@/components/commonNavbar";
@@ -40,8 +41,12 @@ export default function QRLandingPage() {
         }
 
         router.replace(`/c/${data.campaignSlug}`);
-      } catch (err: any) {
-        setError(err?.message || "Failed to unlock this QR code.");
+      } catch (error) {
+        setError(
+          error instanceof Error
+            ? error.message
+            : "Failed to unlock this QR code.",
+        );
       }
     };
 
@@ -102,12 +107,12 @@ export default function QRLandingPage() {
             {error ? (
               <div className="space-y-4">
                 <p className="text-red-300">{error}</p>
-                <a
+                <Link
                   href="/"
                   className="inline-flex rounded-full border border-white bg-white px-6 py-3 text-black transition hover:scale-[1.01] active:scale-[0.99]"
                 >
                   Go Home
-                </a>
+                </Link>
               </div>
             ) : (
               <div className="flex flex-col items-center gap-4">

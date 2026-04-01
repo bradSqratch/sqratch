@@ -1,9 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { cookies } from "next/headers";
+import { awardQrScanPoint } from "@/lib/points";
+import { redeemQrCodeForUser } from "@/lib/qr-redemption";
 
 async function mergeAnonymousCampaignUnlocks(
   userId: string,
+  userEmail?: string | null,
   anonKey?: string | null,
 ) {
   if (!anonKey) return;
@@ -21,26 +24,78 @@ async function mergeAnonymousCampaignUnlocks(
   });
 
   for (const unlock of anonUnlocks) {
-    const existingUserUnlock = await prisma.campaignUnlock.findFirst({
-      where: {
-        campaignId: unlock.campaignId,
-        userId,
-      },
-      select: { id: true },
-    });
-
-    if (existingUserUnlock) {
-      await prisma.campaignUnlock.delete({
-        where: { id: unlock.id },
+    await prisma.$transaction(async (tx) => {
+      const existingUserUnlock = await tx.campaignUnlock.findFirst({
+        where: {
+          campaignId: unlock.campaignId,
+          userId,
+        },
+        select: { id: true },
       });
-      continue;
-    }
 
-    await prisma.campaignUnlock.update({
-      where: { id: unlock.id },
-      data: {
-        userId,
-      },
+      if (existingUserUnlock) {
+        if (unlock.qrCodeId) {
+          const redemption = await redeemQrCodeForUser({
+            qrCodeId: unlock.qrCodeId,
+            userId,
+            userEmail,
+            db: tx,
+          });
+
+          if (redemption.redeemed) {
+            try {
+              await awardQrScanPoint({
+                userId,
+                qrCodeId: unlock.qrCodeId,
+                db: tx,
+              });
+            } catch (error) {
+              console.error(
+                "Failed to add QR scan point during verification:",
+                error,
+              );
+            }
+          }
+        }
+
+        await tx.campaignUnlock.delete({
+          where: { id: unlock.id },
+        });
+        return;
+      }
+
+      if (unlock.qrCodeId) {
+        const redemption = await redeemQrCodeForUser({
+          qrCodeId: unlock.qrCodeId,
+          userId,
+          userEmail,
+          db: tx,
+        });
+
+        if (!redemption.redeemed) {
+          await tx.campaignUnlock.delete({
+            where: { id: unlock.id },
+          });
+          return;
+        }
+      }
+
+      await tx.campaignUnlock.update({
+        where: { id: unlock.id },
+        data: {
+          userId,
+        },
+      });
+
+      try {
+        await awardQrScanPoint({
+          userId,
+          qrCodeId: unlock.qrCodeId,
+          db: tx,
+        });
+      } catch (error) {
+        console.error("Failed to add QR scan point during verification:", error);
+      }
     });
   }
 }
@@ -134,8 +189,19 @@ export async function POST(request: NextRequest) {
 
     await mergeAnonymousCampaignUnlocks(
       user.id,
-      bodyAnonKey || anonKeyFromCookie,
+      user.email,
+      bodyAnonKey || anonKeyFromCookie || sessionIdFromCookie,
     );
+
+    if (sessionIdFromCookie) {
+      await prisma.userSession.updateMany({
+        where: { id: sessionIdFromCookie },
+        data: {
+          userId: user.id,
+          lastSeenAt: new Date(),
+        },
+      });
+    }
 
     await mergeAnonymousLessonProgress(user.id, sessionIdFromCookie);
 

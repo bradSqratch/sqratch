@@ -65,6 +65,9 @@ export async function PATCH(
         qrCodeData: true,
         qrCodeUrl: true,
         campaignId: true,
+        redeemedById: true,
+        email: true,
+        usedAt: true,
       },
     });
 
@@ -90,10 +93,15 @@ export async function PATCH(
       );
     }
 
-    let redeemedById: string | null = null;
-    let email: string | null = null;
+    let redeemedById: string | null = existingQRCode.redeemedById;
+    let email: string | null = existingQRCode.email;
+    let nextUsedAt: Date | null = existingQRCode.usedAt;
 
-    if (usedBy) {
+    if (nextStatus === "NEW") {
+      redeemedById = null;
+      email = null;
+      nextUsedAt = null;
+    } else if (usedBy) {
       const user = await prisma.user.findUnique({
         where: { email: usedBy },
         select: { id: true, email: true },
@@ -105,6 +113,7 @@ export async function PATCH(
 
       redeemedById = user.id;
       email = user.email;
+      nextUsedAt = usedAt ? new Date(usedAt) : existingQRCode.usedAt || new Date();
     }
 
     let newImageUrl = existingQRCode.qrCodeUrl;
@@ -176,7 +185,7 @@ export async function PATCH(
       data: {
         campaignId,
         status: nextStatus,
-        usedAt: usedAt ? new Date(usedAt) : null,
+        usedAt: nextUsedAt,
         redeemedById,
         email,
         qrCodeUrl: newImageUrl,

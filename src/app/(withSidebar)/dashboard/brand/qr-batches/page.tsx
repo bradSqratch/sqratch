@@ -42,6 +42,7 @@ type QRCodeRow = {
   usedAt: string | null;
   createdAt: string;
   usedBy: string | null;
+  usedByEmail: string | null;
   batch: {
     id: string;
     name: string;
@@ -66,6 +67,7 @@ type EditQRForm = {
   imageUrl: string | null;
   usedAt: string | null;
   usedBy: string | null;
+  usedByEmail: string | null;
   campaignId: string;
 };
 
@@ -181,8 +183,9 @@ export default function BrandQRBatchesPage() {
         body: JSON.stringify({
           campaignId: editForm.campaignId,
           status: editForm.status === "REDEEMED" ? "USED" : "NEW",
-          usedBy: editForm.usedBy || "",
-          usedAt: editForm.usedAt || "",
+          usedBy:
+            editForm.status === "REDEEMED" ? editForm.usedByEmail || "" : "",
+          usedAt: editForm.status === "REDEEMED" ? editForm.usedAt || "" : "",
         }),
       });
       setEditForm(null);
@@ -415,6 +418,7 @@ export default function BrandQRBatchesPage() {
                                 imageUrl: qrCode.imageUrl,
                                 usedAt: qrCode.usedAt,
                                 usedBy: qrCode.usedBy,
+                                usedByEmail: qrCode.usedByEmail,
                                 campaignId: qrCode.campaign.id,
                               })
                             }

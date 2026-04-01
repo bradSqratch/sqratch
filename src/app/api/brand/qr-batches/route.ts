@@ -76,6 +76,7 @@ export async function GET() {
           qrCodeData: true,
           status: true,
           qrCodeUrl: true,
+          email: true,
           usedAt: true,
           createdAt: true,
           batch: {
@@ -125,6 +126,7 @@ export async function GET() {
             qrCode.redeemedBy?.name ||
             qrCode.redeemedBy?.email ||
             null,
+          usedByEmail: qrCode.redeemedBy?.email || qrCode.email || null,
         })),
       },
     });

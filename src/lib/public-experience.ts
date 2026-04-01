@@ -198,6 +198,7 @@ export async function loadPublicExperience(
       isLoggedIn: access.isLoggedIn,
       hasUnlockedCampaign: access.hasUnlockedCampaign,
       isCreatorOwner: access.isCreatorOwner,
+      hasRedeemedQrWarning: access.hasRedeemedQrWarning,
       canAccessPrivate: access.canAccessPrivate,
       canInteract: access.canInteract,
     },

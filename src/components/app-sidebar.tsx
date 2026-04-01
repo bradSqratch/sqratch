@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   QrCode,
   User,
+  Coins,
   Sparkles,
   BookOpen,
   MessageSquareText,
@@ -99,6 +100,7 @@ export function AppSidebar() {
 
   const common: NavItem[] = [
     { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
+    { title: "Points", url: "/dashboard/points", icon: Coins },
     { title: "Profile", url: "/profile", icon: User },
   ];
 

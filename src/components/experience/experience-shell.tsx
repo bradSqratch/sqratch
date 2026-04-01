@@ -223,7 +223,10 @@ export function GatePanel({
   title: string;
   description: string;
 }) {
-  const unlockHref = experience.campaigns[0]
+  const nextHref = `/x/${experience.slug}`;
+  const loginHref = `/login?next=${encodeURIComponent(nextHref)}`;
+  const signupHref = `/signup?next=${encodeURIComponent(nextHref)}`;
+  const campaignHref = experience.campaigns[0]
     ? `/c/${experience.campaigns[0].id}`
     : `/x/${experience.slug}`;
 
@@ -237,23 +240,44 @@ export function GatePanel({
           </p>
         </div>
 
+        {experience.hasRedeemedQrWarning && (
+          <div className="rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
+            This QR code is already redeemed. You can log in and browse public
+            content, but private access requires a different QR code.
+          </div>
+        )}
+
         <div className="flex flex-wrap gap-3">
           {!experience.isLoggedIn && (
             <Button
               asChild
               className="rounded-full border border-white bg-white text-black"
             >
-              <Link href="/login">Log In</Link>
+              <Link href={loginHref}>Log In</Link>
             </Button>
           )}
 
-          <Button
-            asChild
-            variant="outline"
-            className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
-          >
-            <Link href={unlockHref}>Unlock Campaign</Link>
-          </Button>
+          {!experience.isLoggedIn ? (
+            <Button
+              asChild
+              variant="outline"
+              className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+            >
+              <Link href={signupHref}>Sign Up to Unlock</Link>
+            </Button>
+          ) : (
+            <Button
+              asChild
+              variant="outline"
+              className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+            >
+              <Link href={campaignHref}>
+                {experience.hasRedeemedQrWarning
+                  ? "View Campaign"
+                  : "Unlock Campaign"}
+              </Link>
+            </Button>
+          )}
         </div>
       </CardContent>
     </Card>

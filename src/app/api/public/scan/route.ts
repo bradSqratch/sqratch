@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
+import { awardQrScanPoint } from "@/lib/points";
+import { redeemQrCodeForUser } from "@/lib/qr-redemption";
 
 const COOKIE_NAME = "sqr_session";
 
@@ -44,7 +46,9 @@ export async function POST(request: NextRequest) {
 
     const sessionId = request.cookies.get(COOKIE_NAME)?.value || null;
     const userId = session?.user?.id || null;
+    const userEmail = session?.user?.email || null;
     const brandId = qr.campaign.brandId || null;
+    const isRedeemed = qr.status === "USED";
 
     if (sessionId) {
       await prisma.userSession.upsert({
@@ -65,38 +69,89 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    await prisma.analyticsEvent.create({
-      data: {
-        name: "qr_scan",
-        brandId,
-        campaignId: qr.campaign.id,
-        qrCodeId: qr.id,
-        userId,
-        sessionId,
-        pagePath: `/q/${qrCodeData}`,
+    if (isRedeemed) {
+      await prisma.analyticsEvent.create({
         data: {
-          batchId: qr.batchId,
-          qrCodeData: qr.qrCodeData,
-        },
-      },
-    });
-
-    if (userId) {
-      const existingUnlock = await prisma.campaignUnlock.findFirst({
-        where: {
+          name: "qr_scan_redeemed",
+          brandId,
           campaignId: qr.campaign.id,
+          qrCodeId: qr.id,
           userId,
+          sessionId,
+          pagePath: `/q/${qrCodeData}`,
+          data: {
+            batchId: qr.batchId,
+            qrCodeData: qr.qrCodeData,
+          },
         },
-        select: { id: true },
       });
 
-      if (!existingUnlock) {
-        await prisma.campaignUnlock.create({
-          data: {
+      return NextResponse.json({
+        ok: true,
+        campaignSlug: qr.campaign.slug || qr.campaign.id,
+      });
+    }
+
+    if (userId) {
+      const redemptionResult = await prisma.$transaction(async (tx) => {
+        const redemption = await redeemQrCodeForUser({
+          qrCodeId: qr.id,
+          userId,
+          userEmail,
+          db: tx,
+        });
+
+        if (!redemption.redeemed) {
+          return redemption;
+        }
+
+        const existingUnlock = await tx.campaignUnlock.findFirst({
+          where: {
             campaignId: qr.campaign.id,
             userId,
-            qrCodeId: qr.id,
           },
+          select: { id: true },
+        });
+
+        if (!existingUnlock) {
+          await tx.campaignUnlock.create({
+            data: {
+              campaignId: qr.campaign.id,
+              userId,
+              qrCodeId: qr.id,
+            },
+          });
+        }
+
+        await awardQrScanPoint({
+          userId,
+          qrCodeId: qr.id,
+          db: tx,
+        });
+
+        return redemption;
+      });
+
+      if (!redemptionResult.redeemed) {
+        await prisma.analyticsEvent.create({
+          data: {
+            name: "qr_scan_redeemed",
+            brandId,
+            campaignId: qr.campaign.id,
+            qrCodeId: qr.id,
+            userId,
+            sessionId,
+            pagePath: `/q/${qrCodeData}`,
+            data: {
+              batchId: qr.batchId,
+              qrCodeData: qr.qrCodeData,
+            },
+          },
+        });
+
+        return NextResponse.json({
+          ok: true,
+          campaignSlug: qr.campaign.slug || qr.campaign.id,
         });
       }
     } else if (sessionId) {
@@ -119,6 +174,22 @@ export async function POST(request: NextRequest) {
         });
       }
     }
+
+    await prisma.analyticsEvent.create({
+      data: {
+        name: "qr_scan",
+        brandId,
+        campaignId: qr.campaign.id,
+        qrCodeId: qr.id,
+        userId,
+        sessionId,
+        pagePath: `/q/${qrCodeData}`,
+        data: {
+          batchId: qr.batchId,
+          qrCodeData: qr.qrCodeData,
+        },
+      },
+    });
 
     return NextResponse.json({
       ok: true,

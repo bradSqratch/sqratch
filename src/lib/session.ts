@@ -19,6 +19,64 @@ export async function getSessionIdFromRequest(request?: NextRequest) {
   return cookieStore.get(SESSION_COOKIE_NAME)?.value || null;
 }
 
+export async function getViewerSessionRecord(request?: NextRequest) {
+  const sessionId = await getSessionIdFromRequest(request);
+
+  if (!sessionId) {
+    return null;
+  }
+
+  return prisma.userSession.findUnique({
+    where: { id: sessionId },
+    select: {
+      id: true,
+      userId: true,
+      campaignId: true,
+      qrCodeId: true,
+      qrCode: {
+        select: {
+          id: true,
+          status: true,
+          redeemedById: true,
+          qrCodeData: true,
+        },
+      },
+    },
+  });
+}
+
+export function hasRedeemedQrWarning(options: {
+  viewerSession: Awaited<ReturnType<typeof getViewerSessionRecord>>;
+  currentUserId?: string | null;
+  allowedCampaignIds?: string[];
+}) {
+  const { viewerSession, currentUserId = null, allowedCampaignIds } = options;
+
+  if (!viewerSession?.qrCode || viewerSession.qrCode.status !== "USED") {
+    return false;
+  }
+
+  if (
+    allowedCampaignIds &&
+    (!viewerSession.campaignId ||
+      !allowedCampaignIds.includes(viewerSession.campaignId))
+  ) {
+    return false;
+  }
+
+  const ownerUserId = currentUserId || viewerSession.userId || null;
+
+  if (
+    ownerUserId &&
+    viewerSession.qrCode.redeemedById &&
+    viewerSession.qrCode.redeemedById === ownerUserId
+  ) {
+    return false;
+  }
+
+  return true;
+}
+
 export async function ensureViewerSession(options?: {
   request?: NextRequest;
   userId?: string | null;

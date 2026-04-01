@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
+import { getViewerSessionRecord, hasRedeemedQrWarning } from "@/lib/session";
 
 const COOKIE_NAME = "sqr_session";
 
@@ -52,6 +53,7 @@ export async function GET(
 
     const userId = session?.user?.id || null;
     const sessionId = request.cookies.get(COOKIE_NAME)?.value || null;
+    const viewerSession = await getViewerSessionRecord(request);
 
     let isUnlocked = false;
 
@@ -77,6 +79,14 @@ export async function GET(
 
       isUnlocked = Boolean(unlock);
     }
+
+    const showRedeemedQrWarning =
+      !isUnlocked &&
+      hasRedeemedQrWarning({
+        viewerSession,
+        currentUserId: userId,
+        allowedCampaignIds: [campaign.id],
+      });
 
     if (sessionId) {
       await prisma.userSession.updateMany({
@@ -119,6 +129,7 @@ export async function GET(
           coverImageUrl: item.experience.coverImageUrl,
         })),
         isUnlocked,
+        hasRedeemedQrWarning: showRedeemedQrWarning,
       },
     });
   } catch (error) {

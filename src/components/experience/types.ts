@@ -25,6 +25,7 @@ export type ExperienceShellData = {
   isLoggedIn: boolean;
   hasUnlockedCampaign: boolean;
   isCreatorOwner: boolean;
+  hasRedeemedQrWarning: boolean;
 };
 
 export type PublicExperienceData = ExperienceShellData & {

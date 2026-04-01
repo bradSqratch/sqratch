@@ -2,8 +2,9 @@
 "use client";
 
 import React, { useEffect } from "react";
-import { useRouter } from "next/navigation";
-import { signIn, useSession, getSession } from "next-auth/react";
+import Link from "next/link";
+import { useRouter, useSearchParams } from "next/navigation";
+import { signIn, getSession } from "next-auth/react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -11,23 +12,32 @@ import {
   CardDescription,
   CardFooter,
   CardHeader,
-  CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import CommonNavbar from "@/components/commonNavbar";
 
-type Message = { type: "error" | "success"; text: string };
+type Message = { type: "error" | "success"; text: React.ReactNode };
+
+function normalizeNextPath(value: string | null) {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return "/dashboard";
+  }
+
+  return value;
+}
 
 export default function LoginPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const nextPath = normalizeNextPath(searchParams.get("next"));
 
   const [user, setUser] = React.useState({ email: "", password: "" });
   const [buttonDisabled, setButtonDisabled] = React.useState(true);
   const [loading, setLoading] = React.useState(false);
   const [message, setMessage] = React.useState<Message | null>(null);
-  const { data: session } = useSession();
-
+  const [hasRedeemedQrWarning, setHasRedeemedQrWarning] =
+    React.useState(false);
   const onLogin = async () => {
     setMessage(null);
 
@@ -42,13 +52,11 @@ export default function LoginPage() {
     setLoading(true);
     try {
       // Check if user is ADMIN before login
-      const roleRes = await fetch("/api/auth/check-roles-login", {
+      await fetch("/api/auth/check-roles-login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: user.email }),
       });
-
-      const roleData = await roleRes.json();
 
       // if (!roleRes.ok || roleData.role !== "ADMIN") {
       //   setMessage({
@@ -113,7 +121,7 @@ export default function LoginPage() {
   const checkSession = async () => {
     const sess = await getSession();
     if (sess?.user) {
-      const { role, isEmailVerified, email } = sess.user;
+      const { isEmailVerified, email } = sess.user;
 
       if (!isEmailVerified) {
         setMessage({
@@ -128,7 +136,7 @@ export default function LoginPage() {
                 Click here to resend verification email.
               </button>
             </>
-          ) as any,
+          ),
         });
         setLoading(false);
         return;
@@ -154,7 +162,7 @@ export default function LoginPage() {
 
       setMessage({ type: "success", text: "Login successful! Redirecting…" });
       setTimeout(() => {
-        router.push("/dashboard");
+        router.push(nextPath);
       }, 600);
     } else {
       // retry briefly
@@ -165,6 +173,22 @@ export default function LoginPage() {
   useEffect(() => {
     setButtonDisabled(!(user.email && user.password));
   }, [user]);
+
+  useEffect(() => {
+    const loadViewerStatus = async () => {
+      try {
+        const response = await fetch("/api/public/viewer-status", {
+          credentials: "include",
+        });
+        const payload = await response.json();
+        setHasRedeemedQrWarning(Boolean(payload?.data?.hasRedeemedQrWarning));
+      } catch {
+        setHasRedeemedQrWarning(false);
+      }
+    };
+
+    void loadViewerStatus();
+  }, []);
 
   const handleEnterSubmit = (
     event: React.KeyboardEvent<HTMLInputElement>,
@@ -226,6 +250,13 @@ export default function LoginPage() {
             <p className="mt-3 text-[16px] sm:text-[18px] leading-[160%] text-[#ECECEC]/75">
               Login to access your dashboard
             </p>
+
+            {hasRedeemedQrWarning && (
+              <div className="mx-auto mt-6 max-w-2xl rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
+                This QR code is already redeemed. You can still log in, but it
+                will not unlock private access or award points.
+              </div>
+            )}
           </div>
 
           {/* Outer card matches Contact outer glass */}
@@ -329,6 +360,12 @@ export default function LoginPage() {
                 >
                   Login
                 </Button>
+                <p className="text-center text-sm text-white/60">
+                  Need an account?{" "}
+                  <Link href="/signup" className="text-white underline">
+                    Sign up
+                  </Link>
+                </p>
               </CardFooter>
             </form>
           </Card>

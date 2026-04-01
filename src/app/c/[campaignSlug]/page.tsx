@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
 import CommonNavbar from "@/components/commonNavbar";
@@ -24,6 +25,7 @@ type CampaignPayload = {
   } | null;
   experiences: ExperienceCard[];
   isUnlocked: boolean;
+  hasRedeemedQrWarning: boolean;
 };
 
 export default function CampaignPage() {
@@ -47,13 +49,12 @@ export default function CampaignPage() {
         }
 
         setData(json.data);
-
-        await fetch("/api/public/session", {
-          method: "POST",
-          credentials: "include",
-        });
-      } catch (err: any) {
-        setError(err?.message || "Failed to load campaign.");
+      } catch (error) {
+        setError(
+          error instanceof Error
+            ? error.message
+            : "Failed to load campaign.",
+        );
       } finally {
         setLoading(false);
       }
@@ -63,26 +64,6 @@ export default function CampaignPage() {
       load();
     }
   }, [campaignSlug]);
-
-  useEffect(() => {
-    if (!data) return;
-
-    fetch("/api/public/session", {
-      method: "POST",
-      credentials: "include",
-    }).catch(() => {});
-
-    fetch("/api/public/scan", {
-      method: "POST",
-      credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ qrCodeData: "__campaign_view_only__" }),
-    }).catch(() => {});
-
-    fetch(`/api/public/campaign/${campaignSlug}`, {
-      credentials: "include",
-    }).catch(() => {});
-  }, [data, campaignSlug]);
 
   return (
     <div className="relative min-h-screen bg-[#020015] text-white overflow-hidden">
@@ -107,17 +88,17 @@ export default function CampaignPage() {
             </div>
           ) : error ? (
             <div className="flex flex-1 items-center justify-center">
-              <Card className="w-full max-w-md rounded-[28px] border border-white/15 bg-white/6 backdrop-blur-xl text-white">
-                <CardContent className="p-8 text-center space-y-4">
-                  <p className="text-red-300">{error}</p>
-                  <a
-                    href="/"
-                    className="inline-flex rounded-full border border-white bg-white px-6 py-3 text-black"
-                  >
-                    Go Home
-                  </a>
-                </CardContent>
-              </Card>
+                <Card className="w-full max-w-md rounded-[28px] border border-white/15 bg-white/6 backdrop-blur-xl text-white">
+                  <CardContent className="p-8 text-center space-y-4">
+                    <p className="text-red-300">{error}</p>
+                    <Link
+                      href="/"
+                      className="inline-flex rounded-full border border-white bg-white px-6 py-3 text-black"
+                    >
+                      Go Home
+                    </Link>
+                  </CardContent>
+                </Card>
             </div>
           ) : data ? (
             <>
@@ -150,6 +131,14 @@ export default function CampaignPage() {
                   <p className="mt-4 max-w-2xl text-[16px] leading-[160%] text-[#ECECEC]/75">
                     {data.description}
                   </p>
+                )}
+
+                {data.hasRedeemedQrWarning && (
+                  <div className="mt-5 max-w-2xl rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
+                    This QR code has already been redeemed. You can still view
+                    public content, but private access requires a different QR
+                    code.
+                  </div>
                 )}
               </div>
 

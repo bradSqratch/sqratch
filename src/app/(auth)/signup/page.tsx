@@ -21,11 +21,46 @@ import { Textarea } from "@/components/ui/textarea";
 type Message = { type: "error" | "success"; text: React.ReactNode };
 type RequestedRole = "CREATOR" | "BRAND" | null;
 
+function getErrorMessage(error: unknown, fallback: string) {
+  if (
+    typeof error === "object" &&
+    error !== null &&
+    "response" in error &&
+    typeof (error as { response?: unknown }).response === "object" &&
+    (error as { response?: { data?: unknown } }).response !== null &&
+    "data" in ((error as { response?: { data?: unknown } }).response || {}) &&
+    typeof (error as { response?: { data?: { error?: unknown } } }).response
+      ?.data === "object" &&
+    (error as { response?: { data?: { error?: unknown } } }).response?.data !==
+      null &&
+    typeof (error as { response?: { data?: { error?: unknown } } }).response
+      ?.data?.error === "string"
+  ) {
+    return (error as { response?: { data?: { error?: string } } }).response!
+      .data!.error!;
+  }
+
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+
+  return fallback;
+}
+
+function normalizeNextPath(value: string | null) {
+  if (!value || !value.startsWith("/") || value.startsWith("//")) {
+    return "/dashboard";
+  }
+
+  return value;
+}
+
 function SignupPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const invitedEmail = searchParams.get("registeredemail");
+  const nextPath = normalizeNextPath(searchParams.get("next"));
   const isInvitedClaimFlow = Boolean(invitedEmail);
 
   const [user, setUser] = React.useState({
@@ -53,6 +88,8 @@ function SignupPageInner() {
   const [buttonDisabled, setButtonDisabled] = React.useState(true);
   const [loading, setLoading] = React.useState(false);
   const [message, setMessage] = React.useState<Message | null>(null);
+  const [hasRedeemedQrWarning, setHasRedeemedQrWarning] =
+    React.useState(false);
 
   useEffect(() => {
     if (invitedEmail) {
@@ -63,6 +100,22 @@ function SignupPageInner() {
   useEffect(() => {
     setButtonDisabled(!(user.name && user.email && user.password));
   }, [user]);
+
+  useEffect(() => {
+    const loadViewerStatus = async () => {
+      try {
+        const response = await fetch("/api/public/viewer-status", {
+          credentials: "include",
+        });
+        const payload = await response.json();
+        setHasRedeemedQrWarning(Boolean(payload?.data?.hasRedeemedQrWarning));
+      } catch {
+        setHasRedeemedQrWarning(false);
+      }
+    };
+
+    void loadViewerStatus();
+  }, []);
 
   const onSignup = async () => {
     setMessage(null);
@@ -120,7 +173,7 @@ function SignupPageInner() {
       }
 
       // 2) New self-serve signup flow
-      let application: Record<string, any> | null = null;
+      let application: Record<string, string> | null = null;
 
       if (requestedRole === "CREATOR") {
         application = {
@@ -155,12 +208,11 @@ function SignupPageInner() {
 
       setTimeout(() => {
         router.push(
-          `/verify-email?email=${encodeURIComponent(normalizedUser.email)}`,
+          `/verify-email?email=${encodeURIComponent(normalizedUser.email)}&next=${encodeURIComponent(nextPath)}`,
         );
       }, 700);
-    } catch (error: any) {
-      const msg =
-        error?.response?.data?.error || error.message || "Signup failed";
+    } catch (error: unknown) {
+      const msg = getErrorMessage(error, "Signup failed");
       setMessage({ type: "error", text: msg });
       setLoading(false);
       return;
@@ -214,6 +266,13 @@ function SignupPageInner() {
                 ? "Claim your invited account"
                 : "Create your account to get started"}
             </p>
+
+            {hasRedeemedQrWarning && (
+              <div className="mx-auto mt-6 max-w-2xl rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
+                This QR code is already redeemed. You can still create an
+                account, but it will not unlock private access or award points.
+              </div>
+            )}
           </div>
 
           {!showApplyCard || isInvitedClaimFlow ? (

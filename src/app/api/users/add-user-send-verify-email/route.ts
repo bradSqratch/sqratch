@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { sendInviteEmail } from "@/helpers/mailer";
+import { awardQrScanPoint } from "@/lib/points";
 
 export async function POST(request: NextRequest) {
   try {
@@ -84,21 +85,9 @@ export async function POST(request: NextRequest) {
 
       // Add point for successful QR scan and invite sent (DIRECT_INVITE case)
       try {
-        await prisma.pointTransaction.create({
-          data: {
-            userId: existingUser.id,
-            points: 1,
-            reason: "QR_SCAN",
-            qrCodeId: qr.id,
-          },
-        });
-
-        // Update user's total points
-        await prisma.user.update({
-          where: { id: existingUser.id },
-          data: {
-            points: { increment: 1 },
-          },
+        await awardQrScanPoint({
+          userId: existingUser.id,
+          qrCodeId: qr.id,
         });
       } catch (pointError) {
         console.error("Failed to add points:", pointError);
@@ -153,21 +142,9 @@ export async function POST(request: NextRequest) {
 
     // Add point for successful QR scan and invite sent (new user case)
     try {
-      await prisma.pointTransaction.create({
-        data: {
-          userId: user.id,
-          points: 1,
-          reason: "QR_SCAN",
-          qrCodeId: qr.id,
-        },
-      });
-
-      // Update user's total points
-      await prisma.user.update({
-        where: { id: user.id },
-        data: {
-          points: { increment: 1 },
-        },
+      await awardQrScanPoint({
+        userId: user.id,
+        qrCodeId: qr.id,
       });
     } catch (pointError) {
       console.error("Failed to add points:", pointError);
@@ -178,8 +155,8 @@ export async function POST(request: NextRequest) {
       { message: "Invite sent directly to your email!" },
       { status: 200 },
     );
-  } catch (err: any) {
-    console.error("Signup with QR error:", err);
+  } catch (error) {
+    console.error("Signup with QR error:", error);
     return NextResponse.json(
       { error: "Server error. Please try again." },
       { status: 500 },

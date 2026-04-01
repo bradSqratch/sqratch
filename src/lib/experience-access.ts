@@ -4,7 +4,11 @@ import type { Session } from "next-auth";
 import type { NextRequest } from "next/server";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
-import { getSessionIdFromRequest } from "@/lib/session";
+import {
+  getSessionIdFromRequest,
+  getViewerSessionRecord,
+  hasRedeemedQrWarning,
+} from "@/lib/session";
 
 type ExperienceAccessBase = {
   id: string;
@@ -54,6 +58,7 @@ export type ExperienceAccessContext = {
   isLoggedIn: boolean;
   isCreatorOwner: boolean;
   hasUnlockedCampaign: boolean;
+  hasRedeemedQrWarning: boolean;
   canAccessPrivate: boolean;
   canInteract: boolean;
 };
@@ -134,6 +139,7 @@ export async function getExperienceAccessContext(
   const campaignIds = experience.campaigns.map((item) => item.campaignId);
   const isLoggedIn = Boolean(viewer.userId);
   const isCreatorOwner = viewer.userId === experience.creator.userId;
+  const viewerSession = await getViewerSessionRecord(request);
 
   let hasUnlockedCampaign = false;
 
@@ -166,6 +172,14 @@ export async function getExperienceAccessContext(
     }
   }
 
+  const showRedeemedQrWarning =
+    !hasUnlockedCampaign &&
+    hasRedeemedQrWarning({
+      viewerSession,
+      currentUserId: viewer.userId,
+      allowedCampaignIds: campaignIds,
+    });
+
   return {
     viewer,
     experience,
@@ -173,6 +187,7 @@ export async function getExperienceAccessContext(
     isLoggedIn,
     isCreatorOwner,
     hasUnlockedCampaign,
+    hasRedeemedQrWarning: showRedeemedQrWarning,
     canAccessPrivate: isCreatorOwner || (isLoggedIn && hasUnlockedCampaign),
     canInteract: isCreatorOwner || (isLoggedIn && hasUnlockedCampaign),
   } satisfies ExperienceAccessContext;
