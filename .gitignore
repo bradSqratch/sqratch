@@ -41,7 +41,6 @@ yarn-error.log*
 next-env.d.ts
 
 # DB backups
-*.sql
 *.dump
 backups/
 exports/
