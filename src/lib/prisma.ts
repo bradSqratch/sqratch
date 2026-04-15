@@ -18,18 +18,26 @@ const configuredPoolMax = Number.parseInt(
   process.env.PG_POOL_MAX ?? (process.env.VERCEL ? "1" : "5"),
   10,
 );
+
 const poolMax =
   Number.isFinite(configuredPoolMax) && configuredPoolMax > 0
     ? configuredPoolMax
     : 1;
+
 const idleTimeoutMillis = Number.parseInt(
   process.env.PG_IDLE_TIMEOUT_MS ?? "30000",
   10,
 );
+
 const connectionTimeoutMillis = Number.parseInt(
   process.env.PG_CONNECT_TIMEOUT_MS ?? "10000",
   10,
 );
+
+const ssl =
+  process.env.PG_SSL_REJECT_UNAUTHORIZED === "false"
+    ? { rejectUnauthorized: false }
+    : { rejectUnauthorized: true };
 
 if (!globalForPrisma.pool) {
   globalForPrisma.pool = new Pool({
@@ -41,11 +49,13 @@ if (!globalForPrisma.pool) {
     connectionTimeoutMillis: Number.isFinite(connectionTimeoutMillis)
       ? connectionTimeoutMillis
       : 10000,
+    ssl,
   });
 }
 
 if (!globalForPrisma.prisma) {
   const adapter = new PrismaPg(globalForPrisma.pool);
+
   globalForPrisma.prisma = new PrismaClient({
     adapter,
     log:
