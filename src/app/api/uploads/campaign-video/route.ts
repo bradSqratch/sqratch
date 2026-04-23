@@ -2,8 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getBrandAdminContext, slugifyValue } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
 import {
+  createSignedUploadUrl,
   getMaxVideoUploadBytes,
-  uploadFileToStorage,
 } from "@/lib/storage-upload";
 
 const ALLOWED_VIDEO_TYPES = new Set([
@@ -37,26 +37,37 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const formData = await request.formData();
-    const file = formData.get("file");
-    const campaignId = String(formData.get("campaignId") || "").trim();
-    const campaignSlug = slugifyValue(String(formData.get("campaignSlug") || "").trim());
+    const body = await request.json().catch(() => null);
+    const fileName = String(body?.fileName || "").trim();
+    const fileType = String(body?.fileType || "").trim();
+    const fileSize = Number(body?.fileSize || 0);
+    const campaignId = String(body?.campaignId || "").trim();
+    const campaignSlug = slugifyValue(
+      String(body?.campaignSlug || "").trim(),
+    );
 
-    if (!(file instanceof File)) {
+    if (!fileName) {
       return NextResponse.json(
-        { error: "A video file is required." },
+        { error: "A video file name is required." },
         { status: 400 },
       );
     }
 
-    if (!ALLOWED_VIDEO_TYPES.has(file.type)) {
+    if (!ALLOWED_VIDEO_TYPES.has(fileType)) {
       return NextResponse.json(
         { error: "Only MP4, MOV, WEBM, and M4V videos are allowed." },
         { status: 400 },
       );
     }
 
-    if (file.size > getMaxVideoUploadBytes()) {
+    if (!Number.isFinite(fileSize) || fileSize <= 0) {
+      return NextResponse.json(
+        { error: "A valid video file size is required." },
+        { status: 400 },
+      );
+    }
+
+    if (fileSize > getMaxVideoUploadBytes()) {
       return NextResponse.json(
         { error: "File is too large." },
         { status: 400 },
@@ -92,20 +103,20 @@ export async function POST(request: NextRequest) {
     const path = buildCampaignVideoPath({
       brandSlug: brand.membership.brand.slug,
       campaignSlug,
-      fileName: file.name,
+      fileName,
     });
-    const uploaded = await uploadFileToStorage({
+    const signedUpload = await createSignedUploadUrl({
       bucket,
       path,
-      file,
       upsert: true,
     });
 
     return NextResponse.json({
       data: {
-        bucket: uploaded.bucket,
-        path: uploaded.path,
-        fileUrl: uploaded.fileUrl,
+        bucket: signedUpload.bucket,
+        path: signedUpload.path,
+        fileUrl: signedUpload.fileUrl,
+        signedUrl: signedUpload.signedUrl,
       },
     });
   } catch (error) {

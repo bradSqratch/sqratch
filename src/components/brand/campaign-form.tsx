@@ -33,6 +33,64 @@ function slugifyValue(value: string) {
     .slice(0, 80);
 }
 
+async function uploadCampaignVideoDirect(options: {
+  file: File;
+  campaignSlug: string;
+  campaignId?: string;
+}) {
+  const signResponse = await fetch("/api/uploads/campaign-video", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    credentials: "include",
+    body: JSON.stringify({
+      fileName: options.file.name,
+      fileType: options.file.type,
+      fileSize: options.file.size,
+      campaignSlug: options.campaignSlug,
+      campaignId: options.campaignId,
+    }),
+  });
+
+  const signJson = await signResponse.json().catch(() => null);
+
+  if (!signResponse.ok) {
+    throw new Error(signJson?.error || "Failed to prepare campaign video upload.");
+  }
+
+  const signedUrl = String(signJson?.data?.signedUrl || "");
+  const fileUrl = String(signJson?.data?.fileUrl || "");
+
+  if (!signedUrl || !fileUrl) {
+    throw new Error("Failed to prepare campaign video upload.");
+  }
+
+  const uploadBody = new FormData();
+  uploadBody.append("cacheControl", "3600");
+  uploadBody.append("", options.file);
+
+  const uploadResponse = await fetch(signedUrl, {
+    method: "PUT",
+    headers: {
+      "x-upsert": "true",
+    },
+    body: uploadBody,
+  });
+
+  const uploadJson = await uploadResponse.json().catch(() => null);
+
+  if (!uploadResponse.ok) {
+    throw new Error(
+      uploadJson?.error ||
+        uploadJson?.message ||
+        "Failed to upload campaign video.",
+    );
+  }
+
+  return fileUrl;
+}
+
 export function BrandCampaignForm({
   mode,
   campaignId,
@@ -124,30 +182,11 @@ export function BrandCampaignForm({
 
       if (form.whyVideoSource === "UPLOAD") {
         if (pendingVideoFile) {
-          const formData = new FormData();
-          formData.append("file", pendingVideoFile);
-          formData.append("campaignSlug", form.slug);
-
-          if (campaignId) {
-            formData.append("campaignId", campaignId);
-          }
-
-          const uploadResponse = await fetch("/api/uploads/campaign-video", {
-            method: "POST",
-            body: formData,
-            credentials: "include",
+          whyVideoAssetUrl = await uploadCampaignVideoDirect({
+            file: pendingVideoFile,
+            campaignSlug: form.slug,
+            campaignId,
           });
-
-          const uploadJson = await uploadResponse.json().catch(() => null);
-
-          if (!uploadResponse.ok) {
-            throw new Error(uploadJson?.error || "Failed to upload campaign video.");
-          }
-
-          whyVideoAssetUrl =
-            uploadJson?.data?.fileUrl ||
-            uploadJson?.fileUrl ||
-            "";
           uploadedWhyVideoAssetUrl = whyVideoAssetUrl;
         }
 

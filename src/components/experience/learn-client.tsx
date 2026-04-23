@@ -73,7 +73,7 @@ export function ExperienceLearnClient({
       <PageCard>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h2 className="text-2xl font-semibold">Courses</h2>
+            <h2 className="text-2xl font-semibold text-[#988dbf]">Courses</h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">
               Public courses are open now. Private courses appear here once your
               account is logged in and the linked campaign is unlocked.
@@ -93,7 +93,7 @@ export function ExperienceLearnClient({
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <h3 className="text-xl font-semibold">{course.title}</h3>
+                    <h3 className="text-xl font-semibold text-[#988dbf]">{course.title}</h3>
                     {course.description && (
                       <p className="mt-2 text-sm leading-6 text-white/70">
                         {course.description}
@@ -121,7 +121,7 @@ export function ExperienceLearnClient({
 
                 <Button
                   asChild
-                  className="mt-6 rounded-full border border-white bg-white text-black"
+                  className="mt-6 rounded-full border border-[#c73484] bg-[#c73484] text-[#e5e6ea] hover:bg-[#b72f78] hover:text-[#e5e6ea]"
                 >
                   <Link href={`/x/${data.slug}/courses/${course.id}`}>
                     Open Course

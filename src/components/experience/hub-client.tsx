@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useId, useRef, useState } from "react";
+import { type MouseEvent, useEffect, useId, useRef, useState } from "react";
+import { Pause, Play } from "lucide-react";
 import {
   ExperienceShell,
   GatePanel,
@@ -14,6 +15,7 @@ import type { PublicExperienceData } from "@/components/experience/types";
 import { useExperience } from "@/components/experience/use-experience";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
 
 type HubYouTubePlayer = {
   playVideo?: () => void;
@@ -202,7 +204,7 @@ export function ExperienceHubClient({
           <PageCard>
             <div className="flex flex-col gap-6 lg:flex-row lg:items-end lg:justify-between">
               <div>
-                <h2 className="text-2xl font-semibold">Learn</h2>
+                <h2 className="text-2xl font-semibold text-[#988dbf]">Learn</h2>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">
                   Public courses are available immediately. Private courses open
                   after login and campaign unlock.
@@ -210,7 +212,7 @@ export function ExperienceHubClient({
               </div>
               <Button
                 asChild
-                className="rounded-full border border-white bg-white text-black"
+                className="rounded-full border border-[#c73484] bg-[#c73484] text-[#e5e6ea] hover:bg-[#b72f78] hover:text-[#e5e6ea]"
               >
                 <Link href={`/x/${data.slug}/learn`}>View All Courses</Link>
               </Button>
@@ -223,7 +225,7 @@ export function ExperienceHubClient({
                   className="rounded-3xl border border-white/10 bg-black/20 p-5"
                 >
                   <div className="flex items-center justify-between gap-3">
-                    <h3 className="text-lg font-semibold">{course.title}</h3>
+                    <h3 className="text-lg font-semibold text-[#988dbf]">{course.title}</h3>
                     <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/65">
                       {course.access}
                     </span>
@@ -245,7 +247,7 @@ export function ExperienceHubClient({
         <TabsContent value="posts">
           {data.canInteract ? (
             <PageCard>
-              <h2 className="text-2xl font-semibold">Creator Posts</h2>
+              <h2 className="text-2xl font-semibold text-[#988dbf]">Creator Posts</h2>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">
                 Discussions, drops, and creator updates live here. Commenting is
                 available once you have access.
@@ -259,7 +261,7 @@ export function ExperienceHubClient({
                 </div>
                 <Button
                   asChild
-                  className="rounded-full border border-white bg-white text-black"
+                  className="rounded-full border border-[#c73484] bg-[#c73484] text-[#e5e6ea] hover:bg-[#b72f78] hover:text-[#e5e6ea]"
                 >
                   <Link href={`/x/${data.slug}/posts`}>Open Posts</Link>
                 </Button>
@@ -277,7 +279,7 @@ export function ExperienceHubClient({
         <TabsContent value="qa">
           {data.canInteract ? (
             <PageCard>
-              <h2 className="text-2xl font-semibold">Q&amp;A</h2>
+              <h2 className="text-2xl font-semibold text-[#988dbf]">Q&amp;A</h2>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">
                 Ask the creator questions directly. Your daily limit for this
                 experience is {data.qaDailyQuestionLimit}.
@@ -291,7 +293,7 @@ export function ExperienceHubClient({
                 </div>
                 <Button
                   asChild
-                  className="rounded-full border border-white bg-white text-black"
+                  className="rounded-full border border-[#c73484] bg-[#c73484] text-[#e5e6ea] hover:bg-[#b72f78] hover:text-[#e5e6ea]"
                 >
                   <Link href={`/x/${data.slug}/qa`}>Open Q&amp;A</Link>
                 </Button>
@@ -317,8 +319,10 @@ function ExperienceWhyHero({
 }) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const ytPlayerRef = useRef<HubYouTubePlayer | null>(null);
+  const centerControlTimeoutRef = useRef<number | null>(null);
   const playerId = useId();
   const [isPlaying, setIsPlaying] = useState(false);
+  const [showCenterControl, setShowCenterControl] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
 
@@ -329,9 +333,34 @@ function ExperienceWhyHero({
 
   useEffect(() => {
     setIsPlaying(false);
+    setShowCenterControl(true);
     setCurrentTime(0);
     setDuration(0);
   }, [featuredStory?.id]);
+
+  useEffect(() => {
+    return () => {
+      if (centerControlTimeoutRef.current) {
+        window.clearTimeout(centerControlTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  function updateCenterControlVisibility(shouldStayVisible: boolean) {
+    if (centerControlTimeoutRef.current) {
+      window.clearTimeout(centerControlTimeoutRef.current);
+    }
+
+    setShowCenterControl(true);
+
+    if (shouldStayVisible) {
+      return;
+    }
+
+    centerControlTimeoutRef.current = window.setTimeout(() => {
+      setShowCenterControl(false);
+    }, 950);
+  }
 
   useEffect(() => {
     if (
@@ -371,6 +400,7 @@ function ExperienceWhyHero({
             const playerState = (window as HubWindow).YT?.PlayerState;
             if (event.data === playerState?.PLAYING) {
               setIsPlaying(true);
+              updateCenterControlVisibility(false);
               return;
             }
 
@@ -379,6 +409,7 @@ function ExperienceWhyHero({
               event.data === playerState?.ENDED
             ) {
               setIsPlaying(false);
+              updateCenterControlVisibility(true);
             }
           },
         },
@@ -433,8 +464,10 @@ function ExperienceWhyHero({
       }
 
       if (video.paused) {
+        updateCenterControlVisibility(false);
         void video.play();
       } else {
+        updateCenterControlVisibility(true);
         video.pause();
       }
 
@@ -446,10 +479,17 @@ function ExperienceWhyHero({
     const currentState = player?.getPlayerState?.();
 
     if (currentState === playerState?.PLAYING) {
+      updateCenterControlVisibility(true);
       player?.pauseVideo?.();
     } else {
+      updateCenterControlVisibility(false);
       player?.playVideo?.();
     }
+  }
+
+  function handleCenterControlClick(event: MouseEvent<HTMLButtonElement>) {
+    event.stopPropagation();
+    togglePlayback();
   }
 
   function handleSeek(nextTime: number) {
@@ -504,9 +544,16 @@ function ExperienceWhyHero({
                       preload="auto"
                       onPlay={() => {
                         setIsPlaying(true);
+                        updateCenterControlVisibility(false);
                       }}
-                      onPause={() => setIsPlaying(false)}
-                      onEnded={() => setIsPlaying(false)}
+                      onPause={() => {
+                        setIsPlaying(false);
+                        updateCenterControlVisibility(true);
+                      }}
+                      onEnded={() => {
+                        setIsPlaying(false);
+                        updateCenterControlVisibility(true);
+                      }}
                       onLoadedMetadata={(event) => {
                         setDuration(event.currentTarget.duration || 0);
                       }}
@@ -545,6 +592,36 @@ function ExperienceWhyHero({
                     : "Play featured story video"
                 }
               />
+            ) : null}
+
+            {featuredStory ? (
+              <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center px-6">
+                <button
+                  type="button"
+                  onClick={handleCenterControlClick}
+                  className={cn(
+                    "pointer-events-auto flex h-16 w-16 items-center justify-center rounded-full border border-white/25 bg-black/35 text-white shadow-[0_10px_30px_rgba(0,0,0,0.28)] backdrop-blur-md transition-all duration-200 sm:h-20 sm:w-20",
+                    showCenterControl
+                      ? "scale-100 opacity-100"
+                      : "scale-95 opacity-0",
+                  )}
+                  aria-label={
+                    isPlaying
+                      ? "Pause featured story video"
+                      : "Play featured story video"
+                  }
+                >
+                  {isPlaying ? (
+                    <Pause className="h-7 w-7 sm:h-9 sm:w-9" strokeWidth={2.4} />
+                  ) : (
+                    <Play
+                      className="ml-1 h-7 w-7 sm:h-9 sm:w-9"
+                      fill="currentColor"
+                      strokeWidth={2.2}
+                    />
+                  )}
+                </button>
+              </div>
             ) : null}
 
             <div className="pointer-events-none absolute inset-0 z-20 flex flex-col px-5 pb-[calc(env(safe-area-inset-bottom)+7rem)] pt-4 sm:px-8 sm:pb-10 sm:pt-6 lg:px-10 lg:pb-28 lg:pt-8">

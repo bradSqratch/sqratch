@@ -38,6 +38,7 @@ function LoginPageInner() {
   const [message, setMessage] = React.useState<Message | null>(null);
   const [hasRedeemedQrWarning, setHasRedeemedQrWarning] =
     React.useState(false);
+  const [viewerStatusLoaded, setViewerStatusLoaded] = React.useState(false);
   const onLogin = async () => {
     setMessage(null);
 
@@ -184,6 +185,8 @@ function LoginPageInner() {
         setHasRedeemedQrWarning(Boolean(payload?.data?.hasRedeemedQrWarning));
       } catch {
         setHasRedeemedQrWarning(false);
+      } finally {
+        setViewerStatusLoaded(true);
       }
     };
 
@@ -360,12 +363,14 @@ function LoginPageInner() {
                 >
                   Login
                 </Button>
-                <p className="text-center text-sm text-white/60">
-                  Need an account?{" "}
-                  <Link href="/signup" className="text-white underline">
-                    Sign up
-                  </Link>
-                </p>
+                {viewerStatusLoaded && !hasRedeemedQrWarning && (
+                  <p className="text-center text-sm text-white/60">
+                    Need an account?{" "}
+                    <Link href="/signup" className="text-white underline">
+                      Sign up
+                    </Link>
+                  </p>
+                )}
               </CardFooter>
             </form>
           </Card>

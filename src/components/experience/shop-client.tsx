@@ -137,7 +137,7 @@ export function ExperienceShopClient({
       ) : !shopData || shopData.products.length === 0 ? (
         <PageCard>
           <div className="space-y-3">
-            <h2 className="text-2xl font-semibold">Shop</h2>
+            <h2 className="text-2xl font-semibold text-[#988dbf]">Shop</h2>
             <p className="max-w-2xl text-sm leading-6 text-white/70">
               No products have been linked to this experience yet.
             </p>
@@ -148,7 +148,7 @@ export function ExperienceShopClient({
           <PageCard>
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
-                <h2 className="text-2xl font-semibold">Shop</h2>
+                <h2 className="text-2xl font-semibold text-[#988dbf]">Shop</h2>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">
                   These products are linked to this experience or pulled from
                   the connected campaign brand storefront.
@@ -194,7 +194,7 @@ export function ExperienceShopClient({
                       )}
                     </div>
 
-                    <h3 className="mt-4 text-xl font-semibold">
+                    <h3 className="mt-4 text-xl font-semibold text-[#988dbf]">
                       {product.title}
                     </h3>
                     <p className="mt-2 text-sm text-white/55">
@@ -206,7 +206,7 @@ export function ExperienceShopClient({
                         type="button"
                         onClick={() => handleOpenProduct(product)}
                         disabled={clickingId === product.id}
-                        className="w-full rounded-full border border-white bg-white text-black"
+                        className="w-full rounded-full border border-[#c73484] bg-[#c73484] text-[#e5e6ea] hover:bg-[#b72f78] hover:text-[#e5e6ea]"
                       >
                         {clickingId === product.id
                           ? "Opening..."

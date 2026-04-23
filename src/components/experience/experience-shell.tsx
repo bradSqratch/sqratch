@@ -76,9 +76,9 @@ export function ExperienceShell({
             <section>{hero}</section>
           ) : (
             <section className="grid gap-6 lg:grid-cols-[1.25fr_0.75fr]">
-              <Card className="overflow-hidden rounded-[32px] border border-white/15 bg-white/6 text-white backdrop-blur-xl">
-                <CardContent className="p-0">
-                  <div className="relative min-h-[280px]">
+              <Card className="overflow-hidden rounded-[32px] border border-white/15 bg-white/6 py-0 text-white backdrop-blur-xl">
+                <CardContent className="h-full p-0">
+                  <div className="relative flex h-full min-h-[280px] flex-col justify-end overflow-hidden">
                     {experience.coverImageUrl ? (
                       <img
                         src={experience.coverImageUrl}
@@ -91,7 +91,7 @@ export function ExperienceShell({
 
                     <div className="absolute inset-0 bg-[linear-gradient(180deg,rgba(2,0,21,0.1),rgba(2,0,21,0.82))]" />
 
-                    <div className="relative flex h-full flex-col justify-end gap-5 p-8">
+                    <div className="relative flex flex-col justify-end gap-5 p-8">
                       <div className="flex flex-wrap items-center gap-2">
                         <StatusPill label="Experience" />
                         {experience.canAccessPrivate && (
@@ -139,7 +139,9 @@ export function ExperienceShell({
                     )}
 
                     <div className="space-y-2 text-sm text-white/65">
-                      <p>{experience.isLoggedIn ? "Logged in" : "Guest session"}</p>
+                      <p>
+                        {experience.isLoggedIn ? "Logged in" : "Guest session"}
+                      </p>
                       <p>
                         {experience.hasUnlockedCampaign
                           ? "Campaign unlocked"
@@ -199,12 +201,16 @@ function StickyExperienceTabsNav({
               >
                 <Icon
                   className={cn(
-                    "h-[18px] w-[18px] sm:h-[20px] sm:w-[20px]",
-                    isActive ? "text-white" : "text-white/70",
+                    "box-content h-[18px] w-[18px] rounded-[8px] p-1 sm:h-[20px] sm:w-[20px]",
+                    isActive
+                      ? "text-[#c73484]"
+                      : "border border-transparent text-white/70",
                   )}
                   strokeWidth={2.1}
                 />
-                <span>{label}</span>
+                <span className={cn(isActive ? "text-[#c73484]" : "")}>
+                  {label}
+                </span>
               </Link>
             );
           })}
@@ -226,6 +232,8 @@ export function GatePanel({
   const nextHref = `/x/${experience.slug}`;
   const loginHref = `/login?next=${encodeURIComponent(nextHref)}`;
   const signupHref = `/signup?next=${encodeURIComponent(nextHref)}`;
+  const canOfferSignup =
+    !experience.isLoggedIn && !experience.hasRedeemedQrWarning;
   const campaignHref = experience.campaigns[0]
     ? `/c/${experience.campaigns[0].id}`
     : `/x/${experience.slug}`;
@@ -243,7 +251,8 @@ export function GatePanel({
         {experience.hasRedeemedQrWarning && (
           <div className="rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
             This QR code is already redeemed. You can log in and browse public
-            content, but private access requires a different QR code.
+            content, but you will not earn points or unlock private access from
+            this QR code.
           </div>
         )}
 
@@ -251,13 +260,13 @@ export function GatePanel({
           {!experience.isLoggedIn && (
             <Button
               asChild
-              className="rounded-full border border-white bg-white text-black"
+              className="rounded-full border border-[#c73484] bg-[#c73484] text-[#e5e6ea] hover:bg-[#b72f78] hover:text-[#e5e6ea]"
             >
               <Link href={loginHref}>Log In</Link>
             </Button>
           )}
 
-          {!experience.isLoggedIn ? (
+          {canOfferSignup ? (
             <Button
               asChild
               variant="outline"
@@ -309,7 +318,7 @@ export function ErrorView({
           <p className="text-red-300">{message}</p>
           <Button
             asChild
-            className="rounded-full border border-white bg-white text-black"
+            className="rounded-full border border-[#c73484] bg-[#c73484] text-[#e5e6ea] hover:bg-[#b72f78] hover:text-[#e5e6ea]"
           >
             <Link href={href}>Go Back</Link>
           </Button>
@@ -374,8 +383,7 @@ function StatusPill({
         tone === "default" && "border-white/15 bg-white/8 text-white/80",
         tone === "success" &&
           "border-emerald-400/30 bg-emerald-500/15 text-emerald-200",
-        tone === "info" &&
-          "border-sky-400/30 bg-sky-500/15 text-sky-200",
+        tone === "info" && "border-sky-400/30 bg-sky-500/15 text-sky-200",
       )}
     >
       {label}

@@ -127,7 +127,7 @@ function QuestionCard({
           <Button
             type="submit"
             disabled={saving || !draft.trim()}
-            className="rounded-full border border-white bg-white text-black"
+            className="rounded-full border border-[#c73484] bg-[#c73484] text-[#e5e6ea] hover:bg-[#b72f78] hover:text-[#e5e6ea]"
           >
             {saving ? "Saving..." : "Publish answer"}
           </Button>
@@ -237,7 +237,7 @@ export function ExperienceQAClient({
       ) : (
         <div className="space-y-6">
           <PageCard>
-            <h2 className="text-2xl font-semibold">Ask the creator</h2>
+            <h2 className="text-2xl font-semibold text-[#988dbf]">Ask the creator</h2>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">
               You can submit up to {qaData?.dailyLimit || data.qaDailyQuestionLimit} question
               {qaData?.dailyLimit === 1 || data.qaDailyQuestionLimit === 1 ? "" : "s"} per day for this
@@ -255,7 +255,7 @@ export function ExperienceQAClient({
                 <Button
                   type="submit"
                   disabled={saving || !draft.trim()}
-                  className="rounded-full border border-white bg-white text-black"
+                  className="rounded-full border border-[#c73484] bg-[#c73484] text-[#e5e6ea] hover:bg-[#b72f78] hover:text-[#e5e6ea]"
                 >
                   {saving ? "Sending..." : "Submit question"}
                 </Button>

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import type { Prisma } from "@prisma/client";
 import { getAdminContext, createUniqueSlug } from "@/lib/admin-auth";
 import { sendApprovalEmail } from "@/helpers/mailer";
 import prisma from "@/lib/prisma";
@@ -17,13 +18,16 @@ function parseAction(value: unknown): ApprovalAction | null {
   return null;
 }
 
-async function createUniqueBrandName(baseValue: string) {
+async function createUniqueBrandName(
+  baseValue: string,
+  tx: Prisma.TransactionClient,
+) {
   const baseName = baseValue.trim() || "New Brand";
   let candidate = baseName;
   let suffix = 2;
 
   while (
-    await prisma.brand.findFirst({
+    await tx.brand.findFirst({
       where: { name: candidate },
       select: { id: true },
     })
@@ -90,99 +94,105 @@ export async function POST(
       );
     }
 
-    const response = await prisma.$transaction(async (tx) => {
-      const updatedRequest = await tx.brandRequest.update({
-        where: { id: requestId },
-        data: {
-          status: action === "approve" ? "APPROVED" : "REJECTED",
-          reason,
-          reviewedById: context.userId,
-        },
-        select: {
-          id: true,
-          status: true,
-          reason: true,
-          updatedAt: true,
-        },
-      });
+    const response = await prisma.$transaction(
+      async (tx) => {
+        const updatedRequest = await tx.brandRequest.update({
+          where: { id: requestId },
+          data: {
+            status: action === "approve" ? "APPROVED" : "REJECTED",
+            reason,
+            reviewedById: context.userId,
+          },
+          select: {
+            id: true,
+            status: true,
+            reason: true,
+            updatedAt: true,
+          },
+        });
 
-      if (action === "reject") {
-        return {
-          request: updatedRequest,
-          brand: null,
-        };
-      }
+        if (action === "reject") {
+          return {
+            request: updatedRequest,
+            brand: null,
+          };
+        }
 
-      await tx.user.update({
-        where: { id: brandRequest.userId },
-        data: { role: "BRAND_ADMIN" },
-      });
+        await tx.user.update({
+          where: { id: brandRequest.userId },
+          data: { role: "BRAND_ADMIN" },
+        });
 
-      const existingMembership = await tx.brandMember.findFirst({
-        where: { userId: brandRequest.userId },
-        select: {
-          brand: {
-            select: {
-              id: true,
-              name: true,
-              slug: true,
+        const existingMembership = await tx.brandMember.findFirst({
+          where: { userId: brandRequest.userId },
+          select: {
+            brand: {
+              select: {
+                id: true,
+                name: true,
+                slug: true,
+              },
             },
           },
-        },
-      });
+        });
 
-      if (existingMembership?.brand) {
+        if (existingMembership?.brand) {
+          return {
+            request: updatedRequest,
+            brand: existingMembership.brand,
+          };
+        }
+
+        const requestedName =
+          brandRequest.proposedBrandName?.trim() ||
+          brandRequest.user.name?.trim() ||
+          brandRequest.user.email.split("@")[0] ||
+          "New Brand";
+
+        const uniqueName = await createUniqueBrandName(requestedName, tx);
+        const uniqueSlug = await createUniqueSlug(
+          uniqueName,
+          async (candidate) =>
+            Boolean(
+              await tx.brand.findFirst({
+                where: { slug: candidate },
+                select: { id: true },
+              }),
+            ),
+          "brand",
+        );
+
+        const brand = await tx.brand.create({
+          data: {
+            name: uniqueName,
+            slug: uniqueSlug,
+            websiteUrl: brandRequest.proposedStoreUrl?.trim() || null,
+          },
+          select: {
+            id: true,
+            name: true,
+            slug: true,
+          },
+        });
+
+        await tx.brandMember.create({
+          data: {
+            brandId: brand.id,
+            userId: brandRequest.userId,
+            role: "ADMIN",
+          },
+        });
+
         return {
           request: updatedRequest,
-          brand: existingMembership.brand,
+          brand,
         };
-      }
-
-      const requestedName =
-        brandRequest.proposedBrandName?.trim() ||
-        brandRequest.user.name?.trim() ||
-        brandRequest.user.email.split("@")[0] ||
-        "New Brand";
-
-      const uniqueName = await createUniqueBrandName(requestedName);
-      const uniqueSlug = await createUniqueSlug(
-        uniqueName,
-        async (candidate) =>
-          Boolean(
-            await tx.brand.findFirst({
-              where: { slug: candidate },
-              select: { id: true },
-            }),
-          ),
-        "brand",
-      );
-
-      const brand = await tx.brand.create({
-        data: {
-          name: uniqueName,
-          slug: uniqueSlug,
-          websiteUrl: brandRequest.proposedStoreUrl?.trim() || null,
-        },
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-        },
-      });
-
-      await tx.brandMember.create({
-        data: {
-          brandId: brand.id,
-          userId: brandRequest.userId,
-          role: "ADMIN",
-        },
-      });
-
-      return {
-        request: updatedRequest,
-        brand,
-      };
-    });
+      },
+      {
+        maxWait: 10_000,
+        timeout: 15_000,
+      },
+    );
 
     if (action === "approve") {
       try {

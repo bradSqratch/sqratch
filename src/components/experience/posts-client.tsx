@@ -136,7 +136,11 @@ function PostCard({
     <div className="rounded-3xl border border-white/10 bg-black/20 p-6">
       <div className="flex items-center justify-between gap-3">
         <div>
-          {post.title && <h3 className="text-xl font-semibold">{post.title}</h3>}
+          {post.title && (
+            <h3 className="text-xl font-semibold text-[#988dbf]">
+              {post.title}
+            </h3>
+          )}
           <p className="mt-1 text-sm text-white/50">{formatDate(post.createdAt)}</p>
         </div>
         {post.isPinned && (
@@ -207,7 +211,7 @@ function PostCard({
           <Button
             type="submit"
             disabled={commentSaving || !commentDraft.trim()}
-            className="rounded-full border border-white bg-white text-black"
+            className="rounded-full border border-[#c73484] bg-[#c73484] text-[#e5e6ea] hover:bg-[#b72f78] hover:text-[#e5e6ea]"
           >
             {commentSaving ? "Posting..." : "Post Comment"}
           </Button>
@@ -311,7 +315,7 @@ export function ExperiencePostsClient({
         <div className="space-y-6">
           {postsData?.canCreate && (
             <PageCard>
-              <h2 className="text-2xl font-semibold">Publish a post</h2>
+              <h2 className="text-2xl font-semibold text-[#988dbf]">Publish a post</h2>
               <p className="mt-2 text-sm leading-6 text-white/70">
                 Only the creator who owns this experience can publish new posts.
               </p>
@@ -332,7 +336,7 @@ export function ExperiencePostsClient({
                 <Button
                   type="submit"
                   disabled={saving || !body.trim()}
-                  className="rounded-full border border-white bg-white text-black"
+                  className="rounded-full border border-[#c73484] bg-[#c73484] text-[#e5e6ea] hover:bg-[#b72f78] hover:text-[#e5e6ea]"
                 >
                   {saving ? "Publishing..." : "Publish post"}
                 </Button>

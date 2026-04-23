@@ -51,9 +51,7 @@ export default function CampaignPage() {
         setData(json.data);
       } catch (error) {
         setError(
-          error instanceof Error
-            ? error.message
-            : "Failed to load campaign.",
+          error instanceof Error ? error.message : "Failed to load campaign.",
         );
       } finally {
         setLoading(false);
@@ -88,17 +86,17 @@ export default function CampaignPage() {
             </div>
           ) : error ? (
             <div className="flex flex-1 items-center justify-center">
-                <Card className="w-full max-w-md rounded-[28px] border border-white/15 bg-white/6 backdrop-blur-xl text-white">
-                  <CardContent className="p-8 text-center space-y-4">
-                    <p className="text-red-300">{error}</p>
-                    <Link
-                      href="/"
-                      className="inline-flex rounded-full border border-white bg-white px-6 py-3 text-black"
-                    >
-                      Go Home
-                    </Link>
-                  </CardContent>
-                </Card>
+              <Card className="w-full max-w-md rounded-[28px] border border-white/15 bg-white/6 backdrop-blur-xl text-white">
+                <CardContent className="p-8 text-center space-y-4">
+                  <p className="text-red-300">{error}</p>
+                  <Link
+                    href="/"
+                    className="inline-flex rounded-full border border-[#c73484] bg-[#c73484] px-6 py-3 text-[#e5e6ea] hover:bg-[#b72f78]"
+                  >
+                    Go Home
+                  </Link>
+                </CardContent>
+              </Card>
             </div>
           ) : data ? (
             <>
@@ -136,14 +134,16 @@ export default function CampaignPage() {
                 {data.hasRedeemedQrWarning && (
                   <div className="mt-5 max-w-2xl rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
                     This QR code has already been redeemed. You can still view
-                    public content, but private access requires a different QR
-                    code.
+                    public content, but you will not earn points or unlock
+                    private access from this QR code.
                   </div>
                 )}
               </div>
 
               <div className="mt-10">
-                <h2 className="mb-4 text-2xl font-semibold">Experiences</h2>
+                <h2 className="mb-4 text-2xl font-semibold text-[#988dbf]">
+                  Experiences
+                </h2>
 
                 {data.experiences.length === 0 ? (
                   <Card className="rounded-[28px] border border-white/15 bg-white/6 backdrop-blur-xl text-white">
@@ -174,14 +174,14 @@ export default function CampaignPage() {
                           </div>
 
                           <div>
-                            <h3 className="text-lg font-semibold">
+                            <h3 className="text-lg font-semibold text-[#988dbf]">
                               {exp.title}
                             </h3>
                           </div>
 
                           <Button
                             asChild
-                            className="w-full rounded-full border border-white bg-white text-black"
+                            className="w-full rounded-full border border-[#c73484] bg-[#c73484] text-[#e5e6ea] hover:bg-[#b72f78] hover:text-[#e5e6ea]"
                           >
                             <a href={`/x/${exp.slug}`}>Continue</a>
                           </Button>

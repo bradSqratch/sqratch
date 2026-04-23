@@ -20,7 +20,7 @@ export default function CommonNavbar({
         <Link href="/" className="flex items-center gap-2">
           <span
             className="
-              text-white font-semibold tracking-[-0.03em]
+              font-logo text-[#988dbf] font-bold
               text-[20px] sm:text-[22px] md:text-[24px]
               drop-shadow-[0_0_22px_rgba(255,255,255,0.4)]
               whitespace-nowrap

@@ -90,6 +90,10 @@ function SignupPageInner() {
   const [message, setMessage] = React.useState<Message | null>(null);
   const [hasRedeemedQrWarning, setHasRedeemedQrWarning] =
     React.useState(false);
+  const [viewerStatusLoaded, setViewerStatusLoaded] = React.useState(false);
+  const redeemedQrBlocksSignup =
+    viewerStatusLoaded && hasRedeemedQrWarning && !isInvitedClaimFlow;
+  const waitingForViewerStatus = !viewerStatusLoaded && !isInvitedClaimFlow;
 
   useEffect(() => {
     if (invitedEmail) {
@@ -111,6 +115,8 @@ function SignupPageInner() {
         setHasRedeemedQrWarning(Boolean(payload?.data?.hasRedeemedQrWarning));
       } catch {
         setHasRedeemedQrWarning(false);
+      } finally {
+        setViewerStatusLoaded(true);
       }
     };
 
@@ -258,24 +264,76 @@ function SignupPageInner() {
                 drop-shadow-[0_0_12px_rgba(236,236,236,0.50)]
               "
             >
-              Signup
+              {redeemedQrBlocksSignup ? "QR Already Redeemed" : "Signup"}
             </h1>
 
             <p className="mt-3 text-[16px] sm:text-[18px] leading-[160%] text-[#ECECEC]/75">
-              {isInvitedClaimFlow
-                ? "Claim your invited account"
-                : "Create your account to get started"}
+              {redeemedQrBlocksSignup
+                ? "Log in to browse public content"
+                : isInvitedClaimFlow
+                  ? "Claim your invited account"
+                  : "Create your account to get started"}
             </p>
 
             {hasRedeemedQrWarning && (
               <div className="mx-auto mt-6 max-w-2xl rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
-                This QR code is already redeemed. You can still create an
-                account, but it will not unlock private access or award points.
+                This QR code is already redeemed. You can log in and browse
+                public content, but you will not earn points or unlock private
+                access from this QR code.
               </div>
             )}
           </div>
 
-          {!showApplyCard || isInvitedClaimFlow ? (
+          {waitingForViewerStatus ? (
+            <Card
+              className="
+                relative mt-10 w-full max-w-md
+                rounded-[28px]
+                border border-white/15
+                bg-white/6
+                backdrop-blur-xl
+                shadow-[0_30px_90px_rgba(0,0,0,0.55)]
+                overflow-hidden
+              "
+            >
+              <CardContent className="flex items-center justify-center gap-3 p-8 text-white/70">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/50 border-t-transparent" />
+                Checking QR status...
+              </CardContent>
+            </Card>
+          ) : redeemedQrBlocksSignup ? (
+            <Card
+              className="
+                relative mt-10 w-full max-w-md
+                rounded-[28px]
+                border border-white/15
+                bg-white/6
+                backdrop-blur-xl
+                shadow-[0_30px_90px_rgba(0,0,0,0.55)]
+                overflow-hidden
+              "
+            >
+              <div className="pointer-events-none absolute inset-0 rounded-[28px] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]" />
+
+              <CardContent className="relative space-y-5 p-6 text-center sm:p-8">
+                <p className="text-sm leading-6 text-white/70">
+                  This QR code has already been used by another redemption. Use
+                  a fresh QR code if you need private access or points.
+                </p>
+
+                <Button
+                  asChild
+                  className="w-full rounded-full border border-white bg-white py-6 text-black"
+                >
+                  <Link
+                    href={`/login?next=${encodeURIComponent(nextPath)}`}
+                  >
+                    Log In
+                  </Link>
+                </Button>
+              </CardContent>
+            </Card>
+          ) : !showApplyCard || isInvitedClaimFlow ? (
             <Card
               className="
                 relative mt-10 w-full max-w-md

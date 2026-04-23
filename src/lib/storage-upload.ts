@@ -6,6 +6,12 @@ type UploadToStorageInput = {
   upsert?: boolean;
 };
 
+type SignedUploadUrlInput = {
+  bucket: string;
+  path: string;
+  upsert?: boolean;
+};
+
 function getStorageUrl() {
   return (
     process.env.SUPABASE_STORAGE_URL ||
@@ -88,6 +94,69 @@ export async function uploadFileToStorage(input: UploadToStorageInput) {
 export function getPublicStorageUrl(bucket: string, path: string) {
   const { storageUrl } = assertStorageConfigured();
   return `${storageUrl}/storage/v1/object/public/${bucket}/${path}`;
+}
+
+function encodeStoragePath(path: string) {
+  return path
+    .split("/")
+    .map((part) => encodeURIComponent(part))
+    .join("/");
+}
+
+function resolveSignedUploadUrl(storageUrl: string, signedPath: string) {
+  if (signedPath.startsWith("http://") || signedPath.startsWith("https://")) {
+    return signedPath;
+  }
+
+  const cleanStorageUrl = storageUrl.replace(/\/$/, "");
+
+  if (signedPath.startsWith("/storage/v1/")) {
+    return `${cleanStorageUrl}${signedPath}`;
+  }
+
+  return `${cleanStorageUrl}/storage/v1${signedPath.startsWith("/") ? "" : "/"}${signedPath}`;
+}
+
+export async function createSignedUploadUrl(input: SignedUploadUrlInput) {
+  const { storageUrl, serviceRoleKey } = assertStorageConfigured();
+  const encodedPath = encodeStoragePath(input.path);
+  const response = await fetch(
+    `${storageUrl}/storage/v1/object/upload/sign/${input.bucket}/${encodedPath}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${serviceRoleKey}`,
+        apikey: serviceRoleKey,
+        "Content-Type": "application/json",
+        "x-upsert": String(Boolean(input.upsert)),
+      },
+      body: "{}",
+    },
+  );
+
+  const json = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new Error(
+      json?.error ||
+        json?.message ||
+        "Failed to create signed upload URL.",
+    );
+  }
+
+  const signedPath =
+    json?.signedUrl || json?.signedURL || json?.url || json?.data?.signedUrl;
+
+  if (!signedPath || typeof signedPath !== "string") {
+    throw new Error("Supabase did not return a signed upload URL.");
+  }
+
+  return {
+    signedUrl: resolveSignedUploadUrl(storageUrl, signedPath),
+    fileUrl: getPublicStorageUrl(input.bucket, input.path),
+    bucket: input.bucket,
+    path: input.path,
+  };
 }
 
 export function parsePublicStorageUrl(url: string) {

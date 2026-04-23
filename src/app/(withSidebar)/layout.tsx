@@ -66,7 +66,7 @@ export default async function DashboardLayout({
                 href="/dashboard"
                 className="hidden sm:flex items-center" // Hidden on mobile, flex on small and larger screens.
               >
-                <h1 className="text-white text-3xl font-bold tracking-tight">
+                <h1 className="font-logo text-3xl font-bold text-[#988dbf]">
                   SQRATCH<sup className="text-sm align-super">™</sup>
                 </h1>
               </Link>
@@ -75,7 +75,7 @@ export default async function DashboardLayout({
                 href="/dashboard"
                 className="sm:hidden justify-self-center flex items-center ml-12" // Flex on mobile, hidden on small and larger screens.
               >
-                <h1 className="text-white text-2xl font-bold tracking-tight">
+                <h1 className="font-logo text-2xl font-bold text-white">
                   SQRATCH<sup className="text-xs align-super">™</sup>
                 </h1>
               </Link>
