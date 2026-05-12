@@ -27,10 +27,20 @@ function normalizeNextPath(value: string | null) {
   return value;
 }
 
+function shouldCheckQrWarningForPath(nextPath: string) {
+  return (
+    nextPath.startsWith("/c/") ||
+    nextPath.startsWith("/x/") ||
+    nextPath.startsWith("/q/")
+  );
+}
+
 function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const nextPath = normalizeNextPath(searchParams.get("next"));
+  const shouldCheckQrWarning = shouldCheckQrWarningForPath(nextPath);
+  const signupHref = `/signup?next=${encodeURIComponent(nextPath)}`;
 
   const [user, setUser] = React.useState({ email: "", password: "" });
   const [buttonDisabled, setButtonDisabled] = React.useState(true);
@@ -176,6 +186,12 @@ function LoginPageInner() {
   }, [user]);
 
   useEffect(() => {
+    if (!shouldCheckQrWarning) {
+      setHasRedeemedQrWarning(false);
+      setViewerStatusLoaded(true);
+      return;
+    }
+
     const loadViewerStatus = async () => {
       try {
         const response = await fetch("/api/public/viewer-status", {
@@ -191,7 +207,7 @@ function LoginPageInner() {
     };
 
     void loadViewerStatus();
-  }, []);
+  }, [shouldCheckQrWarning]);
 
   const handleEnterSubmit = (
     event: React.KeyboardEvent<HTMLInputElement>,
@@ -254,7 +270,7 @@ function LoginPageInner() {
               Login to access your dashboard
             </p>
 
-            {hasRedeemedQrWarning && (
+            {viewerStatusLoaded && hasRedeemedQrWarning && (
               <div className="mx-auto mt-6 max-w-2xl rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
                 This QR code is already redeemed. You can still log in, but it
                 will not unlock private access or award points.
@@ -366,7 +382,7 @@ function LoginPageInner() {
                 {viewerStatusLoaded && !hasRedeemedQrWarning && (
                   <p className="text-center text-sm text-white/60">
                     Need an account?{" "}
-                    <Link href="/signup" className="text-white underline">
+                    <Link href={signupHref} className="text-white underline">
                       Sign up
                     </Link>
                   </p>

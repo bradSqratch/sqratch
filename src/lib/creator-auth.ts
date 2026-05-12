@@ -58,10 +58,29 @@ export async function getOwnedExperienceForCreator(
       slug: true,
       description: true,
       coverImageUrl: true,
+      whyVideoSource: true,
+      whyYoutubeUrl: true,
+      whyVideoUploadUrl: true,
       isActive: true,
       creatorId: true,
     },
   });
+}
+
+export function normalizeVideoSource(value: unknown) {
+  const normalized = String(value || "")
+    .trim()
+    .toUpperCase();
+
+  if (normalized === "UPLOAD") {
+    return "UPLOAD" as const;
+  }
+
+  if (normalized === "YOUTUBE") {
+    return "YOUTUBE" as const;
+  }
+
+  return null;
 }
 
 export function normalizeExperienceStatus(value: unknown) {

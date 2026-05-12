@@ -91,9 +91,6 @@ export async function getOwnedBrandCampaign(
       description: true,
       isActive: true,
       brandId: true,
-      whyVideoSource: true,
-      whyYoutubeUrl: true,
-      whyVideoUploadUrl: true,
     },
   });
 }

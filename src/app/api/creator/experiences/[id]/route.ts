@@ -4,9 +4,12 @@ import {
   getOwnedExperienceForCreator,
   isPublishedStatus,
   normalizeExperienceStatus,
+  normalizeVideoSource,
   slugifyValue,
 } from "@/lib/creator-auth";
+import { Prisma } from "@prisma/client";
 import prisma from "@/lib/prisma";
+import { deleteStorageObjectByUrl } from "@/lib/storage-upload";
 
 export async function GET(
   _request: NextRequest,
@@ -39,6 +42,9 @@ export async function GET(
         slug: experience.slug,
         description: experience.description,
         coverImageUrl: experience.coverImageUrl,
+        whyVideoSource: experience.whyVideoSource,
+        whyYoutubeUrl: experience.whyYoutubeUrl,
+        whyVideoUploadUrl: experience.whyVideoUploadUrl,
         status: experience.isActive ? "PUBLISHED" : "DRAFT",
       },
     });
@@ -80,6 +86,9 @@ export async function PATCH(
     const rawSlug = String(body?.slug || "").trim();
     const description = String(body?.description || "").trim();
     const coverImageUrl = String(body?.coverImageUrl || "").trim();
+    const whyVideoSource = normalizeVideoSource(body?.whyVideoSource);
+    const whyYoutubeUrl = String(body?.whyYoutubeUrl || "").trim();
+    const whyVideoAssetUrl = String(body?.whyVideoAssetUrl || "").trim();
     const status = normalizeExperienceStatus(body?.status);
     const slug = slugifyValue(rawSlug || title || existing.slug);
 
@@ -90,12 +99,24 @@ export async function PATCH(
       );
     }
 
+    if (whyVideoSource === "YOUTUBE" && !whyYoutubeUrl) {
+      return NextResponse.json(
+        { error: "whyYoutubeUrl is required for YouTube WHY videos." },
+        { status: 400 },
+      );
+    }
+
+    if (whyVideoSource === "UPLOAD" && !whyVideoAssetUrl) {
+      return NextResponse.json(
+        { error: "whyVideoAssetUrl is required for uploaded WHY videos." },
+        { status: 400 },
+      );
+    }
+
     const conflicting = await prisma.experience.findFirst({
       where: {
         slug,
-        id: {
-          not: existing.id,
-        },
+        id: { not: existing.id },
       },
       select: { id: true },
     });
@@ -114,6 +135,10 @@ export async function PATCH(
         slug,
         description: description || null,
         coverImageUrl: coverImageUrl || null,
+        whyVideoSource,
+        whyYoutubeUrl: whyVideoSource === "YOUTUBE" ? whyYoutubeUrl : null,
+        whyVideoUploadUrl:
+          whyVideoSource === "UPLOAD" ? whyVideoAssetUrl : null,
         isActive: isPublishedStatus(status),
       },
       select: {
@@ -122,10 +147,27 @@ export async function PATCH(
         slug: true,
         description: true,
         coverImageUrl: true,
+        whyVideoSource: true,
+        whyYoutubeUrl: true,
+        whyVideoUploadUrl: true,
         isActive: true,
         updatedAt: true,
       },
     });
+
+    if (
+      existing.coverImageUrl &&
+      existing.coverImageUrl !== experience.coverImageUrl
+    ) {
+      await deleteStorageObjectByUrl(existing.coverImageUrl);
+    }
+
+    if (
+      existing.whyVideoUploadUrl &&
+      existing.whyVideoUploadUrl !== experience.whyVideoUploadUrl
+    ) {
+      await deleteStorageObjectByUrl(existing.whyVideoUploadUrl);
+    }
 
     return NextResponse.json({
       data: {
@@ -134,6 +176,15 @@ export async function PATCH(
       },
     });
   } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === "P2002") {
+        return NextResponse.json(
+          { error: "An experience with this slug already exists." },
+          { status: 409 },
+        );
+      }
+    }
+
     console.error("[creator/experiences/[id]][PATCH] Error:", error);
     return NextResponse.json(
       { error: "Failed to update experience." },

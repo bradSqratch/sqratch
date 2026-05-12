@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBrandAdminContext, slugifyValue } from "@/lib/brand-auth";
-import prisma from "@/lib/prisma";
+import {
+  getCreatorContext,
+  getOwnedExperienceForCreator,
+  slugifyValue,
+} from "@/lib/creator-auth";
 import {
   createSignedUploadUrl,
   getMaxVideoUploadBytes,
@@ -14,25 +17,24 @@ const ALLOWED_VIDEO_TYPES = new Set([
   "video/x-m4v",
 ]);
 
-function buildCampaignVideoPath(options: {
-  brandSlug: string;
-  campaignSlug: string;
+function buildExperienceVideoPath(options: {
+  experienceSlug: string;
   fileName: string;
 }) {
   const cleanFileName = options.fileName.replace(/[^a-zA-Z0-9._-]/g, "-");
-  const cleanBrandSlug = slugifyValue(options.brandSlug) || "brand";
-  const cleanCampaignSlug = slugifyValue(options.campaignSlug) || "campaign";
+  const cleanExperienceSlug =
+    slugifyValue(options.experienceSlug) || "experience";
 
-  return `brands/${cleanBrandSlug}/campaigns/${cleanCampaignSlug}/why/${Date.now()}-${cleanFileName}`;
+  return `experiences/${cleanExperienceSlug}/why/${Date.now()}-${cleanFileName}`;
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const brand = await getBrandAdminContext();
+    const creator = await getCreatorContext();
 
-    if (!brand?.membership?.brand) {
+    if (!creator) {
       return NextResponse.json(
-        { error: "Brand admin access required." },
+        { error: "Creator access required." },
         { status: 403 },
       );
     }
@@ -41,9 +43,9 @@ export async function POST(request: NextRequest) {
     const fileName = String(body?.fileName || "").trim();
     const fileType = String(body?.fileType || "").trim();
     const fileSize = Number(body?.fileSize || 0);
-    const campaignId = String(body?.campaignId || "").trim();
-    const campaignSlug = slugifyValue(
-      String(body?.campaignSlug || "").trim(),
+    const experienceId = String(body?.experienceId || "").trim();
+    const experienceSlug = slugifyValue(
+      String(body?.experienceSlug || "").trim(),
     );
 
     if (!fileName) {
@@ -74,40 +76,37 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!campaignSlug) {
+    if (!experienceSlug) {
       return NextResponse.json(
-        { error: "campaignSlug is required." },
+        { error: "experienceSlug is required." },
         { status: 400 },
       );
     }
 
-    if (campaignId) {
-      const campaign = await prisma.campaign.findFirst({
-        where: {
-          id: campaignId,
-          brandId: brand.membership.brand.id,
-        },
-        select: { id: true },
-      });
+    if (experienceId) {
+      const experience = await getOwnedExperienceForCreator(
+        experienceId,
+        creator.userId,
+      );
 
-      if (!campaign) {
+      if (!experience) {
         return NextResponse.json(
-          { error: "Campaign not found." },
+          { error: "Experience not found." },
           { status: 404 },
         );
       }
     }
 
     const bucket =
-      process.env.SUPABASE_CAMPAIGN_VIDEO_BUCKET || "campaign-videos";
-    const path = buildCampaignVideoPath({
-      brandSlug: brand.membership.brand.slug,
-      campaignSlug,
-      fileName,
-    });
+      process.env.SUPABASE_EXPERIENCE_VIDEO_BUCKET ||
+      process.env.SUPABASE_CAMPAIGN_VIDEO_BUCKET ||
+      "campaign-videos";
     const signedUpload = await createSignedUploadUrl({
       bucket,
-      path,
+      path: buildExperienceVideoPath({
+        experienceSlug,
+        fileName,
+      }),
       upsert: true,
     });
 
@@ -120,9 +119,9 @@ export async function POST(request: NextRequest) {
       },
     });
   } catch (error) {
-    console.error("[uploads/campaign-video][POST] Error:", error);
+    console.error("[uploads/experience-video][POST] Error:", error);
     return NextResponse.json(
-      { error: "Failed to upload campaign video." },
+      { error: "Failed to upload experience video." },
       { status: 500 },
     );
   }

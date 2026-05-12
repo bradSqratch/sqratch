@@ -55,6 +55,14 @@ function normalizeNextPath(value: string | null) {
   return value;
 }
 
+function shouldCheckQrWarningForPath(nextPath: string) {
+  return (
+    nextPath.startsWith("/c/") ||
+    nextPath.startsWith("/x/") ||
+    nextPath.startsWith("/q/")
+  );
+}
+
 function SignupPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -62,6 +70,9 @@ function SignupPageInner() {
   const invitedEmail = searchParams.get("registeredemail");
   const nextPath = normalizeNextPath(searchParams.get("next"));
   const isInvitedClaimFlow = Boolean(invitedEmail);
+  const shouldCheckQrWarning =
+    !isInvitedClaimFlow && shouldCheckQrWarningForPath(nextPath);
+  const loginHref = `/login?next=${encodeURIComponent(nextPath)}`;
 
   const [user, setUser] = React.useState({
     name: "",
@@ -92,8 +103,9 @@ function SignupPageInner() {
     React.useState(false);
   const [viewerStatusLoaded, setViewerStatusLoaded] = React.useState(false);
   const redeemedQrBlocksSignup =
-    viewerStatusLoaded && hasRedeemedQrWarning && !isInvitedClaimFlow;
-  const waitingForViewerStatus = !viewerStatusLoaded && !isInvitedClaimFlow;
+    shouldCheckQrWarning && viewerStatusLoaded && hasRedeemedQrWarning;
+  const waitingForViewerStatus =
+    shouldCheckQrWarning && !viewerStatusLoaded;
 
   useEffect(() => {
     if (invitedEmail) {
@@ -106,6 +118,12 @@ function SignupPageInner() {
   }, [user]);
 
   useEffect(() => {
+    if (!shouldCheckQrWarning) {
+      setHasRedeemedQrWarning(false);
+      setViewerStatusLoaded(true);
+      return;
+    }
+
     const loadViewerStatus = async () => {
       try {
         const response = await fetch("/api/public/viewer-status", {
@@ -121,7 +139,7 @@ function SignupPageInner() {
     };
 
     void loadViewerStatus();
-  }, []);
+  }, [shouldCheckQrWarning]);
 
   const onSignup = async () => {
     setMessage(null);
@@ -275,7 +293,7 @@ function SignupPageInner() {
                   : "Create your account to get started"}
             </p>
 
-            {hasRedeemedQrWarning && (
+            {viewerStatusLoaded && hasRedeemedQrWarning && (
               <div className="mx-auto mt-6 max-w-2xl rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
                 This QR code is already redeemed. You can log in and browse
                 public content, but you will not earn points or unlock private
@@ -325,11 +343,7 @@ function SignupPageInner() {
                   asChild
                   className="w-full rounded-full border border-white bg-white py-6 text-black"
                 >
-                  <Link
-                    href={`/login?next=${encodeURIComponent(nextPath)}`}
-                  >
-                    Log In
-                  </Link>
+                  <Link href={loginHref}>Log In</Link>
                 </Button>
               </CardContent>
             </Card>
@@ -455,7 +469,7 @@ function SignupPageInner() {
                     asChild
                     className="mt-2 text-white/70 hover:text-white"
                   >
-                    <Link href="/login">Already have an account? Login</Link>
+                    <Link href={loginHref}>Already have an account? Login</Link>
                   </Button>
                 </CardFooter>
               </form>
@@ -766,7 +780,7 @@ function SignupPageInner() {
                     asChild
                     className="text-white/70 hover:text-white"
                   >
-                    <Link href="/login">Already have an account? Login</Link>
+                    <Link href={loginHref}>Already have an account? Login</Link>
                   </Button>
                 </CardFooter>
               </form>

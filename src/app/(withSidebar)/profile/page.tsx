@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
+import {
+  deleteUploadedAsset,
+  fetchJson,
+  getErrorMessage,
+} from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,8 +23,9 @@ export default function ProfilePage() {
   const [imageUrl, setImageUrl] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [pendingAvatarFile, setPendingAvatarFile] = useState<File | null>(null);
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
   const [passwordSaving, setPasswordSaving] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [passwordSuccess, setPasswordSuccess] = useState<string | null>(null);
@@ -49,6 +54,14 @@ export default function ProfilePage() {
     void load();
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (avatarPreview) {
+        URL.revokeObjectURL(avatarPreview);
+      }
+    };
+  }, [avatarPreview]);
+
   async function handleUpload(event: React.ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
 
@@ -56,28 +69,14 @@ export default function ProfilePage() {
       return;
     }
 
-    setUploading(true);
-    setError(null);
-
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const result = await fetchJson<{ fileUrl: string }>(
-        "/api/uploads/user-avatar",
-        {
-          method: "POST",
-          body: formData,
-        },
-      );
-
-      setImageUrl(result.fileUrl);
-    } catch (uploadError) {
-      setError(getErrorMessage(uploadError, "Failed to upload profile image."));
-    } finally {
-      event.target.value = "";
-      setUploading(false);
+    if (avatarPreview) {
+      URL.revokeObjectURL(avatarPreview);
     }
+
+    setPendingAvatarFile(file);
+    setAvatarPreview(URL.createObjectURL(file));
+    setError(null);
+    event.target.value = "";
   }
 
   async function handleSave(event: React.FormEvent<HTMLFormElement>) {
@@ -85,7 +84,26 @@ export default function ProfilePage() {
     setSaving(true);
     setError(null);
 
+    let nextImageUrl = imageUrl;
+    let uploadedImageUrl: string | null = null;
+
     try {
+      if (pendingAvatarFile) {
+        const formData = new FormData();
+        formData.append("file", pendingAvatarFile);
+
+        const uploadResult = await fetchJson<{ fileUrl: string }>(
+          "/api/uploads/user-avatar",
+          {
+            method: "POST",
+            body: formData,
+          },
+        );
+
+        nextImageUrl = uploadResult.fileUrl;
+        uploadedImageUrl = uploadResult.fileUrl;
+      }
+
       const updated = await fetchJson<UserProfile>("/api/user/profile", {
         method: "PATCH",
         headers: {
@@ -93,13 +111,21 @@ export default function ProfilePage() {
         },
         body: JSON.stringify({
           name,
-          imageUrl,
+          imageUrl: nextImageUrl,
         }),
       });
       setProfile(updated);
       setName(updated.name || "");
       setImageUrl(updated.imageUrl || "");
+      setPendingAvatarFile(null);
+      if (avatarPreview) {
+        URL.revokeObjectURL(avatarPreview);
+        setAvatarPreview(null);
+      }
     } catch (saveError) {
+      if (uploadedImageUrl) {
+        await deleteUploadedAsset(uploadedImageUrl);
+      }
       setError(getErrorMessage(saveError, "Failed to update profile."));
     } finally {
       setSaving(false);
@@ -164,11 +190,11 @@ export default function ProfilePage() {
           <form onSubmit={handleSave} className="space-y-6">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
               <div className="h-24 w-24 overflow-hidden rounded-full border border-white/10 bg-white/5">
-                {imageUrl ? (
+                {avatarPreview || imageUrl ? (
                   <>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={imageUrl}
+                      src={avatarPreview || imageUrl}
                       alt={profile?.name || "Profile"}
                       className="h-full w-full object-cover"
                     />
@@ -186,21 +212,26 @@ export default function ProfilePage() {
                   type="file"
                   accept=".png,.jpg,.jpeg,.webp"
                   onChange={handleUpload}
-                  disabled={uploading}
+                  disabled={saving}
                   className="hidden"
                 />
                 <Button
                   type="button"
                   variant="outline"
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
+                  disabled={saving}
                   className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
                 >
-                  {uploading ? "Uploading..." : "Upload profile image"}
+                  {pendingAvatarFile ? "Image selected" : "Upload profile image"}
                 </Button>
                 <p className="text-xs text-white/45">
                   PNG, JPG, JPEG, WEBP up to 5 MB.
                 </p>
+                {pendingAvatarFile ? (
+                  <p className="text-xs text-white/45">
+                    Pending file: {pendingAvatarFile.name}. Save profile to upload and apply it.
+                  </p>
+                ) : null}
               </div>
             </div>
 

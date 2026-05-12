@@ -32,7 +32,7 @@ export type PublicExperienceData = ExperienceShellData & {
   featuredStory: {
     id: string;
     lessonId: string | null;
-    kind: "CAMPAIGN" | "LESSON";
+    kind: "EXPERIENCE" | "LESSON";
     title: string;
     courseTitle: string | null;
     videoSource: "YOUTUBE" | "UPLOAD";

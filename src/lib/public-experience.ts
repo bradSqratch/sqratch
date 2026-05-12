@@ -55,16 +55,7 @@ export async function loadPublicExperience(
     },
   });
 
-  const campaignsWithVideo = access.experience.campaigns.filter(
-    (item) =>
-      (item.campaign.whyVideoSource === "YOUTUBE" &&
-        item.campaign.whyYoutubeUrl) ||
-      (item.campaign.whyVideoSource === "UPLOAD" &&
-        item.campaign.whyVideoUploadUrl),
-  );
-
-  const primaryCampaign =
-    campaignsWithVideo[0] || access.experience.campaigns[0] || null;
+  const primaryCampaign = access.experience.campaigns[0] || null;
 
   const orderedCampaigns = primaryCampaign
     ? [
@@ -95,25 +86,25 @@ export async function loadPublicExperience(
         (lesson.videoSource === "UPLOAD" && lesson.videoAssetUrl),
     );
 
-  const primaryCampaignVideo = primaryCampaign?.campaign &&
-    ((primaryCampaign.campaign.whyVideoSource === "YOUTUBE" &&
-      primaryCampaign.campaign.whyYoutubeUrl) ||
-      (primaryCampaign.campaign.whyVideoSource === "UPLOAD" &&
-        primaryCampaign.campaign.whyVideoUploadUrl))
+  const experienceWhyVideo =
+    (access.experience.whyVideoSource === "YOUTUBE" &&
+      access.experience.whyYoutubeUrl) ||
+    (access.experience.whyVideoSource === "UPLOAD" &&
+      access.experience.whyVideoUploadUrl)
     ? {
-        id: `campaign:${primaryCampaign.campaign.id}`,
+        id: `experience:${access.experience.id}:why`,
         lessonId: null,
-        kind: "CAMPAIGN" as const,
-        title: primaryCampaign.campaign.name,
+        kind: "EXPERIENCE" as const,
+        title: access.experience.title,
         courseTitle: null,
-        videoSource: primaryCampaign.campaign.whyVideoSource,
-        youtubeUrl: primaryCampaign.campaign.whyYoutubeUrl,
-        videoAssetUrl: primaryCampaign.campaign.whyVideoUploadUrl,
+        videoSource: access.experience.whyVideoSource,
+        youtubeUrl: access.experience.whyYoutubeUrl,
+        videoAssetUrl: access.experience.whyVideoUploadUrl,
       }
     : null;
 
-  const featuredStory = primaryCampaignVideo
-    ? primaryCampaignVideo
+  const featuredStory = experienceWhyVideo
+    ? experienceWhyVideo
     : playableLessons.find((lesson) => lesson.sortOrder === 3) ||
       playableLessons[0] ||
       null;

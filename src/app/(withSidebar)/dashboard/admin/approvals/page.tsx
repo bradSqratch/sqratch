@@ -48,6 +48,7 @@ type ApprovalHistoryItem = {
   id: string;
   requestType: "CREATOR" | "BRAND";
   status: "APPROVED" | "REJECTED";
+  reason: string | null;
   createdAt: string;
   updatedAt: string;
   proposedBrandName: string | null;
@@ -73,6 +74,19 @@ function getDecisionClasses(status: ApprovalHistoryItem["status"]) {
   return status === "APPROVED"
     ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-200"
     : "border-rose-400/25 bg-rose-400/10 text-rose-200";
+}
+
+function ApprovalNote({ reason }: { reason: string | null }) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
+      <p className="text-[11px] uppercase tracking-[0.2em] text-white/40">
+        Admin Note
+      </p>
+      <p className="mt-2 text-sm leading-6 text-white/65">
+        {reason?.trim() || "No admin note added."}
+      </p>
+    </div>
+  );
 }
 
 export default function AdminApprovalsPage() {
@@ -222,6 +236,7 @@ export default function AdminApprovalsPage() {
                         <p className="text-sm text-white/55">
                           Applied {formatDateTime(request.createdAt)}
                         </p>
+                        <ApprovalNote reason={request.reason} />
                       </div>
 
                       <div className="flex flex-wrap gap-3">
@@ -296,6 +311,7 @@ export default function AdminApprovalsPage() {
                         <p className="text-sm text-white/55">
                           Applied {formatDateTime(request.createdAt)}
                         </p>
+                        <ApprovalNote reason={request.reason} />
                       </div>
 
                       <div className="flex flex-wrap gap-3">
@@ -395,6 +411,9 @@ export default function AdminApprovalsPage() {
                           </span>
                           <span className="text-xs text-white/45">
                             Applied {formatDateTime(item.createdAt)}
+                          </span>
+                          <span className="text-xs text-white/55">
+                            Note: {item.reason?.trim() || "No admin note added."}
                           </span>
                         </div>
                       </TableCell>

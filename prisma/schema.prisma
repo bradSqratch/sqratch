@@ -120,9 +120,6 @@ model Campaign {
   name            String               @unique
   description     String?
   inviteUrl       String?
-  whyVideoSource  CampaignVideoSource?
-  whyYoutubeUrl   String?
-  whyVideoUploadUrl String?
   createdAt       DateTime             @default(now())
   updatedAt       DateTime             @updatedAt
   createdById     String
@@ -209,6 +206,9 @@ model Experience {
   slug                 String                  @unique
   description          String?
   coverImageUrl        String?
+  whyVideoSource       ExperienceVideoSource?
+  whyYoutubeUrl        String?
+  whyVideoUploadUrl    String?
   isActive             Boolean                 @default(true)
   creatorId            String
   createdAt            DateTime                @default(now())
@@ -543,9 +543,11 @@ enum LessonVideoSource {
   UPLOAD
 }
 
-enum CampaignVideoSource {
+enum ExperienceVideoSource {
   YOUTUBE
   UPLOAD
+
+  @@map("CampaignVideoSource")
 }
 
 enum QuestionStatus {

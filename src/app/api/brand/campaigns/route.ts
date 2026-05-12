@@ -2,22 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { getBrandAdminContext, slugifyValue } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
 
-function normalizeVideoSource(value: unknown) {
-  const normalized = String(value || "")
-    .trim()
-    .toUpperCase();
-
-  if (normalized === "UPLOAD") {
-    return "UPLOAD" as const;
-  }
-
-  if (normalized === "YOUTUBE") {
-    return "YOUTUBE" as const;
-  }
-
-  return null;
-}
-
 export async function GET() {
   try {
     const context = await getBrandAdminContext();
@@ -89,34 +73,10 @@ export async function POST(request: NextRequest) {
     const slug = slugifyValue(String(body?.slug || "").trim() || name);
     const description = String(body?.description || "").trim();
     const isActive = Boolean(body?.isActive);
-    const whyVideoSource = normalizeVideoSource(body?.whyVideoSource);
-    const whyYoutubeUrl = String(body?.whyYoutubeUrl || "").trim();
-    const whyVideoAssetUrl = String(body?.whyVideoAssetUrl || "").trim();
 
     if (!name || !slug) {
       return NextResponse.json(
         { error: "Campaign name and slug are required." },
-        { status: 400 },
-      );
-    }
-
-    if (!whyVideoSource) {
-      return NextResponse.json(
-        { error: "Campaign video source is required." },
-        { status: 400 },
-      );
-    }
-
-    if (whyVideoSource === "YOUTUBE" && !whyYoutubeUrl) {
-      return NextResponse.json(
-        { error: "whyYoutubeUrl is required for YouTube campaign videos." },
-        { status: 400 },
-      );
-    }
-
-    if (whyVideoSource === "UPLOAD" && !whyVideoAssetUrl) {
-      return NextResponse.json(
-        { error: "whyVideoAssetUrl is required for uploaded campaign videos." },
         { status: 400 },
       );
     }
@@ -141,10 +101,6 @@ export async function POST(request: NextRequest) {
         slug,
         description: description || null,
         isActive,
-        whyVideoSource,
-        whyYoutubeUrl: whyVideoSource === "YOUTUBE" ? whyYoutubeUrl : null,
-        whyVideoUploadUrl:
-          whyVideoSource === "UPLOAD" ? whyVideoAssetUrl : null,
         brandId: context.membership.brand.id,
         createdById: context.userId,
       },
@@ -154,9 +110,6 @@ export async function POST(request: NextRequest) {
         slug: true,
         description: true,
         isActive: true,
-        whyVideoSource: true,
-        whyYoutubeUrl: true,
-        whyVideoUploadUrl: true,
       },
     });
 

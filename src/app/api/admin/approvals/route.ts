@@ -66,6 +66,7 @@ export async function GET() {
         select: {
           id: true,
           status: true,
+          reason: true,
           createdAt: true,
           updatedAt: true,
           user: {
@@ -93,6 +94,7 @@ export async function GET() {
         select: {
           id: true,
           status: true,
+          reason: true,
           proposedBrandName: true,
           createdAt: true,
           updatedAt: true,
@@ -124,6 +126,7 @@ export async function GET() {
         status: request.status,
         createdAt: request.createdAt,
         updatedAt: request.updatedAt,
+        reason: request.reason,
         proposedBrandName: null,
         user: request.user,
         reviewedBy: request.reviewedBy,
@@ -134,6 +137,7 @@ export async function GET() {
         status: request.status,
         createdAt: request.createdAt,
         updatedAt: request.updatedAt,
+        reason: request.reason,
         proposedBrandName: request.proposedBrandName,
         user: request.user,
         reviewedBy: request.reviewedBy,

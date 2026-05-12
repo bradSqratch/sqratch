@@ -2,7 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { BrandPageShell } from "@/components/brand/page-shell";
-import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
+import {
+  deleteUploadedAsset,
+  fetchJson,
+  getErrorMessage,
+} from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -87,10 +91,24 @@ export default function BrandProfilePage() {
     void load();
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (logoPreview) {
+        URL.revokeObjectURL(logoPreview);
+      }
+      if (coverPreview) {
+        URL.revokeObjectURL(coverPreview);
+      }
+    };
+  }, [coverPreview, logoPreview]);
+
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setSaving(true);
     setError(null);
+
+    let uploadedLogoUrl: string | null = null;
+    let uploadedCoverUrl: string | null = null;
 
     try {
       let logoUrl = form.logoUrl;
@@ -98,10 +116,12 @@ export default function BrandProfilePage() {
 
       if (logoFile) {
         logoUrl = await uploadBrandAsset(logoFile, "logo");
+        uploadedLogoUrl = logoUrl;
       }
 
       if (coverFile) {
         coverImageUrl = await uploadBrandAsset(coverFile, "cover");
+        uploadedCoverUrl = coverImageUrl;
       }
 
       await fetchJson("/api/brand/profile", {
@@ -132,6 +152,10 @@ export default function BrandProfilePage() {
       }
       setExists(true);
     } catch (submitError) {
+      await Promise.allSettled([
+        uploadedLogoUrl ? deleteUploadedAsset(uploadedLogoUrl) : Promise.resolve(false),
+        uploadedCoverUrl ? deleteUploadedAsset(uploadedCoverUrl) : Promise.resolve(false),
+      ]);
       setError(getErrorMessage(submitError, "Failed to save brand profile."));
     } finally {
       setSaving(false);
@@ -264,12 +288,17 @@ export default function BrandProfilePage() {
                     </div>
                     <Input
                       value={form.logoUrl}
-                      onChange={(event) =>
+                      onChange={(event) => {
+                        if (logoPreview) {
+                          URL.revokeObjectURL(logoPreview);
+                          setLogoPreview(null);
+                        }
+                        setLogoFile(null);
                         setForm((current) => ({
                           ...current,
                           logoUrl: event.target.value,
-                        }))
-                      }
+                        }));
+                      }}
                       className="border-white/10 bg-black/20 text-white"
                     />
                   </div>
@@ -330,12 +359,17 @@ export default function BrandProfilePage() {
                   </div>
                   <Input
                     value={form.coverImageUrl}
-                    onChange={(event) =>
+                    onChange={(event) => {
+                      if (coverPreview) {
+                        URL.revokeObjectURL(coverPreview);
+                        setCoverPreview(null);
+                      }
+                      setCoverFile(null);
                       setForm((current) => ({
                         ...current,
                         coverImageUrl: event.target.value,
-                      }))
-                    }
+                      }));
+                    }}
                     className="border-white/10 bg-black/20 text-white"
                   />
                 </div>

@@ -74,16 +74,7 @@ export async function POST(
       );
     }
 
-    const campaignsWithVideo = access.experience.campaigns.filter(
-      (item) =>
-        (item.campaign.whyVideoSource === "YOUTUBE" &&
-          item.campaign.whyYoutubeUrl) ||
-        (item.campaign.whyVideoSource === "UPLOAD" &&
-          item.campaign.whyVideoUploadUrl),
-    );
-
-    const primaryCampaign =
-      campaignsWithVideo[0] || access.experience.campaigns[0] || null;
+    const primaryCampaign = access.experience.campaigns[0] || null;
 
     const sessionId =
       access.viewer.sessionId ||

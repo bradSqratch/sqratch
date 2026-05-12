@@ -1,8 +1,14 @@
-import { Coins, QrCode } from "lucide-react";
+import { Coins, Hammer, Info, QrCode } from "lucide-react";
 import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { getUserPointsOverview } from "@/lib/points";
 
 function formatDate(value: Date) {
@@ -75,15 +81,48 @@ export default async function DashboardPointsPage() {
               </p>
             </div>
 
-            <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/20 px-5 py-4 text-white/80">
-              <QrCode className="h-5 w-5 text-amber-300" />
-              <div>
-                <p className="text-xs uppercase tracking-[0.2em] text-white/45">
-                  Rule
-                </p>
-                <p className="text-sm text-white/75">
-                  1 point per redeemed QR code
-                </p>
+            <div className="flex w-full flex-col gap-3 md:w-auto md:items-end">
+              <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/20 px-5 py-4 text-white/80">
+                <QrCode className="h-5 w-5 text-amber-300" />
+                <div>
+                  <p className="text-xs uppercase tracking-[0.2em] text-white/45">
+                    Rule
+                  </p>
+                  <p className="text-sm text-white/75">
+                    1 point per redeemed QR code
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  disabled
+                  variant="outline"
+                  className="rounded-full border-amber-300/20 bg-amber-300/10 px-4 text-amber-100 hover:bg-amber-300/15"
+                >
+                  <Hammer className="h-4 w-4" />
+                  Mining coming soon
+                </Button>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-black/20 text-white/55 transition-colors hover:text-white/80"
+                      aria-label="Mining info"
+                    >
+                      <Info className="h-4 w-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent
+                    side="top"
+                    sideOffset={8}
+                    className="max-w-xs border border-white/10 bg-[#111827] text-white"
+                  >
+                    Only people who go through the SQRATCH experience will be
+                    able to mint.
+                  </TooltipContent>
+                </Tooltip>
               </div>
             </div>
           </CardContent>

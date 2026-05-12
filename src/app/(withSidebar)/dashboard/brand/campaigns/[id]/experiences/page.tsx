@@ -145,7 +145,12 @@ export default function BrandCampaignExperiencesPage({
                     void toggleExperience(experience.id, !experience.attached)
                   }
                   disabled={savingId === experience.id}
-                  className="rounded-full border border-white bg-white text-black"
+                  variant={experience.attached ? "destructive" : undefined}
+                  className={
+                    experience.attached
+                      ? "rounded-full border border-red-500/40 bg-red-500 text-white hover:bg-red-500/90"
+                      : "rounded-full border border-white bg-white text-black"
+                  }
                 >
                   {savingId === experience.id
                     ? "Saving..."
