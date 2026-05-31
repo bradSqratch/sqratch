@@ -7,8 +7,8 @@ This app uses Shopify only to read and display products in SQRATCH. Store owners
 - `SHOPIFY_API_KEY`: Shopify app client ID/API key.
 - `SHOPIFY_API_SECRET`: Shopify app client secret. Used for OAuth and webhook HMAC verification.
 - `SHOPIFY_SCOPES`: Must be exactly `read_products`.
-- `SHOPIFY_APP_URL`: Production app origin, for example `https://sqratch.com`.
-- `NEXTAUTH_URL`: Production app origin, for example `https://sqratch.com`.
+- `SHOPIFY_APP_URL`: Production app origin, for example `https://www.sqratch.com`.
+- `NEXTAUTH_URL`: Production app origin, for example `https://www.sqratch.com`.
 - `NEXTAUTH_SECRET`: Required by auth and used as an encryption fallback.
 - `APP_ENCRYPTION_KEY`: Preferred stable key for encrypting Shopify access tokens. Do not rotate without a token migration plan.
 - `DATABASE_URL`: Production database URL.
@@ -18,15 +18,15 @@ Do not add product write scopes unless the product requirements change.
 
 ## Shopify Partner Dashboard Settings
 
-- App URL: `https://sqratch.com/shopify`.
+- App URL: `https://www.sqratch.com/shopify`.
 - Embedded app: enabled.
-- Allowed redirection URL: `https://sqratch.com/api/shopify/oauth/callback`.
+- Allowed redirection URL: `https://www.sqratch.com/api/shopify/oauth/callback`.
 - Access scopes: `read_products` only.
 - Admin API version: match `SHOPIFY_API_VERSION` in `src/lib/shopify.ts`.
-- App uninstall webhook: `https://sqratch.com/api/shopify/webhooks/app/uninstalled`.
-- Customer data request webhook: `https://sqratch.com/api/shopify/webhooks/customers/data_request`.
-- Customer redact webhook: `https://sqratch.com/api/shopify/webhooks/customers/redact`.
-- Shop redact webhook: `https://sqratch.com/api/shopify/webhooks/shop/redact`.
+- App uninstall webhook: `https://www.sqratch.com/api/shopify/webhooks/app/uninstalled`.
+- Customer data request webhook: `https://www.sqratch.com/api/shopify/webhooks/customers/data_request`.
+- Customer redact webhook: `https://www.sqratch.com/api/shopify/webhooks/customers/redact`.
+- Shop redact webhook: `https://www.sqratch.com/api/shopify/webhooks/shop/redact`.
 
 The repository also contains `shopify.app.toml` for the production embedded app configuration.
 

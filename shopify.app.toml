@@ -1,7 +1,7 @@
 client_id = "0e94b8983e671068b33cdbd17dc54dc5"
 name = "SQRATCH"
 handle = "sqratch"
-application_url = "https://sqratch.com/shopify"
+application_url = "https://www.sqratch.com/shopify"
 embedded = true
 
 [access_scopes]
@@ -9,7 +9,7 @@ scopes = "read_products"
 
 [auth]
 redirect_urls = [
-  "https://sqratch.com/api/shopify/oauth/callback"
+  "https://www.sqratch.com/api/shopify/oauth/callback"
 ]
 
 [webhooks]
@@ -17,16 +17,16 @@ api_version = "2026-04"
 
 [[webhooks.subscriptions]]
 topics = ["app/uninstalled"]
-uri = "https://sqratch.com/api/shopify/webhooks/app/uninstalled"
+uri = "https://www.sqratch.com/api/shopify/webhooks/app/uninstalled"
 
 [[webhooks.subscriptions]]
 compliance_topics = ["customers/data_request"]
-uri = "https://sqratch.com/api/shopify/webhooks/customers/data_request"
+uri = "https://www.sqratch.com/api/shopify/webhooks/customers/data_request"
 
 [[webhooks.subscriptions]]
 compliance_topics = ["customers/redact"]
-uri = "https://sqratch.com/api/shopify/webhooks/customers/redact"
+uri = "https://www.sqratch.com/api/shopify/webhooks/customers/redact"
 
 [[webhooks.subscriptions]]
 compliance_topics = ["shop/redact"]
-uri = "https://sqratch.com/api/shopify/webhooks/shop/redact"
+uri = "https://www.sqratch.com/api/shopify/webhooks/shop/redact"

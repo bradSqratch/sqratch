@@ -5,6 +5,11 @@ import { getToken } from "next-auth/jwt";
 export async function middleware(request: NextRequest) {
   const url = request.nextUrl;
   console.log("Middleware invoked for:", url.pathname);
+
+  if (url.pathname.startsWith("/api/shopify/webhooks/")) {
+    return NextResponse.next();
+  }
+
   const token = await getToken({ req: request }).catch(() => null);
 
   // Redirect /signup to /login
@@ -57,7 +62,7 @@ export async function middleware(request: NextRequest) {
 
   // 3) If logged in but NOT admin, block /admin/*
   if (token && isAdminRoute) {
-    const role = (token as any).role; // must exist in token (see section 2)
+    const role = (token as { role?: string }).role; // must exist in token (see section 2)
     if (role !== "ADMIN") {
       return NextResponse.redirect(new URL("/dashboard", request.url));
     }
@@ -73,6 +78,7 @@ export const config = {
     "/signup",
     "/sign-up",
     "/verify-email",
+    "/api/shopify/webhooks/:path*",
     "/admin/:path*",
     "/dashboard/:path*",
     "/generateQR/:path*",
