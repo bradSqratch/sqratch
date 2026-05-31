@@ -60,12 +60,7 @@ export default function BrandShopifyPage() {
       setError(null);
       setMessage(null);
 
-      const connected = searchParams.get("connected");
       const oauthError = searchParams.get("error");
-
-      if (connected === "1") {
-        setMessage("Shopify connected successfully.");
-      }
 
       if (oauthError) {
         setError(`Shopify connection failed: ${oauthError.replaceAll("_", " ")}`);
@@ -77,6 +72,18 @@ export default function BrandShopifyPage() {
         setBrand(brandData);
         if (brandData?.shopifyShopDomain) {
           setShopDomain(brandData.shopifyShopDomain);
+        }
+
+        if (brandData?.shopifyConnectionStatus === "CONNECTED") {
+          if (searchParams.get("connected") === "1") {
+            setMessage("Shopify connected successfully.");
+          }
+        } else if (brandData?.shopifyConnectionStatus === "UNINSTALLED") {
+          setMessage(
+            "Shopify app was uninstalled from the store. Reconnect to fetch products.",
+          );
+        } else if (brandData?.shopifyConnectionStatus === "DISCONNECTED") {
+          setMessage("Shopify disconnected.");
         }
       } catch (loadError) {
         setError(getErrorMessage(loadError, "Failed to load Shopify status."));
