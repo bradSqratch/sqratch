@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import Link from "next/link";
 import Script from "next/script";
 import { Button } from "@/components/ui/button";
 import prisma from "@/lib/prisma";
@@ -34,7 +33,9 @@ export default async function ShopifyShellPage({
 }) {
   const params = await searchParams;
   const rawShop = firstParam(params.shop);
-  const shop = String(rawShop || "").trim().toLowerCase();
+  const shop = String(rawShop || "")
+    .trim()
+    .toLowerCase();
   const validShop = isValidShopDomain(shop);
   const linkedBrand = validShop
     ? await prisma.brand.findFirst({
@@ -42,16 +43,16 @@ export default async function ShopifyShellPage({
           shopifyShopDomain: shop,
         },
         select: {
-          shopifyConnectionStatus: true,
+          shopifyAdminAccessTokenEncrypted: true,
         },
       })
     : null;
-  const isConnected = linkedBrand?.shopifyConnectionStatus === "CONNECTED";
+  const isConnected = Boolean(linkedBrand?.shopifyAdminAccessTokenEncrypted);
   const continueHref = isConnected
     ? "/dashboard/brand/shopify"
     : validShop
       ? `/api/shopify/oauth/start?shop=${encodeURIComponent(shop)}`
-      : "/dashboard/brand/shopify";
+      : "";
 
   return (
     <main className="min-h-screen bg-[#050714] px-5 py-8 text-white">
@@ -63,8 +64,8 @@ export default async function ShopifyShellPage({
       ) : null}
 
       <section className="mx-auto flex min-h-[calc(100vh-4rem)] max-w-3xl items-center">
-        <div className="w-full overflow-hidden rounded-[2rem] border border-white/10 bg-[#111722]/95 shadow-2xl shadow-black/40">
-          <div className="border-b border-white/10 bg-gradient-to-r from-[#111827] via-[#0b1020] to-[#172338] px-7 py-6">
+        <div className="w-full overflow-hidden rounded-4xl border border-white/10 bg-[#111722]/95 shadow-2xl shadow-black/40">
+          <div className="border-b border-white/10 bg-linear-to-r from-[#111827] via-[#0b1020] to-[#172338] px-7 py-6">
             <p className="text-xs font-semibold uppercase tracking-[0.35em] text-[#b7a6e8]">
               SQRATCH
             </p>
@@ -102,28 +103,47 @@ export default async function ShopifyShellPage({
             </div>
 
             <div className="rounded-2xl border border-[#b7a6e8]/20 bg-[#b7a6e8]/10 p-5 text-sm leading-6 text-white/75">
-              Link this Shopify store to a SQRATCH Brand account so Brand
-              Admins can display Shopify products inside SQRATCH experiences.
-              SQRATCH only requests product read access.
+              Link this Shopify store to a SQRATCH Brand account so Brand Admins
+              can display Shopify products inside SQRATCH experiences. SQRATCH
+              only requests product read access.
             </div>
 
+            {!validShop ? (
+              <p className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+                Shopify did not provide a valid shop domain. Reopen SQRATCH from
+                Shopify Admin or install with a valid `*.myshopify.com` store.
+              </p>
+            ) : null}
+
             <div className="flex flex-wrap gap-3">
-              <Button
-                asChild
-                className="rounded-full border border-white bg-white px-5 text-black hover:bg-white/90"
-              >
-                <Link href={continueHref}>
-                  {isConnected
-                    ? "Open SQRATCH Shopify dashboard"
-                    : "Continue to SQRATCH linking"}
-                </Link>
-              </Button>
+              {validShop ? (
+                <Button
+                  asChild
+                  className="rounded-full border border-white bg-white px-5 text-black hover:bg-white/90"
+                >
+                  <a href={continueHref} target="_top">
+                    {isConnected
+                      ? "Open SQRATCH Shopify dashboard"
+                      : "Continue to SQRATCH linking"}
+                  </a>
+                </Button>
+              ) : (
+                <Button
+                  type="button"
+                  disabled
+                  className="rounded-full border border-white bg-white px-5 text-black hover:bg-white/90"
+                >
+                  Continue to SQRATCH linking
+                </Button>
+              )}
               <Button
                 asChild
                 variant="outline"
                 className="rounded-full border-white/15 bg-transparent px-5 text-white hover:bg-white/10"
               >
-                <Link href="/dashboard/brand/shopify">Brand dashboard</Link>
+                <a href="/dashboard/brand/shopify" target="_top">
+                  Brand dashboard
+                </a>
               </Button>
             </div>
           </div>
