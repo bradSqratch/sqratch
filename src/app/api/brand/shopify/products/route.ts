@@ -54,6 +54,7 @@ export async function GET() {
         title: product.title,
         handle: product.handle,
         productUrl: product.productUrl,
+        imageUrl: product.imageUrl,
         images: product.images,
         priceRange: product.priceRange,
         variantIds: product.variantIds,

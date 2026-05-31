@@ -43,7 +43,10 @@ export default async function ShopifyShellPage({
           shopifyShopDomain: shop,
         },
         select: {
+          name: true,
           shopifyAdminAccessTokenEncrypted: true,
+          shopifyDisconnectedAt: true,
+          shopifyUninstalledAt: true,
         },
       })
     : null;
@@ -53,6 +56,13 @@ export default async function ShopifyShellPage({
     : validShop
       ? `/api/shopify/oauth/start?shop=${encodeURIComponent(shop)}`
       : "";
+  const connectionLabel = isConnected
+    ? `Connected to SQRATCH Brand${linkedBrand?.name ? `: ${linkedBrand.name}` : ""}`
+    : linkedBrand?.shopifyUninstalledAt
+      ? "Uninstalled from Shopify"
+      : linkedBrand?.shopifyDisconnectedAt
+        ? "Disconnected from SQRATCH"
+        : "Not connected";
 
   return (
     <main className="min-h-screen bg-[#050714] px-5 py-8 text-white">
@@ -93,11 +103,7 @@ export default async function ShopifyShellPage({
                   SQRATCH link
                 </p>
                 <p className="mt-2 text-sm text-white/85">
-                  {isConnected
-                    ? "Connected to a SQRATCH Brand"
-                    : linkedBrand
-                      ? "Previously linked to a SQRATCH Brand"
-                      : "Not connected"}
+                  {connectionLabel}
                 </p>
               </div>
             </div>
@@ -136,15 +142,6 @@ export default async function ShopifyShellPage({
                   Continue to SQRATCH linking
                 </Button>
               )}
-              <Button
-                asChild
-                variant="outline"
-                className="rounded-full border-white/15 bg-transparent px-5 text-white hover:bg-white/10"
-              >
-                <a href="/dashboard/brand/shopify" target="_top">
-                  Brand dashboard
-                </a>
-              </Button>
             </div>
           </div>
         </div>

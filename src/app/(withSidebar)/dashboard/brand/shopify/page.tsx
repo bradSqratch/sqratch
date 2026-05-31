@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { BrandPageShell } from "@/components/brand/page-shell";
@@ -29,6 +30,7 @@ type ShopifyProduct = {
   title: string;
   handle: string;
   productUrl: string;
+  imageUrl: string | null;
   images: string[];
   priceRange: {
     min: number | null;
@@ -241,6 +243,19 @@ export default function BrandShopifyPage() {
                 key={product.id}
                 className="rounded-2xl border border-white/10 bg-black/20 p-4"
               >
+                {product.imageUrl ? (
+                  <Image
+                    src={product.imageUrl}
+                    alt={product.title}
+                    width={480}
+                    height={288}
+                    className="mb-4 h-36 w-full rounded-xl border border-white/10 object-cover"
+                  />
+                ) : (
+                  <div className="mb-4 flex h-36 w-full items-center justify-center rounded-xl border border-white/10 bg-white/5 text-xs uppercase tracking-[0.2em] text-white/35">
+                    No image
+                  </div>
+                )}
                 <h3 className="font-medium">{product.title}</h3>
                 <p className="mt-2 text-sm text-white/55">
                   {product.priceRange.min !== null

@@ -413,7 +413,7 @@ export default function HomePage() {
                   </h3>
                   <div className="flex flex-col gap-0">
                     <Link
-                      href="https://www.sqratch.com/"
+                      href="https://sqratch.com/"
                       className="text-[22px] font-semibold tracking-[-0.03em] text-[#ECECEC] whitespace-nowrap hover:text-white transition"
                     >
                       Sqratch Inc.
