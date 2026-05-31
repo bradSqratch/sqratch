@@ -2,7 +2,7 @@ import { decryptSecret } from "@/lib/crypto";
 import { SHOPIFY_API_VERSION } from "@/lib/shopify";
 
 type ShopifyProductImage = {
-  src: string | null;
+  url: string | null;
 };
 
 type ShopifyProductVariant = {
@@ -14,13 +14,26 @@ type ShopifyProduct = {
   id: number | string;
   title: string;
   handle: string;
-  images?: ShopifyProductImage[];
-  variants?: ShopifyProductVariant[];
+  onlineStoreUrl?: string | null;
+  images?: {
+    nodes?: ShopifyProductImage[];
+  };
+  variants?: {
+    nodes?: ShopifyProductVariant[];
+  };
+  featuredImage?: ShopifyProductImage | null;
 };
 
 type ShopifyProductsResponse = {
-  products?: ShopifyProduct[];
-  errors?: string | string[] | Record<string, string>;
+  data?: {
+    products?: {
+      nodes?: ShopifyProduct[];
+      pageInfo?: {
+        hasNextPage?: boolean;
+      };
+    };
+  };
+  errors?: Array<{ message?: string }> | string | Record<string, string>;
 };
 
 export type NormalizedShopifyProduct = {
@@ -68,20 +81,30 @@ function normalizeProduct(
   shopDomain: string,
   currency = "USD",
 ): NormalizedShopifyProduct {
-  const prices = (product.variants || [])
-    .map((variant) => Number(variant.price || 0))
+  const variants = product.variants?.nodes || [];
+  const imageNodes = product.images?.nodes || [];
+  const prices = variants
+    .map((variant) =>
+      variant.price === null || variant.price === ""
+        ? Number.NaN
+        : Number(variant.price),
+    )
     .filter((price) => Number.isFinite(price));
   const minPrice = prices.length ? Math.min(...prices) : null;
   const maxPrice = prices.length ? Math.max(...prices) : null;
-  const images = (product.images || [])
-    .map((image) => image.src)
+  const images = [
+    product.featuredImage?.url || null,
+    ...imageNodes.map((image) => image.url),
+  ]
     .filter((src): src is string => Boolean(src));
 
   return {
     id: String(product.id),
     title: product.title,
     handle: product.handle,
-    productUrl: `https://${shopDomain}/products/${product.handle}`,
+    productUrl:
+      product.onlineStoreUrl ||
+      `https://${shopDomain}/products/${product.handle}`,
     images,
     imageUrl: images[0] || null,
     priceRange: {
@@ -90,8 +113,27 @@ function normalizeProduct(
     },
     priceText: formatPriceText(prices, currency),
     currency,
-    variantIds: (product.variants || []).map((variant) => String(variant.id)),
+    variantIds: variants.map((variant) => String(variant.id)),
   };
+}
+
+function formatShopifyErrors(errors: ShopifyProductsResponse["errors"]) {
+  if (!errors) {
+    return "Failed to fetch Shopify products.";
+  }
+
+  if (typeof errors === "string") {
+    return errors;
+  }
+
+  if (Array.isArray(errors)) {
+    return errors
+      .map((error) => error.message)
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  return "Failed to fetch Shopify products.";
 }
 
 export async function fetchNormalizedShopifyProducts(options: {
@@ -102,12 +144,47 @@ export async function fetchNormalizedShopifyProducts(options: {
 }) {
   const accessToken = decryptSecret(options.encryptedToken);
   const response = await fetch(
-    `https://${options.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/products.json?limit=${options.limit || 100}`,
+    `https://${options.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
     {
+      method: "POST",
       headers: {
         "X-Shopify-Access-Token": accessToken,
         "Content-Type": "application/json",
       },
+      body: JSON.stringify({
+        query: `
+          query SqratchProducts($first: Int!) {
+            products(first: $first, query: "status:active") {
+              nodes {
+                id
+                title
+                handle
+                onlineStoreUrl
+                featuredImage {
+                  url
+                }
+                images(first: 10) {
+                  nodes {
+                    url
+                  }
+                }
+                variants(first: 100) {
+                  nodes {
+                    id
+                    price
+                  }
+                }
+              }
+              pageInfo {
+                hasNextPage
+              }
+            }
+          }
+        `,
+        variables: {
+          first: options.limit || 100,
+        },
+      }),
       cache: "no-store",
     },
   );
@@ -116,18 +193,22 @@ export async function fetchNormalizedShopifyProducts(options: {
     | ShopifyProductsResponse
     | null;
 
-  if (!response.ok || !json?.products) {
+  const products = json?.data?.products?.nodes;
+
+  if (!response.ok || json?.errors || !products) {
     return {
       ok: false as const,
-      status: response.status || 500,
-      error: json?.errors || "Failed to fetch Shopify products.",
+      status: response.ok ? 502 : response.status || 500,
+      error: formatShopifyErrors(json?.errors),
     };
   }
 
   return {
     ok: true as const,
-    items: json.products.map((product) =>
+    items: products.map((product) =>
       normalizeProduct(product, options.shopDomain, options.currency || "USD"),
     ),
+    hasNextPage: Boolean(json?.data?.products?.pageInfo?.hasNextPage),
+    limit: options.limit || 100,
   };
 }

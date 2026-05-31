@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBrandAdminContext } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
 import {
   buildShopifyDashboardRedirect,
@@ -11,17 +10,6 @@ import {
 
 export async function GET(request: NextRequest) {
   try {
-    const context = await getBrandAdminContext();
-
-    if (!context?.membership?.brand) {
-      return NextResponse.redirect(
-        buildShopifyDashboardRedirect({
-          origin: request.nextUrl.origin,
-          error: "brand_access_required",
-        }),
-      );
-    }
-
     const apiKey = process.env.SHOPIFY_API_KEY;
 
     if (!apiKey) {
@@ -34,9 +22,7 @@ export async function GET(request: NextRequest) {
     }
 
     const shop = String(
-      request.nextUrl.searchParams.get("shop") ||
-        context.membership.brand.shopifyShopDomain ||
-        "",
+      request.nextUrl.searchParams.get("shop") || "",
     )
       .trim()
       .toLowerCase();
@@ -60,8 +46,6 @@ export async function GET(request: NextRequest) {
       data: {
         service: `shopify_oauth_state:${state}`,
         token: JSON.stringify({
-          brandId: context.membership.brand.id,
-          userId: context.userId,
           shop,
         }),
         expiresAt: new Date(Date.now() + 10 * 60 * 1000),

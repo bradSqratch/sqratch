@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth";
+import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import { encryptSecret } from "@/lib/crypto";
 import prisma from "@/lib/prisma";
 import {
+  buildShopifyPendingInstallService,
   buildShopifyDashboardRedirect,
   buildShopifyHmac,
+  createOauthState,
+  SHOPIFY_PENDING_INSTALL_TTL_MS,
   isValidShopDomain,
 } from "@/lib/shopify";
 
@@ -64,8 +69,6 @@ export async function GET(request: NextRequest) {
     }
 
     const payload = JSON.parse(stateRecord.token) as {
-      brandId: string;
-      userId: string;
       shop: string;
     };
 
@@ -104,31 +107,35 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    await prisma.$transaction(async (tx) => {
-      await tx.brand.update({
-        where: {
-          id: payload.brandId,
-        },
-        data: {
-          shopifyShopDomain: shop,
-          shopifyAdminAccessTokenEncrypted: encryptSecret(
-            tokenJson.access_token,
-          ),
-          shopifyInstalledAt: new Date(),
-        },
-      });
+    const pendingInstallId = createOauthState();
 
-      await tx.tokenStore.delete({
+    await prisma.$transaction([
+      prisma.tokenStore.create({
+        data: {
+          service: buildShopifyPendingInstallService(pendingInstallId),
+          token: JSON.stringify({
+            shop,
+            encryptedToken: encryptSecret(tokenJson.access_token),
+          }),
+          expiresAt: new Date(Date.now() + SHOPIFY_PENDING_INSTALL_TTL_MS),
+        },
+      }),
+      prisma.tokenStore.delete({
         where: {
           service: stateRecord.service,
         },
-      });
-    });
+      }),
+    ]);
 
-    const redirectUrl = buildShopifyDashboardRedirect({
-      origin: request.nextUrl.origin,
-      connected: "1",
-    });
+    const installPath = `/dashboard/brand/shopify/install?install=${encodeURIComponent(pendingInstallId)}`;
+    const session = await getServerSession(authOptions);
+    const redirectUrl = session?.user?.id
+      ? new URL(installPath, request.nextUrl.origin)
+      : new URL(
+          `/login?next=${encodeURIComponent(installPath)}`,
+          request.nextUrl.origin,
+        );
+
     return NextResponse.redirect(redirectUrl);
   } catch (error) {
     console.error("[shopify/oauth/callback][GET] Error:", error);

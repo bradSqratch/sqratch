@@ -18,6 +18,9 @@ export type BrandAdminContext = {
         shopifyShopDomain: string | null;
         shopifyAdminAccessTokenEncrypted: string | null;
         shopifyInstalledAt: Date | null;
+        shopifyDisconnectedAt: Date | null;
+        shopifyUninstalledAt: Date | null;
+        shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED";
         shopifyLastProductSyncAt: Date | null;
       };
   } | null;
@@ -59,6 +62,63 @@ export async function getBrandAdminContext(options?: {
           shopifyShopDomain: true,
           shopifyAdminAccessTokenEncrypted: true,
           shopifyInstalledAt: true,
+          shopifyDisconnectedAt: true,
+          shopifyUninstalledAt: true,
+          shopifyConnectionStatus: true,
+          shopifyLastProductSyncAt: true,
+        },
+      },
+    },
+  });
+
+  if (!membership && !options?.allowWithoutBrand) {
+    return null;
+  }
+
+  return {
+    userId,
+    membership,
+  };
+}
+
+export async function getBrandManagementContext(options?: {
+  allowWithoutBrand?: boolean;
+}): Promise<BrandAdminContext | null> {
+  const session = await getServerSession(authOptions);
+  const userId = session?.user?.id || null;
+
+  if (!userId) {
+    return null;
+  }
+
+  const membership = await prisma.brandMember.findFirst({
+    where: {
+      userId,
+      role: {
+        in: ["ADMIN", "MANAGER"],
+      },
+    },
+    orderBy: {
+      createdAt: "asc",
+    },
+    select: {
+      id: true,
+      role: true,
+      brand: {
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          bio: true,
+          websiteUrl: true,
+          logoUrl: true,
+          coverImageUrl: true,
+          shopifyShopDomain: true,
+          shopifyAdminAccessTokenEncrypted: true,
+          shopifyInstalledAt: true,
+          shopifyDisconnectedAt: true,
+          shopifyUninstalledAt: true,
+          shopifyConnectionStatus: true,
           shopifyLastProductSyncAt: true,
         },
       },

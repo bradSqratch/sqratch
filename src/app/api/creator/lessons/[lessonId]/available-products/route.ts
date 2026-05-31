@@ -23,7 +23,11 @@ export async function GET(
 
     const brand = access.data.primaryBrand;
 
-    if (!brand?.shopifyShopDomain || !brand.shopifyAdminAccessTokenEncrypted) {
+    if (
+      !brand?.shopifyShopDomain ||
+      !brand.shopifyAdminAccessTokenEncrypted ||
+      brand.shopifyConnectionStatus !== "CONNECTED"
+    ) {
       return NextResponse.json({
         data: {
           brand: brand

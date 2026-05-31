@@ -14,6 +14,7 @@ type CandidateBrand = {
   slug: string;
   shopifyShopDomain: string | null;
   shopifyAdminAccessTokenEncrypted: string | null;
+  shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED";
 };
 
 export type LessonProductManagementContext = {
@@ -150,6 +151,7 @@ export async function getLessonProductManagementContext(
                           slug: true,
                           shopifyShopDomain: true,
                           shopifyAdminAccessTokenEncrypted: true,
+                          shopifyConnectionStatus: true,
                         },
                       },
                     },
@@ -188,7 +190,9 @@ export async function getLessonProductManagementContext(
   const primaryBrand =
     candidateBrands.find(
       (brand) =>
-        brand.shopifyShopDomain && brand.shopifyAdminAccessTokenEncrypted,
+        brand.shopifyShopDomain &&
+        brand.shopifyAdminAccessTokenEncrypted &&
+        brand.shopifyConnectionStatus === "CONNECTED",
     ) || candidateBrands[0] || null;
 
   return {

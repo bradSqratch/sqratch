@@ -18,11 +18,14 @@ type BrandProfileResponse = {
   coverImageUrl: string | null;
   shopifyShopDomain: string | null;
   shopifyInstalledAt: string | null;
+  shopifyDisconnectedAt: string | null;
+  shopifyUninstalledAt: string | null;
+  shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED";
   shopifyLastProductSyncAt: string | null;
 } | null;
 
 type ShopifyProduct = {
-  id: number;
+  id: string;
   title: string;
   handle: string;
   productUrl: string;
@@ -31,7 +34,7 @@ type ShopifyProduct = {
     min: number | null;
     max: number | null;
   };
-  variantIds: number[];
+  variantIds: string[];
 };
 
 export default function BrandShopifyPage() {
@@ -41,10 +44,12 @@ export default function BrandShopifyPage() {
   const [products, setProducts] = useState<ShopifyProduct[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const isConnected = Boolean(
-    brand?.shopifyInstalledAt && brand?.shopifyShopDomain,
+    brand?.shopifyConnectionStatus === "CONNECTED" &&
+      brand?.shopifyShopDomain,
   );
 
   useEffect(() => {
@@ -65,7 +70,8 @@ export default function BrandShopifyPage() {
       }
 
       try {
-        const brandData = await fetchJson<BrandProfileResponse>("/api/brand/profile");
+        const brandData =
+          await fetchJson<BrandProfileResponse>("/api/brand/shopify/status");
         setBrand(brandData);
         if (brandData?.shopifyShopDomain) {
           setShopDomain(brandData.shopifyShopDomain);
@@ -96,6 +102,42 @@ export default function BrandShopifyPage() {
     }
   }
 
+  async function disconnectShopify() {
+    setDisconnecting(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const updated = await fetchJson<{
+        shopifyShopDomain: string | null;
+        shopifyInstalledAt: string | null;
+        shopifyDisconnectedAt: string | null;
+        shopifyUninstalledAt: string | null;
+        shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED";
+        shopifyLastProductSyncAt: string | null;
+      }>("/api/brand/shopify/disconnect", {
+        method: "POST",
+      });
+
+      setBrand((current) =>
+        current
+          ? {
+              ...current,
+              ...updated,
+            }
+          : current,
+      );
+      setProducts([]);
+      setMessage("Shopify disconnected.");
+    } catch (disconnectError) {
+      setError(
+        getErrorMessage(disconnectError, "Failed to disconnect Shopify."),
+      );
+    } finally {
+      setDisconnecting(false);
+    }
+  }
+
   return (
     <BrandPageShell
       title="Shopify Connect"
@@ -110,7 +152,11 @@ export default function BrandShopifyPage() {
               <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                 <p className="text-sm text-white/55">Status</p>
                 <p className="mt-2 text-2xl font-semibold">
-                  {brand?.shopifyInstalledAt ? "Connected" : "Not connected"}
+                  {brand?.shopifyConnectionStatus === "CONNECTED"
+                    ? "Connected"
+                    : brand?.shopifyConnectionStatus === "UNINSTALLED"
+                      ? "Uninstalled"
+                      : "Not connected"}
                 </p>
               </div>
               <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
@@ -157,11 +203,23 @@ export default function BrandShopifyPage() {
                 type="button"
                 variant="outline"
                 onClick={() => void syncProducts()}
-                disabled={syncing || !brand?.shopifyInstalledAt}
+                disabled={syncing || !isConnected}
                 className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
               >
                 {syncing ? "Syncing..." : "Fetch products"}
               </Button>
+
+              {isConnected ? (
+                <Button
+                  type="button"
+                  variant="destructive"
+                  onClick={() => void disconnectShopify()}
+                  disabled={disconnecting}
+                  className="rounded-full border border-red-500/40 bg-red-500 text-white hover:bg-red-500/90"
+                >
+                  {disconnecting ? "Disconnecting..." : "Disconnect Shopify"}
+                </Button>
+              ) : null}
             </div>
 
             {error && <p className="text-sm text-red-300">{error}</p>}
@@ -173,6 +231,10 @@ export default function BrandShopifyPage() {
       {products.length > 0 && (
         <PageCard>
           <h2 className="text-xl font-semibold">Products</h2>
+          <p className="mt-2 text-sm text-white/55">
+            Showing up to 100 active Shopify products. Draft, archived, and
+            disconnected store products are not shown.
+          </p>
           <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
             {products.map((product) => (
               <div

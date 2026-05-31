@@ -31,6 +31,9 @@ export async function GET() {
         coverImageUrl: brand.coverImageUrl,
         shopifyShopDomain: brand.shopifyShopDomain,
         shopifyInstalledAt: brand.shopifyInstalledAt,
+        shopifyDisconnectedAt: brand.shopifyDisconnectedAt,
+        shopifyUninstalledAt: brand.shopifyUninstalledAt,
+        shopifyConnectionStatus: brand.shopifyConnectionStatus,
         shopifyLastProductSyncAt: brand.shopifyLastProductSyncAt,
       },
     });

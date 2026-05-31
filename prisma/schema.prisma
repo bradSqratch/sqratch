@@ -90,6 +90,9 @@ model Brand {
   shopifyShopDomain                     String?                 @unique
   shopifyAdminAccessTokenEncrypted      String?
   shopifyInstalledAt                    DateTime?
+  shopifyDisconnectedAt                 DateTime?
+  shopifyUninstalledAt                  DateTime?
+  shopifyConnectionStatus               ShopifyConnectionStatus @default(DISCONNECTED)
   createdAt                             DateTime                @default(now())
   updatedAt                             DateTime                @updatedAt
   coverImageUrl                         String?
@@ -548,6 +551,12 @@ enum ExperienceVideoSource {
   UPLOAD
 
   @@map("CampaignVideoSource")
+}
+
+enum ShopifyConnectionStatus {
+  DISCONNECTED
+  CONNECTED
+  UNINSTALLED
 }
 
 enum QuestionStatus {

@@ -9,7 +9,7 @@ import { attachSessionCookie, ensureViewerSession } from "@/lib/session";
 import { SHOPIFY_API_VERSION } from "@/lib/shopify";
 
 type ShopifyProductImage = {
-  src: string | null;
+  url: string | null;
 };
 
 type ShopifyProductVariant = {
@@ -21,12 +21,22 @@ type ShopifyProduct = {
   id: number | string;
   title: string;
   handle: string;
-  images?: ShopifyProductImage[];
-  variants?: ShopifyProductVariant[];
+  onlineStoreUrl?: string | null;
+  featuredImage?: ShopifyProductImage | null;
+  images?: {
+    nodes?: ShopifyProductImage[];
+  };
+  variants?: {
+    nodes?: ShopifyProductVariant[];
+  };
 };
 
 type ShopifyProductsResponse = {
-  products?: ShopifyProduct[];
+  data?: {
+    products?: {
+      nodes?: ShopifyProduct[];
+    };
+  };
 };
 
 function getProductHandle(productUrl: string) {
@@ -67,12 +77,33 @@ async function fetchProductByHandle(options: {
 }) {
   const accessToken = decryptSecret(options.encryptedToken);
   const response = await fetch(
-    `https://${options.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/products.json?handle=${encodeURIComponent(options.handle)}&fields=id,title,handle,images,variants,status`,
+    `https://${options.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
     {
+      method: "POST",
       headers: {
         "X-Shopify-Access-Token": accessToken,
         "Content-Type": "application/json",
       },
+      body: JSON.stringify({
+        query: `
+          query SqratchProductByHandle($handleQuery: String!) {
+            products(first: 1, query: $handleQuery) {
+              nodes {
+                id
+                title
+                handle
+                onlineStoreUrl
+                featuredImage { url }
+                images(first: 1) { nodes { url } }
+                variants(first: 100) { nodes { id price } }
+              }
+            }
+          }
+        `,
+        variables: {
+          handleQuery: `handle:${options.handle} status:active`,
+        },
+      }),
       cache: "no-store",
     },
   );
@@ -85,7 +116,7 @@ async function fetchProductByHandle(options: {
     | ShopifyProductsResponse
     | null;
 
-  return json?.products?.[0] || null;
+  return json?.data?.products?.nodes?.[0] || null;
 }
 
 async function fetchCampaignProducts(options: {
@@ -94,12 +125,30 @@ async function fetchCampaignProducts(options: {
 }) {
   const accessToken = decryptSecret(options.encryptedToken);
   const response = await fetch(
-    `https://${options.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/products.json?limit=12&fields=id,title,handle,images,variants,status`,
+    `https://${options.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
     {
+      method: "POST",
       headers: {
         "X-Shopify-Access-Token": accessToken,
         "Content-Type": "application/json",
       },
+      body: JSON.stringify({
+        query: `
+          query SqratchCampaignProducts {
+            products(first: 12, query: "status:active") {
+              nodes {
+                id
+                title
+                handle
+                onlineStoreUrl
+                featuredImage { url }
+                images(first: 1) { nodes { url } }
+                variants(first: 100) { nodes { id price } }
+              }
+            }
+          }
+        `,
+      }),
       cache: "no-store",
     },
   );
@@ -112,7 +161,7 @@ async function fetchCampaignProducts(options: {
     | ShopifyProductsResponse
     | null;
 
-  return json?.products || [];
+  return json?.data?.products?.nodes || [];
 }
 
 export async function GET(
@@ -180,6 +229,7 @@ export async function GET(
             slug: true,
             shopifyShopDomain: true,
             shopifyAdminAccessTokenEncrypted: true,
+            shopifyConnectionStatus: true,
           },
         })
       : [];
@@ -197,6 +247,7 @@ export async function GET(
         const shopifyProduct =
           linkedBrand?.shopifyShopDomain &&
           linkedBrand.shopifyAdminAccessTokenEncrypted &&
+          linkedBrand.shopifyConnectionStatus === "CONNECTED" &&
           handle
             ? await fetchProductByHandle({
                 shopDomain: linkedBrand.shopifyShopDomain,
@@ -207,8 +258,10 @@ export async function GET(
             : null;
 
         if (shopifyProduct) {
-          const prices = (shopifyProduct.variants || []).map((variant) =>
-            Number(variant.price || 0),
+          const prices = (shopifyProduct.variants?.nodes || []).map((variant) =>
+            variant.price === null || variant.price === ""
+              ? Number.NaN
+              : Number(variant.price),
           );
 
           return {
@@ -216,7 +269,11 @@ export async function GET(
             productId: String(shopifyProduct.id),
             productLinkId: link.id,
             title: shopifyProduct.title,
-            imageUrl: shopifyProduct.images?.[0]?.src || link.imageUrl || null,
+            imageUrl:
+              shopifyProduct.featuredImage?.url ||
+              shopifyProduct.images?.nodes?.[0]?.url ||
+              link.imageUrl ||
+              null,
             priceText: formatPriceText(prices) || link.priceText || null,
             productUrl: link.productUrl,
             brand: linkedBrand
@@ -269,7 +326,8 @@ export async function GET(
     if (
       linkedProducts.length === 0 &&
       primaryBrand?.shopifyShopDomain &&
-      primaryBrand.shopifyAdminAccessTokenEncrypted
+      primaryBrand.shopifyAdminAccessTokenEncrypted &&
+      primaryBrand.shopifyConnectionStatus === "CONNECTED"
     ) {
       const products = await fetchCampaignProducts({
         shopDomain: primaryBrand.shopifyShopDomain,
@@ -281,11 +339,17 @@ export async function GET(
         productId: String(product.id),
         productLinkId: null,
         title: product.title,
-        imageUrl: product.images?.[0]?.src || null,
+        imageUrl: product.featuredImage?.url || product.images?.nodes?.[0]?.url || null,
         priceText: formatPriceText(
-          (product.variants || []).map((variant) => Number(variant.price || 0)),
+          (product.variants?.nodes || []).map((variant) =>
+            variant.price === null || variant.price === ""
+              ? Number.NaN
+              : Number(variant.price),
+          ),
         ),
-        productUrl: `https://${primaryBrand.shopifyShopDomain}/products/${product.handle}`,
+        productUrl:
+          product.onlineStoreUrl ||
+          `https://${primaryBrand.shopifyShopDomain}/products/${product.handle}`,
         brand: {
           id: primaryBrand.id,
           name: primaryBrand.name,

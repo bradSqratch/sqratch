@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
-import { getBrandAdminContext } from "@/lib/brand-auth";
+import { getBrandManagementContext } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
 import { fetchNormalizedShopifyProducts } from "@/lib/shopify-products";
 
 export async function GET() {
   try {
-    const context = await getBrandAdminContext();
+    const context = await getBrandManagementContext();
 
     if (!context?.membership?.brand) {
       return NextResponse.json(
@@ -18,7 +18,8 @@ export async function GET() {
 
     if (
       !brand.shopifyShopDomain ||
-      !brand.shopifyAdminAccessTokenEncrypted
+      !brand.shopifyAdminAccessTokenEncrypted ||
+      brand.shopifyConnectionStatus !== "CONNECTED"
     ) {
       return NextResponse.json(
         { error: "Shopify is not connected for this brand." },
@@ -43,6 +44,7 @@ export async function GET() {
       where: { id: brand.id },
       data: {
         shopifyLastProductSyncAt: new Date(),
+        shopifyConnectionStatus: "CONNECTED",
       },
     });
 
@@ -56,6 +58,10 @@ export async function GET() {
         priceRange: product.priceRange,
         variantIds: product.variantIds,
       })),
+      meta: {
+        hasNextPage: products.hasNextPage,
+        limit: products.limit,
+      },
     });
   } catch (error) {
     console.error("[brand/shopify/products][GET] Error:", error);
