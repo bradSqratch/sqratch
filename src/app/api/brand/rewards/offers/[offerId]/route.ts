@@ -68,7 +68,7 @@ export async function PUT(
       return NextResponse.json(
         {
           error:
-            "Connect Shopify before activating a Shopify reward offer.",
+            "Reconnect Shopify before creating or enabling reward offers.",
         },
         { status: 400 },
       );

@@ -4,7 +4,7 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
 import {
   CLAIM_COUNTED_REDEMPTION_STATUSES,
-  isOfferClaimable,
+  getRewardOfferAvailability,
 } from "@/lib/reward-offers";
 
 export async function GET() {
@@ -87,12 +87,21 @@ export async function GET() {
             : Promise.resolve(0),
         ]);
         const limitReached = Boolean(
-          (offer.maxTotalRedemptions &&
-            totalRedemptions >= offer.maxTotalRedemptions) ||
-            (offer.maxRedemptionsPerUser &&
-              userRedemptions >= offer.maxRedemptionsPerUser),
+          offer.maxTotalRedemptions &&
+            totalRedemptions >= offer.maxTotalRedemptions,
+        );
+        const userLimitReached = Boolean(
+          offer.maxRedemptionsPerUser &&
+            userRedemptions >= offer.maxRedemptionsPerUser,
         );
         const hasEnoughPoints = user.points >= offer.pointsCost;
+        const computedAvailability = getRewardOfferAvailability({
+          offer,
+          shopifyConnected: Boolean(offer.brand.shopifyShopDomain),
+          totalRedemptions,
+          userRedemptions,
+          now,
+        });
 
         return {
           id: offer.id,
@@ -111,11 +120,12 @@ export async function GET() {
           minimumSubtotalCents: offer.minimumSubtotalCents,
           products: offer.products,
           userPointsBalance: user.points,
+          computedAvailability,
           eligibility: {
-            eligible:
-              isOfferClaimable(offer, now) && hasEnoughPoints && !limitReached,
+            eligible: computedAvailability.claimable && hasEnoughPoints,
             hasEnoughPoints,
             limitReached,
+            userLimitReached,
           },
         };
       }),

@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Check, Copy, ExternalLink, Gift, RefreshCw } from "lucide-react";
+import { useRouter } from "next/navigation";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -38,6 +39,19 @@ type ShopifyRewardOffer = {
     eligible: boolean;
     hasEnoughPoints: boolean;
     limitReached: boolean;
+    userLimitReached: boolean;
+  };
+  computedAvailability: {
+    status:
+      | "CLAIMABLE"
+      | "INACTIVE"
+      | "NOT_STARTED"
+      | "CLAIM_WINDOW_ENDED"
+      | "LIMIT_REACHED"
+      | "USER_LIMIT_REACHED"
+      | "SHOPIFY_DISCONNECTED";
+    label: string;
+    claimable: boolean;
   };
 };
 
@@ -107,6 +121,7 @@ export function ShopifyRewardsClient({
 }: {
   currentPoints: number;
 }) {
+  const router = useRouter();
   const [offers, setOffers] = useState<ShopifyRewardOffer[]>([]);
   const [redemptions, setRedemptions] = useState<ShopifyRewardRedemption[]>([]);
   const [loading, setLoading] = useState(true);
@@ -170,6 +185,7 @@ export function ShopifyRewardsClient({
         ...current,
         [offer.id]: redemption.code,
       }));
+      router.refresh();
       await loadRewards();
     } catch (redeemError) {
       setError(getErrorMessage(redeemError, "Failed to redeem this reward."));
@@ -321,24 +337,35 @@ export function ShopifyRewardsClient({
                           </Button>
                         </div>
                         <p className="mt-2 text-sm text-emerald-100/75">
-                          Use this code at the brand&apos;s Shopify checkout.
+                          Copy and paste this code at Shopify checkout.
                         </p>
                       </div>
                     ) : null}
 
                     <div className="mt-5 flex flex-wrap gap-3">
-                      <Button
-                        type="button"
-                        onClick={() => void redeemOffer(offer)}
-                        disabled={!offer.eligibility.eligible || redeemingOfferId === offer.id}
-                        className="rounded-full border border-white bg-white text-black hover:bg-white/90"
-                      >
-                        {redeemingOfferId === offer.id
-                          ? "Redeeming..."
-                          : offer.eligibility.hasEnoughPoints
-                            ? "Redeem"
-                            : "Not enough points"}
-                      </Button>
+                      {offer.computedAvailability.status === "LIMIT_REACHED" ||
+                      offer.computedAvailability.status ===
+                        "USER_LIMIT_REACHED" ? (
+                        <span className="inline-flex items-center rounded-full border border-amber-300/25 bg-amber-300/10 px-4 py-2 text-sm text-amber-100">
+                          {offer.computedAvailability.label}
+                        </span>
+                      ) : (
+                        <Button
+                          type="button"
+                          onClick={() => void redeemOffer(offer)}
+                          disabled={
+                            !offer.eligibility.eligible ||
+                            redeemingOfferId === offer.id
+                          }
+                          className="rounded-full border border-white bg-white text-black hover:bg-white/90"
+                        >
+                          {redeemingOfferId === offer.id
+                            ? "Redeeming..."
+                            : offer.eligibility.hasEnoughPoints
+                              ? "Redeem"
+                              : "Not enough points"}
+                        </Button>
+                      )}
                       {(primaryProduct?.productUrl || offer.shopUrl) ? (
                         <a
                           href={primaryProduct?.productUrl || offer.shopUrl || "#"}

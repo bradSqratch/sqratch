@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { getBrandManagementContext } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
 import {
+  CLAIM_COUNTED_REDEMPTION_STATUSES,
+  getRewardOfferAvailability,
   parseRewardOfferPayload,
   serializeRewardOffer,
 } from "@/lib/reward-offers";
@@ -29,9 +31,10 @@ export async function GET() {
       );
     }
 
+    const brand = context.membership.brand;
     const offers = await prisma.brandRewardOffer.findMany({
       where: {
-        brandId: context.membership.brand.id,
+        brandId: brand.id,
       },
       include: {
         products: true,
@@ -48,12 +51,16 @@ export async function GET() {
     const statusCounts = await prisma.shopifyRewardRedemption.groupBy({
       by: ["offerId", "status"],
       where: {
-        brandId: context.membership.brand.id,
+        brandId: brand.id,
       },
       _count: {
         _all: true,
       },
     });
+    const countedStatuses = new Set<string>([
+      ...CLAIM_COUNTED_REDEMPTION_STATUSES,
+    ]);
+    const countedRedemptionsByOffer = new Map<string, number>();
     const statsByOffer = new Map<
       string,
       { totalIssued: number; usedCount: number; expiredCount: number; failedCount: number }
@@ -73,6 +80,14 @@ export async function GET() {
         stats.totalIssued += count._count._all;
       }
 
+      if (countedStatuses.has(count.status)) {
+        countedRedemptionsByOffer.set(
+          count.offerId,
+          (countedRedemptionsByOffer.get(count.offerId) || 0) +
+            count._count._all,
+        );
+      }
+
       if (count.status === "USED") {
         stats.usedCount += count._count._all;
       }
@@ -89,16 +104,25 @@ export async function GET() {
     }
 
     return NextResponse.json({
-      data: offers.map((offer) => ({
-        ...serializeRewardOffer(offer),
-        redemptionCount: offer._count.redemptions,
-        stats: statsByOffer.get(offer.id) || {
-          totalIssued: 0,
-          usedCount: 0,
-          expiredCount: 0,
-          failedCount: 0,
-        },
-      })),
+      data: offers.map((offer) => {
+        const computedAvailability = getRewardOfferAvailability({
+          offer,
+          shopifyConnected: canActivateShopifyOffer(brand),
+          totalRedemptions: countedRedemptionsByOffer.get(offer.id) || 0,
+        });
+
+        return {
+          ...serializeRewardOffer(offer),
+          redemptionCount: offer._count.redemptions,
+          computedAvailability,
+          stats: statsByOffer.get(offer.id) || {
+            totalIssued: 0,
+            usedCount: 0,
+            expiredCount: 0,
+            failedCount: 0,
+          },
+        };
+      }),
     });
   } catch (error) {
     console.error("[brand/rewards/offers][GET] Error:", error);
@@ -134,7 +158,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            "Connect Shopify before activating a Shopify reward offer.",
+            "Reconnect Shopify before creating or enabling reward offers.",
         },
         { status: 400 },
       );

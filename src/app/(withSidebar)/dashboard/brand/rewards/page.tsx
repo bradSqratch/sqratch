@@ -60,6 +60,18 @@ type RewardOffer = {
   maxTotalRedemptions: number | null;
   maxRedemptionsPerUser: number | null;
   redemptionCount: number;
+  computedAvailability: {
+    status:
+      | "CLAIMABLE"
+      | "INACTIVE"
+      | "NOT_STARTED"
+      | "CLAIM_WINDOW_ENDED"
+      | "LIMIT_REACHED"
+      | "USER_LIMIT_REACHED"
+      | "SHOPIFY_DISCONNECTED";
+    label: string;
+    claimable: boolean;
+  };
   stats: {
     totalIssued: number;
     usedCount: number;
@@ -137,6 +149,18 @@ function formatDate(value: string | null) {
     day: "numeric",
     year: "numeric",
   }).format(new Date(value));
+}
+
+function getAvailabilityBadgeClass(status: RewardOffer["computedAvailability"]["status"]) {
+  if (status === "CLAIMABLE") {
+    return "border-emerald-300/30 bg-emerald-300/10 text-emerald-100";
+  }
+
+  if (status === "SHOPIFY_DISCONNECTED" || status === "LIMIT_REACHED") {
+    return "border-amber-300/25 bg-amber-300/10 text-amber-100";
+  }
+
+  return "border-white/10 bg-white/5 text-white/60";
 }
 
 export default function BrandRewardsPage() {
@@ -397,7 +421,7 @@ export default function BrandRewardsPage() {
 
             {!isConnected ? (
               <div className="rounded-2xl border border-amber-300/20 bg-amber-300/10 p-4 text-sm text-amber-100">
-                Connect Shopify before creating reward offers.
+                Reconnect Shopify before creating or enabling reward offers.
               </div>
             ) : null}
 
@@ -417,7 +441,8 @@ export default function BrandRewardsPage() {
             </h2>
             <p className="mt-1 text-sm text-white/55">
               Codes are single-use globally and manually copied into Shopify
-              checkout.
+              checkout. Active means enabled by Brand Admin; Claimable means
+              users can currently redeem it.
             </p>
           </div>
           {editingOfferId ? (
@@ -590,6 +615,7 @@ export default function BrandRewardsPage() {
             <Checkbox
               checked={form.isActive}
               onCheckedChange={(checked) => updateForm("isActive", checked === true)}
+              disabled={!isConnected && !form.isActive}
               className="border-white/30 data-[state=checked]:border-emerald-300 data-[state=checked]:bg-emerald-400"
             />
             Active offer
@@ -667,7 +693,9 @@ export default function BrandRewardsPage() {
           <Button
             type="button"
             onClick={() => void saveOffer()}
-            disabled={saving || !isConnected}
+            disabled={
+              saving || (!isConnected && (!editingOfferId || form.isActive))
+            }
             className="rounded-full border border-white bg-white text-black hover:bg-white/90"
           >
             <Gift className="h-4 w-4" />
@@ -683,7 +711,8 @@ export default function BrandRewardsPage() {
       <PageCard>
         <h2 className="text-xl font-semibold">Reward offers</h2>
         <p className="mt-1 text-sm text-white/55">
-          Disable offers when they should no longer be claimable.
+          Disable offers when they should no longer be claimable. Active means
+          enabled by Brand Admin; Claimable means users can currently redeem it.
         </p>
 
         <div className="mt-6 space-y-4">
@@ -702,14 +731,18 @@ export default function BrandRewardsPage() {
                     <div className="flex flex-wrap items-center gap-3">
                       <h3 className="text-xl font-semibold">{offer.title}</h3>
                       <span
-                        className={`rounded-full border px-3 py-1 text-xs ${
-                          offer.isActive
-                            ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-100"
-                            : "border-white/10 bg-white/5 text-white/55"
-                        }`}
+                        className={`rounded-full border px-3 py-1 text-xs ${getAvailabilityBadgeClass(
+                          offer.computedAvailability.status,
+                        )}`}
                       >
-                        {offer.isActive ? "Active" : "Disabled"}
+                        {offer.computedAvailability.label}
                       </span>
+                      {offer.isActive &&
+                      offer.computedAvailability.status !== "CLAIMABLE" ? (
+                        <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/45">
+                          Active
+                        </span>
+                      ) : null}
                     </div>
                     <p className="mt-2 text-sm text-white/55">
                       {offer.pointsCost} points for{" "}

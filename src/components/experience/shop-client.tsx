@@ -12,6 +12,7 @@ import {
   getErrorMessage,
 } from "@/components/experience/client-utils";
 import { useExperience } from "@/components/experience/use-experience";
+import { ShopifyShopRewardCard } from "@/components/rewards/shopify-shop-reward-card";
 import { Button } from "@/components/ui/button";
 
 type ShopResponse = {
@@ -102,6 +103,11 @@ export function ExperienceShopClient({
     });
   }
 
+  const shopBrandId =
+    shopData?.campaign?.brand?.id ||
+    shopData?.products.find((product) => product.brand?.id)?.brand?.id ||
+    null;
+
   if (loading) {
     return <LoadingView label="Loading shop..." />;
   }
@@ -161,6 +167,8 @@ export function ExperienceShopClient({
               )}
             </div>
           </PageCard>
+
+          <ShopifyShopRewardCard brandId={shopBrandId} />
 
           <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
             {shopData.products.map((product) => (

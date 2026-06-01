@@ -13,6 +13,15 @@ export const CLAIM_COUNTED_REDEMPTION_STATUSES = [
   "EXPIRED",
 ] as const;
 
+export type RewardOfferAvailabilityStatus =
+  | "CLAIMABLE"
+  | "INACTIVE"
+  | "NOT_STARTED"
+  | "CLAIM_WINDOW_ENDED"
+  | "LIMIT_REACHED"
+  | "USER_LIMIT_REACHED"
+  | "SHOPIFY_DISCONNECTED";
+
 type OfferPayload = {
   title: string;
   description: string | null;
@@ -53,6 +62,89 @@ export function isOfferClaimable(
   }
 
   return true;
+}
+
+export function getRewardOfferAvailability(input: {
+  offer: Pick<
+    BrandRewardOffer,
+    | "isActive"
+    | "claimStartsAt"
+    | "claimEndsAt"
+    | "maxTotalRedemptions"
+    | "maxRedemptionsPerUser"
+  >;
+  shopifyConnected: boolean;
+  totalRedemptions?: number;
+  userRedemptions?: number;
+  now?: Date;
+}): {
+  status: RewardOfferAvailabilityStatus;
+  label: string;
+  claimable: boolean;
+} {
+  const now = input.now || new Date();
+  const totalRedemptions = input.totalRedemptions || 0;
+  const userRedemptions = input.userRedemptions || 0;
+
+  if (!input.offer.isActive) {
+    return {
+      status: "INACTIVE",
+      label: "Inactive",
+      claimable: false,
+    };
+  }
+
+  if (!input.shopifyConnected) {
+    return {
+      status: "SHOPIFY_DISCONNECTED",
+      label: "Unavailable - Shopify disconnected",
+      claimable: false,
+    };
+  }
+
+  if (input.offer.claimStartsAt && input.offer.claimStartsAt > now) {
+    return {
+      status: "NOT_STARTED",
+      label: "Not started",
+      claimable: false,
+    };
+  }
+
+  if (input.offer.claimEndsAt && input.offer.claimEndsAt < now) {
+    return {
+      status: "CLAIM_WINDOW_ENDED",
+      label: "Claim window ended",
+      claimable: false,
+    };
+  }
+
+  if (
+    input.offer.maxTotalRedemptions &&
+    totalRedemptions >= input.offer.maxTotalRedemptions
+  ) {
+    return {
+      status: "LIMIT_REACHED",
+      label: "Limit reached",
+      claimable: false,
+    };
+  }
+
+  if (
+    input.offer.maxRedemptionsPerUser &&
+    userRedemptions >= input.offer.maxRedemptionsPerUser
+  ) {
+    return {
+      status: "USER_LIMIT_REACHED",
+      label: "User limit reached",
+      claimable: false,
+    };
+  }
+
+  return {
+    status: "CLAIMABLE",
+    label: "Claimable",
+    claimable: true,
+  };
 }
 
 function parseOptionalDate(value: unknown) {

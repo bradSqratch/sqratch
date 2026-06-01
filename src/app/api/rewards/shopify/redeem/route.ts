@@ -6,7 +6,7 @@ import { createShopifyRewardDiscountCode } from "@/lib/shopify-discounts";
 import {
   CLAIM_COUNTED_REDEMPTION_STATUSES,
   generateRewardCode,
-  isOfferClaimable,
+  getRewardOfferAvailability,
 } from "@/lib/reward-offers";
 
 function cleanIdempotencyKey(value: unknown) {
@@ -94,7 +94,7 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    if (!offer || !isOfferClaimable(offer)) {
+    if (!offer) {
       return NextResponse.json(
         { error: "Reward offer is not available." },
         { status: 404 },
@@ -126,13 +126,6 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "User not found." }, { status: 404 });
     }
 
-    if (user.points < offer.pointsCost) {
-      return NextResponse.json(
-        { error: "Not enough SQRATCH points for this reward." },
-        { status: 409 },
-      );
-    }
-
     const [totalRedemptions, userRedemptions] = await Promise.all([
       offer.maxTotalRedemptions
         ? prisma.shopifyRewardRedemption.count({
@@ -156,15 +149,23 @@ export async function POST(request: NextRequest) {
           })
         : Promise.resolve(0),
     ]);
+    const availability = getRewardOfferAvailability({
+      offer,
+      shopifyConnected: true,
+      totalRedemptions,
+      userRedemptions,
+    });
 
-    if (
-      (offer.maxTotalRedemptions &&
-        totalRedemptions >= offer.maxTotalRedemptions) ||
-      (offer.maxRedemptionsPerUser &&
-        userRedemptions >= offer.maxRedemptionsPerUser)
-    ) {
+    if (!availability.claimable) {
       return NextResponse.json(
-        { error: "Reward offer redemption limit reached." },
+        { error: availability.label },
+        { status: 409 },
+      );
+    }
+
+    if (user.points < offer.pointsCost) {
+      return NextResponse.json(
+        { error: "Not enough SQRATCH points for this reward." },
         { status: 409 },
       );
     }
