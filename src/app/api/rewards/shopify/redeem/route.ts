@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
+import { getRewardClaimContext } from "@/lib/reward-access";
 import { createShopifyRewardDiscountCode } from "@/lib/shopify-discounts";
 import {
   CLAIM_COUNTED_REDEMPTION_STATUSES,
@@ -51,6 +52,10 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => null);
     const offerId = String(body?.offerId || "").trim();
     const idempotencyKey = cleanIdempotencyKey(body?.idempotencyKey);
+    const experienceSlug = body?.experienceSlug
+      ? String(body.experienceSlug).trim()
+      : null;
+    const campaignId = body?.campaignId ? String(body.campaignId).trim() : null;
 
     if (!offerId || !idempotencyKey) {
       return NextResponse.json(
@@ -98,6 +103,27 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: "Reward offer is not available." },
         { status: 404 },
+      );
+    }
+
+    const rewardContext = await getRewardClaimContext({
+      request,
+      userId: session.user.id,
+      experienceSlug,
+      campaignId,
+    });
+
+    if (!rewardContext.ok) {
+      return NextResponse.json(
+        { error: rewardContext.error },
+        { status: rewardContext.status },
+      );
+    }
+
+    if (!rewardContext.brandIds.includes(offer.brandId)) {
+      return NextResponse.json(
+        { error: "Unlock this experience before claiming rewards." },
+        { status: 403 },
       );
     }
 

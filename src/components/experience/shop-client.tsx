@@ -168,7 +168,10 @@ export function ExperienceShopClient({
             </div>
           </PageCard>
 
-          <ShopifyShopRewardCard brandId={shopBrandId} />
+          <ShopifyShopRewardCard
+            brandId={shopBrandId}
+            experienceSlug={experienceSlug}
+          />
 
           <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
             {shopData.products.map((product) => (

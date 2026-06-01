@@ -2,27 +2,8 @@
 
 import React from "react";
 import CommonNavbar from "@/components/commonNavbar";
+import SiteFooter from "@/components/home/site-footer";
 import { Card, CardContent } from "@/components/ui/card";
-
-function FeatureRow({
-  title,
-  description,
-}: {
-  title: string;
-  description: React.ReactNode;
-}) {
-  return (
-    <div className="flex gap-3 rounded-2xl border border-white/10 bg-black/25 p-4 backdrop-blur-xl">
-      <div className="mt-1 h-2.5 w-2.5 shrink-0 rounded-full bg-white/70 shadow-[0_0_18px_rgba(236,236,236,0.25)]" />
-      <div>
-        <div className="text-[15px] font-semibold text-white/90">{title}</div>
-        <div className="mt-1 text-[14.5px] leading-[1.75] text-white/72">
-          {description}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function Callout({ children }: { children: React.ReactNode }) {
   return (
@@ -160,9 +141,7 @@ export default function AboutPage() {
           </Card>
         </main>
 
-        <div className="pb-6 text-center text-white/55">
-          © {new Date().getFullYear()} SQRATCH. All rights reserved.
-        </div>
+        <SiteFooter />
       </div>
     </div>
   );

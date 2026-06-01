@@ -2,20 +2,26 @@
 "use client";
 
 import React, { useState } from "react";
-import Link from "next/link";
 import { motion } from "framer-motion";
 import CommonNavbar from "@/components/commonNavbar";
+import SiteFooter from "@/components/home/site-footer";
 import { Copy, Check, Mail, MapPin } from "lucide-react";
 
 const COMPANY = "Sqratch Inc.";
 const ADDRESS_LINE_1 = "280 Albert Street, Suite 706";
 const ADDRESS_LINE_2 = "Ottawa ON K1P 5P3";
 const PRESS_EMAIL = "press@sqratch.com";
+const SUPPORT_EMAIL = "support@sqratch.com";
 
 export default function ContactPage() {
-  const [copied, setCopied] = useState<null | "email" | "address">(null);
+  const [copied, setCopied] = useState<null | "press" | "support" | "address">(
+    null
+  );
 
-  const copyToClipboard = async (text: string, which: "email" | "address") => {
+  const copyToClipboard = async (
+    text: string,
+    which: "press" | "support" | "address"
+  ) => {
     try {
       await navigator.clipboard.writeText(text);
       setCopied(which);
@@ -78,8 +84,8 @@ export default function ContactPage() {
           transition={{ duration: 0.5, ease: "easeOut", delay: 0.12 }}
           className="mt-3 max-w-3xl text-center text-[16px] sm:text-[18px] leading-[160%] text-[#ECECEC]/75"
         >
-          If you’re reaching out for press inquiries, use the email below. For
-          official correspondence, use the address listed.
+          For product help, account access, Shopify app questions, or press
+          inquiries, use the contacts below.
         </motion.p>
 
         {/* Glass card */}
@@ -88,7 +94,7 @@ export default function ContactPage() {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           transition={{ duration: 0.55, ease: "easeOut", delay: 0.18 }}
           className="
-            mt-10 w-full max-w-3xl
+            mt-10 w-full max-w-4xl
             rounded-[28px]
             border border-white/15
             bg-white/6
@@ -101,6 +107,66 @@ export default function ContactPage() {
           <div className="pointer-events-none absolute inset-0 rounded-[28px] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]" />
 
           <div className="grid gap-6 p-6 sm:p-10 md:grid-cols-2">
+            {/* Support */}
+            <div className="rounded-[20px] border border-white/10 bg-black/25 p-6">
+              <div className="flex items-center gap-3">
+                <div className="grid h-10 w-10 place-items-center rounded-xl bg-white/5 ring-1 ring-white/10">
+                  <Mail className="h-5 w-5 text-white/90" />
+                </div>
+                <div>
+                  <p className="text-[14px] uppercase tracking-[0.25em] text-white/50">
+                    Support
+                  </p>
+                  <h2 className="text-[20px] font-semibold text-white">
+                    Product help
+                  </h2>
+                </div>
+              </div>
+
+              <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/30 px-4 py-3">
+                <a
+                  href={`mailto:${SUPPORT_EMAIL}`}
+                  className="min-w-0 truncate text-[15px] text-white/90 underline decoration-white/25 underline-offset-4 hover:decoration-white/70 sm:text-[16px]"
+                >
+                  {SUPPORT_EMAIL}
+                </a>
+
+                <button
+                  type="button"
+                  onClick={() => copyToClipboard(SUPPORT_EMAIL, "support")}
+                  className="shrink-0 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[13px] text-white/90 hover:bg-white/10 transition"
+                >
+                  {copied === "support" ? (
+                    <>
+                      <Check className="h-4 w-4" /> Copied
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="h-4 w-4" /> Copy
+                    </>
+                  )}
+                </button>
+              </div>
+
+              <div className="mt-5">
+                <a
+                  href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(
+                    "Support inquiry — SQRATCH"
+                  )}`}
+                  className="
+                    inline-flex w-full items-center justify-center gap-2
+                    rounded-full
+                    border border-white bg-white text-black
+                    px-5 py-3 text-[15px] font-medium
+                    hover:scale-[1.01] active:scale-[0.99]
+                    transition
+                  "
+                >
+                  Email Support <Mail className="h-4 w-4" />
+                </a>
+              </div>
+            </div>
+
             {/* Press */}
             <div className="rounded-[20px] border border-white/10 bg-black/25 p-6">
               <div className="flex items-center gap-3">
@@ -120,17 +186,17 @@ export default function ContactPage() {
               <div className="mt-4 flex items-center justify-between gap-3 rounded-2xl border border-white/10 bg-black/30 px-4 py-3">
                 <a
                   href={`mailto:${PRESS_EMAIL}`}
-                  className="break-all text-[16px] text-white/90 underline decoration-white/25 underline-offset-4 hover:decoration-white/70"
+                  className="min-w-0 truncate text-[15px] text-white/90 underline decoration-white/25 underline-offset-4 hover:decoration-white/70 sm:text-[16px]"
                 >
                   {PRESS_EMAIL}
                 </a>
 
                 <button
                   type="button"
-                  onClick={() => copyToClipboard(PRESS_EMAIL, "email")}
+                  onClick={() => copyToClipboard(PRESS_EMAIL, "press")}
                   className="shrink-0 inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/5 px-3 py-1.5 text-[13px] text-white/90 hover:bg-white/10 transition"
                 >
-                  {copied === "email" ? (
+                  {copied === "press" ? (
                     <>
                       <Check className="h-4 w-4" /> Copied
                     </>
@@ -162,32 +228,28 @@ export default function ContactPage() {
             </div>
 
             {/* Address */}
-            <div className="rounded-[20px] border border-white/10 bg-black/25 p-6">
-              <div className="flex items-center gap-3">
-                <div className="grid h-10 w-10 place-items-center rounded-xl bg-white/5 ring-1 ring-white/10">
-                  <MapPin className="h-5 w-5 text-white/90" />
+            <div className="rounded-[24px] border border-white/10 bg-[radial-gradient(700px_260px_at_12%_0%,rgba(168,85,247,0.16),rgba(0,0,0,0)_60%),rgba(0,0,0,0.25)] p-6 md:col-span-2">
+              <div className="grid gap-5 md:grid-cols-[1fr_auto] md:items-center">
+                <div className="flex items-start gap-4">
+                  <div className="grid h-12 w-12 shrink-0 place-items-center rounded-2xl bg-white/5 ring-1 ring-white/10">
+                    <MapPin className="h-5 w-5 text-purple-200" />
+                  </div>
+                  <div>
+                    <p className="text-[14px] uppercase tracking-[0.25em] text-white/50">
+                      Office
+                    </p>
+                    <h2 className="mt-1 text-[24px] font-semibold tracking-[-0.02em] text-white">
+                      Sqratch Inc.
+                    </h2>
+                    <p className="mt-2 text-[17px] leading-relaxed text-white/78">
+                      {ADDRESS_LINE_1}
+                      <br />
+                      {ADDRESS_LINE_2}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <p className="text-[14px] uppercase tracking-[0.25em] text-white/50">
-                    Office
-                  </p>
-                  <h2 className="text-[20px] font-semibold text-white">
-                    Address
-                  </h2>
-                </div>
-              </div>
 
-              <div className="mt-4 rounded-2xl border border-white/10 bg-black/30 px-4 py-3">
-                <p className="text-[18px] font-semibold tracking-[-0.02em] text-white">
-                  {COMPANY}
-                </p>
-                <p className="mt-1 text-[16px] leading-relaxed text-white/80">
-                  {ADDRESS_LINE_1}
-                  <br />
-                  {ADDRESS_LINE_2}
-                </p>
-
-                <div className="mt-4 flex flex-wrap items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3 md:justify-end">
                   <button
                     type="button"
                     onClick={() => copyToClipboard(fullAddress, "address")}
@@ -219,25 +281,12 @@ export default function ContactPage() {
               </div>
             </div>
           </div>
-
-          {/* Bottom bar (links) */}
-          <div className="flex flex-col gap-4 border-t border-white/10 px-6 py-5 sm:flex-row sm:items-center sm:justify-between sm:px-10">
-            <p className="text-[14px] text-white/55">
-              © {new Date().getFullYear()} Sqratch. All rights reserved.
-            </p>
-
-            <div className="flex items-center gap-4 text-[14px] text-white/55">
-              <Link href="#" className="hover:text-white/80 transition">
-                Privacy
-              </Link>
-              <span className="opacity-40">•</span>
-              <Link href="#" className="hover:text-white/80 transition">
-                Terms
-              </Link>
-            </div>
-          </div>
         </motion.div>
       </main>
+
+      <div className="relative z-10">
+        <SiteFooter />
+      </div>
     </div>
   );
 }

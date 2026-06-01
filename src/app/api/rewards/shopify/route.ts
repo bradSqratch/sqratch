@@ -1,13 +1,14 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
+import { getRewardClaimContext } from "@/lib/reward-access";
 import {
   CLAIM_COUNTED_REDEMPTION_STATUSES,
   getRewardOfferAvailability,
 } from "@/lib/reward-offers";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
 
@@ -16,6 +17,28 @@ export async function GET() {
     }
 
     const now = new Date();
+    const searchParams = request.nextUrl.searchParams;
+    const rewardContext = await getRewardClaimContext({
+      request,
+      userId: session.user.id,
+      experienceSlug: searchParams.get("experienceSlug"),
+      campaignId: searchParams.get("campaignId"),
+    });
+
+    if (!rewardContext.ok) {
+      return NextResponse.json({
+        data: [],
+        reason: rewardContext.error,
+      });
+    }
+
+    if (rewardContext.brandIds.length === 0) {
+      return NextResponse.json({
+        data: [],
+        reason: "Unlock this experience before claiming rewards.",
+      });
+    }
+
     const user = await prisma.user.findUnique({
       where: {
         id: session.user.id,
@@ -36,6 +59,9 @@ export async function GET() {
         OR: [{ claimStartsAt: null }, { claimStartsAt: { lte: now } }],
         AND: [{ OR: [{ claimEndsAt: null }, { claimEndsAt: { gte: now } }] }],
         brand: {
+          id: {
+            in: rewardContext.brandIds,
+          },
           shopifyConnectionStatus: "CONNECTED",
           shopifyShopDomain: {
             not: null,

@@ -86,8 +86,10 @@ function getIdempotencyKey() {
 
 export function ShopifyShopRewardCard({
   brandId,
+  experienceSlug,
 }: {
   brandId: string | null;
+  experienceSlug: string;
 }) {
   const [offers, setOffers] = useState<ShopifyRewardOffer[]>([]);
   const [loading, setLoading] = useState(true);
@@ -123,7 +125,11 @@ export function ShopifyShopRewardCard({
       setHidden(false);
 
       try {
-        const data = await fetchJson<ShopifyRewardOffer[]>("/api/rewards/shopify");
+        const data = await fetchJson<ShopifyRewardOffer[]>(
+          `/api/rewards/shopify?experienceSlug=${encodeURIComponent(
+            experienceSlug,
+          )}`,
+        );
         setOffers(data);
       } catch (loadError) {
         const message = getErrorMessage(loadError, "Failed to load rewards.");
@@ -139,7 +145,7 @@ export function ShopifyShopRewardCard({
     }
 
     void loadRewards();
-  }, [brandId]);
+  }, [brandId, experienceSlug]);
 
   async function copyCode(code: string) {
     await navigator.clipboard.writeText(code);
@@ -162,6 +168,7 @@ export function ShopifyShopRewardCard({
           body: JSON.stringify({
             offerId: offer.id,
             idempotencyKey: getIdempotencyKey(),
+            experienceSlug,
           }),
         },
       );
@@ -170,7 +177,11 @@ export function ShopifyShopRewardCard({
         [offer.id]: redemption.code,
       }));
 
-      const data = await fetchJson<ShopifyRewardOffer[]>("/api/rewards/shopify");
+      const data = await fetchJson<ShopifyRewardOffer[]>(
+        `/api/rewards/shopify?experienceSlug=${encodeURIComponent(
+          experienceSlug,
+        )}`,
+      );
       setOffers(data);
     } catch (redeemError) {
       setError(getErrorMessage(redeemError, "Failed to redeem this reward."));
