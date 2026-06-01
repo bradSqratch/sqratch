@@ -51,6 +51,7 @@ export async function GET() {
     return NextResponse.json({
       data: products.items.map((product) => ({
         id: product.id,
+        shopifyProductGid: product.shopifyProductGid,
         title: product.title,
         handle: product.handle,
         productUrl: product.productUrl,

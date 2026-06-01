@@ -1,32 +1,33 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
 client_id = "0e94b8983e671068b33cdbd17dc54dc5"
 name = "sqratch-custom-app-test"
 handle = "sqratch-custom-app-test"
 application_url = "https://www.sqratch.com/shopify"
 embedded = true
 
-[access_scopes]
-scopes = "read_products"
-
-[auth]
-redirect_urls = [
-  "https://www.sqratch.com/api/shopify/oauth/callback"
-]
-
 [webhooks]
 api_version = "2026-04"
 
-[[webhooks.subscriptions]]
-topics = ["app/uninstalled"]
-uri = "https://www.sqratch.com/api/shopify/webhooks/app/uninstalled"
+  [[webhooks.subscriptions]]
+  uri = "https://www.sqratch.com/api/shopify/webhooks/app/uninstalled"
+  topics = [ "app/uninstalled" ]
 
-[[webhooks.subscriptions]]
-compliance_topics = ["customers/data_request"]
-uri = "https://www.sqratch.com/api/shopify/webhooks/customers/data_request"
+  [[webhooks.subscriptions]]
+  uri = "https://www.sqratch.com/api/shopify/webhooks/customers/data_request"
+  compliance_topics = [ "customers/data_request" ]
 
-[[webhooks.subscriptions]]
-compliance_topics = ["customers/redact"]
-uri = "https://www.sqratch.com/api/shopify/webhooks/customers/redact"
+  [[webhooks.subscriptions]]
+  uri = "https://www.sqratch.com/api/shopify/webhooks/customers/redact"
+  compliance_topics = [ "customers/redact" ]
 
-[[webhooks.subscriptions]]
-compliance_topics = ["shop/redact"]
-uri = "https://www.sqratch.com/api/shopify/webhooks/shop/redact"
+  [[webhooks.subscriptions]]
+  uri = "https://www.sqratch.com/api/shopify/webhooks/shop/redact"
+  compliance_topics = [ "shop/redact" ]
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_products,read_discounts,write_discounts"
+
+[auth]
+redirect_urls = [ "https://www.sqratch.com/api/shopify/oauth/callback" ]

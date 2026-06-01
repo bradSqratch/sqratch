@@ -38,6 +38,7 @@ type ShopifyProductsResponse = {
 
 export type NormalizedShopifyProduct = {
   id: string;
+  shopifyProductGid: string;
   title: string;
   handle: string;
   productUrl: string;
@@ -100,6 +101,7 @@ function normalizeProduct(
 
   return {
     id: String(product.id),
+    shopifyProductGid: String(product.id),
     title: product.title,
     handle: product.handle,
     productUrl:

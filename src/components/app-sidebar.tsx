@@ -12,6 +12,7 @@ import {
   HelpCircle,
   BarChart3,
   Store,
+  Gift,
   FlagIcon,
   Users,
   ShieldCheck,
@@ -170,6 +171,12 @@ export function AppSidebar() {
       title: "Shopify",
       url: "/dashboard/brand/shopify",
       icon: Store,
+      roles: ["BRAND_ADMIN"],
+    },
+    {
+      title: "Rewards",
+      url: "/dashboard/brand/rewards",
+      icon: Gift,
       roles: ["BRAND_ADMIN"],
     },
     {

@@ -9,6 +9,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { ShopifyRewardsClient } from "@/components/rewards/shopify-rewards-client";
 import { getUserPointsOverview } from "@/lib/points";
 
 function formatDate(value: Date) {
@@ -127,6 +128,8 @@ export default async function DashboardPointsPage() {
             </div>
           </CardContent>
         </Card>
+
+        <ShopifyRewardsClient currentPoints={overview.totals.currentPoints} />
 
         <Card className="rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
           <CardContent className="p-6">

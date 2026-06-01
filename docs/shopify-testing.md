@@ -6,7 +6,7 @@ This app uses Shopify only to read and display products in SQRATCH. Store owners
 
 - `SHOPIFY_API_KEY`: Shopify app client ID/API key.
 - `SHOPIFY_API_SECRET`: Shopify app client secret. Used for OAuth and webhook HMAC verification.
-- `SHOPIFY_SCOPES`: Must be exactly `read_products`.
+- `SHOPIFY_SCOPES`: Must be exactly `read_products,read_discounts,write_discounts`.
 - `SHOPIFY_APP_URL`: Production app origin, for example `https://www.sqratch.com`.
 - `NEXTAUTH_URL`: Production app origin, for example `https://www.sqratch.com`.
 - `NEXTAUTH_SECRET`: Required by auth and used as an encryption fallback.
@@ -21,7 +21,7 @@ Do not add product write scopes unless the product requirements change.
 - App URL: `https://www.sqratch.com/shopify`.
 - Embedded app: enabled.
 - Allowed redirection URL: `https://www.sqratch.com/api/shopify/oauth/callback`.
-- Access scopes: `read_products` only.
+- Access scopes: `read_products`, `read_discounts`, and `write_discounts` only.
 - Admin API version: match `SHOPIFY_API_VERSION` in `src/lib/shopify.ts`.
 - App uninstall webhook: `https://www.sqratch.com/api/shopify/webhooks/app/uninstalled`.
 - Customer data request webhook: `https://www.sqratch.com/api/shopify/webhooks/customers/data_request`.
@@ -109,7 +109,7 @@ Current limitation: the embedded shell loads the minimum App Bridge script/meta 
 
 ## App Store Submission Checklist
 
-- Confirm scopes contain only `read_products`.
+- Confirm scopes contain only `read_products`, `read_discounts`, and `write_discounts`.
 - Confirm the app is embedded.
 - Confirm app URL and OAuth redirect URL are HTTPS production URLs.
 - Confirm privacy compliance webhooks are configured and return `200` for valid HMAC requests.

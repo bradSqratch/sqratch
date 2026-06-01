@@ -7,37 +7,38 @@ datasource db {
 }
 
 model User {
-  id                      String                   @id @default(cuid())
-  name                    String?
-  email                   String                   @unique
-  isEmailVerified         Boolean                  @default(false)
-  emailVerifiedAt         DateTime?
-  createdAt               DateTime                 @default(now())
-  updatedAt               DateTime                 @updatedAt
-  password                String?
-  role                    Role                     @default(USER)
-  isActive                Boolean                  @default(true)
-  points                  Int                      @default(0)
-  imageUrl                String?
-  analyticsEvents         AnalyticsEvent[]
-  brandMembers            BrandMember[]
-  reviewedBrandRequests   BrandRequest[]           @relation("BrandRequestReviewer")
-  brandRequests           BrandRequest[]           @relation("BrandRequestOwner")
-  campaigns               Campaign[]               @relation("CampaignCreatedByUser")
-  campaignUnlocks         CampaignUnlock[]
-  creatorProfile          CreatorProfile?
-  reviewedCreatorRequests CreatorRequest[]         @relation("CreatorRequestReviewer")
-  creatorRequests         CreatorRequest[]         @relation("CreatorRequestOwner")
-  emailQueue              EmailQueue[]
-  emailVerificationTokens EmailVerificationToken[]
-  lessonProgress          LessonProgress[]
-  pointTransactions       PointTransaction[]
-  postComments            PostComment[]
-  qrCodesCreated          QRCode[]                 @relation("QRCodeCreatedByUser")
-  qrRedemptions           QRCode[]                 @relation("QRCodeRedeemedByUser")
-  questions               Question[]
-  questionAnswers         QuestionAnswer[]
-  sessions                UserSession[]
+  id                       String                    @id @default(cuid())
+  name                     String?
+  email                    String                    @unique
+  isEmailVerified          Boolean                   @default(false)
+  emailVerifiedAt          DateTime?
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
+  password                 String?
+  role                     Role                      @default(USER)
+  isActive                 Boolean                   @default(true)
+  points                   Int                       @default(0)
+  imageUrl                 String?
+  analyticsEvents          AnalyticsEvent[]
+  brandMembers             BrandMember[]
+  reviewedBrandRequests    BrandRequest[]            @relation("BrandRequestReviewer")
+  brandRequests            BrandRequest[]            @relation("BrandRequestOwner")
+  campaigns                Campaign[]                @relation("CampaignCreatedByUser")
+  campaignUnlocks          CampaignUnlock[]
+  creatorProfile           CreatorProfile?
+  reviewedCreatorRequests  CreatorRequest[]          @relation("CreatorRequestReviewer")
+  creatorRequests          CreatorRequest[]          @relation("CreatorRequestOwner")
+  emailQueue               EmailQueue[]
+  emailVerificationTokens  EmailVerificationToken[]
+  lessonProgress           LessonProgress[]
+  pointTransactions        PointTransaction[]
+  postComments             PostComment[]
+  qrCodesCreated           QRCode[]                  @relation("QRCodeCreatedByUser")
+  qrRedemptions            QRCode[]                  @relation("QRCodeRedeemedByUser")
+  questions                Question[]
+  questionAnswers          QuestionAnswer[]
+  shopifyRewardRedemptions ShopifyRewardRedemption[]
+  sessions                 UserSession[]
 }
 
 model CreatorRequest {
@@ -80,28 +81,30 @@ model CreatorProfile {
 }
 
 model Brand {
-  id                                    String                  @id @default(cuid())
-  name                                  String                  @unique
-  slug                                  String                  @unique
-  bio                                   String?
-  websiteUrl                            String?
-  logoUrl                               String?
-  isActive                              Boolean                 @default(true)
-  shopifyShopDomain                     String?                 @unique
-  shopifyAdminAccessTokenEncrypted      String?
-  shopifyInstalledAt                    DateTime?
-  shopifyDisconnectedAt                 DateTime?
-  shopifyUninstalledAt                  DateTime?
-  shopifyConnectionStatus               ShopifyConnectionStatus @default(DISCONNECTED)
-  createdAt                             DateTime                @default(now())
-  updatedAt                             DateTime                @updatedAt
-  coverImageUrl                         String?
-  shopifyLastProductSyncAt              DateTime?
-  analyticsEvents                       AnalyticsEvent[]
-  members                               BrandMember[]
-  campaigns                             Campaign[]
-  experienceProductLinks                ExperienceProductLink[]
-  lessonProductLinks                    LessonProductLink[]
+  id                               String                    @id @default(cuid())
+  name                             String                    @unique
+  slug                             String                    @unique
+  bio                              String?
+  websiteUrl                       String?
+  logoUrl                          String?
+  isActive                         Boolean                   @default(true)
+  shopifyShopDomain                String?                   @unique
+  shopifyAdminAccessTokenEncrypted String?
+  shopifyInstalledAt               DateTime?
+  shopifyDisconnectedAt            DateTime?
+  shopifyUninstalledAt             DateTime?
+  shopifyConnectionStatus          ShopifyConnectionStatus   @default(DISCONNECTED)
+  createdAt                        DateTime                  @default(now())
+  updatedAt                        DateTime                  @updatedAt
+  coverImageUrl                    String?
+  shopifyLastProductSyncAt         DateTime?
+  analyticsEvents                  AnalyticsEvent[]
+  members                          BrandMember[]
+  campaigns                        Campaign[]
+  experienceProductLinks           ExperienceProductLink[]
+  lessonProductLinks               LessonProductLink[]
+  rewardOffers                     BrandRewardOffer[]
+  shopifyRewardRedemptions         ShopifyRewardRedemption[]
 }
 
 model BrandMember {
@@ -396,6 +399,80 @@ model LessonProductLink {
   @@index([brandId])
 }
 
+model BrandRewardOffer {
+  id                    String                    @id @default(cuid())
+  brandId               String
+  title                 String
+  description           String?
+  isActive              Boolean                   @default(false)
+  pointsCost            Int
+  discountAmountCents   Int
+  currencyCode          String                    @default("CAD")
+  claimStartsAt         DateTime?
+  claimEndsAt           DateTime?
+  codeValidDays         Int                       @default(30)
+  appliesTo             RewardAppliesTo           @default(ALL_PRODUCTS)
+  minimumSubtotalCents  Int?
+  codePrefix            String?
+  maxTotalRedemptions   Int?
+  maxRedemptionsPerUser Int?
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
+  brand                 Brand                     @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  products              BrandRewardOfferProduct[]
+  redemptions           ShopifyRewardRedemption[]
+
+  @@index([brandId])
+  @@index([brandId, isActive, claimStartsAt, claimEndsAt])
+}
+
+model BrandRewardOfferProduct {
+  id                String           @id @default(cuid())
+  offerId           String
+  shopifyProductGid String
+  title             String?
+  imageUrl          String?
+  productUrl        String?
+  offer             BrandRewardOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
+
+  @@unique([offerId, shopifyProductGid])
+  @@index([offerId])
+}
+
+model ShopifyRewardRedemption {
+  id                     String                        @id @default(cuid())
+  userId                 String
+  brandId                String
+  offerId                String
+  idempotencyKey         String                        @unique
+  code                   String                        @unique
+  status                 ShopifyRewardRedemptionStatus
+  pointsCost             Int
+  discountAmountCents    Int
+  currencyCode           String                        @default("CAD")
+  shopifyShopDomain      String
+  shopifyDiscountNodeId  String?
+  shopifyDiscountStatus  String?
+  shopifyAsyncUsageCount Int?
+  shopifyLastCheckedAt   DateTime?
+  issuedAt               DateTime?
+  expiresAt              DateTime?
+  usedAt                 DateTime?
+  errorMessage           String?
+  shopifyUserErrors      Json?
+  createdAt              DateTime                      @default(now())
+  updatedAt              DateTime                      @updatedAt
+  brand                  Brand                         @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  offer                  BrandRewardOffer              @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  pointTransactions      PointTransaction[]
+  user                   User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([brandId, createdAt])
+  @@index([offerId])
+  @@index([status])
+}
+
 model UserSession {
   id              String           @id
   createdAt       DateTime         @default(now())
@@ -496,18 +573,21 @@ model WaitlistEntry {
 }
 
 model PointTransaction {
-  id        String      @id @default(cuid())
-  userId    String
-  points    Int
-  reason    PointReason
-  qrCodeId  String?
-  createdAt DateTime    @default(now())
-  qrCode    QRCode?     @relation(fields: [qrCodeId], references: [id])
-  user      User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                        String                   @id @default(cuid())
+  userId                    String
+  points                    Int
+  reason                    PointReason
+  qrCodeId                  String?
+  shopifyRewardRedemptionId String?
+  createdAt                 DateTime                 @default(now())
+  qrCode                    QRCode?                  @relation(fields: [qrCodeId], references: [id])
+  shopifyRewardRedemption   ShopifyRewardRedemption? @relation(fields: [shopifyRewardRedemptionId], references: [id], onDelete: SetNull)
+  user                      User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, qrCodeId])
   @@index([userId])
   @@index([qrCodeId])
+  @@index([shopifyRewardRedemptionId])
 }
 
 enum Role {
@@ -559,6 +639,22 @@ enum ShopifyConnectionStatus {
   UNINSTALLED
 }
 
+enum RewardAppliesTo {
+  ALL_PRODUCTS
+  SPECIFIC_PRODUCTS
+}
+
+enum ShopifyRewardRedemptionStatus {
+  PENDING
+  POINTS_DEBITED
+  ISSUED
+  USED
+  EXPIRED
+  FAILED
+  REFUNDED
+  CANCELLED
+}
+
 enum QuestionStatus {
   OPEN
   ANSWERED
@@ -580,4 +676,6 @@ enum PointReason {
   QR_SCAN
   BONUS
   REFERRAL
+  SHOPIFY_REWARD_REDEMPTION
+  SHOPIFY_REWARD_REFUND
 }

@@ -1,7 +1,11 @@
 import crypto from "crypto";
 
 export const SHOPIFY_API_VERSION = "2026-04";
-export const SHOPIFY_SCOPES = ["read_products"].join(",");
+export const SHOPIFY_SCOPES = [
+  "read_products",
+  "read_discounts",
+  "write_discounts",
+].join(",");
 export const SHOPIFY_PENDING_INSTALL_TTL_MS = 24 * 60 * 60 * 1000;
 
 export function isValidShopDomain(value: string) {
@@ -109,14 +113,16 @@ export async function registerShopifyWebhooks(options: {
 
   await Promise.allSettled(
     webhooks.map((webhook) =>
-      fetch(`https://${options.shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Shopify-Access-Token": options.accessToken,
-        },
-        body: JSON.stringify({
-          query: `
+      fetch(
+        `https://${options.shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Shopify-Access-Token": options.accessToken,
+          },
+          body: JSON.stringify({
+            query: `
             mutation webhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $callbackUrl: URL!) {
               webhookSubscriptionCreate(
                 topic: $topic
@@ -126,12 +132,13 @@ export async function registerShopifyWebhooks(options: {
               }
             }
           `,
-          variables: {
-            topic: webhook.topic,
-            callbackUrl: new URL(webhook.path, callbackOrigin).toString(),
-          },
-        }),
-      }),
+            variables: {
+              topic: webhook.topic,
+              callbackUrl: new URL(webhook.path, callbackOrigin).toString(),
+            },
+          }),
+        },
+      ),
     ),
   );
 }
