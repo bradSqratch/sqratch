@@ -58,7 +58,7 @@ export default function SiteFooter() {
                     </a>{" "}
                     or book a half hour discovery session on{" "}
                     <a
-                      href="https://calendly.com/sqratch/30min"
+                      href="https://calendly.com/sqratch"
                       target="_blank"
                       rel="noreferrer"
                       className="underline decoration-white/30 underline-offset-4 hover:decoration-white/70"

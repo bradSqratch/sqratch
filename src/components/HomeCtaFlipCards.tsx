@@ -273,7 +273,7 @@ export default function HomeCtaFlipCards() {
         cta: {
           type: "link",
           label: "Apply As An Expert",
-          href: "https://calendly.com/sqratch/30min",
+          href: "https://calendly.com/sqratch",
         },
       },
       {
@@ -287,7 +287,7 @@ export default function HomeCtaFlipCards() {
         cta: {
           type: "link",
           label: "Become A Brand Partner",
-          href: "https://calendly.com/sqratch/sqratch-for-brands",
+          href: "https://calendly.com/sqratch",
         },
       },
     ],

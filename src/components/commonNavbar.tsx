@@ -53,7 +53,7 @@ export default function CommonNavbar({
         {/* Actions */}
         {/* <div className="flex items-center gap-4">
               <Link
-                href="https://calendly.com/sqratch/30min"
+                href="https://calendly.com/sqratch"
                 className="
                   inline-flex items-center justify-center rounded-full
                   border border-[#ECECEC] bg-transparent
