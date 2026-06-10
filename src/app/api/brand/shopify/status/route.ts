@@ -24,6 +24,9 @@ export async function GET() {
         shopifyDisconnectedAt: brand.shopifyDisconnectedAt,
         shopifyUninstalledAt: brand.shopifyUninstalledAt,
         shopifyConnectionStatus: brand.shopifyConnectionStatus,
+        hasShopifyAccessToken: Boolean(
+          brand.shopifyAdminAccessTokenEncrypted,
+        ),
         shopifyLastProductSyncAt: brand.shopifyLastProductSyncAt,
       },
     });

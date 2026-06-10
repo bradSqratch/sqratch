@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import {
+  Prisma,
+  type RewardAppliesTo,
+  type ShopifyRewardRedemption,
+} from "@prisma/client";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
 import { getRewardClaimContext } from "@/lib/reward-access";
@@ -14,6 +19,44 @@ function cleanIdempotencyKey(value: unknown) {
   const key = String(value || "").trim();
   return key.length > 0 && key.length <= 160 ? key : null;
 }
+
+const redemptionErrorResponses: Record<
+  string,
+  { error: string; status: number }
+> = {
+  OFFER_NOT_AVAILABLE: {
+    error: "Reward offer is not available.",
+    status: 409,
+  },
+  SHOPIFY_DISCONNECTED: {
+    error: "Shopify is not connected for this brand.",
+    status: 400,
+  },
+  INSUFFICIENT_POINTS: {
+    error: "Not enough SQRATCH points for this reward.",
+    status: 409,
+  },
+  INACTIVE: {
+    error: "Inactive",
+    status: 409,
+  },
+  NOT_STARTED: {
+    error: "Not started",
+    status: 409,
+  },
+  CLAIM_WINDOW_ENDED: {
+    error: "Claim window ended",
+    status: 409,
+  },
+  LIMIT_REACHED: {
+    error: "Limit reached",
+    status: 409,
+  },
+  USER_LIMIT_REACHED: {
+    error: "User limit reached",
+    status: 409,
+  },
+};
 
 function serializeRedemption(redemption: {
   id: string;
@@ -198,33 +241,120 @@ export async function POST(request: NextRequest) {
 
     const issuedAt = new Date();
     const code = generateRewardCode(offer.codePrefix);
-    let redemption = await prisma.shopifyRewardRedemption.create({
-      data: {
-        userId: user.id,
-        brandId: offer.brandId,
-        offerId: offer.id,
-        idempotencyKey,
-        code,
-        status: "PENDING",
-        pointsCost: offer.pointsCost,
-        discountAmountCents: offer.discountAmountCents,
-        currencyCode: offer.currencyCode,
-        shopifyShopDomain: offer.brand.shopifyShopDomain,
-      },
-    });
+    let reservation: {
+      redemption: ShopifyRewardRedemption;
+      discountConfig: {
+        brandName: string;
+        shopDomain: string;
+        encryptedToken: string;
+        title: string;
+        codeValidDays: number;
+        discountAmountCents: number;
+        currencyCode: string;
+        appliesTo: RewardAppliesTo;
+        shopifyProductGids: string[];
+        minimumSubtotalCents: number | null;
+        pointsCost: number;
+      };
+    } | null = null;
 
     try {
-      redemption = await prisma.$transaction(async (tx) => {
+      reservation = await prisma.$transaction(async (tx) => {
+        const currentOffer = await tx.brandRewardOffer.findUnique({
+          where: {
+            id: offer.id,
+          },
+          include: {
+            brand: {
+              select: {
+                name: true,
+                shopifyConnectionStatus: true,
+                shopifyShopDomain: true,
+                shopifyAdminAccessTokenEncrypted: true,
+              },
+            },
+            products: {
+              select: {
+                shopifyProductGid: true,
+              },
+            },
+          },
+        });
+
+        if (!currentOffer || currentOffer.brandId !== offer.brandId) {
+          throw new Error("OFFER_NOT_AVAILABLE");
+        }
+
+        const shopifyConnected =
+          currentOffer.brand.shopifyConnectionStatus === "CONNECTED" &&
+          Boolean(currentOffer.brand.shopifyShopDomain) &&
+          Boolean(currentOffer.brand.shopifyAdminAccessTokenEncrypted);
+
+        if (!shopifyConnected) {
+          throw new Error("SHOPIFY_DISCONNECTED");
+        }
+
+        const [currentTotalRedemptions, currentUserRedemptions] =
+          await Promise.all([
+            currentOffer.maxTotalRedemptions
+              ? tx.shopifyRewardRedemption.count({
+                  where: {
+                    offerId: currentOffer.id,
+                    status: {
+                      in: [...CLAIM_COUNTED_REDEMPTION_STATUSES],
+                    },
+                  },
+                })
+              : Promise.resolve(0),
+            currentOffer.maxRedemptionsPerUser
+              ? tx.shopifyRewardRedemption.count({
+                  where: {
+                    offerId: currentOffer.id,
+                    userId: user.id,
+                    status: {
+                      in: [...CLAIM_COUNTED_REDEMPTION_STATUSES],
+                    },
+                  },
+                })
+              : Promise.resolve(0),
+          ]);
+        const currentAvailability = getRewardOfferAvailability({
+          offer: currentOffer,
+          shopifyConnected,
+          totalRedemptions: currentTotalRedemptions,
+          userRedemptions: currentUserRedemptions,
+          now: issuedAt,
+        });
+
+        if (!currentAvailability.claimable) {
+          throw new Error(currentAvailability.status);
+        }
+
+        const createdRedemption = await tx.shopifyRewardRedemption.create({
+          data: {
+            userId: user.id,
+            brandId: currentOffer.brandId,
+            offerId: currentOffer.id,
+            idempotencyKey,
+            code,
+            status: "PENDING",
+            pointsCost: currentOffer.pointsCost,
+            discountAmountCents: currentOffer.discountAmountCents,
+            currencyCode: currentOffer.currencyCode,
+            shopifyShopDomain: currentOffer.brand.shopifyShopDomain!,
+          },
+        });
+
         const debit = await tx.user.updateMany({
           where: {
             id: user.id,
             points: {
-              gte: offer.pointsCost,
+              gte: currentOffer.pointsCost,
             },
           },
           data: {
             points: {
-              decrement: offer.pointsCost,
+              decrement: currentOffer.pointsCost,
             },
           },
         });
@@ -236,72 +366,132 @@ export async function POST(request: NextRequest) {
         await tx.pointTransaction.create({
           data: {
             userId: user.id,
-            points: -offer.pointsCost,
+            points: -currentOffer.pointsCost,
             reason: "SHOPIFY_REWARD_REDEMPTION",
-            shopifyRewardRedemptionId: redemption.id,
+            shopifyRewardRedemptionId: createdRedemption.id,
           },
         });
 
-        return tx.shopifyRewardRedemption.update({
+        const debitedRedemption = await tx.shopifyRewardRedemption.update({
           where: {
-            id: redemption.id,
+            id: createdRedemption.id,
           },
           data: {
             status: "POINTS_DEBITED",
           },
         });
+
+        return {
+          redemption: debitedRedemption,
+          discountConfig: {
+            brandName: currentOffer.brand.name,
+            shopDomain: currentOffer.brand.shopifyShopDomain!,
+            encryptedToken:
+              currentOffer.brand.shopifyAdminAccessTokenEncrypted!,
+            title: currentOffer.title,
+            codeValidDays: currentOffer.codeValidDays,
+            discountAmountCents: currentOffer.discountAmountCents,
+            currencyCode: currentOffer.currencyCode,
+            appliesTo: currentOffer.appliesTo,
+            shopifyProductGids: currentOffer.products.map(
+              (product) => product.shopifyProductGid,
+            ),
+            minimumSubtotalCents: currentOffer.minimumSubtotalCents,
+            pointsCost: currentOffer.pointsCost,
+          },
+        };
+      }, {
+        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
       });
     } catch (error) {
-      const isInsufficientPoints =
-        error instanceof Error && error.message === "INSUFFICIENT_POINTS";
+      const concurrentExisting =
+        await prisma.shopifyRewardRedemption.findUnique({
+          where: {
+            idempotencyKey,
+          },
+        });
 
-      await prisma.shopifyRewardRedemption.update({
-        where: {
-          id: redemption.id,
-        },
-        data: {
-          status: "CANCELLED",
-          errorMessage: isInsufficientPoints
-            ? "Not enough SQRATCH points for this reward."
-            : "Failed to debit points.",
-        },
-      });
+      if (concurrentExisting?.userId === user.id) {
+        return NextResponse.json({
+          data: serializeRedemption(concurrentExisting),
+        });
+      }
 
+      const errorCode = error instanceof Error ? error.message : "";
+      const knownError = redemptionErrorResponses[errorCode];
+
+      if (knownError) {
+        return NextResponse.json(
+          { error: knownError.error },
+          { status: knownError.status },
+        );
+      }
+
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2034"
+      ) {
+        return NextResponse.json(
+          { error: "Reward availability changed. Please try again." },
+          { status: 409 },
+        );
+      }
+
+      console.error("[rewards/shopify/redeem][reserve] Error:", error);
       return NextResponse.json(
-        {
-          error: isInsufficientPoints
-            ? "Not enough SQRATCH points for this reward."
-            : "Failed to debit points for this reward.",
-        },
-        { status: isInsufficientPoints ? 409 : 500 },
+        { error: "Failed to reserve this reward." },
+        { status: 500 },
       );
     }
 
+    if (!reservation) {
+      return NextResponse.json(
+        { error: "Failed to reserve this reward." },
+        { status: 500 },
+      );
+    }
+
+    const { redemption, discountConfig } = reservation;
     const discount = await createShopifyRewardDiscountCode({
-      shopDomain: offer.brand.shopifyShopDomain,
-      encryptedToken: offer.brand.shopifyAdminAccessTokenEncrypted,
-      title: `${offer.brand.name} - ${offer.title}`,
-      code,
+      shopDomain: discountConfig.shopDomain,
+      encryptedToken: discountConfig.encryptedToken,
+      title: `${discountConfig.brandName} - ${discountConfig.title}`,
+      code: redemption.code,
       issuedAt,
-      codeValidDays: offer.codeValidDays,
-      discountAmountCents: offer.discountAmountCents,
-      currencyCode: offer.currencyCode,
-      appliesTo: offer.appliesTo,
-      shopifyProductGids: offer.products.map(
-        (product) => product.shopifyProductGid,
-      ),
-      minimumSubtotalCents: offer.minimumSubtotalCents,
+      codeValidDays: discountConfig.codeValidDays,
+      discountAmountCents: discountConfig.discountAmountCents,
+      currencyCode: discountConfig.currencyCode,
+      appliesTo: discountConfig.appliesTo,
+      shopifyProductGids: discountConfig.shopifyProductGids,
+      minimumSubtotalCents: discountConfig.minimumSubtotalCents,
     });
 
     if (!discount.ok) {
       const refunded = await prisma.$transaction(async (tx) => {
+        const current = await tx.shopifyRewardRedemption.findUnique({
+          where: {
+            id: redemption.id,
+          },
+          select: {
+            status: true,
+          },
+        });
+
+        if (current?.status !== "POINTS_DEBITED") {
+          return tx.shopifyRewardRedemption.findUniqueOrThrow({
+            where: {
+              id: redemption.id,
+            },
+          });
+        }
+
         await tx.user.update({
           where: {
             id: user.id,
           },
           data: {
             points: {
-              increment: offer.pointsCost,
+              increment: discountConfig.pointsCost,
             },
           },
         });
@@ -309,7 +499,7 @@ export async function POST(request: NextRequest) {
         await tx.pointTransaction.create({
           data: {
             userId: user.id,
-            points: offer.pointsCost,
+            points: discountConfig.pointsCost,
             reason: "SHOPIFY_REWARD_REFUND",
             shopifyRewardRedemptionId: redemption.id,
           },

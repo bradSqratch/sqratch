@@ -17,6 +17,7 @@ type ShopifyStatus = {
   slug: string;
   shopifyShopDomain: string | null;
   shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED";
+  hasShopifyAccessToken: boolean;
   shopifyLastProductSyncAt: string | null;
 } | null;
 
@@ -177,7 +178,9 @@ export default function BrandRewardsPage() {
   const [message, setMessage] = useState<string | null>(null);
 
   const isConnected =
-    brand?.shopifyConnectionStatus === "CONNECTED" && brand.shopifyShopDomain;
+    brand?.shopifyConnectionStatus === "CONNECTED" &&
+    Boolean(brand.shopifyShopDomain) &&
+    brand.hasShopifyAccessToken;
   const selectedProductSet = useMemo(
     () => new Set(form.selectedProductGids),
     [form.selectedProductGids],

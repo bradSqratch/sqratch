@@ -50,7 +50,7 @@ export async function getRewardClaimContext(options: {
       };
     }
 
-    if (access.viewer.userId !== options.userId || !access.canAccessPrivate) {
+    if (access.viewer.userId !== options.userId) {
       return {
         ok: false as const,
         status: 403,
@@ -58,8 +58,33 @@ export async function getRewardClaimContext(options: {
       };
     }
 
-    const brandIds = access.experience.campaigns
-      .map((item) => item.campaign.brand?.id)
+    const unlockedCampaigns = await prisma.campaignUnlock.findMany({
+      where: {
+        userId: options.userId,
+        campaignId: {
+          in: access.campaignIds,
+        },
+      },
+      select: {
+        campaignId: true,
+        campaign: {
+          select: {
+            brandId: true,
+          },
+        },
+      },
+    });
+
+    if (unlockedCampaigns.length === 0) {
+      return {
+        ok: false as const,
+        status: 403,
+        error: "Unlock this experience before claiming rewards.",
+      };
+    }
+
+    const brandIds = unlockedCampaigns
+      .map((item) => item.campaign.brandId)
       .filter((brandId): brandId is string => Boolean(brandId));
 
     if (brandIds.length === 0) {
@@ -73,7 +98,7 @@ export async function getRewardClaimContext(options: {
     return {
       ok: true as const,
       brandIds: Array.from(new Set(brandIds)),
-      campaignIds: access.campaignIds,
+      campaignIds: unlockedCampaigns.map((item) => item.campaignId),
     };
   }
 
