@@ -44,3 +44,6 @@ next-env.d.ts
 *.dump
 backups/
 exports/
+
+# AI tooling output
+graphify-out/
