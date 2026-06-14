@@ -267,21 +267,23 @@ model Course {
 }
 
 model Lesson {
-  id              String              @id @default(cuid())
-  courseId        String
-  title           String
-  description     String?
-  sortOrder       Int                 @default(0)
-  isActive        Boolean             @default(true)
-  videoSource     LessonVideoSource   @default(YOUTUBE)
-  youtubeUrl      String?
-  videoUploadUrl  String?
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
-  analyticsEvents AnalyticsEvent[]
-  course          Course              @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  productLinks    LessonProductLink[]
-  progress        LessonProgress[]
+  id                 String              @id @default(cuid())
+  courseId           String
+  title              String
+  description        String?
+  sortOrder          Int                 @default(0)
+  isActive           Boolean             @default(true)
+  videoSource        LessonVideoSource   @default(YOUTUBE)
+  youtubeUrl         String?
+  videoUploadUrl     String?
+  videoStorageBucket String?
+  videoStoragePath   String?
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+  analyticsEvents    AnalyticsEvent[]
+  course             Course              @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  productLinks       LessonProductLink[]
+  progress           LessonProgress[]
 
   @@index([courseId])
   @@index([courseId, isActive, sortOrder, createdAt])

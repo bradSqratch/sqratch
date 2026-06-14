@@ -112,6 +112,9 @@ Middleware (`src/middleware.ts`) only protects `/dashboard/**`, `/admin/**` page
 | `SHOPIFY_API_SECRET` | HMAC verification (OAuth + webhooks) | Yes — must match Shopify partner dashboard |
 | `SHOPIFY_APP_URL` | Webhook callback URL registration | Yes — must be public HTTPS URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-side storage uploads | Yes for uploads |
+| `SUPABASE_LESSON_VIDEO_BUCKET` | Lesson video bucket used for signed direct uploads | Recommended |
+| `MAX_VIDEO_UPLOAD_MB` | Server-authoritative lesson video limit; defaults to 250 MB | No |
+| `LESSON_VIDEO_SIGNED_URL_TTL_SECONDS` | Private lesson playback URL lifetime; defaults to 3600 seconds | No |
 | `RESEND_API_KEY` | Email sending | Yes for emails |
 
 ---

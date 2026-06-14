@@ -1,10 +1,12 @@
 import type { NextRequest } from "next/server";
+import { unstable_noStore as noStore } from "next/cache";
 import type { PublicExperienceData } from "@/components/experience/types";
 import {
   getExperienceAccessContext,
   type ExperienceAccessContext,
 } from "@/lib/experience-access";
 import prisma from "@/lib/prisma";
+import { getAuthorizedLessonVideoUrl } from "@/lib/lesson-video-playback";
 
 type LoadPublicExperienceResult = {
   access: ExperienceAccessContext;
@@ -17,6 +19,7 @@ export async function loadPublicExperience(
   experienceSlug: string,
   request?: NextRequest,
 ): Promise<LoadPublicExperienceResult | null> {
+  noStore();
   const access = await getExperienceAccessContext(experienceSlug, request);
 
   if (!access) {
@@ -50,6 +53,8 @@ export async function loadPublicExperience(
           videoSource: true,
           youtubeUrl: true,
           videoUploadUrl: true,
+          videoStorageBucket: true,
+          videoStoragePath: true,
         },
       },
     },
@@ -66,20 +71,30 @@ export async function loadPublicExperience(
       ]
     : access.experience.campaigns;
 
-  const playableLessons = courses
-    .flatMap((course) =>
-      course.lessons.map((lesson) => ({
-        id: `lesson:${lesson.id}`,
-        lessonId: lesson.id,
-        kind: "LESSON" as const,
-        title: lesson.title,
-        sortOrder: lesson.sortOrder,
-        courseTitle: course.title,
-        videoSource: lesson.videoSource,
-        youtubeUrl: lesson.youtubeUrl,
-        videoAssetUrl: lesson.videoUploadUrl,
-      })),
+  const playableLessons = (
+    await Promise.all(
+      courses.flatMap((course) =>
+        course.lessons.map(async (lesson) => ({
+          id: `lesson:${lesson.id}`,
+          lessonId: lesson.id,
+          kind: "LESSON" as const,
+          title: lesson.title,
+          sortOrder: lesson.sortOrder,
+          courseTitle: course.title,
+          videoSource: lesson.videoSource,
+          youtubeUrl: lesson.youtubeUrl,
+          videoAssetUrl: await getAuthorizedLessonVideoUrl({
+            canAccess:
+              course.access === "PUBLIC" || access.canAccessPrivate,
+            videoSource: lesson.videoSource,
+            lesson,
+            courseId: course.id,
+            experienceSlug: access.experience.slug,
+          }),
+        })),
+      ),
     )
+  )
     .filter(
       (lesson) =>
         (lesson.videoSource === "YOUTUBE" && lesson.youtubeUrl) ||
@@ -91,17 +106,17 @@ export async function loadPublicExperience(
       access.experience.whyYoutubeUrl) ||
     (access.experience.whyVideoSource === "UPLOAD" &&
       access.experience.whyVideoUploadUrl)
-    ? {
-        id: `experience:${access.experience.id}:why`,
-        lessonId: null,
-        kind: "EXPERIENCE" as const,
-        title: access.experience.title,
-        courseTitle: null,
-        videoSource: access.experience.whyVideoSource,
-        youtubeUrl: access.experience.whyYoutubeUrl,
-        videoAssetUrl: access.experience.whyVideoUploadUrl,
-      }
-    : null;
+      ? {
+          id: `experience:${access.experience.id}:why`,
+          lessonId: null,
+          kind: "EXPERIENCE" as const,
+          title: access.experience.title,
+          courseTitle: null,
+          videoSource: access.experience.whyVideoSource,
+          youtubeUrl: access.experience.whyYoutubeUrl,
+          videoAssetUrl: access.experience.whyVideoUploadUrl,
+        }
+      : null;
 
   const featuredStory = experienceWhyVideo
     ? experienceWhyVideo

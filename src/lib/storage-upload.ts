@@ -1,3 +1,9 @@
+import {
+  DEFAULT_MAX_VIDEO_UPLOAD_BYTES,
+  hasAllowedVideoExtension,
+  isAllowedVideoMimeType,
+} from "@/lib/video-upload-config";
+
 type UploadToStorageInput = {
   bucket: string;
   path: string;
@@ -39,9 +45,15 @@ export function getMaxUploadBytes() {
 export function getMaxVideoUploadBytes() {
   const maxUploadMb = Number(process.env.MAX_VIDEO_UPLOAD_MB || "250");
   const safeMaxUploadMb =
-    Number.isFinite(maxUploadMb) && maxUploadMb > 0 ? maxUploadMb : 250;
+    Number.isFinite(maxUploadMb) && maxUploadMb > 0
+      ? maxUploadMb
+      : DEFAULT_MAX_VIDEO_UPLOAD_BYTES / (1024 * 1024);
 
   return safeMaxUploadMb * 1024 * 1024;
+}
+
+export function getLessonVideoBucket() {
+  return process.env.SUPABASE_LESSON_VIDEO_BUCKET || "lesson-videos";
 }
 
 export function assertStorageConfigured() {
@@ -166,20 +178,173 @@ export function parsePublicStorageUrl(url: string) {
     return null;
   }
 
-  const prefix = `${storageUrl}/storage/v1/object/public/`;
+  let candidate: URL;
+  let configured: URL;
 
-  if (!url.startsWith(prefix)) {
+  try {
+    candidate = new URL(url);
+    configured = new URL(storageUrl);
+  } catch {
     return null;
   }
 
-  const remainder = url.slice(prefix.length);
-  const [bucket, ...rest] = remainder.split("/");
-
-  if (!bucket || rest.length === 0) {
+  if (candidate.origin !== configured.origin) {
     return null;
   }
 
-  return { bucket, path: rest.join("/") };
+  const publicPrefix = "/storage/v1/object/public/";
+
+  if (!candidate.pathname.startsWith(publicPrefix)) {
+    return null;
+  }
+
+  const remainder = candidate.pathname.slice(publicPrefix.length);
+  const [encodedBucket, ...encodedParts] = remainder.split("/");
+
+  if (!encodedBucket || encodedParts.length === 0) {
+    return null;
+  }
+
+  try {
+    const bucket = decodeURIComponent(encodedBucket);
+    const pathParts = encodedParts.map((part) => decodeURIComponent(part));
+
+    if (
+      !bucket ||
+      bucket.includes("/") ||
+      bucket.includes("\\") ||
+      pathParts.some(
+        (part) =>
+          !part ||
+          part === "." ||
+          part === ".." ||
+          part.includes("/") ||
+          part.includes("\\"),
+      )
+    ) {
+      return null;
+    }
+
+    return { bucket, path: pathParts.join("/") };
+  } catch {
+    return null;
+  }
+}
+
+export function validateLessonVideoStorageUrl(options: {
+  url: string;
+  courseId: string;
+  experienceSlug: string;
+}) {
+  const parsed = parsePublicStorageUrl(options.url);
+
+  if (
+    !parsed ||
+    !validateLessonVideoStorageObject({
+      bucket: parsed.bucket,
+      path: parsed.path,
+      courseId: options.courseId,
+      experienceSlug: options.experienceSlug,
+    })
+  ) {
+    return null;
+  }
+
+  return parsed;
+}
+
+export function validateLessonVideoStorageObject(options: {
+  bucket: string;
+  path: string;
+  courseId: string;
+  experienceSlug: string;
+}) {
+  if (options.bucket !== getLessonVideoBucket()) {
+    return null;
+  }
+
+  const pathParts = options.path.split("/");
+  const expectedPrefix = [
+    "experiences",
+    options.experienceSlug,
+    "courses",
+    options.courseId,
+    "lessons",
+  ];
+
+  if (
+    pathParts.length <= expectedPrefix.length ||
+    expectedPrefix.some((part, index) => pathParts[index] !== part) ||
+    pathParts.some(
+      (part) =>
+        !part ||
+        part === "." ||
+        part === ".." ||
+        part.includes("\\") ||
+        part.includes("\0"),
+    )
+  ) {
+    return null;
+  }
+
+  return {
+    bucket: options.bucket,
+    path: options.path,
+  };
+}
+
+export async function storageObjectExists(options: {
+  bucket: string;
+  path: string;
+}) {
+  const { storageUrl, serviceRoleKey } = assertStorageConfigured();
+  const response = await fetch(
+    `${storageUrl}/storage/v1/object/${encodeURIComponent(options.bucket)}/${encodeStoragePath(options.path)}`,
+    {
+      method: "HEAD",
+      headers: {
+        Authorization: `Bearer ${serviceRoleKey}`,
+        apikey: serviceRoleKey,
+      },
+      cache: "no-store",
+    },
+  );
+
+  return response.ok;
+}
+
+export function validateVideoUploadMetadata(input: {
+  fileName: string;
+  fileType: string;
+  fileSize: number;
+}) {
+  if (
+    !input.fileName ||
+    input.fileName === "." ||
+    input.fileName === ".." ||
+    input.fileName.includes("/") ||
+    input.fileName.includes("\\")
+  ) {
+    return "A valid video file name is required.";
+  }
+
+  if (!hasAllowedVideoExtension(input.fileName)) {
+    return "The video file extension is not allowed.";
+  }
+
+  if (!isAllowedVideoMimeType(input.fileType)) {
+    return "Only MP4, MOV, WEBM, MPEG, and M4V videos are allowed.";
+  }
+
+  if (!Number.isFinite(input.fileSize) || input.fileSize <= 0) {
+    return "A valid video file size is required.";
+  }
+
+  if (input.fileSize > getMaxVideoUploadBytes()) {
+    return "File is too large.";
+  }
+
+  return null;
 }
 
 export async function deleteFileFromStorage(bucket: string, path: string) {

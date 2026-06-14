@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getExperienceAccessContext } from "@/lib/experience-access";
+import { getAuthorizedLessonVideoUrl } from "@/lib/lesson-video-playback";
 import prisma from "@/lib/prisma";
+
+const PRIVATE_NO_STORE_HEADERS = {
+  "Cache-Control": "private, no-store",
+};
 
 export async function GET(
   request: NextRequest,
@@ -36,6 +41,8 @@ export async function GET(
         videoSource: true,
         youtubeUrl: true,
         videoUploadUrl: true,
+        videoStorageBucket: true,
+        videoStoragePath: true,
         course: {
           select: {
             id: true,
@@ -60,6 +67,13 @@ export async function GET(
 
     const canAccess =
       lesson.course.access === "PUBLIC" || access.canAccessPrivate;
+    const videoAssetUrl = await getAuthorizedLessonVideoUrl({
+      canAccess,
+      videoSource: lesson.videoSource,
+      lesson,
+      courseId: lesson.course.id,
+      experienceSlug: access.experience.slug,
+    });
     const lessonIndex = lesson.course.lessons.findIndex(
       (item) => item.id === lesson.id,
     );
@@ -70,52 +84,57 @@ export async function GET(
         ? lesson.course.lessons[lessonIndex + 1]
         : null;
 
-    return NextResponse.json({
-      data: {
-        experience: {
-          id: access.experience.id,
-          slug: access.experience.slug,
-          title: access.experience.title,
-          description: access.experience.description,
-          coverImageUrl: access.experience.coverImageUrl,
-          creator: {
-            id: access.experience.creator.id,
-            displayName:
-              access.experience.creator.displayName ||
-              access.experience.creator.user.name ||
-              "Creator",
-            bio: access.experience.creator.bio,
-            avatarUrl: access.experience.creator.avatarUrl,
+    return NextResponse.json(
+      {
+        data: {
+          experience: {
+            id: access.experience.id,
+            slug: access.experience.slug,
+            title: access.experience.title,
+            description: access.experience.description,
+            coverImageUrl: access.experience.coverImageUrl,
+            creator: {
+              id: access.experience.creator.id,
+              displayName:
+                access.experience.creator.displayName ||
+                access.experience.creator.user.name ||
+                "Creator",
+              bio: access.experience.creator.bio,
+              avatarUrl: access.experience.creator.avatarUrl,
+            },
+            campaigns: access.experience.campaigns.map((item) => ({
+              id: item.campaign.id,
+              name: item.campaign.name,
+              brand: item.campaign.brand,
+            })),
+            isLoggedIn: access.isLoggedIn,
+            hasUnlockedCampaign: access.hasUnlockedCampaign,
+            isCreatorOwner: access.isCreatorOwner,
+            canAccessPrivate: access.canAccessPrivate,
+            canInteract: access.canInteract,
           },
-          campaigns: access.experience.campaigns.map((item) => ({
-            id: item.campaign.id,
-            name: item.campaign.name,
-            brand: item.campaign.brand,
-          })),
-          isLoggedIn: access.isLoggedIn,
-          hasUnlockedCampaign: access.hasUnlockedCampaign,
-          isCreatorOwner: access.isCreatorOwner,
-          canAccessPrivate: access.canAccessPrivate,
-          canInteract: access.canInteract,
+          course: {
+            id: lesson.course.id,
+            title: lesson.course.title,
+            access: lesson.course.access,
+          },
+          lesson: {
+            id: lesson.id,
+            title: lesson.title,
+            description: lesson.description,
+            videoSource: lesson.videoSource,
+            youtubeUrl: canAccess ? lesson.youtubeUrl : null,
+            videoAssetUrl,
+          },
+          previousLesson,
+          nextLesson,
+          canAccess,
         },
-        course: {
-          id: lesson.course.id,
-          title: lesson.course.title,
-          access: lesson.course.access,
-        },
-        lesson: {
-          id: lesson.id,
-          title: lesson.title,
-          description: lesson.description,
-          videoSource: lesson.videoSource,
-          youtubeUrl: canAccess ? lesson.youtubeUrl : null,
-          videoAssetUrl: canAccess ? lesson.videoUploadUrl : null,
-        },
-        previousLesson,
-        nextLesson,
-        canAccess,
       },
-    });
+      {
+        headers: PRIVATE_NO_STORE_HEADERS,
+      },
+    );
   } catch (error) {
     console.error(
       "[public/experience/[experienceSlug]/lessons/[lessonId]] Error:",

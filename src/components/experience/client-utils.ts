@@ -54,8 +54,15 @@ export function postBeacon(url: string, body?: Record<string, unknown>) {
   return false;
 }
 
-export async function deleteUploadedAsset(url: string) {
-  if (!url) {
+export async function deleteUploadedAsset(
+  url: string,
+  options?: {
+    courseId?: string;
+    bucket?: string;
+    path?: string;
+  },
+) {
+  if (!url && !options?.bucket && !options?.path) {
     return false;
   }
 
@@ -66,7 +73,12 @@ export async function deleteUploadedAsset(url: string) {
       headers: {
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({ url }),
+      body: JSON.stringify({
+        url,
+        courseId: options?.courseId,
+        bucket: options?.bucket,
+        path: options?.path,
+      }),
     });
 
     if (!response.ok) {

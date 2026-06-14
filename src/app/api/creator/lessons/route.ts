@@ -1,7 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCreatorContext } from "@/lib/creator-auth";
 import prisma from "@/lib/prisma";
-import { deleteStorageObjectByUrl } from "@/lib/storage-upload";
+import {
+  deleteFileFromStorage,
+  storageObjectExists,
+  validateLessonVideoStorageObject,
+  validateLessonVideoStorageUrl,
+} from "@/lib/storage-upload";
+import { createSignedLessonVideoUrl } from "@/lib/lesson-video-playback";
+import {
+  resolveLessonVideoStorageReference,
+  type LessonVideoStorageReference,
+} from "@/lib/lesson-video-reference";
 
 function normalizeVideoSource(value: unknown) {
   const normalized = String(value || "YOUTUBE")
@@ -9,6 +19,66 @@ function normalizeVideoSource(value: unknown) {
     .toUpperCase();
 
   return normalized === "UPLOAD" ? "UPLOAD" : "YOUTUBE";
+}
+
+async function validateNewLessonVideoAsset(options: {
+  videoAssetUrl: string;
+  videoStorageBucket: string;
+  videoStoragePath: string;
+  courseId: string;
+  experienceSlug: string;
+}) {
+  const parsed =
+    options.videoStorageBucket || options.videoStoragePath
+      ? validateLessonVideoStorageObject({
+          bucket: options.videoStorageBucket,
+          path: options.videoStoragePath,
+          courseId: options.courseId,
+          experienceSlug: options.experienceSlug,
+        })
+      : validateLessonVideoStorageUrl({
+          url: options.videoAssetUrl,
+          courseId: options.courseId,
+          experienceSlug: options.experienceSlug,
+        });
+
+  if (!parsed) {
+    return {
+      ok: false as const,
+      error: "The uploaded lesson video is not valid for this course.",
+    };
+  }
+
+  const exists = await storageObjectExists(parsed);
+
+  if (!exists) {
+    return {
+      ok: false as const,
+      error: "The uploaded lesson video could not be found.",
+    };
+  }
+
+  return { ok: true as const, reference: parsed };
+}
+
+async function cleanupLessonVideo(
+  reference: LessonVideoStorageReference | null,
+  context: string,
+) {
+  if (!reference) {
+    return;
+  }
+
+  const deleted = await deleteFileFromStorage(
+    reference.bucket,
+    reference.path,
+  );
+
+  if (!deleted) {
+    console.error(
+      `[creator/lessons][${context}] Failed to delete lesson video object.`,
+    );
+  }
 }
 
 export async function GET(request: NextRequest) {
@@ -71,6 +141,8 @@ export async function GET(request: NextRequest) {
         videoSource: true,
         youtubeUrl: true,
         videoUploadUrl: true,
+        videoStorageBucket: true,
+        videoStoragePath: true,
         productLinks: {
           orderBy: {
             createdAt: "desc",
@@ -90,21 +162,45 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    return NextResponse.json({
-      data: {
-        course,
-        lessons: lessons.map((lesson) => ({
+    const lessonData = await Promise.all(
+      lessons.map(async (lesson) => {
+        const reference = resolveLessonVideoStorageReference({
+          lesson,
+          courseId: course.id,
+          experienceSlug: course.experience.slug,
+        });
+
+        return {
           id: lesson.id,
           title: lesson.title,
           description: lesson.description,
           sortOrder: lesson.sortOrder,
           videoSource: lesson.videoSource,
           youtubeUrl: lesson.youtubeUrl,
-          videoAssetUrl: lesson.videoUploadUrl,
+          videoAssetUrl:
+            lesson.videoSource === "UPLOAD" && reference
+              ? await createSignedLessonVideoUrl(reference)
+              : null,
+          videoStorageBucket: reference?.bucket || null,
+          videoStoragePath: reference?.path || null,
           productLinks: lesson.productLinks,
-        })),
+        };
+      }),
+    );
+
+    return NextResponse.json(
+      {
+        data: {
+          course,
+          lessons: lessonData,
+        },
       },
-    });
+      {
+        headers: {
+          "Cache-Control": "private, no-store",
+        },
+      },
+    );
   } catch (error) {
     console.error("[creator/lessons][GET] Error:", error);
     return NextResponse.json(
@@ -133,6 +229,10 @@ export async function POST(request: NextRequest) {
     const videoSource = normalizeVideoSource(body?.videoSource);
     const youtubeUrl = String(body?.youtubeUrl || "").trim();
     const videoAssetUrl = String(body?.videoAssetUrl || "").trim();
+    const videoStorageBucket = String(
+      body?.videoStorageBucket || "",
+    ).trim();
+    const videoStoragePath = String(body?.videoStoragePath || "").trim();
 
     if (!courseId || !title) {
       return NextResponse.json(
@@ -148,7 +248,12 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (videoSource === "UPLOAD" && !videoAssetUrl) {
+    if (
+      videoSource === "UPLOAD" &&
+      !videoAssetUrl &&
+      !videoStorageBucket &&
+      !videoStoragePath
+    ) {
       return NextResponse.json(
         { error: "videoAssetUrl is required for uploaded lessons." },
         { status: 400 },
@@ -164,11 +269,39 @@ export async function POST(request: NextRequest) {
           },
         },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        experience: {
+          select: {
+            slug: true,
+          },
+        },
+      },
     });
 
     if (!course) {
       return NextResponse.json({ error: "Course not found." }, { status: 404 });
+    }
+
+    let videoReference: LessonVideoStorageReference | null = null;
+
+    if (videoSource === "UPLOAD") {
+      const validation = await validateNewLessonVideoAsset({
+        videoAssetUrl,
+        videoStorageBucket,
+        videoStoragePath,
+        courseId: course.id,
+        experienceSlug: course.experience.slug,
+      });
+
+      if (!validation.ok) {
+        return NextResponse.json(
+          { error: validation.error },
+          { status: 400 },
+        );
+      }
+
+      videoReference = validation.reference;
     }
 
     const lesson = await prisma.lesson.create({
@@ -179,7 +312,9 @@ export async function POST(request: NextRequest) {
         sortOrder: Number.isFinite(sortOrder) ? sortOrder : 0,
         videoSource,
         youtubeUrl: videoSource === "YOUTUBE" ? youtubeUrl : null,
-        videoUploadUrl: videoSource === "UPLOAD" ? videoAssetUrl : null,
+        videoUploadUrl: null,
+        videoStorageBucket: videoReference?.bucket || null,
+        videoStoragePath: videoReference?.path || null,
       },
       select: {
         id: true,
@@ -189,6 +324,8 @@ export async function POST(request: NextRequest) {
         videoSource: true,
         youtubeUrl: true,
         videoUploadUrl: true,
+        videoStorageBucket: true,
+        videoStoragePath: true,
       },
     });
 
@@ -196,7 +333,7 @@ export async function POST(request: NextRequest) {
       {
         data: {
           ...lesson,
-          videoAssetUrl: lesson.videoUploadUrl,
+          videoAssetUrl: null,
         },
       },
       { status: 201 },
@@ -229,6 +366,10 @@ export async function PATCH(request: NextRequest) {
     const videoSource = normalizeVideoSource(body?.videoSource);
     const youtubeUrl = String(body?.youtubeUrl || "").trim();
     const videoAssetUrl = String(body?.videoAssetUrl || "").trim();
+    const videoStorageBucket = String(
+      body?.videoStorageBucket || "",
+    ).trim();
+    const videoStoragePath = String(body?.videoStoragePath || "").trim();
 
     if (!id || !title) {
       return NextResponse.json(
@@ -244,7 +385,12 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    if (videoSource === "UPLOAD" && !videoAssetUrl) {
+    if (
+      videoSource === "UPLOAD" &&
+      !videoAssetUrl &&
+      !videoStorageBucket &&
+      !videoStoragePath
+    ) {
       return NextResponse.json(
         { error: "videoAssetUrl is required for uploaded lessons." },
         { status: 400 },
@@ -262,11 +408,52 @@ export async function PATCH(request: NextRequest) {
           },
         },
       },
-      select: { id: true },
+      select: {
+        id: true,
+        courseId: true,
+        videoUploadUrl: true,
+        videoStorageBucket: true,
+        videoStoragePath: true,
+        course: {
+          select: {
+            experience: {
+              select: {
+                slug: true,
+              },
+            },
+          },
+        },
+      },
     });
 
     if (!existing) {
       return NextResponse.json({ error: "Lesson not found." }, { status: 404 });
+    }
+
+    const oldReference = resolveLessonVideoStorageReference({
+      lesson: existing,
+      courseId: existing.courseId,
+      experienceSlug: existing.course.experience.slug,
+    });
+    let videoReference: LessonVideoStorageReference | null = null;
+
+    if (videoSource === "UPLOAD") {
+      const validation = await validateNewLessonVideoAsset({
+        videoAssetUrl,
+        videoStorageBucket,
+        videoStoragePath,
+        courseId: existing.courseId,
+        experienceSlug: existing.course.experience.slug,
+      });
+
+      if (!validation.ok) {
+        return NextResponse.json(
+          { error: validation.error },
+          { status: 400 },
+        );
+      }
+
+      videoReference = validation.reference;
     }
 
     const lesson = await prisma.lesson.update({
@@ -277,7 +464,9 @@ export async function PATCH(request: NextRequest) {
         sortOrder: Number.isFinite(sortOrder) ? sortOrder : 0,
         videoSource,
         youtubeUrl: videoSource === "YOUTUBE" ? youtubeUrl : null,
-        videoUploadUrl: videoSource === "UPLOAD" ? videoAssetUrl : null,
+        videoUploadUrl: null,
+        videoStorageBucket: videoReference?.bucket || null,
+        videoStoragePath: videoReference?.path || null,
       },
       select: {
         id: true,
@@ -287,13 +476,25 @@ export async function PATCH(request: NextRequest) {
         videoSource: true,
         youtubeUrl: true,
         videoUploadUrl: true,
+        videoStorageBucket: true,
+        videoStoragePath: true,
       },
     });
+
+    const storageObjectChanged =
+      oldReference &&
+      (!videoReference ||
+        oldReference.bucket !== videoReference.bucket ||
+        oldReference.path !== videoReference.path);
+
+    if (storageObjectChanged) {
+      await cleanupLessonVideo(oldReference, "PATCH");
+    }
 
     return NextResponse.json({
       data: {
         ...lesson,
-        videoAssetUrl: lesson.videoUploadUrl,
+        videoAssetUrl: null,
       },
     });
   } catch (error) {
@@ -340,6 +541,18 @@ export async function DELETE(request: NextRequest) {
       select: {
         id: true,
         videoUploadUrl: true,
+        videoStorageBucket: true,
+        videoStoragePath: true,
+        courseId: true,
+        course: {
+          select: {
+            experience: {
+              select: {
+                slug: true,
+              },
+            },
+          },
+        },
       },
     });
 
@@ -347,11 +560,15 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "Lesson not found." }, { status: 404 });
     }
 
+    const videoReference = resolveLessonVideoStorageReference({
+      lesson,
+      courseId: lesson.courseId,
+      experienceSlug: lesson.course.experience.slug,
+    });
+
     await prisma.lesson.delete({ where: { id: lesson.id } });
 
-    if (lesson.videoUploadUrl) {
-      await deleteStorageObjectByUrl(lesson.videoUploadUrl);
-    }
+    await cleanupLessonVideo(videoReference, "DELETE");
 
     return NextResponse.json({ data: { id: lesson.id } });
   } catch (error) {

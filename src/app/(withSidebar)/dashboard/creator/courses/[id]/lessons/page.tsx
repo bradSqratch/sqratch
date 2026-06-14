@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useCallback, useEffect, useState } from "react";
+import { use, useCallback, useEffect, useRef, useState } from "react";
 import {
   LessonProductLinksSection,
   type LessonProductLinkItem,
@@ -15,6 +15,15 @@ import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  requestLessonVideoUploadAuthorization,
+  uploadFileToSignedStorage,
+} from "@/lib/direct-storage-upload";
+import {
+  DEFAULT_MAX_VIDEO_UPLOAD_BYTES,
+  hasAllowedVideoExtension,
+  isAllowedVideoMimeType,
+} from "@/lib/video-upload-config";
 
 type Lesson = {
   id: string;
@@ -24,6 +33,8 @@ type Lesson = {
   videoSource: "YOUTUBE" | "UPLOAD";
   youtubeUrl: string | null;
   videoAssetUrl: string | null;
+  videoStorageBucket: string | null;
+  videoStoragePath: string | null;
   productLinks: LessonProductLinkItem[];
 };
 
@@ -48,7 +59,15 @@ type LessonDraft = {
   videoSource: "YOUTUBE" | "UPLOAD";
   youtubeUrl: string;
   videoAssetUrl: string;
+  videoStorageBucket: string;
+  videoStoragePath: string;
   file: File | null;
+};
+
+type LessonOperation = {
+  key: string;
+  phase: "PREPARING" | "UPLOADING" | "SAVING" | "FAILED";
+  progress: number;
 };
 
 const emptyLessonDraft: LessonDraft = {
@@ -58,8 +77,36 @@ const emptyLessonDraft: LessonDraft = {
   videoSource: "YOUTUBE",
   youtubeUrl: "",
   videoAssetUrl: "",
+  videoStorageBucket: "",
+  videoStoragePath: "",
   file: null,
 };
+
+function formatFileSize(bytes: number) {
+  return `${new Intl.NumberFormat(undefined, {
+    maximumFractionDigits: 1,
+  }).format(bytes / (1024 * 1024))} MB`;
+}
+
+function getVideoFileValidationError(file: File) {
+  if (!hasAllowedVideoExtension(file.name)) {
+    return "Choose an MP4, MOV, WEBM, MPEG, or M4V video.";
+  }
+
+  if (!isAllowedVideoMimeType(file.type)) {
+    return "The selected file has an unsupported video MIME type.";
+  }
+
+  if (!Number.isFinite(file.size) || file.size <= 0) {
+    return "The selected video file is empty or invalid.";
+  }
+
+  if (file.size > DEFAULT_MAX_VIDEO_UPLOAD_BYTES) {
+    return "The selected video is larger than 250 MB.";
+  }
+
+  return null;
+}
 
 export default function CreatorCourseLessonsPage({
   params,
@@ -71,7 +118,10 @@ export default function CreatorCourseLessonsPage({
   const [draft, setDraft] = useState<LessonDraft>(emptyLessonDraft);
   const [saving, setSaving] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [operation, setOperation] = useState<LessonOperation | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const uploadAbortControllerRef = useRef<AbortController | null>(null);
+  const submissionInFlightRef = useRef(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -87,54 +137,74 @@ export default function CreatorCourseLessonsPage({
   }, [courseId]);
 
   useEffect(() => {
-    if (!courseId) {
-      return;
+    if (courseId) {
+      void load();
     }
-
-    void load();
   }, [courseId, load]);
 
-  async function uploadVideo(file: File) {
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("courseId", courseId);
+  async function uploadVideo(file: File, operationKey: string) {
+    const validationError = getVideoFileValidationError(file);
 
-    const result = await fetchJson<{
-      bucket: string;
-      path: string;
-      fileUrl: string;
-    }>("/api/uploads/video", {
-      method: "POST",
-      body: formData,
+    if (validationError) {
+      throw new Error(validationError);
+    }
+
+    setOperation({ key: operationKey, phase: "PREPARING", progress: 0 });
+    const authorization = await requestLessonVideoUploadAuthorization({
+      courseId,
+      file,
     });
+    const controller = new AbortController();
+    uploadAbortControllerRef.current = controller;
+    setOperation({ key: operationKey, phase: "UPLOADING", progress: 0 });
 
-    return result.fileUrl;
+    await uploadFileToSignedStorage({
+      signedUrl: authorization.signedUrl,
+      file,
+      signal: controller.signal,
+      onProgress: (progress) =>
+        setOperation({
+          key: operationKey,
+          phase: "UPLOADING",
+          progress,
+        }),
+    });
+    uploadAbortControllerRef.current = null;
+
+    return authorization;
+  }
+
+  function cancelUpload() {
+    uploadAbortControllerRef.current?.abort();
   }
 
   async function createLesson() {
-    if (!draft.title.trim()) {
+    if (!draft.title.trim() || submissionInFlightRef.current) {
       return;
     }
 
+    submissionInFlightRef.current = true;
     setSaving(true);
     setError(null);
-
-    let uploadedVideoAssetUrl: string | null = null;
+    let uploadedVideo: { bucket: string; path: string } | null = null;
 
     try {
-      const videoAssetUrl =
+      const uploadAuthorization =
         draft.videoSource === "UPLOAD" && draft.file
-          ? await uploadVideo(draft.file)
-          : draft.videoAssetUrl;
+          ? await uploadVideo(draft.file, "new")
+          : null;
+      const videoAssetUrl = draft.videoAssetUrl;
+      const videoStorageBucket =
+        uploadAuthorization?.bucket || draft.videoStorageBucket;
+      const videoStoragePath =
+        uploadAuthorization?.path || draft.videoStoragePath;
 
-      uploadedVideoAssetUrl =
-        draft.videoSource === "UPLOAD" && draft.file ? videoAssetUrl : null;
+      uploadedVideo = uploadAuthorization;
+      setOperation({ key: "new", phase: "SAVING", progress: 100 });
 
       await fetchJson("/api/creator/lessons", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           courseId,
           title: draft.title,
@@ -143,43 +213,58 @@ export default function CreatorCourseLessonsPage({
           videoSource: draft.videoSource,
           youtubeUrl: draft.youtubeUrl,
           videoAssetUrl,
+          videoStorageBucket,
+          videoStoragePath,
         }),
       });
 
       setDraft(emptyLessonDraft);
+      setOperation(null);
       await load();
     } catch (saveError) {
-      if (uploadedVideoAssetUrl) {
-        await deleteUploadedAsset(uploadedVideoAssetUrl);
+      if (uploadedVideo) {
+        await deleteUploadedAsset("", {
+          courseId,
+          bucket: uploadedVideo.bucket,
+          path: uploadedVideo.path,
+        });
       }
+      setOperation({ key: "new", phase: "FAILED", progress: 0 });
       setError(getErrorMessage(saveError, "Failed to create lesson."));
     } finally {
+      uploadAbortControllerRef.current = null;
+      submissionInFlightRef.current = false;
       setSaving(false);
     }
   }
 
   async function updateLesson(id: string, lessonDraft: LessonDraft) {
+    if (submissionInFlightRef.current) {
+      return;
+    }
+
+    submissionInFlightRef.current = true;
     setSavingId(id);
     setError(null);
-
-    let uploadedVideoAssetUrl: string | null = null;
+    let uploadedVideo: { bucket: string; path: string } | null = null;
 
     try {
-      const videoAssetUrl =
+      const uploadAuthorization =
         lessonDraft.videoSource === "UPLOAD" && lessonDraft.file
-          ? await uploadVideo(lessonDraft.file)
-          : lessonDraft.videoAssetUrl;
-
-      uploadedVideoAssetUrl =
-        lessonDraft.videoSource === "UPLOAD" && lessonDraft.file
-          ? videoAssetUrl
+          ? await uploadVideo(lessonDraft.file, id)
           : null;
+      const videoAssetUrl = lessonDraft.videoAssetUrl;
+      const videoStorageBucket =
+        uploadAuthorization?.bucket || lessonDraft.videoStorageBucket;
+      const videoStoragePath =
+        uploadAuthorization?.path || lessonDraft.videoStoragePath;
+
+      uploadedVideo = uploadAuthorization;
+      setOperation({ key: id, phase: "SAVING", progress: 100 });
 
       await fetchJson("/api/creator/lessons", {
         method: "PATCH",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id,
           title: lessonDraft.title,
@@ -188,16 +273,26 @@ export default function CreatorCourseLessonsPage({
           videoSource: lessonDraft.videoSource,
           youtubeUrl: lessonDraft.youtubeUrl,
           videoAssetUrl,
+          videoStorageBucket,
+          videoStoragePath,
         }),
       });
 
+      setOperation(null);
       await load();
     } catch (saveError) {
-      if (uploadedVideoAssetUrl) {
-        await deleteUploadedAsset(uploadedVideoAssetUrl);
+      if (uploadedVideo) {
+        await deleteUploadedAsset("", {
+          courseId,
+          bucket: uploadedVideo.bucket,
+          path: uploadedVideo.path,
+        });
       }
+      setOperation({ key: id, phase: "FAILED", progress: 0 });
       setError(getErrorMessage(saveError, "Failed to update lesson."));
     } finally {
+      uploadAbortControllerRef.current = null;
+      submissionInFlightRef.current = false;
       setSavingId(null);
     }
   }
@@ -210,21 +305,26 @@ export default function CreatorCourseLessonsPage({
       <PageCard>
         <h2 className="text-xl font-semibold">Add lesson</h2>
         <p className="mt-2 text-sm text-white/60">
-          Lessons are attached to this course. Create them here and control their display order inside the course.
+          Lessons are attached to this course. Create them here and control
+          their display order inside the course.
         </p>
         <LessonEditor
           draft={draft}
           onChange={setDraft}
           submitLabel={saving ? "Creating..." : "Create lesson"}
           onSubmit={() => void createLesson()}
+          operation={operation?.key === "new" ? operation : null}
+          busy={saving}
+          onCancelUpload={cancelUpload}
+          onValidationError={setError}
         />
       </PageCard>
 
-      {error && (
+      {error ? (
         <PageCard>
           <p className="text-sm text-red-300">{error}</p>
         </PageCard>
-      )}
+      ) : null}
 
       {!data ? (
         <PageCard>
@@ -241,8 +341,11 @@ export default function CreatorCourseLessonsPage({
               key={lesson.id}
               lesson={lesson}
               saving={savingId === lesson.id}
+              operation={operation?.key === lesson.id ? operation : null}
               onSave={updateLesson}
               onRefresh={load}
+              onCancelUpload={cancelUpload}
+              onValidationError={setError}
             />
           ))}
         </div>
@@ -254,13 +357,19 @@ export default function CreatorCourseLessonsPage({
 function EditableLessonCard({
   lesson,
   saving,
+  operation,
   onSave,
   onRefresh,
+  onCancelUpload,
+  onValidationError,
 }: {
   lesson: Lesson;
   saving: boolean;
+  operation: LessonOperation | null;
   onSave: (id: string, lessonDraft: LessonDraft) => Promise<void>;
   onRefresh: () => Promise<void>;
+  onCancelUpload: () => void;
+  onValidationError: (message: string | null) => void;
 }) {
   const [draft, setDraft] = useState<LessonDraft>({
     title: lesson.title,
@@ -269,6 +378,8 @@ function EditableLessonCard({
     videoSource: lesson.videoSource,
     youtubeUrl: lesson.youtubeUrl || "",
     videoAssetUrl: lesson.videoAssetUrl || "",
+    videoStorageBucket: lesson.videoStorageBucket || "",
+    videoStoragePath: lesson.videoStoragePath || "",
     file: null,
   });
 
@@ -280,6 +391,8 @@ function EditableLessonCard({
       videoSource: lesson.videoSource,
       youtubeUrl: lesson.youtubeUrl || "",
       videoAssetUrl: lesson.videoAssetUrl || "",
+      videoStorageBucket: lesson.videoStorageBucket || "",
+      videoStoragePath: lesson.videoStoragePath || "",
       file: null,
     });
   }, [lesson]);
@@ -292,6 +405,10 @@ function EditableLessonCard({
           onChange={setDraft}
           submitLabel={saving ? "Saving..." : "Save lesson"}
           onSubmit={() => void onSave(lesson.id, draft)}
+          operation={operation}
+          busy={saving}
+          onCancelUpload={onCancelUpload}
+          onValidationError={onValidationError}
         />
         <LessonProductLinksSection
           lessonId={lesson.id}
@@ -308,11 +425,19 @@ function LessonEditor({
   onChange,
   submitLabel,
   onSubmit,
+  operation,
+  busy,
+  onCancelUpload,
+  onValidationError,
 }: {
   draft: LessonDraft;
   onChange: (draft: LessonDraft) => void;
   submitLabel: string;
   onSubmit: () => void;
+  operation: LessonOperation | null;
+  busy: boolean;
+  onCancelUpload: () => void;
+  onValidationError: (message: string | null) => void;
 }) {
   return (
     <div className="space-y-4">
@@ -321,6 +446,7 @@ function LessonEditor({
           <p className="text-sm text-white/70">Lesson title</p>
           <Input
             value={draft.title}
+            disabled={busy}
             onChange={(event) =>
               onChange({ ...draft, title: event.target.value })
             }
@@ -333,6 +459,7 @@ function LessonEditor({
           <Input
             type="number"
             value={draft.sortOrder}
+            disabled={busy}
             onChange={(event) =>
               onChange({
                 ...draft,
@@ -348,6 +475,7 @@ function LessonEditor({
 
       <Textarea
         value={draft.description}
+        disabled={busy}
         onChange={(event) =>
           onChange({ ...draft, description: event.target.value })
         }
@@ -358,6 +486,7 @@ function LessonEditor({
       <div className="grid gap-4 lg:grid-cols-2">
         <select
           value={draft.videoSource}
+          disabled={busy}
           onChange={(event) =>
             onChange({
               ...draft,
@@ -366,6 +495,12 @@ function LessonEditor({
                 event.target.value === "YOUTUBE" ? draft.youtubeUrl : "",
               videoAssetUrl:
                 event.target.value === "UPLOAD" ? draft.videoAssetUrl : "",
+              videoStorageBucket:
+                event.target.value === "UPLOAD"
+                  ? draft.videoStorageBucket
+                  : "",
+              videoStoragePath:
+                event.target.value === "UPLOAD" ? draft.videoStoragePath : "",
               file: null,
             })
           }
@@ -378,6 +513,7 @@ function LessonEditor({
         {draft.videoSource === "YOUTUBE" ? (
           <Input
             value={draft.youtubeUrl}
+            disabled={busy}
             onChange={(event) =>
               onChange({ ...draft, youtubeUrl: event.target.value })
             }
@@ -388,28 +524,90 @@ function LessonEditor({
           <div className="space-y-2">
             <Input
               type="file"
-              accept=".mp4,.mov,.webm,.m4v"
-              onChange={(event) =>
-                onChange({
-                  ...draft,
-                  file: event.target.files?.[0] || null,
-                })
-              }
+              disabled={busy}
+              accept=".mp4,.mov,.webm,.mpeg,.mpg,.m4v,video/mp4,video/webm,video/quicktime,video/mpeg,video/x-m4v"
+              onChange={(event) => {
+                const file = event.target.files?.[0] || null;
+                const validationError = file
+                  ? getVideoFileValidationError(file)
+                  : null;
+
+                if (validationError) {
+                  onValidationError(validationError);
+                  onChange({ ...draft, file: null });
+                  event.target.value = "";
+                  return;
+                }
+
+                onValidationError(null);
+                onChange({ ...draft, file });
+              }}
               className="border-white/10 bg-black/20 text-white file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-black"
             />
-            <p className="text-xs text-white/45">MP4, MOV, WEBM, M4V up to 250 MB.</p>
+            <p className="text-xs text-white/45">
+              MP4, MOV, WEBM, MPEG, M4V up to 250 MB.
+            </p>
+            {draft.file ? (
+              <p className="text-sm text-white/65">
+                Selected: {draft.file.name} ({formatFileSize(draft.file.size)})
+              </p>
+            ) : null}
           </div>
         )}
       </div>
 
-      {draft.videoSource === "UPLOAD" && draft.videoAssetUrl && (
-        <p className="text-sm text-white/55">Current asset: {draft.videoAssetUrl}</p>
-      )}
+      {draft.videoSource === "UPLOAD" && draft.videoAssetUrl ? (
+        <div className="space-y-2">
+          <p className="text-sm text-white/55">Uploaded video preview</p>
+          <video
+            className="max-h-80 w-full rounded-2xl border border-white/10 bg-black object-contain"
+            src={draft.videoAssetUrl}
+            controls
+            playsInline
+            preload="metadata"
+          />
+        </div>
+      ) : null}
+
+      {operation ? (
+        <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+          <div className="flex items-center justify-between gap-4 text-sm">
+            <span className="text-white/70">
+              {operation.phase === "PREPARING"
+                ? "Preparing upload"
+                : operation.phase === "UPLOADING"
+                  ? `Uploading video ${operation.progress}%`
+                  : operation.phase === "SAVING"
+                    ? "Saving lesson"
+                    : "Upload or save failed"}
+            </span>
+            {operation.phase === "UPLOADING" ? (
+              <Button
+                type="button"
+                variant="outline"
+                onClick={onCancelUpload}
+                className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+              >
+                Cancel upload
+              </Button>
+            ) : null}
+          </div>
+          {operation.phase === "UPLOADING" ? (
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+              <div
+                className="h-full rounded-full bg-[#c73484] transition-[width]"
+                style={{ width: `${operation.progress}%` }}
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       <Button
         type="button"
         onClick={onSubmit}
         disabled={
+          busy ||
           !draft.title.trim() ||
           (draft.videoSource === "YOUTUBE" && !draft.youtubeUrl.trim()) ||
           (draft.videoSource === "UPLOAD" &&

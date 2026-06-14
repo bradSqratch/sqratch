@@ -46,7 +46,14 @@ export async function GET(
       },
     });
 
-    const response = NextResponse.json({ data });
+    const response = NextResponse.json(
+      { data },
+      {
+        headers: {
+          "Cache-Control": "private, no-store",
+        },
+      },
+    );
 
     attachSessionCookie(response, sessionId);
     return response;

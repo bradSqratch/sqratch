@@ -13,7 +13,7 @@
 | **Routing** | App Router — `src/app/` directory; route groups `(auth)`, `(home)`, `(withSidebar)` |
 | **Auth / Session** | next-auth v4 (`credentials` provider + JWT strategy); custom `sqr_session` cookie for anonymous QR tracking |
 | **Database ORM** | Prisma 7 — PostgreSQL via Supabase (separate `DATABASE_URL` + `DIRECT_URL`) |
-| **File Storage** | Supabase Storage (`SUPABASE_STORAGE_BUCKET`) |
+| **File Storage** | Supabase Storage; lesson videos use signed browser-to-Supabase uploads (`docs/lesson-video-uploads.md`) |
 | **Email** | Resend API (`RESEND_API_KEY`); async queue via `EmailQueue` table + `/api/internal/email-worker` |
 | **Shopify** | Custom OAuth 2.0 flow (no Shopify Node SDK); Admin GraphQL API v2026-04 |
 | **Encryption** | AES-256-GCM via `APP_ENCRYPTION_KEY`; used to store Shopify access tokens at rest |
