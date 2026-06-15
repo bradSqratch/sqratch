@@ -14,7 +14,7 @@ type CandidateBrand = {
   slug: string;
   shopifyShopDomain: string | null;
   shopifyAdminAccessTokenEncrypted: string | null;
-  shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED";
+  shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED" | "REQUIRES_RECONNECT";
 };
 
 export type LessonProductManagementContext = {

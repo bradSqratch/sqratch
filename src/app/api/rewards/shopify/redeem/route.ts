@@ -9,6 +9,7 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
 import { getRewardClaimContext } from "@/lib/reward-access";
 import { createShopifyRewardDiscountCode } from "@/lib/shopify-discounts";
+import { getValidAccessToken } from "@/lib/shopify-token-manager";
 import {
   CLAIM_COUNTED_REDEMPTION_STATUSES,
   generateRewardCode,
@@ -255,7 +256,7 @@ export async function POST(request: NextRequest) {
       discountConfig: {
         brandName: string;
         shopDomain: string;
-        encryptedToken: string;
+        brandId: string;
         title: string;
         codeValidDays: number;
         discountType: "FIXED_AMOUNT" | "PERCENTAGE";
@@ -405,8 +406,7 @@ export async function POST(request: NextRequest) {
           discountConfig: {
             brandName: currentOffer.brand.name,
             shopDomain: currentOffer.brand.shopifyShopDomain!,
-            encryptedToken:
-              currentOffer.brand.shopifyAdminAccessTokenEncrypted!,
+            brandId: currentOffer.brandId,
             title: currentOffer.title,
             codeValidDays: currentOffer.codeValidDays,
             discountType: currentOffer.discountType,
@@ -473,9 +473,51 @@ export async function POST(request: NextRequest) {
     }
 
     const { redemption, discountConfig } = reservation;
+
+    const tokenResult = await getValidAccessToken(discountConfig.brandId);
+    if (!tokenResult.ok) {
+      const refunded = await prisma.$transaction(async (tx) => {
+        const current = await tx.shopifyRewardRedemption.findUnique({
+          where: { id: redemption.id },
+          select: { status: true },
+        });
+        if (current?.status !== "POINTS_DEBITED") {
+          return tx.shopifyRewardRedemption.findUniqueOrThrow({
+            where: { id: redemption.id },
+          });
+        }
+        await tx.user.update({
+          where: { id: user.id },
+          data: { points: { increment: discountConfig.pointsCost } },
+        });
+        await tx.pointTransaction.create({
+          data: {
+            userId: user.id,
+            points: discountConfig.pointsCost,
+            reason: "SHOPIFY_REWARD_REFUND",
+            shopifyRewardRedemptionId: redemption.id,
+          },
+        });
+        return tx.shopifyRewardRedemption.update({
+          where: { id: redemption.id },
+          data: {
+            status: "REFUNDED",
+            errorMessage: "Shopify token unavailable: " + tokenResult.reason,
+          },
+        });
+      });
+      return NextResponse.json(
+        {
+          error: "Could not create the Shopify discount code. Points were refunded.",
+          data: serializeRedemption(refunded),
+        },
+        { status: 502 },
+      );
+    }
+
     const discount = await createShopifyRewardDiscountCode({
       shopDomain: discountConfig.shopDomain,
-      encryptedToken: discountConfig.encryptedToken,
+      accessToken: tokenResult.accessToken,
       title: `${discountConfig.brandName} - ${discountConfig.title}`,
       code: redemption.code,
       issuedAt,

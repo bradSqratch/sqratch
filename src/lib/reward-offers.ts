@@ -5,13 +5,7 @@ import type {
   RewardAppliesTo,
 } from "@prisma/client";
 
-export const CLAIM_COUNTED_REDEMPTION_STATUSES = [
-  "PENDING",
-  "POINTS_DEBITED",
-  "ISSUED",
-  "USED",
-  "EXPIRED",
-] as const;
+export { CLAIM_COUNTED_REDEMPTION_STATUSES } from "./reward-redemption-state";
 
 export type RewardOfferAvailabilityStatus =
   | "CLAIMABLE"

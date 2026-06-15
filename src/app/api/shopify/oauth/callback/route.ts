@@ -7,8 +7,10 @@ import {
   buildShopifyPendingInstallService,
   buildShopifyDashboardRedirect,
   buildShopifyHmac,
+  safeHmacEqual,
   createOauthState,
   SHOPIFY_PENDING_INSTALL_TTL_MS,
+  SHOPIFY_SCOPES,
   isValidShopDomain,
 } from "@/lib/shopify";
 
@@ -44,7 +46,8 @@ export async function GET(request: NextRequest) {
 
     const expectedHmac = buildShopifyHmac(request.nextUrl.searchParams, apiSecret);
 
-    if (expectedHmac !== hmac) {
+    // (a) Timing-safe HMAC comparison
+    if (!safeHmacEqual(expectedHmac, hmac)) {
       return NextResponse.redirect(
         buildShopifyDashboardRedirect({
           origin: request.nextUrl.origin,
@@ -53,10 +56,22 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // (b) Timestamp freshness — reject if |now - timestamp| > 60 s
+    const timestampStr = request.nextUrl.searchParams.get("timestamp");
+    const timestampSec = timestampStr ? parseInt(timestampStr, 10) : NaN;
+    if (isNaN(timestampSec) || Math.abs(Date.now() / 1000 - timestampSec) > 60) {
+      return NextResponse.redirect(
+        buildShopifyDashboardRedirect({
+          origin: request.nextUrl.origin,
+          error: "stale_oauth_timestamp",
+        }),
+      );
+    }
+
+    // (d) Single-use state: read payload first, then consume atomically before
+    // token exchange so a failed/replayed callback cannot reuse the same state.
     const stateRecord = await prisma.tokenStore.findUnique({
-      where: {
-        service: `shopify_oauth_state:${state}`,
-      },
+      where: { service: `shopify_oauth_state:${state}` },
     });
 
     if (!stateRecord || stateRecord.expiresAt < new Date()) {
@@ -68,15 +83,32 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const payload = JSON.parse(stateRecord.token) as {
-      shop: string;
-    };
+    const payload = JSON.parse(stateRecord.token) as { shop: string };
 
     if (payload.shop !== shop) {
       return NextResponse.redirect(
         buildShopifyDashboardRedirect({
           origin: request.nextUrl.origin,
           error: "shop_mismatch",
+        }),
+      );
+    }
+
+    // Consume the record now — before token exchange — so any subsequent replay
+    // of this callback (same state token) hits count === 0 and is rejected.
+    const consumed = await prisma.tokenStore.deleteMany({
+      where: {
+        service: stateRecord.service,
+        expiresAt: { gt: new Date() },
+      },
+    });
+
+    if (consumed.count === 0) {
+      // Race: another request already consumed it.
+      return NextResponse.redirect(
+        buildShopifyDashboardRedirect({
+          origin: request.nextUrl.origin,
+          error: "expired_oauth_state",
         }),
       );
     }
@@ -107,25 +139,31 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // (c) Verify returned scopes include all required scopes
+    const requiredScopes = SHOPIFY_SCOPES.split(",");
+    const grantedScopes = (tokenJson.scope as string | undefined)?.split(",") ?? [];
+    const missingScopes = requiredScopes.filter((s) => !grantedScopes.includes(s));
+    if (missingScopes.length > 0) {
+      return NextResponse.redirect(
+        buildShopifyDashboardRedirect({
+          origin: request.nextUrl.origin,
+          error: "insufficient_scopes",
+        }),
+      );
+    }
+
     const pendingInstallId = createOauthState();
 
-    await prisma.$transaction([
-      prisma.tokenStore.create({
-        data: {
-          service: buildShopifyPendingInstallService(pendingInstallId),
-          token: JSON.stringify({
-            shop,
-            encryptedToken: encryptSecret(tokenJson.access_token),
-          }),
-          expiresAt: new Date(Date.now() + SHOPIFY_PENDING_INSTALL_TTL_MS),
-        },
-      }),
-      prisma.tokenStore.delete({
-        where: {
-          service: stateRecord.service,
-        },
-      }),
-    ]);
+    await prisma.tokenStore.create({
+      data: {
+        service: buildShopifyPendingInstallService(pendingInstallId),
+        token: JSON.stringify({
+          shop,
+          encryptedToken: encryptSecret(tokenJson.access_token),
+        }),
+        expiresAt: new Date(Date.now() + SHOPIFY_PENDING_INSTALL_TTL_MS),
+      },
+    });
 
     const installPath = `/dashboard/brand/shopify/install?install=${encodeURIComponent(pendingInstallId)}`;
     const session = await getServerSession(authOptions);

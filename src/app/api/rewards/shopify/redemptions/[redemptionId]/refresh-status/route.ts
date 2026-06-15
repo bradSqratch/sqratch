@@ -4,6 +4,8 @@ import { ShopifyRewardRedemptionStatus } from "@prisma/client";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
 import { getShopifyDiscountUsageStatus } from "@/lib/shopify-discounts";
+import { getValidAccessToken } from "@/lib/shopify-token-manager";
+import { canRefresh, assertTransition } from "@/lib/reward-redemption-state";
 
 export async function POST(
   _request: NextRequest,
@@ -40,6 +42,37 @@ export async function POST(
       );
     }
 
+    // State-machine guard: only ISSUED redemptions may be refreshed.
+    if (!canRefresh(redemption.status)) {
+      // USED and EXPIRED are already terminal "success" states — return current
+      // state as a 200 idempotent no-op so the client can display them.
+      if (
+        redemption.status === ShopifyRewardRedemptionStatus.USED ||
+        redemption.status === ShopifyRewardRedemptionStatus.EXPIRED
+      ) {
+        return NextResponse.json({
+          data: {
+            id: redemption.id,
+            code: redemption.code,
+            status: redemption.status,
+            issuedAt: redemption.issuedAt,
+            expiresAt: redemption.expiresAt,
+            usedAt: redemption.usedAt,
+            shopifyDiscountStatus: redemption.shopifyDiscountStatus,
+            shopifyAsyncUsageCount: redemption.shopifyAsyncUsageCount,
+            shopifyLastCheckedAt: redemption.shopifyLastCheckedAt,
+          },
+        });
+      }
+
+      // All other non-refreshable statuses (PENDING, POINTS_DEBITED, REFUNDED,
+      // FAILED, CANCELLED) → conflict.
+      return NextResponse.json(
+        { error: "Redemption is not in a refreshable state." },
+        { status: 409 },
+      );
+    }
+
     if (
       !redemption.shopifyDiscountNodeId ||
       redemption.brand.shopifyConnectionStatus !== "CONNECTED" ||
@@ -52,9 +85,17 @@ export async function POST(
       );
     }
 
+    const tokenResult = await getValidAccessToken(redemption.brandId);
+    if (!tokenResult.ok) {
+      return NextResponse.json(
+        { error: "Shopify discount status cannot be refreshed right now." },
+        { status: 400 },
+      );
+    }
+
     const status = await getShopifyDiscountUsageStatus({
       shopDomain: redemption.brand.shopifyShopDomain,
-      encryptedToken: redemption.brand.shopifyAdminAccessTokenEncrypted,
+      accessToken: tokenResult.accessToken,
       discountNodeId: redemption.shopifyDiscountNodeId,
     });
 
@@ -71,6 +112,11 @@ export async function POST(
         : status.derivedStatus === "EXPIRED"
           ? ShopifyRewardRedemptionStatus.EXPIRED
           : redemption.status;
+
+    // Validate the transition before writing.  Allows ISSUED→USED, ISSUED→EXPIRED,
+    // and ISSUED→ISSUED (unchanged / idempotent).
+    assertTransition(redemption.status, nextStatus);
+
     const updated = await prisma.shopifyRewardRedemption.update({
       where: {
         id: redemption.id,

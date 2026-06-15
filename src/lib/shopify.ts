@@ -1,6 +1,13 @@
 import crypto from "crypto";
 import { decryptSecret } from "@/lib/crypto";
 
+// NOTE: registerShopifyWebhooks has been removed. All webhook subscriptions
+// (app/uninstalled + the 3 GDPR compliance topics) are declared via
+// shopify.app.toml / shopify.app.custom.toml config. Shopify does not allow
+// registering compliance topics (CUSTOMERS_DATA_REQUEST, CUSTOMERS_REDACT,
+// SHOP_REDACT) via the API at all, so runtime registration was both redundant
+// and partly unsupported.
+
 export const SHOPIFY_API_VERSION = "2026-04";
 export const SHOPIFY_SCOPES = [
   "read_products",
@@ -48,6 +55,14 @@ export function verifyShopifyWebhookHmac(options: {
   );
 }
 
+/** Timing-safe string equality — returns false when lengths differ. */
+export function safeHmacEqual(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, "utf8");
+  const bufB = Buffer.from(b, "utf8");
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
 export function createOauthState() {
   return crypto.randomBytes(24).toString("hex");
 }
@@ -57,13 +72,28 @@ export function buildShopifyPendingInstallService(id: string) {
 }
 
 export function getShopifyAppUrl(origin?: string) {
-  return (
+  const resolved =
     process.env.SHOPIFY_APP_URL ||
     process.env.NEXT_PUBLIC_APP_URL ||
     process.env.NEXTAUTH_URL ||
-    origin ||
-    "http://localhost:3000"
-  );
+    (process.env.NODE_ENV !== "production" ? origin : undefined) ||
+    (process.env.NODE_ENV !== "production" ? "http://localhost:3000" : undefined);
+
+  if (process.env.NODE_ENV === "production") {
+    if (!resolved) {
+      throw new Error(
+        "[Shopify] No app URL configured for production. " +
+          "Set SHOPIFY_APP_URL, NEXT_PUBLIC_APP_URL, or NEXTAUTH_URL.",
+      );
+    }
+    if (!resolved.startsWith("https://")) {
+      throw new Error(
+        `[Shopify] App URL must use HTTPS in production. Got: ${resolved}`,
+      );
+    }
+  }
+
+  return resolved as string;
 }
 
 export function buildShopifyDashboardRedirect(options?: {
@@ -85,63 +115,6 @@ export function buildShopifyDashboardRedirect(options?: {
   }
 
   return url;
-}
-
-export async function registerShopifyWebhooks(options: {
-  shop: string;
-  accessToken: string;
-  origin?: string;
-}) {
-  const callbackOrigin = getShopifyAppUrl(options.origin);
-  const webhooks = [
-    {
-      topic: "APP_UNINSTALLED",
-      path: "/api/shopify/webhooks/app/uninstalled",
-    },
-    {
-      topic: "CUSTOMERS_DATA_REQUEST",
-      path: "/api/shopify/webhooks/customers/data_request",
-    },
-    {
-      topic: "CUSTOMERS_REDACT",
-      path: "/api/shopify/webhooks/customers/redact",
-    },
-    {
-      topic: "SHOP_REDACT",
-      path: "/api/shopify/webhooks/shop/redact",
-    },
-  ];
-
-  await Promise.allSettled(
-    webhooks.map((webhook) =>
-      fetch(
-        `https://${options.shop}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Shopify-Access-Token": options.accessToken,
-          },
-          body: JSON.stringify({
-            query: `
-            mutation webhookSubscriptionCreate($topic: WebhookSubscriptionTopic!, $callbackUrl: URL!) {
-              webhookSubscriptionCreate(
-                topic: $topic
-                webhookSubscription: { callbackUrl: $callbackUrl, format: JSON }
-              ) {
-                userErrors { field message }
-              }
-            }
-          `,
-            variables: {
-              topic: webhook.topic,
-              callbackUrl: new URL(webhook.path, callbackOrigin).toString(),
-            },
-          }),
-        },
-      ),
-    ),
-  );
 }
 
 export async function getShopifyShopCurrency(input: {

@@ -2,11 +2,15 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { getAdminContext } from "@/lib/admin-auth";
 
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ qrcodeID: string }> }
 ) {
+  const admin = await getAdminContext();
+  if (!admin) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
   // ⬇️ Must await context.params!
   const { qrcodeID } = await context.params;
   const campaignId = request.nextUrl.searchParams.get("campaignId");

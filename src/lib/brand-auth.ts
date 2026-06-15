@@ -20,7 +20,7 @@ export type BrandAdminContext = {
         shopifyInstalledAt: Date | null;
         shopifyDisconnectedAt: Date | null;
         shopifyUninstalledAt: Date | null;
-        shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED";
+        shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED" | "REQUIRES_RECONNECT";
         shopifyLastProductSyncAt: Date | null;
         shopifyCurrencyCode: string | null;
       };

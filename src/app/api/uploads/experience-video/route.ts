@@ -83,18 +83,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (experienceId) {
-      const experience = await getOwnedExperienceForCreator(
-        experienceId,
-        creator.userId,
+    // experienceId is required — ownership must always be verified before
+    // issuing a signed URL. Allowing a slug-only path with no DB ownership
+    // check would let any creator upload under an arbitrary experience slug.
+    if (!experienceId) {
+      return NextResponse.json(
+        { error: "experienceId is required." },
+        { status: 400 },
       );
+    }
 
-      if (!experience) {
-        return NextResponse.json(
-          { error: "Experience not found." },
-          { status: 404 },
-        );
-      }
+    const experience = await getOwnedExperienceForCreator(
+      experienceId,
+      creator.userId,
+    );
+
+    if (!experience) {
+      return NextResponse.json(
+        { error: "Experience not found." },
+        { status: 404 },
+      );
     }
 
     const bucket =

@@ -14,14 +14,16 @@ async function canDeleteComment(options: {
     return false;
   }
 
-  if (
-    viewerRole === "ADMIN" ||
-    viewerRole === "BRAND_ADMIN" ||
-    viewerUserId === experienceCreatorUserId
-  ) {
+  // ADMIN may delete any comment globally.
+  // Experience creator/owner may delete any comment on their experience.
+  if (viewerRole === "ADMIN" || viewerUserId === experienceCreatorUserId) {
     return true;
   }
 
+  // BRAND_ADMIN may only delete comments on experiences linked to a brand
+  // they belong to (as ADMIN or MANAGER). This mirrors the brandIds derived
+  // from the experience's campaigns — a brand_admin from an unrelated brand
+  // is NOT permitted.
   if (brandIds.length === 0) {
     return false;
   }
@@ -32,7 +34,7 @@ async function canDeleteComment(options: {
       brandId: {
         in: brandIds,
       },
-      role: "ADMIN",
+      role: { in: ["ADMIN", "MANAGER"] },
     },
     select: { id: true },
   });

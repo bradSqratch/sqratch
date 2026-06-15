@@ -2,6 +2,9 @@ import { NextResponse } from "next/server";
 import { buildInviteEmailHtml } from "@/helpers/emailTemplates";
 
 export async function GET(req: Request) {
+  if (process.env.NODE_ENV === "production") {
+    return new NextResponse(null, { status: 404 });
+  }
   const url = new URL(req.url);
 
   const name = url.searchParams.get("name") ?? "there";

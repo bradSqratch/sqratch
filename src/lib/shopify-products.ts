@@ -1,4 +1,4 @@
-import { decryptSecret } from "@/lib/crypto";
+import { getValidAccessToken } from "@/lib/shopify-token-manager";
 import { SHOPIFY_API_VERSION } from "@/lib/shopify";
 
 type ShopifyProductImage = {
@@ -140,11 +140,28 @@ function formatShopifyErrors(errors: ShopifyProductsResponse["errors"]) {
 
 export async function fetchNormalizedShopifyProducts(options: {
   shopDomain: string;
-  encryptedToken: string;
+  brandId: string;
   limit?: number;
   currency?: string;
+  /** @deprecated Pass brandId instead; encryptedToken is kept for callers
+   *  that have not yet been migrated. When brandId is provided the token
+   *  manager is used and this field is ignored. */
+  encryptedToken?: string;
 }) {
-  const accessToken = decryptSecret(options.encryptedToken);
+  const tokenResult = await getValidAccessToken(options.brandId);
+
+  if (!tokenResult.ok) {
+    return {
+      ok: false as const,
+      status: 401,
+      error:
+        tokenResult.reason === "NEEDS_RECONNECT"
+          ? "Shopify connection requires reconnection."
+          : "Shopify is not connected.",
+    };
+  }
+
+  const accessToken = tokenResult.accessToken;
   const response = await fetch(
     `https://${options.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
     {

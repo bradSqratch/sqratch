@@ -14,15 +14,13 @@ export async function POST(req: Request) {
     url: req.url,
     method: "POST",
     hasHeader: !!req.headers.get("x-cron-secret"),
-    headerPrefix: req.headers.get("x-cron-secret")?.slice(0, 6) ?? null,
     envHasSecret: !!process.env.CRON_SECRET,
-    envSecretPrefix: process.env.CRON_SECRET?.slice(0, 6) ?? null,
   });
 
   if (!requireCronSecret(req)) {
     console.warn("[email-worker] UNAUTHORIZED", {
-      got: req.headers.get("x-cron-secret")?.slice(0, 10) ?? null,
-      expected: process.env.CRON_SECRET?.slice(0, 10) ?? null,
+      hasHeader: !!req.headers.get("x-cron-secret"),
+      envHasSecret: !!process.env.CRON_SECRET,
     });
 
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

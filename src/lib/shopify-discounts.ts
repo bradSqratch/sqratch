@@ -1,5 +1,18 @@
-import { decryptSecret } from "@/lib/crypto";
 import { SHOPIFY_API_VERSION } from "@/lib/shopify";
+
+type DiscountByCodeResponse = {
+  data?: {
+    codeDiscountNodeByCode?: {
+      id: string;
+      codeDiscount?: {
+        status?: string | null;
+        endsAt?: string | null;
+        asyncUsageCount?: number | null;
+      } | null;
+    } | null;
+  };
+  errors?: Array<{ message?: string }>;
+};
 
 type ShopifyUserError = {
   field?: string[] | null;
@@ -48,7 +61,7 @@ function formatGraphqlErrors(errors?: Array<{ message?: string }>) {
 
 export async function createShopifyRewardDiscountCode(input: {
   shopDomain: string;
-  encryptedToken: string;
+  accessToken: string;
   title: string;
   code: string;
   issuedAt: Date;
@@ -60,7 +73,7 @@ export async function createShopifyRewardDiscountCode(input: {
   shopifyProductGids?: string[];
   minimumSubtotalCents?: number | null;
 }) {
-  const accessToken = decryptSecret(input.encryptedToken);
+  const accessToken = input.accessToken;
   const startsAt = input.issuedAt;
   const endsAt = new Date(
     startsAt.getTime() + input.codeValidDays * 24 * 60 * 60 * 1000,
@@ -188,10 +201,10 @@ export async function createShopifyRewardDiscountCode(input: {
 
 export async function getShopifyDiscountUsageStatus(input: {
   shopDomain: string;
-  encryptedToken: string;
+  accessToken: string;
   discountNodeId: string;
 }) {
-  const accessToken = decryptSecret(input.encryptedToken);
+  const accessToken = input.accessToken;
   const response = await fetch(
     `https://${input.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
     {
@@ -256,5 +269,87 @@ export async function getShopifyDiscountUsageStatus(input: {
     usageLimit: discount.usageLimit || null,
     endsAt,
     derivedStatus,
+  };
+}
+
+/**
+ * Looks up a Shopify discount code node by its code string.
+ *
+ * Returns a discriminated union:
+ *   { ok:true, exists:true, discountNodeId, status, endsAt, asyncUsageCount }
+ *   { ok:true, exists:false }          — code definitely not found on Shopify
+ *   { ok:false, status, error }        — HTTP/GraphQL error (AMBIGUOUS — retry later)
+ *
+ * SECURITY: accessToken is never logged.
+ */
+export async function getShopifyDiscountByCode(input: {
+  shopDomain: string;
+  accessToken: string;
+  code: string;
+}): Promise<
+  | { ok: true; exists: true; discountNodeId: string; status: string | null; endsAt: Date | null; asyncUsageCount: number }
+  | { ok: true; exists: false }
+  | { ok: false; status: number; error: string }
+> {
+  let response: Response;
+  try {
+    response = await fetch(
+      `https://${input.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
+      {
+        method: "POST",
+        headers: {
+          "X-Shopify-Access-Token": input.accessToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: `
+            query SqratchDiscountByCode($code: String!) {
+              codeDiscountNodeByCode(code: $code) {
+                id
+                codeDiscount {
+                  ... on DiscountCodeBasic {
+                    status
+                    endsAt
+                    asyncUsageCount
+                  }
+                }
+              }
+            }
+          `,
+          variables: { code: input.code },
+        }),
+        cache: "no-store",
+      },
+    );
+  } catch {
+    return { ok: false, status: 503, error: "Network error fetching discount by code." };
+  }
+
+  const json = (await response.json().catch(() => null)) as DiscountByCodeResponse | null;
+  const graphqlError = formatGraphqlErrors(json?.errors);
+
+  if (!response.ok || graphqlError) {
+    return {
+      ok: false,
+      status: response.ok ? 502 : response.status || 500,
+      error: graphqlError || "Failed to fetch Shopify discount by code.",
+    };
+  }
+
+  // Explicit null means the code does not exist on Shopify
+  if (json?.data?.codeDiscountNodeByCode === null || json?.data?.codeDiscountNodeByCode === undefined) {
+    return { ok: true, exists: false };
+  }
+
+  const node = json.data.codeDiscountNodeByCode;
+  const codeDiscount = node.codeDiscount;
+
+  return {
+    ok: true,
+    exists: true,
+    discountNodeId: node.id,
+    status: codeDiscount?.status ?? null,
+    endsAt: codeDiscount?.endsAt ? new Date(codeDiscount.endsAt) : null,
+    asyncUsageCount: codeDiscount?.asyncUsageCount ?? 0,
   };
 }

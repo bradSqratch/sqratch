@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getBrandManagementContext } from "@/lib/brand-auth";
+import prisma from "@/lib/prisma";
 
 export async function GET() {
   try {
@@ -13,6 +14,19 @@ export async function GET() {
     }
 
     const brand = context.membership.brand;
+
+    // Fetch the additional fields that brand-auth doesn't include in its select
+    const brandExtra = await prisma.brand.findUnique({
+      where: { id: brand.id },
+      select: {
+        shopifyAuthMode: true,
+        shopifyAccessTokenExpiresAt: true,
+        shopifyGrantedScopes: true,
+      },
+    });
+
+    const requiresReconnect =
+      brand.shopifyConnectionStatus === "REQUIRES_RECONNECT";
 
     return NextResponse.json({
       data: {
@@ -29,6 +43,11 @@ export async function GET() {
         ),
         shopifyLastProductSyncAt: brand.shopifyLastProductSyncAt,
         shopifyCurrencyCode: brand.shopifyCurrencyCode,
+        // Additive fields — token mode and reconnect state
+        shopifyAuthMode: brandExtra?.shopifyAuthMode ?? "LEGACY_OFFLINE",
+        shopifyAccessTokenExpiresAt: brandExtra?.shopifyAccessTokenExpiresAt ?? null,
+        shopifyGrantedScopes: brandExtra?.shopifyGrantedScopes ?? null,
+        requiresReconnect,
       },
     });
   } catch (error) {

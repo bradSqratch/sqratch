@@ -62,22 +62,6 @@ function LoginPageInner() {
 
     setLoading(true);
     try {
-      // Check if user is ADMIN before login
-      await fetch("/api/auth/check-roles-login", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: user.email }),
-      });
-
-      // if (!roleRes.ok || roleData.role !== "ADMIN") {
-      //   setMessage({
-      //     type: "error",
-      //     text: "Only ADMIN users are allowed to log in.",
-      //   });
-      //   setLoading(false);
-      //   return;
-      // }
-
       const result = await signIn("credentials", {
         redirect: false,
         email: user.email,
@@ -129,7 +113,8 @@ function LoginPageInner() {
     }
   };
 
-  const checkSession = async () => {
+  const checkSession = async (attempt = 0) => {
+    const MAX_ATTEMPTS = 10;
     const sess = await getSession();
     if (sess?.user) {
       const { isEmailVerified, email } = sess.user;
@@ -175,9 +160,15 @@ function LoginPageInner() {
       setTimeout(() => {
         router.push(nextPath);
       }, 600);
-    } else {
+    } else if (attempt < MAX_ATTEMPTS) {
       // retry briefly
-      setTimeout(checkSession, 500);
+      setTimeout(() => checkSession(attempt + 1), 500);
+    } else {
+      setMessage({
+        type: "error",
+        text: "Sign-in is taking longer than expected. Please refresh and try again.",
+      });
+      setLoading(false);
     }
   };
 

@@ -99,6 +99,13 @@ model Brand {
   coverImageUrl                    String?
   shopifyLastProductSyncAt         DateTime?
   shopifyCurrencyCode              String?
+  shopifyAccessTokenExpiresAt      DateTime?
+  shopifyRefreshTokenEncrypted     String?
+  shopifyRefreshTokenExpiresAt     DateTime?
+  shopifyGrantedScopes             String?
+  shopifyClientId                  String?
+  shopifyTokenRefreshLockedUntil   DateTime?
+  shopifyAuthMode                  ShopifyAuthMode           @default(LEGACY_OFFLINE)
   analyticsEvents                  AnalyticsEvent[]
   members                          BrandMember[]
   campaigns                        Campaign[]
@@ -469,6 +476,10 @@ model ShopifyRewardRedemption {
   shopifyUserErrors      Json?
   createdAt              DateTime                      @default(now())
   updatedAt              DateTime                      @updatedAt
+  reconcileLockedUntil   DateTime?
+  reconcileAttempts      Int                           @default(0)
+  needsManualReview      Boolean                       @default(false)
+  lastReconcileReason    String?
   brand                  Brand                         @relation(fields: [brandId], references: [id], onDelete: Cascade)
   offer                  BrandRewardOffer              @relation(fields: [offerId], references: [id], onDelete: Restrict)
   pointTransactions      PointTransaction[]
@@ -478,6 +489,7 @@ model ShopifyRewardRedemption {
   @@index([brandId, createdAt])
   @@index([offerId])
   @@index([status])
+  @@index([status, needsManualReview, createdAt])
 }
 
 model UserSession {
@@ -592,6 +604,7 @@ model PointTransaction {
   user                      User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, qrCodeId])
+  @@unique([shopifyRewardRedemptionId, reason], name: "uq_point_tx_redemption_reason")
   @@index([userId])
   @@index([qrCodeId])
   @@index([shopifyRewardRedemptionId])
@@ -644,6 +657,12 @@ enum ShopifyConnectionStatus {
   DISCONNECTED
   CONNECTED
   UNINSTALLED
+  REQUIRES_RECONNECT
+}
+
+enum ShopifyAuthMode {
+  LEGACY_OFFLINE
+  EXPIRING_OFFLINE
 }
 
 enum RewardAppliesTo {

@@ -46,7 +46,7 @@ export async function GET(
 
     const products = await fetchNormalizedShopifyProducts({
       shopDomain: brand.shopifyShopDomain,
-      encryptedToken: brand.shopifyAdminAccessTokenEncrypted,
+      brandId: brand.id,
       limit: 100,
     });
 

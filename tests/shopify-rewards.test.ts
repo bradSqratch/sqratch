@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-// Set NEXTAUTH_SECRET so encryptSecret/decryptSecret can work in tests
-process.env.NEXTAUTH_SECRET = "test-secret-key-for-decryption-longer-string-32-chars";
-
-import { encryptSecret } from "../src/lib/crypto";
 import { createShopifyRewardDiscountCode } from "../src/lib/shopify-discounts";
 import { parseRewardOfferPayload, serializeRewardOffer, validateCurrencyMatch } from "../src/lib/reward-offers";
 import { formatRewardMoney, formatRewardPercentage } from "../src/components/experience/client-utils";
@@ -41,14 +37,14 @@ globalThis.fetch = (async (url: string | URL, options?: RequestInit) => {
   return mockResponse as unknown as Response;
 }) as unknown as typeof fetch;
 
-const testEncryptedToken = encryptSecret("shpat_mock_access_token_123");
+const testAccessToken = "shpat_mock_access_token_123";
 
 // Test group 1: Shopify payload structure
 test("1. Fixed CAD reward sends discountAmount only", async () => {
   lastFetchOptions = null;
   const result = await createShopifyRewardDiscountCode({
     shopDomain: "test-store.myshopify.com",
-    encryptedToken: testEncryptedToken,
+    accessToken: testAccessToken,
     title: "Test Reward",
     code: "TESTCODE123",
     issuedAt: new Date("2026-06-15T00:00:00Z"),
@@ -75,7 +71,7 @@ test("2. Fixed USD reward sends discountAmount only", async () => {
   lastFetchOptions = null;
   const result = await createShopifyRewardDiscountCode({
     shopDomain: "test-store.myshopify.com",
-    encryptedToken: testEncryptedToken,
+    accessToken: testAccessToken,
     title: "Test Reward",
     code: "TESTCODE123",
     issuedAt: new Date("2026-06-15T00:00:00Z"),
@@ -102,7 +98,7 @@ test("3. Percentage reward sends percentage only", async () => {
   lastFetchOptions = null;
   const result = await createShopifyRewardDiscountCode({
     shopDomain: "test-store.myshopify.com",
-    encryptedToken: testEncryptedToken,
+    accessToken: testAccessToken,
     title: "Test Reward",
     code: "TESTCODE123",
     issuedAt: new Date("2026-06-15T00:00:00Z"),
@@ -126,7 +122,7 @@ test("4. 15% sends 0.15", async () => {
   lastFetchOptions = null;
   await createShopifyRewardDiscountCode({
     shopDomain: "test-store.myshopify.com",
-    encryptedToken: testEncryptedToken,
+    accessToken: testAccessToken,
     title: "Test",
     code: "CODE",
     issuedAt: new Date(),
@@ -144,7 +140,7 @@ test("5. 15.25% sends 0.1525", async () => {
   lastFetchOptions = null;
   await createShopifyRewardDiscountCode({
     shopDomain: "test-store.myshopify.com",
-    encryptedToken: testEncryptedToken,
+    accessToken: testAccessToken,
     title: "Test",
     code: "CODE",
     issuedAt: new Date(),
@@ -162,7 +158,7 @@ test("6. 100% sends 1", async () => {
   lastFetchOptions = null;
   await createShopifyRewardDiscountCode({
     shopDomain: "test-store.myshopify.com",
-    encryptedToken: testEncryptedToken,
+    accessToken: testAccessToken,
     title: "Test",
     code: "CODE",
     issuedAt: new Date(),
@@ -181,7 +177,7 @@ test("7. Payload never sends fixed and percentage together", async () => {
   lastFetchOptions = null;
   await createShopifyRewardDiscountCode({
     shopDomain: "test-store.myshopify.com",
-    encryptedToken: testEncryptedToken,
+    accessToken: testAccessToken,
     title: "Test",
     code: "CODE",
     issuedAt: new Date(),
@@ -199,7 +195,7 @@ test("7. Payload never sends fixed and percentage together", async () => {
   lastFetchOptions = null;
   await createShopifyRewardDiscountCode({
     shopDomain: "test-store.myshopify.com",
-    encryptedToken: testEncryptedToken,
+    accessToken: testAccessToken,
     title: "Test",
     code: "CODE",
     issuedAt: new Date(),
@@ -219,7 +215,7 @@ test("8. Minimum subtotal remains present for both discount types", async () => 
   lastFetchOptions = null;
   await createShopifyRewardDiscountCode({
     shopDomain: "test-store.myshopify.com",
-    encryptedToken: testEncryptedToken,
+    accessToken: testAccessToken,
     title: "Test",
     code: "CODE",
     issuedAt: new Date(),
@@ -241,7 +237,7 @@ test("8. Minimum subtotal remains present for both discount types", async () => 
   lastFetchOptions = null;
   await createShopifyRewardDiscountCode({
     shopDomain: "test-store.myshopify.com",
-    encryptedToken: testEncryptedToken,
+    accessToken: testAccessToken,
     title: "Test",
     code: "CODE",
     issuedAt: new Date(),
@@ -264,7 +260,7 @@ test("9. Product targeting remains unchanged", async () => {
   lastFetchOptions = null;
   await createShopifyRewardDiscountCode({
     shopDomain: "test-store.myshopify.com",
-    encryptedToken: testEncryptedToken,
+    accessToken: testAccessToken,
     title: "Test",
     code: "CODE",
     issuedAt: new Date(),

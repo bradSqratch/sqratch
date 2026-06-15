@@ -4,14 +4,32 @@ import bcrypt from "bcryptjs";
 const prisma = new PrismaClient();
 
 async function main() {
+  // Production guard: refuse to run unless explicitly allowed
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.ALLOW_PROD_SEED !== "true"
+  ) {
+    throw new Error(
+      "Refusing to run seed in production. Set ALLOW_PROD_SEED=true to override."
+    );
+  }
+
   // 1. Create Admin User
-  const adminPassword = bcrypt.hashSync("pass", 10);
+  const rawAdminPassword = process.env.SEED_ADMIN_PASSWORD;
+  if (!rawAdminPassword) {
+    throw new Error(
+      "SEED_ADMIN_PASSWORD must be set to seed the admin user."
+    );
+  }
+  const adminPassword = bcrypt.hashSync(rawAdminPassword, 10);
+  const adminEmail =
+    process.env.SEED_ADMIN_EMAIL ?? "admin@gmail.com";
   const admin = await prisma.user.upsert({
-    where: { email: "admin@gmail.com" },
+    where: { email: adminEmail },
     update: {},
     create: {
       name: "Platform Admin",
-      email: "admin@gmail.com",
+      email: adminEmail,
       password: adminPassword,
       isEmailVerified: true,
       emailVerifiedAt: new Date(),

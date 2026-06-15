@@ -1,11 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
-import { decryptSecret } from "@/lib/crypto";
 import prisma from "@/lib/prisma";
 import {
   buildShopifyPendingInstallService,
-  registerShopifyWebhooks,
   getShopifyShopCurrency,
 } from "@/lib/shopify";
 import { slugifyValue } from "@/lib/brand-auth";
@@ -160,14 +158,37 @@ export async function POST(
         shopifyShopDomain: payload.shop,
         ...(requestedBrandId ? { id: { not: requestedBrandId } } : {}),
       },
-      select: { id: true },
+      select: { id: true, shopifyConnectionStatus: true },
     });
 
     if (existingShopBrand) {
-      return NextResponse.json(
-        { error: "This Shopify store is already linked to another brand." },
-        { status: 409 },
-      );
+      if (existingShopBrand.shopifyConnectionStatus === "UNINSTALLED") {
+        // Relink policy: if the existing brand holding the domain is UNINSTALLED,
+        // release it (null its domain and clear its Shopify credential/token fields)
+        // so the new brand can claim the domain. The release + new-link happen in
+        // a single transaction so the @unique constraint is never violated.
+        await prisma.$transaction(async (tx) => {
+          await tx.brand.update({
+            where: { id: existingShopBrand.id },
+            data: {
+              shopifyShopDomain: null,
+              shopifyAdminAccessTokenEncrypted: null,
+              shopifyRefreshTokenEncrypted: null,
+              shopifyAccessTokenExpiresAt: null,
+              shopifyRefreshTokenExpiresAt: null,
+              shopifyGrantedScopes: null,
+            },
+          });
+          // The domain is now free; the main brand.update below (outside this
+          // tx) will claim it. We commit early here so the slot is released.
+        });
+      } else {
+        // Brand is CONNECTED (or some other non-UNINSTALLED status) — conflict.
+        return NextResponse.json(
+          { error: "This Shopify store is already linked to another brand." },
+          { status: 409 },
+        );
+      }
     }
 
     let brandId = requestedBrandId;
@@ -283,11 +304,8 @@ export async function POST(
       return updated;
     });
 
-    await registerShopifyWebhooks({
-      shop: payload.shop,
-      accessToken: decryptSecret(payload.encryptedToken),
-      origin: request.nextUrl.origin,
-    });
+    // Webhook subscriptions are declared via shopify.app.toml config and managed
+    // by Shopify — no runtime registration call is needed here.
 
     return NextResponse.json({
       data: {

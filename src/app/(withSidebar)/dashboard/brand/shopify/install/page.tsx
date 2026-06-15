@@ -181,18 +181,26 @@ export default function ShopifyInstallPage() {
 
             {error ? <p className="text-sm text-red-300">{error}</p> : null}
 
-            <Button
-              type="button"
-              onClick={() => void linkInstall()}
-              disabled={
-                saving ||
-                (!selectedBrandId &&
-                  (!canCreate || !brandName.trim() || !brandSlug.trim()))
-              }
-              className="rounded-full border border-white bg-white text-black"
-            >
-              {saving ? "Connecting..." : "Connect Shopify"}
-            </Button>
+            {!data?.brands.length && !canCreate ? (
+              <p className="text-sm text-white/65">
+                No brands are available for your account yet. Contact your
+                SQRATCH administrator to be granted brand access before
+                connecting this Shopify store.
+              </p>
+            ) : (
+              <Button
+                type="button"
+                onClick={() => void linkInstall()}
+                disabled={
+                  saving ||
+                  (!selectedBrandId &&
+                    (!canCreate || !brandName.trim() || !brandSlug.trim()))
+                }
+                className="rounded-full border border-white bg-white text-black"
+              >
+                {saving ? "Connecting..." : "Connect Shopify"}
+              </Button>
+            )}
           </div>
         )}
       </PageCard>
