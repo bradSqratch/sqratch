@@ -138,7 +138,9 @@ export async function GET(request: NextRequest) {
             ? `https://${offer.brand.shopifyShopDomain}`
             : null,
           pointsCost: offer.pointsCost,
+          discountType: offer.discountType,
           discountAmountCents: offer.discountAmountCents,
+          discountPercentageBasisPoints: offer.discountPercentageBasisPoints,
           currencyCode: offer.currencyCode,
           claimEndsAt: offer.claimEndsAt,
           codeValidDays: offer.codeValidDays,

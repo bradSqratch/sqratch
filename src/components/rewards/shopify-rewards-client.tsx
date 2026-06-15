@@ -3,7 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Check, Copy, ExternalLink, Gift, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
+import {
+  fetchJson,
+  getErrorMessage,
+  formatRewardMoney,
+  formatRewardPercentage,
+} from "@/components/experience/client-utils";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -27,7 +32,9 @@ type ShopifyRewardOffer = {
   };
   shopUrl: string | null;
   pointsCost: number;
-  discountAmountCents: number;
+  discountType: "FIXED_AMOUNT" | "PERCENTAGE";
+  discountAmountCents: number | null;
+  discountPercentageBasisPoints: number | null;
   currencyCode: string;
   claimEndsAt: string | null;
   codeValidDays: number;
@@ -72,16 +79,11 @@ type ShopifyRewardRedemption = {
   expiresAt: string | null;
   usedAt: string | null;
   pointsCost: number;
-  discountAmountCents: number;
+  discountType: "FIXED_AMOUNT" | "PERCENTAGE";
+  discountAmountCents: number | null;
+  discountPercentageBasisPoints: number | null;
   currencyCode: string;
 };
-
-function formatMoney(cents: number, currencyCode: string) {
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: currencyCode,
-  }).format(cents / 100);
-}
 
 function formatDate(value: string | null) {
   if (!value) {
@@ -288,10 +290,9 @@ export function ShopifyRewardsClient({
                       </p>
                       <p>
                         <span className="text-white/45">Discount:</span>{" "}
-                        {formatMoney(
-                          offer.discountAmountCents,
-                          offer.currencyCode,
-                        )}
+                        {offer.discountType === "PERCENTAGE"
+                          ? formatRewardPercentage(offer.discountPercentageBasisPoints)
+                          : formatRewardMoney(offer.discountAmountCents, offer.currencyCode)}
                       </p>
                       <p>
                         <span className="text-white/45">Claim by:</span>{" "}
@@ -422,11 +423,10 @@ export function ShopifyRewardsClient({
                         {redemption.offer.title} by {redemption.brand.name}
                       </p>
                       <p className="mt-1 text-sm text-white/50">
-                        {formatMoney(
-                          redemption.discountAmountCents,
-                          redemption.currencyCode,
-                        )}{" "}
-                        off for {redemption.pointsCost} points
+                        {redemption.discountType === "PERCENTAGE"
+                          ? `${formatRewardPercentage(redemption.discountPercentageBasisPoints)} off`
+                          : `${formatRewardMoney(redemption.discountAmountCents, redemption.currencyCode)} off`}{" "}
+                        for {redemption.pointsCost} points
                       </p>
                     </div>
 

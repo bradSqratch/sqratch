@@ -53,8 +53,9 @@ export async function createShopifyRewardDiscountCode(input: {
   code: string;
   issuedAt: Date;
   codeValidDays: number;
-  discountAmountCents: number;
-  currencyCode: string;
+  discountType: "FIXED_AMOUNT" | "PERCENTAGE";
+  discountAmountCents: number | null;
+  discountPercentageBasisPoints: number | null;
   appliesTo: "ALL_PRODUCTS" | "SPECIFIC_PRODUCTS";
   shopifyProductGids?: string[];
   minimumSubtotalCents?: number | null;
@@ -84,6 +85,18 @@ export async function createShopifyRewardDiscountCode(input: {
           },
         }
       : undefined;
+
+  const value =
+    input.discountType === "PERCENTAGE"
+      ? {
+          percentage: Number((input.discountPercentageBasisPoints! / 10000).toFixed(4)),
+        }
+      : {
+          discountAmount: {
+            amount: formatAmount(input.discountAmountCents!),
+            appliesOnEachItem: false,
+          },
+        };
 
   const response = await fetch(
     `https://${input.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
@@ -124,12 +137,7 @@ export async function createShopifyRewardDiscountCode(input: {
               all: true,
             },
             customerGets: {
-              value: {
-                discountAmount: {
-                  amount: formatAmount(input.discountAmountCents),
-                  appliesOnEachItem: false,
-                },
-              },
+              value,
               items,
             },
             minimumRequirement,

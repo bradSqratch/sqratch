@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getBrandManagementContext } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
+import { getShopifyShopCurrency } from "@/lib/shopify";
 import {
   CLAIM_COUNTED_REDEMPTION_STATUSES,
   getRewardOfferAvailability,
@@ -144,14 +145,34 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const brand = context.membership.brand;
+    let shopCurrency = brand.shopifyCurrencyCode;
+
+    if (!shopCurrency && brand.shopifyShopDomain && brand.shopifyAdminAccessTokenEncrypted) {
+      try {
+        const currencyResult = await getShopifyShopCurrency({
+          shopDomain: brand.shopifyShopDomain,
+          encryptedToken: brand.shopifyAdminAccessTokenEncrypted,
+        });
+        if (currencyResult.ok) {
+          shopCurrency = currencyResult.currencyCode;
+          await prisma.brand.update({
+            where: { id: brand.id },
+            data: { shopifyCurrencyCode: shopCurrency },
+          });
+        }
+      } catch (err) {
+        console.error("[brand/rewards/offers][POST] Error refreshing missing shop currency:", err);
+      }
+    }
+
     const body = await request.json().catch(() => null);
-    const parsed = parseRewardOfferPayload(body);
+    const parsed = parseRewardOfferPayload(body, shopCurrency);
 
     if (!parsed.ok) {
       return NextResponse.json({ error: parsed.error }, { status: 400 });
     }
 
-    const brand = context.membership.brand;
     const data = parsed.data;
 
     if (data.isActive && !canActivateShopifyOffer(brand)) {
@@ -171,7 +192,9 @@ export async function POST(request: NextRequest) {
         description: data.description,
         isActive: data.isActive,
         pointsCost: data.pointsCost,
+        discountType: data.discountType,
         discountAmountCents: data.discountAmountCents,
+        discountPercentageBasisPoints: data.discountPercentageBasisPoints,
         currencyCode: data.currencyCode,
         claimStartsAt: data.claimStartsAt,
         claimEndsAt: data.claimEndsAt,

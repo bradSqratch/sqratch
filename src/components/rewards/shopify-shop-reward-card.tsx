@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Check, Copy, Gift } from "lucide-react";
-import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
+import {
+  fetchJson,
+  getErrorMessage,
+  formatRewardMoney,
+  formatRewardPercentage,
+} from "@/components/experience/client-utils";
 import { Button } from "@/components/ui/button";
 
 type RewardProduct = {
@@ -24,7 +29,9 @@ type ShopifyRewardOffer = {
     shopifyShopDomain?: string | null;
   };
   pointsCost: number;
-  discountAmountCents: number;
+  discountType: "FIXED_AMOUNT" | "PERCENTAGE";
+  discountAmountCents: number | null;
+  discountPercentageBasisPoints: number | null;
   currencyCode: string;
   claimEndsAt: string | null;
   codeValidDays: number;
@@ -56,13 +63,6 @@ type ShopifyRewardRedemption = {
   code: string;
   status: string;
 };
-
-function formatMoney(cents: number, currencyCode: string) {
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: currencyCode,
-  }).format(cents / 100);
-}
 
 function formatDate(value: string | null) {
   if (!value) {
@@ -230,7 +230,9 @@ export function ShopifyShopRewardCard({
                   </h3>
                   <p className="mt-1 text-sm text-white/55">
                     {offer.pointsCost} points for{" "}
-                    {formatMoney(offer.discountAmountCents, offer.currencyCode)}
+                    {offer.discountType === "PERCENTAGE"
+                      ? `${formatRewardPercentage(offer.discountPercentageBasisPoints)} off`
+                      : `${formatRewardMoney(offer.discountAmountCents, offer.currencyCode)} off`}
                   </p>
                 </div>
                 <span className="rounded-full border border-emerald-300/25 bg-emerald-300/10 px-3 py-1 text-xs text-emerald-100">

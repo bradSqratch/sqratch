@@ -6,6 +6,7 @@ import prisma from "@/lib/prisma";
 import {
   buildShopifyPendingInstallService,
   registerShopifyWebhooks,
+  getShopifyShopCurrency,
 } from "@/lib/shopify";
 import { slugifyValue } from "@/lib/brand-auth";
 
@@ -239,6 +240,21 @@ export async function POST(
       brandId = created.id;
     }
 
+    let shopifyCurrencyCode: string | null = null;
+    try {
+      const currencyResult = await getShopifyShopCurrency({
+        shopDomain: payload.shop,
+        encryptedToken: payload.encryptedToken,
+      });
+      if (currencyResult.ok) {
+        shopifyCurrencyCode = currencyResult.currencyCode;
+      } else {
+        console.warn("[shopify/installations/[installId]] Failed to query currency:", currencyResult.error);
+      }
+    } catch (err) {
+      console.error("[shopify/installations/[installId]] Error querying currency:", err);
+    }
+
     const brand = await prisma.$transaction(async (tx) => {
       const updated = await tx.brand.update({
         where: { id: brandId },
@@ -249,6 +265,7 @@ export async function POST(
           shopifyDisconnectedAt: null,
           shopifyUninstalledAt: null,
           shopifyConnectionStatus: "CONNECTED",
+          shopifyCurrencyCode,
         },
         select: {
           id: true,

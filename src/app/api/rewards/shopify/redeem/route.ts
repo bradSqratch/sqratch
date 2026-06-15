@@ -13,6 +13,7 @@ import {
   CLAIM_COUNTED_REDEMPTION_STATUSES,
   generateRewardCode,
   getRewardOfferAvailability,
+  validateCurrencyMatch,
 } from "@/lib/reward-offers";
 
 function cleanIdempotencyKey(value: unknown) {
@@ -56,6 +57,10 @@ const redemptionErrorResponses: Record<
     error: "User limit reached",
     status: 409,
   },
+  CURRENCY_MISMATCH: {
+    error: "Reward currency does not match the Shopify store currency. Please contact the brand.",
+    status: 409,
+  },
 };
 
 function serializeRedemption(redemption: {
@@ -63,7 +68,9 @@ function serializeRedemption(redemption: {
   code: string;
   status: string;
   pointsCost: number;
-  discountAmountCents: number;
+  discountType: "FIXED_AMOUNT" | "PERCENTAGE";
+  discountAmountCents: number | null;
+  discountPercentageBasisPoints: number | null;
   currencyCode: string;
   issuedAt: Date | null;
   expiresAt: Date | null;
@@ -75,7 +82,9 @@ function serializeRedemption(redemption: {
     code: redemption.code,
     status: redemption.status,
     pointsCost: redemption.pointsCost,
+    discountType: redemption.discountType,
     discountAmountCents: redemption.discountAmountCents,
+    discountPercentageBasisPoints: redemption.discountPercentageBasisPoints,
     currencyCode: redemption.currencyCode,
     issuedAt: redemption.issuedAt,
     expiresAt: redemption.expiresAt,
@@ -249,7 +258,9 @@ export async function POST(request: NextRequest) {
         encryptedToken: string;
         title: string;
         codeValidDays: number;
-        discountAmountCents: number;
+        discountType: "FIXED_AMOUNT" | "PERCENTAGE";
+        discountAmountCents: number | null;
+        discountPercentageBasisPoints: number | null;
         currencyCode: string;
         appliesTo: RewardAppliesTo;
         shopifyProductGids: string[];
@@ -271,6 +282,7 @@ export async function POST(request: NextRequest) {
                 shopifyConnectionStatus: true,
                 shopifyShopDomain: true,
                 shopifyAdminAccessTokenEncrypted: true,
+                shopifyCurrencyCode: true,
               },
             },
             products: {
@@ -293,6 +305,11 @@ export async function POST(request: NextRequest) {
         if (!shopifyConnected) {
           throw new Error("SHOPIFY_DISCONNECTED");
         }
+
+        if (!currentOffer.brand.shopifyCurrencyCode) {
+          throw new Error("CURRENCY_MISMATCH");
+        }
+        validateCurrencyMatch(currentOffer.currencyCode, currentOffer.brand.shopifyCurrencyCode);
 
         const [currentTotalRedemptions, currentUserRedemptions] =
           await Promise.all([
@@ -339,7 +356,9 @@ export async function POST(request: NextRequest) {
             code,
             status: "PENDING",
             pointsCost: currentOffer.pointsCost,
+            discountType: currentOffer.discountType,
             discountAmountCents: currentOffer.discountAmountCents,
+            discountPercentageBasisPoints: currentOffer.discountPercentageBasisPoints,
             currencyCode: currentOffer.currencyCode,
             shopifyShopDomain: currentOffer.brand.shopifyShopDomain!,
           },
@@ -390,7 +409,9 @@ export async function POST(request: NextRequest) {
               currentOffer.brand.shopifyAdminAccessTokenEncrypted!,
             title: currentOffer.title,
             codeValidDays: currentOffer.codeValidDays,
+            discountType: currentOffer.discountType,
             discountAmountCents: currentOffer.discountAmountCents,
+            discountPercentageBasisPoints: currentOffer.discountPercentageBasisPoints,
             currencyCode: currentOffer.currencyCode,
             appliesTo: currentOffer.appliesTo,
             shopifyProductGids: currentOffer.products.map(
@@ -459,8 +480,9 @@ export async function POST(request: NextRequest) {
       code: redemption.code,
       issuedAt,
       codeValidDays: discountConfig.codeValidDays,
+      discountType: discountConfig.discountType,
       discountAmountCents: discountConfig.discountAmountCents,
-      currencyCode: discountConfig.currencyCode,
+      discountPercentageBasisPoints: discountConfig.discountPercentageBasisPoints,
       appliesTo: discountConfig.appliesTo,
       shopifyProductGids: discountConfig.shopifyProductGids,
       minimumSubtotalCents: discountConfig.minimumSubtotalCents,

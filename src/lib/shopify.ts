@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import { decryptSecret } from "@/lib/crypto";
 
 export const SHOPIFY_API_VERSION = "2026-04";
 export const SHOPIFY_SCOPES = [
@@ -141,4 +142,68 @@ export async function registerShopifyWebhooks(options: {
       ),
     ),
   );
+}
+
+export async function getShopifyShopCurrency(input: {
+  shopDomain: string;
+  encryptedToken: string;
+}) {
+  try {
+    const accessToken = decryptSecret(input.encryptedToken);
+    const response = await fetch(
+      `https://${input.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
+      {
+        method: "POST",
+        headers: {
+          "X-Shopify-Access-Token": accessToken,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          query: `
+            query SqratchShopCurrency {
+              shop {
+                currencyCode
+              }
+            }
+          `,
+        }),
+        cache: "no-store",
+      },
+    );
+
+    if (!response.ok) {
+      return {
+        ok: false as const,
+        error: `Shopify request failed with status ${response.status}`,
+      };
+    }
+
+    const json = await response.json().catch(() => null);
+    if (!json) {
+      return { ok: false as const, error: "Empty response from Shopify" };
+    }
+
+    if (json.errors && json.errors.length > 0) {
+      const msg = (json.errors as Array<{ message?: string }>)
+        .map((e) => e.message)
+        .filter(Boolean)
+        .join(" ");
+      return { ok: false as const, error: msg || "Unknown Shopify error" };
+    }
+
+    const currencyCode = json.data?.shop?.currencyCode;
+    if (!currencyCode) {
+      return { ok: false as const, error: "Currency code missing from shop query response" };
+    }
+
+    const normalized = String(currencyCode).trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(normalized)) {
+      return { ok: false as const, error: `Invalid currency code: ${normalized}` };
+    }
+
+    return { ok: true as const, currencyCode: normalized };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : "Unknown error querying currency";
+    return { ok: false as const, error: message };
+  }
 }

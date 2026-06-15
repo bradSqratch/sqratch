@@ -4,7 +4,12 @@ import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import { Gift, Package, Pencil, Power, RefreshCw } from "lucide-react";
 import { BrandPageShell } from "@/components/brand/page-shell";
-import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
+import {
+  fetchJson,
+  getErrorMessage,
+  formatRewardMoney,
+  formatRewardPercentage,
+} from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -19,6 +24,7 @@ type ShopifyStatus = {
   shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED";
   hasShopifyAccessToken: boolean;
   shopifyLastProductSyncAt: string | null;
+  shopifyCurrencyCode: string | null;
 } | null;
 
 type ShopifyProduct = {
@@ -50,7 +56,9 @@ type RewardOffer = {
   description: string | null;
   isActive: boolean;
   pointsCost: number;
-  discountAmountCents: number;
+  discountType: "FIXED_AMOUNT" | "PERCENTAGE";
+  discountAmountCents: number | null;
+  discountPercentageBasisPoints: number | null;
   currencyCode: string;
   claimStartsAt: string | null;
   claimEndsAt: string | null;
@@ -87,7 +95,9 @@ type OfferFormState = {
   description: string;
   isActive: boolean;
   pointsCost: string;
+  discountType: "FIXED_AMOUNT" | "PERCENTAGE";
   discountAmount: string;
+  discountPercentage: string;
   currencyCode: string;
   claimStartsAt: string;
   claimEndsAt: string;
@@ -105,7 +115,9 @@ const defaultForm: OfferFormState = {
   description: "",
   isActive: false,
   pointsCost: "",
+  discountType: "FIXED_AMOUNT",
   discountAmount: "",
+  discountPercentage: "",
   currencyCode: "CAD",
   claimStartsAt: "",
   claimEndsAt: "",
@@ -136,12 +148,7 @@ function toInputDateTime(value: string | null) {
     .slice(0, 16);
 }
 
-function formatMoney(cents: number, currencyCode: string) {
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: currencyCode,
-  }).format(cents / 100);
-}
+
 
 function formatDate(value: string | null) {
   if (!value) return "Not set";
@@ -208,6 +215,13 @@ export default function BrandRewardsPage() {
       ]);
       setBrand(status);
       setOffers(offerData);
+      if (status?.shopifyCurrencyCode) {
+        const currencyCode = status.shopifyCurrencyCode;
+        setForm((f) => ({
+          ...f,
+          currencyCode,
+        }));
+      }
     } catch (loadError) {
       setError(getErrorMessage(loadError, "Failed to load reward offers."));
     } finally {
@@ -259,12 +273,12 @@ export default function BrandRewardsPage() {
   function toggleProduct(product: ShopifyProduct, checked: boolean) {
     setForm((current) => {
       const next = checked
-        ? Array.from(
-            new Set([...current.selectedProductGids, product.shopifyProductGid]),
-          )
-        : current.selectedProductGids.filter(
-            (gid) => gid !== product.shopifyProductGid,
-          );
+          ? Array.from(
+              new Set([...current.selectedProductGids, product.shopifyProductGid]),
+            )
+          : current.selectedProductGids.filter(
+              (gid) => gid !== product.shopifyProductGid,
+            );
 
       return {
         ...current,
@@ -280,7 +294,11 @@ export default function BrandRewardsPage() {
       description: offer.description || "",
       isActive: offer.isActive,
       pointsCost: String(offer.pointsCost),
-      discountAmount: centsToDollars(offer.discountAmountCents),
+      discountType: offer.discountType || "FIXED_AMOUNT",
+      discountAmount: offer.discountType === "PERCENTAGE" ? "" : centsToDollars(offer.discountAmountCents),
+      discountPercentage: offer.discountType === "PERCENTAGE" && offer.discountPercentageBasisPoints
+        ? String(offer.discountPercentageBasisPoints / 100)
+        : "",
       currencyCode: offer.currencyCode,
       claimStartsAt: toInputDateTime(offer.claimStartsAt),
       claimEndsAt: toInputDateTime(offer.claimEndsAt),
@@ -303,13 +321,43 @@ export default function BrandRewardsPage() {
 
   function resetForm() {
     setEditingOfferId(null);
-    setForm(defaultForm);
+    setForm({
+      ...defaultForm,
+      currencyCode: brand?.shopifyCurrencyCode || "CAD",
+    });
   }
 
   async function saveOffer() {
     setSaving(true);
     setError(null);
     setMessage(null);
+
+    if (form.discountType === "FIXED_AMOUNT") {
+      if (form.currencyCode !== "CAD" && form.currencyCode !== "USD") {
+        setError("Fixed rewards currently support CAD and USD stores only.");
+        setSaving(false);
+        return;
+      }
+      const amt = Number(form.discountAmount);
+      if (Number.isNaN(amt) || amt <= 0) {
+        setError("Discount amount must be a positive number.");
+        setSaving(false);
+        return;
+      }
+    } else {
+      const pct = Number(form.discountPercentage);
+      if (Number.isNaN(pct) || pct <= 0 || pct > 100) {
+        setError("Discount percentage must be greater than 0 and no greater than 100.");
+        setSaving(false);
+        return;
+      }
+      const decimalStr = form.discountPercentage.split(".")[1];
+      if (decimalStr && decimalStr.length > 2) {
+        setError("Discount percentage supports up to 2 decimal places only.");
+        setSaving(false);
+        return;
+      }
+    }
 
     const productCatalog = new Map(
       products.map((product) => [product.shopifyProductGid, product]),
@@ -341,7 +389,13 @@ export default function BrandRewardsPage() {
             description: form.description,
             isActive: form.isActive,
             pointsCost: Number(form.pointsCost),
-            discountAmountCents: dollarsToCents(form.discountAmount),
+            discountType: form.discountType,
+            discountAmountCents: form.discountType === "PERCENTAGE"
+              ? null
+              : dollarsToCents(form.discountAmount),
+            discountPercentageBasisPoints: form.discountType === "PERCENTAGE"
+              ? Math.round(Number(form.discountPercentage) * 100)
+              : null,
             currencyCode: form.currencyCode || "CAD",
             claimStartsAt: form.claimStartsAt || null,
             claimEndsAt: form.claimEndsAt || null,
@@ -471,16 +525,86 @@ export default function BrandRewardsPage() {
             />
           </label>
           <label className="space-y-2 text-sm text-white/70">
-            <span>Currency</span>
-            <Input
-              value={form.currencyCode}
+            <span>Discount type</span>
+            <select
+              value={form.discountType}
               onChange={(event) =>
-                updateForm("currencyCode", event.target.value.toUpperCase())
+                updateForm(
+                  "discountType",
+                  event.target.value as OfferFormState["discountType"],
+                )
               }
-              placeholder="CAD"
-              className="border-white/10 bg-black/20 text-white"
-            />
+              className="h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+            >
+              <option value="FIXED_AMOUNT">Fixed amount</option>
+              <option value="PERCENTAGE">Percentage</option>
+            </select>
           </label>
+          <label className="space-y-2 text-sm text-white/70">
+            <span>Currency</span>
+            <select
+              value={form.currencyCode}
+              disabled
+              className="h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white/50 cursor-not-allowed"
+            >
+              <option value="CAD">CAD</option>
+              <option value="USD">USD</option>
+              {form.currencyCode && form.currencyCode !== "CAD" && form.currencyCode !== "USD" && (
+                <option value={form.currencyCode}>{form.currencyCode}</option>
+              )}
+            </select>
+            <p className="text-xs text-white/45 mt-1">
+              Fixed discounts use your Shopify store currency.
+            </p>
+            {brand?.shopifyCurrencyCode && form.currencyCode !== brand.shopifyCurrencyCode && (
+              <p className="text-xs text-amber-300 mt-1">
+                ⚠️ Store currency is now {brand.shopifyCurrencyCode}. Saving this reward will update its currency from {form.currencyCode} to {brand.shopifyCurrencyCode}.
+              </p>
+            )}
+          </label>
+          {form.discountType === "FIXED_AMOUNT" ? (
+            <label className="space-y-2 text-sm text-white/70">
+              <span>Discount amount</span>
+              <div className="relative flex items-center">
+                <Input
+                  type="number"
+                  min="0.01"
+                  step="0.01"
+                  value={form.discountAmount}
+                  onChange={(event) =>
+                    updateForm("discountAmount", event.target.value)
+                  }
+                  placeholder="10.00"
+                  className="border-white/10 bg-black/20 text-white pr-12 w-full"
+                />
+                <span className="absolute right-3 text-white/45 text-sm pointer-events-none">{form.currencyCode}</span>
+              </div>
+            </label>
+          ) : (
+            <label className="space-y-2 text-sm text-white/70">
+              <span>Discount percentage</span>
+              <div className="relative flex items-center">
+                <Input
+                  type="number"
+                  min="0.01"
+                  max="100"
+                  step="0.01"
+                  value={form.discountPercentage}
+                  onChange={(event) =>
+                    updateForm("discountPercentage", event.target.value)
+                  }
+                  placeholder="15"
+                  className="border-white/10 bg-black/20 text-white pr-8 w-full"
+                />
+                <span className="absolute right-3 text-white/45 text-sm pointer-events-none">%</span>
+              </div>
+            </label>
+          )}
+          {form.discountType === "FIXED_AMOUNT" && form.currencyCode !== "CAD" && form.currencyCode !== "USD" && (
+            <div className="rounded-2xl border border-red-300/20 bg-red-300/10 p-3 text-sm text-red-200 lg:col-span-2">
+              Fixed rewards currently support CAD and USD stores only. Please choose Percentage discount type or connect a CAD/USD store.
+            </div>
+          )}
           <label className="space-y-2 text-sm text-white/70 lg:col-span-2">
             <span>Description</span>
             <Textarea
@@ -499,20 +623,6 @@ export default function BrandRewardsPage() {
               min="1"
               value={form.pointsCost}
               onChange={(event) => updateForm("pointsCost", event.target.value)}
-              className="border-white/10 bg-black/20 text-white"
-            />
-          </label>
-          <label className="space-y-2 text-sm text-white/70">
-            <span>Discount amount</span>
-            <Input
-              type="number"
-              min="0.01"
-              step="0.01"
-              value={form.discountAmount}
-              onChange={(event) =>
-                updateForm("discountAmount", event.target.value)
-              }
-              placeholder="10.00"
               className="border-white/10 bg-black/20 text-white"
             />
           </label>
@@ -749,8 +859,15 @@ export default function BrandRewardsPage() {
                     </div>
                     <p className="mt-2 text-sm text-white/55">
                       {offer.pointsCost} points for{" "}
-                      {formatMoney(offer.discountAmountCents, offer.currencyCode)}
+                      {offer.discountType === "PERCENTAGE"
+                        ? `${formatRewardPercentage(offer.discountPercentageBasisPoints)} off`
+                        : `${formatRewardMoney(offer.discountAmountCents, offer.currencyCode)} off`}
                     </p>
+                    {brand?.shopifyCurrencyCode && offer.currencyCode !== brand.shopifyCurrencyCode && (
+                      <p className="mt-2 text-sm font-semibold text-red-400">
+                        ⚠️ Currency mismatch: Store is {brand.shopifyCurrencyCode}, offer is {offer.currencyCode}. Redemptions are blocked. Edit and save this offer to update it to {brand.shopifyCurrencyCode}.
+                      </p>
+                    )}
                     <p className="mt-2 text-sm text-white/45">
                       Claim by {formatDate(offer.claimEndsAt)}. Code expires{" "}
                       {offer.codeValidDays} days after claim.

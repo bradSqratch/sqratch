@@ -193,14 +193,19 @@ function parseProducts(value: unknown): OfferPayload["products"] {
     );
 }
 
-export function parseRewardOfferPayload(body: unknown) {
+export function parseRewardOfferPayload(body: unknown, shopCurrency: string | null) {
   const payload = (body || {}) as Record<string, unknown>;
   const title = String(payload.title || "").trim();
   const pointsCost = Number(payload.pointsCost);
-  const discountAmountCents = Number(payload.discountAmountCents);
-  const currencyCode = String(payload.currencyCode || "CAD")
-    .trim()
-    .toUpperCase();
+  const discountType = payload.discountType ? String(payload.discountType).trim().toUpperCase() : "FIXED_AMOUNT";
+
+  const discountAmountCents = payload.discountAmountCents !== undefined && payload.discountAmountCents !== null && payload.discountAmountCents !== ""
+    ? Number(payload.discountAmountCents)
+    : null;
+  const discountPercentageBasisPoints = payload.discountPercentageBasisPoints !== undefined && payload.discountPercentageBasisPoints !== null && payload.discountPercentageBasisPoints !== ""
+    ? Number(payload.discountPercentageBasisPoints)
+    : null;
+
   const codeValidDays = Number(payload.codeValidDays || 30);
   const appliesTo = String(payload.appliesTo || "ALL_PRODUCTS");
   const claimStartsAt = parseOptionalDate(payload.claimStartsAt);
@@ -224,15 +229,57 @@ export function parseRewardOfferPayload(body: unknown) {
     return { ok: false as const, error: "pointsCost must be a positive integer." };
   }
 
-  if (!Number.isInteger(discountAmountCents) || discountAmountCents <= 0) {
+  if (!["FIXED_AMOUNT", "PERCENTAGE"].includes(discountType)) {
+    return { ok: false as const, error: "Invalid discount type." };
+  }
+
+  if (!shopCurrency) {
     return {
       ok: false as const,
-      error: "discountAmountCents must be a positive integer.",
+      error: "Shopify store currency is unknown. Reconnect Shopify or sync store status first.",
     };
   }
 
-  if (!/^[A-Z]{3}$/.test(currencyCode)) {
-    return { ok: false as const, error: "currencyCode must be a 3-letter code." };
+  const cleanCurrency = shopCurrency.trim().toUpperCase();
+
+  if (discountType === "FIXED_AMOUNT") {
+    if (discountAmountCents === null || !Number.isInteger(discountAmountCents) || discountAmountCents <= 0) {
+      return {
+        ok: false as const,
+        error: "Discount amount must be a positive integer.",
+      };
+    }
+    if (discountPercentageBasisPoints !== null) {
+      return {
+        ok: false as const,
+        error: "Percentage value must be absent for fixed discounts.",
+      };
+    }
+    if (!["CAD", "USD"].includes(cleanCurrency)) {
+      return {
+        ok: false as const,
+        error: `Fixed discounts support CAD and USD stores only. Store currency is ${cleanCurrency}.`,
+      };
+    }
+  } else {
+    // PERCENTAGE
+    if (
+      discountPercentageBasisPoints === null ||
+      !Number.isInteger(discountPercentageBasisPoints) ||
+      discountPercentageBasisPoints < 1 ||
+      discountPercentageBasisPoints > 10000
+    ) {
+      return {
+        ok: false as const,
+        error: "Discount percentage must be an integer between 1 and 10000 basis points.",
+      };
+    }
+    if (discountAmountCents !== null) {
+      return {
+        ok: false as const,
+        error: "Fixed discount amount must be absent for percentage discounts.",
+      };
+    }
   }
 
   if (!Number.isInteger(codeValidDays) || codeValidDays < 1 || codeValidDays > 365) {
@@ -269,8 +316,10 @@ export function parseRewardOfferPayload(body: unknown) {
         : null,
       isActive: Boolean(payload.isActive),
       pointsCost,
+      discountType: discountType as "FIXED_AMOUNT" | "PERCENTAGE",
       discountAmountCents,
-      currencyCode,
+      discountPercentageBasisPoints,
+      currencyCode: cleanCurrency,
       claimStartsAt,
       claimEndsAt,
       codeValidDays,
@@ -306,7 +355,9 @@ export function serializeRewardOffer(
     description: offer.description,
     isActive: offer.isActive,
     pointsCost: offer.pointsCost,
+    discountType: offer.discountType,
     discountAmountCents: offer.discountAmountCents,
+    discountPercentageBasisPoints: offer.discountPercentageBasisPoints,
     currencyCode: offer.currencyCode,
     claimStartsAt: offer.claimStartsAt,
     claimEndsAt: offer.claimEndsAt,
@@ -321,3 +372,10 @@ export function serializeRewardOffer(
     products: offer.products || [],
   };
 }
+
+export function validateCurrencyMatch(offerCurrency: string | null, storeCurrency: string | null) {
+  if (offerCurrency && storeCurrency && offerCurrency !== storeCurrency) {
+    throw new Error("CURRENCY_MISMATCH");
+  }
+}
+

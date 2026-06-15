@@ -98,6 +98,7 @@ model Brand {
   updatedAt                        DateTime                  @updatedAt
   coverImageUrl                    String?
   shopifyLastProductSyncAt         DateTime?
+  shopifyCurrencyCode              String?
   analyticsEvents                  AnalyticsEvent[]
   members                          BrandMember[]
   campaigns                        Campaign[]
@@ -408,7 +409,9 @@ model BrandRewardOffer {
   description           String?
   isActive              Boolean                   @default(false)
   pointsCost            Int
-  discountAmountCents   Int
+  discountType          RewardDiscountType        @default(FIXED_AMOUNT)
+  discountAmountCents   Int?
+  discountPercentageBasisPoints Int?
   currencyCode          String                    @default("CAD")
   claimStartsAt         DateTime?
   claimEndsAt           DateTime?
@@ -450,7 +453,9 @@ model ShopifyRewardRedemption {
   code                   String                        @unique
   status                 ShopifyRewardRedemptionStatus
   pointsCost             Int
-  discountAmountCents    Int
+  discountType           RewardDiscountType            @default(FIXED_AMOUNT)
+  discountAmountCents    Int?
+  discountPercentageBasisPoints Int?
   currencyCode           String                        @default("CAD")
   shopifyShopDomain      String
   shopifyDiscountNodeId  String?
@@ -680,4 +685,9 @@ enum PointReason {
   REFERRAL
   SHOPIFY_REWARD_REDEMPTION
   SHOPIFY_REWARD_REFUND
+}
+
+enum RewardDiscountType {
+  FIXED_AMOUNT
+  PERCENTAGE
 }

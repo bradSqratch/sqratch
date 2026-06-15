@@ -22,6 +22,7 @@ export type BrandAdminContext = {
         shopifyUninstalledAt: Date | null;
         shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED";
         shopifyLastProductSyncAt: Date | null;
+        shopifyCurrencyCode: string | null;
       };
   } | null;
 };
@@ -66,6 +67,7 @@ export async function getBrandAdminContext(options?: {
           shopifyUninstalledAt: true,
           shopifyConnectionStatus: true,
           shopifyLastProductSyncAt: true,
+          shopifyCurrencyCode: true,
         },
       },
     },
@@ -120,6 +122,7 @@ export async function getBrandManagementContext(options?: {
           shopifyUninstalledAt: true,
           shopifyConnectionStatus: true,
           shopifyLastProductSyncAt: true,
+          shopifyCurrencyCode: true,
         },
       },
     },

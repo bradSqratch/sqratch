@@ -28,6 +28,7 @@ export async function GET() {
           brand.shopifyAdminAccessTokenEncrypted,
         ),
         shopifyLastProductSyncAt: brand.shopifyLastProductSyncAt,
+        shopifyCurrencyCode: brand.shopifyCurrencyCode,
       },
     });
   } catch (error) {
