@@ -105,16 +105,6 @@ export function AppSidebar() {
     { title: "Profile", url: "/profile", icon: User },
   ];
 
-  // Keep your existing behavior: Admin or User can see Generate QR
-  const generateQr: NavItem[] = [
-    {
-      title: "Generate QR",
-      url: "/generateQR",
-      icon: QrCode,
-      roles: ["ADMIN", "USER"],
-    },
-  ];
-
   const creator: NavItem[] = [
     {
       title: "Experiences",
@@ -255,7 +245,6 @@ export function AppSidebar() {
 
       <SidebarContent className="text-white bg-transparent px-2">
         <Section label="Common" items={common} role={role} />
-        <Section label="Tools" items={generateQr} role={role} />
         <Section label="Creator" items={creator} role={role} />
         <Section label="Brand" items={brand} role={role} />
         <Section label="Admin" items={adminNew} role={role} />

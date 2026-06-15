@@ -4,7 +4,6 @@ import { getToken } from "next-auth/jwt";
 
 export async function middleware(request: NextRequest) {
   const url = request.nextUrl;
-  console.log("Middleware invoked for:", url.pathname);
 
   if (url.pathname.startsWith("/api/shopify/webhooks/")) {
     return NextResponse.next();
