@@ -14,6 +14,13 @@ import { postBeacon } from "@/components/experience/client-utils";
 import type { PublicExperienceData } from "@/components/experience/types";
 import { useExperience } from "@/components/experience/use-experience";
 import { Button } from "@/components/ui/button";
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
@@ -31,6 +38,12 @@ type HubYouTubePlayerState = {
   PLAYING: number;
   PAUSED: number;
   ENDED: number;
+};
+
+type MeasuredDescriptionPreview = {
+  source: string;
+  text: string;
+  isTruncated: boolean;
 };
 
 type HubYouTubePlayerFactory = new (
@@ -157,7 +170,7 @@ export function ExperienceHubClient({
       activeTab="hub"
       hero={<ExperienceWhyHero data={data} />}
     >
-      <div className="grid gap-4 md:grid-cols-3 lg:hidden">
+      <div className="grid gap-4 md:grid-cols-3 xl:hidden">
         <PageCard>
           <p className="text-sm text-white/55">Visible courses</p>
           <p className="mt-2 text-4xl font-semibold">
@@ -320,23 +333,154 @@ function ExperienceWhyHero({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const ytPlayerRef = useRef<HubYouTubePlayer | null>(null);
   const centerControlTimeoutRef = useRef<number | null>(null);
+  const descriptionCardRef = useRef<HTMLDivElement | null>(null);
+  const descriptionMeasureRef = useRef<HTMLParagraphElement | null>(null);
+  const descriptionMeasureTextRef = useRef<HTMLSpanElement | null>(null);
+  const descriptionMeasureSuffixRef = useRef<HTMLSpanElement | null>(null);
+  const descriptionTriggerRef = useRef<HTMLButtonElement | null>(null);
   const playerId = useId();
   const [isPlaying, setIsPlaying] = useState(false);
   const [showCenterControl, setShowCenterControl] = useState(true);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
+  const [descriptionOpen, setDescriptionOpen] = useState(false);
+  const [descriptionPreview, setDescriptionPreview] =
+    useState<MeasuredDescriptionPreview | null>(null);
+  const [useRightSheet, setUseRightSheet] = useState(false);
 
   const featuredStory = data?.featuredStory || null;
   const primaryCampaign = data?.campaigns[0] || null;
   const campaignName = primaryCampaign?.name || "Campaign";
   const brandName = primaryCampaign?.brand?.name || "Brand";
+  const description =
+    data?.description || "This experience is waiting for its story.";
 
   useEffect(() => {
     setIsPlaying(false);
     setShowCenterControl(true);
     setCurrentTime(0);
     setDuration(0);
+    setDescriptionOpen(false);
   }, [featuredStory?.id]);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia("(min-width: 768px)");
+    const syncSheetSide = () => setUseRightSheet(mediaQuery.matches);
+
+    syncSheetSide();
+    mediaQuery.addEventListener("change", syncSheetSide);
+    window.addEventListener("resize", syncSheetSide);
+
+    return () => {
+      mediaQuery.removeEventListener("change", syncSheetSide);
+      window.removeEventListener("resize", syncSheetSide);
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const card = descriptionCardRef.current;
+    const measurement = descriptionMeasureRef.current;
+    const measurementText = descriptionMeasureTextRef.current;
+    const measurementSuffix = descriptionMeasureSuffixRef.current;
+
+    if (!card || !measurement || !measurementText || !measurementSuffix) {
+      return;
+    }
+
+    let lastWidth = card.getBoundingClientRect().width;
+
+    const updatePreview = () => {
+      if (cancelled) return;
+
+      const rect = card.getBoundingClientRect();
+      const width = rect.width;
+
+      const lineHeight = Number.parseFloat(
+        window.getComputedStyle(measurement).lineHeight,
+      );
+
+      if (!Number.isFinite(lineHeight) || width <= 0) {
+        return;
+      }
+
+      const maxHeight = lineHeight * 3 + 1;
+      const fits = (text: string, includeSuffix: boolean) => {
+        measurementText.textContent = text;
+        measurementSuffix.style.display = includeSuffix ? "inline" : "none";
+        return measurement.scrollHeight <= maxHeight;
+      };
+
+      let nextPreview: MeasuredDescriptionPreview;
+
+      if (fits(description, false)) {
+        nextPreview = {
+          source: description,
+          text: description,
+          isTruncated: false,
+        };
+      } else {
+        const words = description.trim().split(/\s+/);
+        let low = 0;
+        let high = words.length;
+
+        while (low < high) {
+          const midpoint = Math.ceil((low + high) / 2);
+          const candidate = words.slice(0, midpoint).join(" ");
+
+          if (fits(candidate, true)) {
+            low = midpoint;
+          } else {
+            high = midpoint - 1;
+          }
+        }
+
+        let text = words.slice(0, low).join(" ");
+        // Trim trailing punctuation (.,;:!? etc.) to avoid duplicate punctuation before the ellipsis
+        text = text.replace(/[,.;:!?\s\-_]+$/, "");
+        nextPreview = {
+          source: description,
+          text,
+          isTruncated: true,
+        };
+      }
+
+      setDescriptionPreview((current) =>
+        current?.source === nextPreview.source &&
+        current.text === nextPreview.text &&
+        current.isTruncated === nextPreview.isTruncated
+          ? current
+          : nextPreview,
+      );
+    };
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      if (cancelled) return;
+      const entry = entries[0];
+      if (entry) {
+        const width = entry.contentRect.width;
+        if (width !== lastWidth) {
+          lastWidth = width;
+          updatePreview();
+        }
+      }
+    });
+
+    updatePreview();
+    resizeObserver.observe(card);
+
+    void document.fonts?.ready.then(() => {
+      if (!cancelled) {
+        updatePreview();
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      resizeObserver.disconnect();
+    };
+  }, [description, isPlaying]);
 
   useEffect(() => {
     return () => {
@@ -517,9 +661,9 @@ function ExperienceWhyHero({
     duration > 0 ? Math.min((currentTime / duration) * 100, 100) : 0;
 
   return (
-    <div className="-mx-6 -mt-1 sm:-mx-8 sm:mt-0 lg:-mx-10">
-      <div className="lg:mt-4 lg:grid lg:grid-cols-[minmax(0,3fr)_minmax(280px,1fr)] lg:gap-6">
-        <div className="relative overflow-hidden bg-black lg:rounded-[36px] lg:border lg:border-white/10">
+    <div className="-mx-6 -mt-1 md:mx-0 md:mt-0">
+      <div className="min-w-0 xl:mt-4 xl:grid xl:grid-cols-[minmax(0,3fr)_minmax(0,1fr)] xl:gap-6">
+        <div className="relative min-w-0 overflow-hidden bg-black lg:rounded-[36px] lg:border lg:border-white/10">
           <div className="relative h-[calc(100svh-52px)] min-h-[calc(100svh-52px)] sm:h-[calc(100svh-60px)] sm:min-h-[calc(100svh-60px)] lg:h-[min(calc(100svh-10rem),920px)] lg:min-h-[890px]">
             {featuredStory ? (
               <>
@@ -538,7 +682,7 @@ function ExperienceWhyHero({
                   featuredStory.videoAssetUrl ? (
                     <video
                       ref={videoRef}
-                      className="absolute inset-0 h-full w-full bg-transparent object-cover object-center lg:object-contain lg:object-bottom"
+                      className="absolute inset-0 h-full w-full bg-transparent object-cover object-center lg:object-contain lg:object-center"
                       src={featuredStory.videoAssetUrl}
                       playsInline
                       preload="auto"
@@ -624,7 +768,7 @@ function ExperienceWhyHero({
               </div>
             ) : null}
 
-            <div className="pointer-events-none absolute inset-0 z-20 flex flex-col px-5 pb-[calc(env(safe-area-inset-bottom)+7rem)] pt-4 sm:px-8 sm:pb-10 sm:pt-6 lg:px-10 lg:pb-28 lg:pt-8">
+            <div className="pointer-events-none absolute inset-0 z-20 px-5 pt-4 sm:px-8 sm:pt-6 lg:px-10 lg:pt-8">
               <div className="flex items-start justify-between gap-5">
                 <div className="max-w-[48%] space-y-1">
                   <p className="text-[clamp(1.1rem,2vw,1.9rem)] font-black uppercase leading-none tracking-[-0.03em] text-white">
@@ -644,18 +788,93 @@ function ExperienceWhyHero({
                   </p>
                 </div>
               </div>
-
-              <div className="mt-auto max-w-3xl">
-                {!isPlaying && (
-                  <div className="space-y-3 pb-14 sm:space-y-4 lg:max-w-2xl lg:pb-0">
-                    <p className="max-w-3xl text-[clamp(1rem,1.2vw,1.2rem)] font-semibold leading-[1.06] tracking-[-0.03em] text-white lg:max-w-[34rem] lg:leading-[1.22] lg:tracking-[-0.01em]">
-                      {data?.description ||
-                        "This experience is waiting for its story."}
-                    </p>
-                  </div>
-                )}
-              </div>
             </div>
+
+            {!isPlaying && description && description.trim() && (
+              <div className="pointer-events-none absolute inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+10.625rem)] z-30 px-5 max-[319px]:bottom-[calc(50%+2.5rem)] sm:bottom-32 sm:px-8 lg:bottom-28 lg:px-10">
+                <div
+                  ref={descriptionCardRef}
+                  className="pointer-events-auto relative w-full max-w-[34rem] rounded-2xl border border-white/15 bg-black/35 px-3 py-2 shadow-[0_12px_36px_rgba(0,0,0,0.24)] backdrop-blur-md sm:w-[78%] sm:p-4 xl:w-[68%]"
+                >
+                  <p
+                    className={cn(
+                      "text-[clamp(1rem,1.2vw,1.2rem)] font-semibold leading-[1.06] tracking-[-0.03em] text-white lg:leading-[1.22] lg:tracking-[-0.01em]",
+                      descriptionPreview?.source === description
+                        ? ""
+                        : "line-clamp-3",
+                    )}
+                  >
+                    {descriptionPreview?.source === description ? (
+                      <>
+                        {descriptionPreview.text}
+                        {descriptionPreview.isTruncated ? (
+                          <span className="whitespace-nowrap">
+                            ...{" "}
+                            <button
+                              ref={descriptionTriggerRef}
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setDescriptionOpen(true);
+                              }}
+                              onPointerDown={(event) =>
+                                event.stopPropagation()
+                              }
+                              className="pointer-events-auto inline rounded-sm text-sm font-semibold text-white/82 underline decoration-white/35 underline-offset-2 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 focus-visible:ring-offset-2 focus-visible:ring-offset-black/50"
+                              aria-haspopup="dialog"
+                            >
+                              Read more
+                            </button>
+                          </span>
+                        ) : null}
+                      </>
+                    ) : (
+                      description
+                    )}
+                  </p>
+
+                  <p
+                    ref={descriptionMeasureRef}
+                    aria-hidden="true"
+                    className="invisible pointer-events-none absolute inset-x-3 top-2 text-[clamp(1rem,1.2vw,1.2rem)] font-semibold leading-[1.06] tracking-[-0.03em] text-white sm:inset-x-4 sm:top-4 lg:leading-[1.22] lg:tracking-[-0.01em]"
+                  >
+                    <span ref={descriptionMeasureTextRef} />
+                    <span
+                      ref={descriptionMeasureSuffixRef}
+                      className="whitespace-nowrap"
+                    >
+                      ...{" "}
+                      <span className="text-sm font-semibold">Read more</span>
+                    </span>
+                  </p>
+                </div>
+              </div>
+            )}
+
+            <Sheet open={descriptionOpen} onOpenChange={setDescriptionOpen}>
+              <SheetContent
+                side={useRightSheet ? "right" : "bottom"}
+                onCloseAutoFocus={(event) => {
+                  event.preventDefault();
+                  descriptionTriggerRef.current?.focus();
+                }}
+                className={cn(
+                  "z-50 gap-0 border-white/15 bg-[#0b0a1d] p-0 text-white",
+                  useRightSheet
+                    ? "h-dvh w-[min(480px,100vw)] sm:max-w-none"
+                    : "max-h-[78dvh] rounded-t-[28px] pb-[env(safe-area-inset-bottom)]",
+                )}
+              >
+                <SheetHeader className="shrink-0 border-b border-white/10 px-6 pb-4 pt-6 text-left">
+                  <SheetTitle className="pr-10 text-xl font-semibold tracking-[-0.02em] text-white">
+                    About this experience
+                  </SheetTitle>
+                </SheetHeader>
+                <SheetDescription className="min-h-0 flex-1 overflow-y-auto whitespace-pre-wrap px-6 py-5 text-sm leading-7 text-white/78 sm:text-base">
+                  {description}
+                </SheetDescription>
+              </SheetContent>
+            </Sheet>
 
             {featuredStory ? (
               <div className="pointer-events-none absolute inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+6.25rem)] z-30 px-5 sm:bottom-14 sm:px-8 lg:bottom-10 lg:px-10">
@@ -689,7 +908,7 @@ function ExperienceWhyHero({
           </div>
         </div>
 
-        <div className="hidden lg:flex lg:self-start lg:flex-col lg:gap-3">
+        <div className="hidden min-w-0 xl:flex xl:self-start xl:flex-col xl:gap-3">
           <HeroStatsCard
             label="Visible courses"
             value={data?.courseSummary.visibleCourseCount || 0}
