@@ -3,6 +3,7 @@ import Link from "next/link";
 import CommonNavbar from "@/components/commonNavbar";
 import SiteFooter from "@/components/home/site-footer";
 import { Mail, MapPin, ShieldCheck } from "lucide-react";
+import { PageFade } from "@/components/ui/page-fade";
 
 export const metadata: Metadata = {
   title: "Support | SQRATCH",
@@ -28,19 +29,19 @@ export default function SupportPage() {
 
         <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col px-6 pb-16 pt-28 sm:pt-32 lg:px-8">
           <div className="mx-auto max-w-3xl text-center">
-            <p className="text-sm uppercase tracking-[0.28em] text-white/45">
+            <PageFade as="p" variant="eyebrow" className="text-sm uppercase tracking-[0.28em] text-white/45">
               Support
-            </p>
-            <h1 className="mt-4 bg-[linear-gradient(145.55deg,#ECECEC_20.35%,rgba(236,236,236,0)_128.73%)] bg-clip-text text-[40px] font-bold leading-[105%] tracking-[-0.03em] text-transparent drop-shadow-[0_0_12px_rgba(236,236,236,0.45)] sm:text-[56px] lg:text-[64px]">
+            </PageFade>
+            <PageFade as="h1" variant="heading" className="mt-4 bg-[linear-gradient(145.55deg,#ECECEC_20.35%,rgba(236,236,236,0)_128.73%)] bg-clip-text text-[40px] font-bold leading-[105%] tracking-[-0.03em] text-transparent drop-shadow-[0_0_12px_rgba(236,236,236,0.45)] sm:text-[56px] lg:text-[64px]">
               Contact SQRATCH
-            </h1>
-            <p className="mt-4 text-[16px] leading-[160%] text-[#ECECEC]/75 sm:text-[18px]">
+            </PageFade>
+            <PageFade as="p" variant="supporting-text" className="mt-4 text-[16px] leading-[160%] text-[#ECECEC]/75 sm:text-[18px]">
               For account help, Shopify app questions, rewards, product links,
               or platform issues, contact SQRATCH support.
-            </p>
+            </PageFade>
           </div>
 
-          <section className="mt-10 rounded-[28px] border border-white/15 bg-white/6 p-6 shadow-[0_30px_90px_rgba(0,0,0,0.55)] backdrop-blur-xl sm:p-8 lg:p-10">
+          <PageFade as="section" variant="card" className="mt-10 rounded-[28px] border border-white/15 bg-white/6 p-6 shadow-[0_30px_90px_rgba(0,0,0,0.55)] backdrop-blur-xl sm:p-8 lg:p-10">
             <div className="grid gap-6 md:grid-cols-2">
               <div className="rounded-[22px] border border-white/10 bg-black/25 p-6">
                 <div className="flex items-center gap-3">
@@ -150,7 +151,7 @@ export default function SupportPage() {
                 </div>
               </div>
             </div>
-          </section>
+          </PageFade>
         </main>
 
         <SiteFooter />

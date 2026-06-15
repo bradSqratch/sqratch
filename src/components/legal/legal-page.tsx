@@ -5,6 +5,7 @@ import type {
   LegalDocument,
   LegalSection,
 } from "@/content/legal/types";
+import { PageFade } from "@/components/ui/page-fade";
 
 function renderText(text: string) {
   const parts = text.split(
@@ -164,13 +165,13 @@ export function LegalPage({ document }: { document: LegalDocument }) {
 
         <main className="mx-auto w-full max-w-5xl px-6 pb-16 pt-28 sm:pt-32 lg:px-8">
           <div className="text-center">
-            <p className="text-sm uppercase tracking-[0.28em] text-white/45">
+            <PageFade as="p" variant="eyebrow" className="text-sm uppercase tracking-[0.28em] text-white/45">
               {document.eyebrow}
-            </p>
-            <h1 className="mt-4 bg-[linear-gradient(145.55deg,#ECECEC_20.35%,rgba(236,236,236,0)_128.73%)] bg-clip-text text-[40px] font-bold leading-[105%] tracking-[-0.03em] text-transparent drop-shadow-[0_0_12px_rgba(236,236,236,0.45)] sm:text-[56px] lg:text-[64px]">
+            </PageFade>
+            <PageFade as="h1" variant="heading" className="mt-4 bg-[linear-gradient(145.55deg,#ECECEC_20.35%,rgba(236,236,236,0)_128.73%)] bg-clip-text text-[40px] font-bold leading-[105%] tracking-[-0.03em] text-transparent drop-shadow-[0_0_12px_rgba(236,236,236,0.45)] sm:text-[56px] lg:text-[64px]">
               {document.title}
-            </h1>
-            <div className="mt-5 flex flex-col items-center justify-center gap-2 text-sm text-white/58 sm:flex-row sm:gap-4">
+            </PageFade>
+            <PageFade variant="supporting-text" className="mt-5 flex flex-col items-center justify-center gap-2 text-sm text-white/58 sm:flex-row sm:gap-4">
               <span>Effective Date: {document.effectiveDate}</span>
               <span className="hidden text-white/25 sm:inline">•</span>
               <span>Company: {document.company}</span>
@@ -181,10 +182,10 @@ export function LegalPage({ document }: { document: LegalDocument }) {
               >
                 {document.contact}
               </a>
-            </div>
+            </PageFade>
           </div>
 
-          <article className="mt-10 rounded-[28px] border border-white/15 bg-white/6 p-5 shadow-[0_30px_90px_rgba(0,0,0,0.55)] backdrop-blur-xl sm:p-8 lg:p-10">
+          <PageFade as="article" variant="card" className="mt-10 rounded-[28px] border border-white/15 bg-white/6 p-5 shadow-[0_30px_90px_rgba(0,0,0,0.55)] backdrop-blur-xl sm:p-8 lg:p-10">
             <div className="mx-auto max-w-3xl">
               <div className="space-y-5 text-[15px] leading-7 text-white/76 sm:text-[16px] sm:leading-8">
                 {document.intro.map((paragraph) => (
@@ -217,7 +218,7 @@ export function LegalPage({ document }: { document: LegalDocument }) {
                 ))}
               </div>
             </div>
-          </article>
+          </PageFade>
         </main>
 
         <SiteFooter />

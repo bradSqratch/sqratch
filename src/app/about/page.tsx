@@ -4,6 +4,7 @@ import React from "react";
 import CommonNavbar from "@/components/commonNavbar";
 import SiteFooter from "@/components/home/site-footer";
 import { Card, CardContent } from "@/components/ui/card";
+import { PageFade } from "@/components/ui/page-fade";
 
 function Callout({ children }: { children: React.ReactNode }) {
   return (
@@ -35,7 +36,7 @@ export default function AboutPage() {
         <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col items-center px-6 pt-24 pb-12 sm:pt-28">
           {/* Hero */}
           <div className="w-full max-w-4xl text-center">
-            <h1
+            <PageFade as="h1" variant="heading"
               className="
                 mt-2
                 text-[40px] sm:text-[56px] lg:text-[64px]
@@ -46,25 +47,25 @@ export default function AboutPage() {
               "
             >
               About SQRATCH
-            </h1>
+            </PageFade>
 
-            <p className="mt-3 text-[16px] sm:text-[18px] leading-[160%] text-[#ECECEC]/75">
+            <PageFade as="p" variant="supporting-text" className="mt-3 text-[16px] sm:text-[18px] leading-[160%] text-[#ECECEC]/75">
               MORE THAN A LABEL
-            </p>
+            </PageFade>
           </div>
 
-          {/* Main glass card */}
-          <Card
-            className="
-              relative mt-10 w-full max-w-4xl
-              rounded-[28px]
-              border border-white/15
-              bg-white/6
-              backdrop-blur-xl
-              shadow-[0_30px_90px_rgba(0,0,0,0.55)]
-              overflow-hidden
-            "
-          >
+          <PageFade variant="card" className="mt-10 w-full max-w-4xl">
+            <Card
+              className="
+                relative w-full
+                rounded-[28px]
+                border border-white/15
+                bg-white/6
+                backdrop-blur-xl
+                shadow-[0_30px_90px_rgba(0,0,0,0.55)]
+                overflow-hidden
+              "
+            >
             <div className="pointer-events-none absolute inset-0 rounded-[28px] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]" />
             <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.05)_0%,rgba(255,255,255,0.02)_30%,rgba(0,0,0,0.00)_100%)]" />
 
@@ -138,7 +139,8 @@ export default function AboutPage() {
               </div>
               */}
             </CardContent>
-          </Card>
+            </Card>
+          </PageFade>
         </main>
 
         <SiteFooter />
