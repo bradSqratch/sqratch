@@ -130,8 +130,6 @@ export default function StickyWhatSqratchCreates() {
           <div className="lg:hidden mt-12 space-y-14">
             {steps.map((step, i) => {
               const square = i === 0 || i === 1;
-              const expanded = i >= 2;
-
               return (
                 <div key={i} className="space-y-6">
                   {/* Video */}

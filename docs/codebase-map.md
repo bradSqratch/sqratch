@@ -1,6 +1,6 @@
 # SQRATCH Codebase Map
 
-> Generated: 2026-06-09 · Next.js 15 · Prisma 7 · next-auth 4
+> Updated: 2026-06-15 · Next.js 15 · Prisma 7 · next-auth 4
 
 ---
 
@@ -14,8 +14,8 @@
 | **Auth / Session** | next-auth v4 (`credentials` provider + JWT strategy); custom `sqr_session` cookie for anonymous QR tracking |
 | **Database ORM** | Prisma 7 — PostgreSQL via Supabase (separate `DATABASE_URL` + `DIRECT_URL`) |
 | **File Storage** | Supabase Storage; lesson videos use signed browser-to-Supabase uploads (`docs/lesson-video-uploads.md`) |
-| **Email** | Resend API (`RESEND_API_KEY`); async queue via `EmailQueue` table + `/api/internal/email-worker` |
-| **Shopify** | Custom OAuth 2.0 flow (no Shopify Node SDK); Admin GraphQL API v2026-04 |
+| **Email** | SMTP via Mailtrap-compatible credentials; async queue via `EmailQueue` table + `/api/internal/email-worker` |
+| **Shopify** | Public embedded session-token/token-exchange flow plus legacy custom-app compatibility; Admin GraphQL API v2026-04 |
 | **Encryption** | AES-256-GCM via `APP_ENCRYPTION_KEY`; used to store Shopify access tokens at rest |
 | **Analytics** | Internal `AnalyticsEvent` table + Google Analytics (`NEXT_PUBLIC_GA_MEASUREMENT_ID`) |
 | **Deployment** | Assumed Vercel (env structure, `NEXTAUTH_URL`, `VERCEL` reference) |

@@ -19,7 +19,7 @@ export async function GET(req: NextRequest) {
     });
 
     return NextResponse.json({ name: campaign?.name ?? null });
-  } catch (e) {
+  } catch {
     return NextResponse.json({ name: null }, { status: 500 });
   }
 }

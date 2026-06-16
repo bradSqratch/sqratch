@@ -35,19 +35,7 @@ function requireCronSecret(req: Request): boolean {
 }
 
 export async function POST(req: Request) {
-  console.log("[reconcile-redemptions] HIT", {
-    ts: new Date().toISOString(),
-    url: req.url,
-    method: "POST",
-    hasHeader: !!req.headers.get("x-cron-secret"),
-    envHasSecret: !!process.env.CRON_SECRET,
-  });
-
   if (!requireCronSecret(req)) {
-    console.warn("[reconcile-redemptions] UNAUTHORIZED", {
-      hasHeader: !!req.headers.get("x-cron-secret"),
-      envHasSecret: !!process.env.CRON_SECRET,
-    });
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, Gift } from "lucide-react";
 import {
   fetchJson,
@@ -64,9 +64,9 @@ type ShopifyRewardRedemption = {
   status: string;
 };
 
-function formatDate(value: string | null) {
+function formatDate(value: string | null, nullLabel = "—"): string {
   if (!value) {
-    return "No deadline";
+    return nullLabel;
   }
 
   return new Intl.DateTimeFormat(undefined, {
@@ -98,6 +98,11 @@ export function ShopifyShopRewardCard({
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [hidden, setHidden] = useState(false);
+  // Stores the idempotency key for in-flight or uncertain redemptions, keyed
+  // by offerId. The same key is reused when retrying after a transport error.
+  // Cleared on confirmed success or confirmed terminal failure so that a new
+  // intentional redemption of the same offer gets a fresh key.
+  const pendingKeyByOffer = useRef<Record<string, string>>({});
 
   const brandOffers = useMemo(() => {
     if (!brandId) {
@@ -157,6 +162,14 @@ export function ShopifyShopRewardCard({
     setRedeemingOfferId(offer.id);
     setError(null);
 
+    // Reuse an existing pending key for this offer so that retries after
+    // transport errors / uncertain responses submit the same key and the server
+    // returns the already-committed redemption row instead of creating a new one.
+    if (!pendingKeyByOffer.current[offer.id]) {
+      pendingKeyByOffer.current[offer.id] = getIdempotencyKey();
+    }
+    const idempotencyKey = pendingKeyByOffer.current[offer.id];
+
     try {
       const redemption = await fetchJson<ShopifyRewardRedemption>(
         "/api/rewards/shopify/redeem",
@@ -167,11 +180,14 @@ export function ShopifyShopRewardCard({
           },
           body: JSON.stringify({
             offerId: offer.id,
-            idempotencyKey: getIdempotencyKey(),
+            idempotencyKey,
             experienceSlug,
           }),
         },
       );
+      // Confirmed success — clear the key so a future redemption of the same
+      // offer gets a fresh key (a new intent).
+      delete pendingKeyByOffer.current[offer.id];
       setIssuedCodeByOffer((current) => ({
         ...current,
         [offer.id]: redemption.code,
@@ -184,7 +200,14 @@ export function ShopifyShopRewardCard({
       );
       setOffers(data);
     } catch (redeemError) {
-      setError(getErrorMessage(redeemError, "Failed to redeem this reward."));
+      const message = getErrorMessage(redeemError, "Failed to redeem this reward.");
+      // Terminal server-side failures are not retryable with the same intent —
+      // clear the key so the next click starts a fresh redemption.
+      const terminalPhrases = ["Not enough SQRATCH points", "Points were refunded", "Idempotency key was already used"];
+      if (terminalPhrases.some((phrase) => message.includes(phrase))) {
+        delete pendingKeyByOffer.current[offer.id];
+      }
+      setError(message);
     } finally {
       setRedeemingOfferId(null);
     }
@@ -243,7 +266,7 @@ export function ShopifyShopRewardCard({
               <div className="mt-4 grid gap-2 text-sm text-white/65 sm:grid-cols-2">
                 <p>
                   <span className="text-white/40">Claim by:</span>{" "}
-                  {formatDate(offer.claimEndsAt)}
+                  {formatDate(offer.claimEndsAt, "Ongoing")}
                 </p>
                 <p>
                   <span className="text-white/40">Code expires:</span>{" "}
@@ -316,9 +339,9 @@ export function ShopifyShopRewardCard({
                 >
                   {redeemingOfferId === offer.id
                     ? "Redeeming..."
-                    : offer.eligibility.hasEnoughPoints
+                    : offer.computedAvailability.claimable
                       ? "Redeem"
-                      : "Not enough points"}
+                      : offer.computedAvailability.label}
                 </Button>
               </div>
             </div>

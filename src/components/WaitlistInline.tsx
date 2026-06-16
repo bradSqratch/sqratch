@@ -34,7 +34,7 @@ export default function WaitlistInline({
       }
       setIsSuccess(true);
       setEmail("");
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Waitlist error:", error);
       setErrorMsg("Something went wrong. Please try again.");
     } finally {
@@ -55,7 +55,7 @@ export default function WaitlistInline({
             className="flex h-11 w-auto min-w-45 items-center justify-center gap-2 rounded-full border border-green-500/30 bg-green-500/10 text-green-100 backdrop-blur-md px-6 shadow-[0_0_20px_rgba(34,197,94,0.2)]"
           >
             <Check className="h-4 w-4" />
-            <span className="font-medium">You're on the list!</span>
+            <span className="font-medium">You&apos;re on the list!</span>
           </motion.div>
         ) : (
           /* FORM STATE */

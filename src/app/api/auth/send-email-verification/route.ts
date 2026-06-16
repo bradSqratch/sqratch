@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { rateLimit, getRequestIp, rateLimitResponse } from "@/lib/rate-limit";
 
 function generateOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
@@ -7,6 +8,12 @@ function generateOtp() {
 
 export async function POST(request: NextRequest) {
   try {
+    const ip = getRequestIp(request);
+    const rl = rateLimit(`send-verify-email:${ip}`, 5, 15 * 60 * 1000);
+    if (!rl.success) {
+      return rateLimitResponse(rl.resetAt);
+    }
+
     const body = await request.json();
     const email = String(body?.email || "")
       .trim()
@@ -58,15 +65,8 @@ export async function POST(request: NextRequest) {
     });
 
     try {
-      const mailer = await import("@/helpers/mailer");
-
-      if (typeof (mailer as any).sendVerificationEmail === "function") {
-        await (mailer as any).sendVerificationEmail(email, otpCode);
-      } else {
-        console.warn(
-          "[auth/send-email-verification] sendVerificationEmail helper not found.",
-        );
-      }
+      const { sendVerificationEmail } = await import("@/helpers/mailer");
+      await sendVerificationEmail(email, otpCode);
     } catch (mailError) {
       console.warn(
         "[auth/send-email-verification] Failed to send verification email:",

@@ -16,7 +16,7 @@ function buildBatchName(baseName: string) {
   return `${baseName} ${new Date().toISOString().slice(0, 10)}`;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
     const brand = await getBrandAdminContext();
 
@@ -27,7 +27,16 @@ export async function GET() {
       );
     }
 
-    const [batches, campaigns, qrCodes] = await Promise.all([
+    const PAGE_SIZE = 100;
+    const MAX_PAGE_SIZE = 200;
+    const page = Math.max(1, parseInt(request.nextUrl.searchParams.get("page") ?? "1", 10) || 1);
+    const take = Math.min(
+      Math.max(1, parseInt(request.nextUrl.searchParams.get("pageSize") ?? String(PAGE_SIZE), 10) || PAGE_SIZE),
+      MAX_PAGE_SIZE,
+    );
+    const skip = (page - 1) * take;
+
+    const [batches, campaigns, qrCodes, qrCodeTotal] = await Promise.all([
       prisma.qRCodeBatch.findMany({
         where: {
           campaign: {
@@ -35,6 +44,7 @@ export async function GET() {
           },
         },
         orderBy: { createdAt: "desc" },
+        take: 500,
         select: {
           id: true,
           name: true,
@@ -58,6 +68,7 @@ export async function GET() {
           brandId: brand.membership.brand.id,
         },
         orderBy: { name: "asc" },
+        take: 500,
         select: {
           id: true,
           name: true,
@@ -71,6 +82,8 @@ export async function GET() {
           },
         },
         orderBy: { createdAt: "desc" },
+        take,
+        skip,
         select: {
           id: true,
           qrCodeData: true,
@@ -101,6 +114,7 @@ export async function GET() {
           },
         },
       }),
+      prisma.qRCode.count({ where: { campaign: { brandId: brand.membership.brand.id } } }),
     ]);
 
     return NextResponse.json({
@@ -128,6 +142,12 @@ export async function GET() {
             null,
           usedByEmail: qrCode.redeemedBy?.email || qrCode.email || null,
         })),
+        pagination: {
+          page,
+          pageSize: take,
+          total: qrCodeTotal,
+          totalPages: Math.ceil(qrCodeTotal / take),
+        },
       },
     });
   } catch (error) {

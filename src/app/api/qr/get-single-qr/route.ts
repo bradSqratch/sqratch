@@ -27,8 +27,8 @@ export async function GET(request: NextRequest) {
     }
 
     return NextResponse.json(qrCode);
-  } catch (error: any) {
+  } catch (error: unknown) {
     console.error("Error fetching single QR code:", error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: "Failed to fetch QR code." }, { status: 500 });
   }
 }

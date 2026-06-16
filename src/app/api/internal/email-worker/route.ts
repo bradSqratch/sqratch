@@ -9,32 +9,13 @@ function requireCronSecret(req: Request) {
 }
 
 export async function POST(req: Request) {
-  console.log("[email-worker] HIT", {
-    ts: new Date().toISOString(),
-    url: req.url,
-    method: "POST",
-    hasHeader: !!req.headers.get("x-cron-secret"),
-    envHasSecret: !!process.env.CRON_SECRET,
-  });
-
   if (!requireCronSecret(req)) {
-    console.warn("[email-worker] UNAUTHORIZED", {
-      hasHeader: !!req.headers.get("x-cron-secret"),
-      envHasSecret: !!process.env.CRON_SECRET,
-    });
-
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const now = new Date();
   const cutoffMinutes = 45;
   const cutoff = new Date(now.getTime() - cutoffMinutes * 60 * 1000); // 45 minutes ago
-
-  console.log("[email-worker] WINDOW", {
-    now: now.toISOString(),
-    cutoff: cutoff.toISOString(),
-    minutesAgo: cutoffMinutes,
-  });
 
   // pick a small batch each run (adjust later)
   const BATCH = 25;
@@ -48,13 +29,6 @@ export async function POST(req: Request) {
     },
     orderBy: { createdAt: "asc" },
     take: BATCH,
-  });
-
-  console.log("[email-worker] ELIGIBLE_JOBS", {
-    count: jobs.length,
-    firstId: jobs[0]?.id ?? null,
-    firstCreatedAt:
-      jobs[0]?.createdAt?.toISOString?.() ?? jobs[0]?.createdAt ?? null,
   });
 
   if (jobs.length === 0) {
@@ -75,17 +49,10 @@ export async function POST(req: Request) {
       },
     });
 
-    console.log("[email-worker] CLAIM_ATTEMPT", {
-      id: job.id,
-      claimed: claimed.count,
-    });
-
     if (claimed.count !== 1) continue; // someone else took it
 
     try {
       await sendWelcomeEmail(job.email);
-
-      console.log("[email-worker] SENT", { id: job.id, email: job.email });
 
       await prisma.emailQueue.update({
         where: { id: job.id },
@@ -96,19 +63,19 @@ export async function POST(req: Request) {
       });
 
       processed++;
-    } catch (e: any) {
+    } catch (error: unknown) {
+      const message =
+        error instanceof Error ? error.message : "Unknown email worker error";
       console.error("[email-worker] FAILED", {
         id: job.id,
-        email: job.email,
-        message: e?.message,
-        stack: e?.stack,
+        message,
       });
 
       await prisma.emailQueue.update({
         where: { id: job.id },
         data: {
           status: "FAILED",
-          lastError: e?.message?.slice(0, 2000) ?? "Unknown error",
+          lastError: message.slice(0, 2000),
         },
       });
     }

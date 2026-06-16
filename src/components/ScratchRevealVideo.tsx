@@ -82,7 +82,6 @@ export default function ScratchRevealVideo({
   function estimateScratchedPercent() {
     // Don’t do this every pointermove (it’s expensive). We’ll throttle it.
     const canvas = canvasRef.current!;
-    const ctx = canvas.getContext("2d")!;
     const { width, height } = canvas;
 
     // Sample a downscaled version for speed:

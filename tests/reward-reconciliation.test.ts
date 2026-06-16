@@ -23,9 +23,11 @@ import {
   reconcileStuckRedemptionsWithDeps,
   type ReconciliationDeps,
   type ReconciliationRow,
-  type ReconciliationSummary,
 } from "../src/lib/reward-reconciliation";
-import { ShopifyRewardRedemptionStatus } from "../src/lib/reward-redemption-state";
+import {
+  assertTransition,
+  ShopifyRewardRedemptionStatus,
+} from "../src/lib/reward-redemption-state";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -345,7 +347,7 @@ test("(e) below maxAttempts → NOT marked for manual review", () => {
 // ---------------------------------------------------------------------------
 
 test("(f) refundRow: P2002 on PointTransaction create → already_refunded, no double increment", async () => {
-  let pointsIncrementCalled = false;
+  const pointsIncrementCalled = false;
   const row = makeRow();
 
   const deps = makeDeps({
@@ -400,7 +402,6 @@ test("(f) two sequential refund attempts on same row → second returns already_
 
 test("(g) assertTransition POINTS_DEBITED → ISSUED does not throw", () => {
   // This is what completeToIssued depends on internally
-  const { assertTransition } = require("../src/lib/reward-redemption-state");
   assert.doesNotThrow(() => {
     assertTransition(
       ShopifyRewardRedemptionStatus.POINTS_DEBITED,
@@ -410,7 +411,6 @@ test("(g) assertTransition POINTS_DEBITED → ISSUED does not throw", () => {
 });
 
 test("(g) assertTransition ISSUED → ISSUED does not throw (idempotent same-state)", () => {
-  const { assertTransition } = require("../src/lib/reward-redemption-state");
   assert.doesNotThrow(() => {
     assertTransition(
       ShopifyRewardRedemptionStatus.ISSUED,
@@ -420,7 +420,6 @@ test("(g) assertTransition ISSUED → ISSUED does not throw (idempotent same-sta
 });
 
 test("(g) assertTransition REFUNDED → ISSUED throws (terminal)", () => {
-  const { assertTransition } = require("../src/lib/reward-redemption-state");
   assert.throws(
     () =>
       assertTransition(

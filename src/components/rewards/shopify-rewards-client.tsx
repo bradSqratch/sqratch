@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, ExternalLink, Gift, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
@@ -83,11 +83,12 @@ type ShopifyRewardRedemption = {
   discountAmountCents: number | null;
   discountPercentageBasisPoints: number | null;
   currencyCode: string;
+  shopUrl: string | null;
 };
 
-function formatDate(value: string | null) {
+function formatDate(value: string | null, nullLabel = "—"): string {
   if (!value) {
-    return "No deadline";
+    return nullLabel;
   }
 
   return new Intl.DateTimeFormat(undefined, {
@@ -109,7 +110,8 @@ function displayStatus(status: ShopifyRewardRedemption["status"]) {
   if (status === "ISSUED") return "Available";
   if (status === "USED") return "Used";
   if (status === "EXPIRED") return "Expired";
-  if (status === "FAILED" || status === "REFUNDED") return "Failed";
+  if (status === "FAILED") return "Failed";
+  if (status === "REFUNDED") return "Refunded — points returned";
   if (status === "CANCELLED") return "Cancelled";
   return "Processing";
 }
@@ -132,6 +134,11 @@ export function ShopifyRewardsClient({
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [issuedCodeByOffer, setIssuedCodeByOffer] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
+  // Stores the idempotency key for in-flight or uncertain redemptions, keyed
+  // by offerId. The same key is reused when retrying after a transport error.
+  // Cleared on confirmed success or confirmed terminal failure so that a new
+  // intentional redemption of the same offer gets a fresh key.
+  const pendingKeyByOffer = useRef<Record<string, string>>({});
 
   const pointsBalance = useMemo(() => {
     return offers[0]?.userPointsBalance ?? currentPoints;
@@ -169,6 +176,14 @@ export function ShopifyRewardsClient({
     setRedeemingOfferId(offer.id);
     setError(null);
 
+    // Reuse an existing pending key for this offer so that retries after
+    // transport errors / uncertain responses submit the same key and the server
+    // returns the already-committed redemption row instead of creating a new one.
+    if (!pendingKeyByOffer.current[offer.id]) {
+      pendingKeyByOffer.current[offer.id] = getIdempotencyKey();
+    }
+    const idempotencyKey = pendingKeyByOffer.current[offer.id];
+
     try {
       const redemption = await fetchJson<ShopifyRewardRedemption>(
         "/api/rewards/shopify/redeem",
@@ -179,10 +194,13 @@ export function ShopifyRewardsClient({
           },
           body: JSON.stringify({
             offerId: offer.id,
-            idempotencyKey: getIdempotencyKey(),
+            idempotencyKey,
           }),
         },
       );
+      // Confirmed success — clear the key so a future redemption of the same
+      // offer gets a fresh key (a new intent).
+      delete pendingKeyByOffer.current[offer.id];
       setIssuedCodeByOffer((current) => ({
         ...current,
         [offer.id]: redemption.code,
@@ -190,7 +208,15 @@ export function ShopifyRewardsClient({
       router.refresh();
       await loadRewards();
     } catch (redeemError) {
-      setError(getErrorMessage(redeemError, "Failed to redeem this reward."));
+      const message = getErrorMessage(redeemError, "Failed to redeem this reward.");
+      // Terminal server-side failures (insufficient points, refunded, etc.) are
+      // not retryable with the same intent — clear the key so the next click
+      // starts a fresh redemption.
+      const terminalPhrases = ["Not enough SQRATCH points", "Points were refunded", "Idempotency key was already used"];
+      if (terminalPhrases.some((phrase) => message.includes(phrase))) {
+        delete pendingKeyByOffer.current[offer.id];
+      }
+      setError(message);
     } finally {
       setRedeemingOfferId(null);
     }
@@ -296,7 +322,7 @@ export function ShopifyRewardsClient({
                       </p>
                       <p>
                         <span className="text-white/45">Claim by:</span>{" "}
-                        {formatDate(offer.claimEndsAt)}
+                        {formatDate(offer.claimEndsAt, "Ongoing")}
                       </p>
                       <p>
                         <span className="text-white/45">Code expires:</span>{" "}
@@ -362,9 +388,9 @@ export function ShopifyRewardsClient({
                         >
                           {redeemingOfferId === offer.id
                             ? "Redeeming..."
-                            : offer.eligibility.hasEnoughPoints
+                            : offer.computedAvailability.claimable
                               ? "Redeem"
-                              : "Not enough points"}
+                              : offer.computedAvailability.label}
                         </Button>
                       )}
                       {(primaryProduct?.productUrl || offer.shopUrl) ? (
@@ -459,12 +485,36 @@ export function ShopifyRewardsClient({
                             : "Refresh status"}
                         </Button>
                       ) : null}
+                      {redemption.shopUrl && redemption.status === "ISSUED" ? (
+                        <a
+                          href={redemption.shopUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="inline-flex items-center gap-2 rounded-full border border-white/15 px-4 py-2 text-sm text-white/75 transition-colors hover:bg-white/10"
+                        >
+                          <ExternalLink className="h-4 w-4" />
+                          Open store
+                        </a>
+                      ) : null}
                     </div>
                   </div>
 
+                  {(redemption.status === "PENDING" || redemption.status === "POINTS_DEBITED") ? (
+                    <div className="mt-3 rounded-2xl border border-amber-300/20 bg-amber-300/10 px-4 py-3 text-sm text-amber-100/80">
+                      This reward is still being processed. If it remains in this state for more
+                      than 30 minutes, please contact support — your points will not be lost.
+                    </div>
+                  ) : null}
+                  {redemption.status === "FAILED" ? (
+                    <div className="mt-3 rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-200/80">
+                      Reward generation failed. Your points should be returned automatically. If
+                      your balance has not been restored within a few minutes, contact support.
+                    </div>
+                  ) : null}
+
                   <div className="mt-4 grid gap-2 text-xs text-white/45 sm:grid-cols-3">
-                    <p>Issued: {formatDate(redemption.issuedAt)}</p>
-                    <p>Expiry: {formatDate(redemption.expiresAt)}</p>
+                    <p>Issued: {formatDate(redemption.issuedAt, "—")}</p>
+                    <p>Expiry: {formatDate(redemption.expiresAt, "No expiry")}</p>
                     <p>
                       Used:{" "}
                       {redemption.usedAt ? formatDate(redemption.usedAt) : "Not used"}

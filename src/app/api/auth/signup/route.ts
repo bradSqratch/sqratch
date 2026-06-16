@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import bcryptjs from "bcryptjs";
+import { rateLimit, getRequestIp, rateLimitResponse } from "@/lib/rate-limit";
 
 type RequestedRole = "CREATOR" | "BRAND" | null;
+
+function optionalString(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
 
 function generateOtp() {
   return String(Math.floor(100000 + Math.random() * 900000));
@@ -10,6 +15,12 @@ function generateOtp() {
 
 export async function POST(request: NextRequest) {
   try {
+    const ip = getRequestIp(request);
+    const rl = rateLimit(`signup:${ip}`, 5, 15 * 60 * 1000);
+    if (!rl.success) {
+      return rateLimitResponse(rl.resetAt);
+    }
+
     const body = await request.json();
 
     const {
@@ -23,7 +34,7 @@ export async function POST(request: NextRequest) {
       email?: string;
       password?: string;
       requestedRole?: RequestedRole;
-      application?: Record<string, any>;
+      application?: Record<string, unknown>;
     } = body;
 
     const normalizedEmail = String(email || "")
@@ -101,9 +112,9 @@ export async function POST(request: NextRequest) {
             userId: user.id,
             status: "PENDING",
             reason: JSON.stringify({
-              displayName: application?.displayName || cleanName,
-              websiteOrSocial: application?.websiteOrSocial || "",
-              shortReason: application?.shortReason || "",
+              displayName: optionalString(application?.displayName) || cleanName,
+              websiteOrSocial: optionalString(application?.websiteOrSocial),
+              shortReason: optionalString(application?.shortReason),
             }),
           },
         });
@@ -114,11 +125,11 @@ export async function POST(request: NextRequest) {
           data: {
             userId: user.id,
             status: "PENDING",
-            proposedBrandName: application?.brandName || null,
-            proposedStoreUrl: application?.website || null,
+            proposedBrandName: optionalString(application?.brandName) || null,
+            proposedStoreUrl: optionalString(application?.website) || null,
             reason: JSON.stringify({
-              shopifyDomain: application?.shopifyDomain || "",
-              shortGoal: application?.shortGoal || "",
+              shopifyDomain: optionalString(application?.shopifyDomain),
+              shortGoal: optionalString(application?.shortGoal),
             }),
           },
         });
@@ -142,14 +153,8 @@ export async function POST(request: NextRequest) {
     // Best-effort email sending.
     // Replace this with your exact mailer helper if needed.
     try {
-      const mailer = await import("@/helpers/mailer");
-      if (typeof (mailer as any).sendVerificationEmail === "function") {
-        await (mailer as any).sendVerificationEmail(normalizedEmail, otpCode);
-      } else {
-        console.warn(
-          "[auth/signup] sendVerificationEmail helper not found. OTP created but not emailed."
-        );
-      }
+      const { sendVerificationEmail } = await import("@/helpers/mailer");
+      await sendVerificationEmail(normalizedEmail, otpCode);
     } catch (mailError) {
       console.warn("[auth/signup] Failed to send verification email:", mailError);
     }

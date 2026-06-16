@@ -33,7 +33,7 @@ export async function PATCH(
   }
 
   const name = String(body.name || "").trim();
-  const email = String(body.email || "").trim();
+  const email = String(body.email || "").trim().toLowerCase();
   const role = body.role;
   const isActive =
     typeof body.isActive === "boolean" ? body.isActive : undefined;
@@ -168,14 +168,44 @@ export async function DELETE(
       select: { imageUrl: true },
     });
 
+    if (!user) {
+      return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+
+    const [campaignCount, qrCodeCount] = await Promise.all([
+      prisma.campaign.count({ where: { createdById: id } }),
+      prisma.qRCode.count({ where: { createdById: id } }),
+    ]);
+
+    if (campaignCount > 0 || qrCodeCount > 0) {
+      return NextResponse.json(
+        {
+          error:
+            "Cannot delete user: they have created campaigns or QR codes. Deactivate the account instead.",
+          blockers: { campaigns: campaignCount, qrCodes: qrCodeCount },
+        },
+        { status: 409 },
+      );
+    }
+
     await prisma.user.delete({ where: { id } });
 
-    if (user?.imageUrl) {
+    if (user.imageUrl) {
       await deleteStorageObjectByUrl(user.imageUrl);
     }
 
     return NextResponse.json({});
-  } catch {
+  } catch (err: unknown) {
+    const prismaErr = err as { code?: string };
+    if (prismaErr.code === "P2003") {
+      return NextResponse.json(
+        {
+          error:
+            "Cannot delete user: dependent records exist. Deactivate the account instead.",
+        },
+        { status: 409 },
+      );
+    }
     return NextResponse.json({ error: "Delete failed" }, { status: 500 });
   }
 }

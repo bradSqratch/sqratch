@@ -11,4 +11,5 @@ ADD COLUMN     "shopifyClientId" TEXT,
 ADD COLUMN     "shopifyGrantedScopes" TEXT,
 ADD COLUMN     "shopifyRefreshTokenEncrypted" TEXT,
 ADD COLUMN     "shopifyRefreshTokenExpiresAt" TIMESTAMP(3),
+ADD COLUMN     "shopifyTokenRefreshLockId" TEXT,
 ADD COLUMN     "shopifyTokenRefreshLockedUntil" TIMESTAMP(3);

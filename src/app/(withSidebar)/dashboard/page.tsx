@@ -37,7 +37,7 @@ type UserData = {
 type DashboardSummary = {
   role: Role;
   user: { name: string | null; email: string | null };
-  cards: Record<string, any>;
+  cards: Record<string, string | number | null>;
   recentActivity?: Array<{ label: string; detail?: string; at?: string }>;
 };
 
@@ -175,7 +175,7 @@ export default function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const role = (session?.user as any)?.role as Role | undefined;
+  const role = session?.user?.role as Role | undefined;
 
   const fetchStats = useCallback(async () => {
     try {
@@ -227,7 +227,7 @@ export default function DashboardPage() {
     setErrorMsg(null);
 
     // What we load depends on role
-    const jobs: Array<Promise<any>> = [];
+    const jobs: Array<Promise<void>> = [];
 
     // Always load summary for unified cards (all roles)
     jobs.push(fetchSummary());
@@ -257,7 +257,7 @@ export default function DashboardPage() {
   const handleExport = () => {
     if (!allTimeStats || !currentMonthStats) return;
 
-    const csvData: any[] = [];
+    const csvData: Array<Record<string, string | number>> = [];
 
     allTimeStats.campaignStats.forEach((c) => {
       csvData.push({

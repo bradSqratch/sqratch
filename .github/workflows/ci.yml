@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/sqratch
+      DIRECT_URL: postgresql://postgres:postgres@localhost:5432/sqratch
+      NEXTAUTH_SECRET: ci-only-nextauth-secret
+      NEXTAUTH_URL: http://localhost:3000
+      APP_ENCRYPTION_KEY: ci-only-encryption-key
+      SHOPIFY_API_KEY: ci-api-key
+      SHOPIFY_API_SECRET: ci-api-secret
+      SHOPIFY_APP_URL: https://example.test
+      SUPABASE_URL: https://example.supabase.co
+      SUPABASE_SERVICE_ROLE_KEY: ci-placeholder
+      MAILTRAP_HOST: localhost
+      MAILTRAP_USER: ci
+      MAILTRAP_PASSWORD: ci
+      ADMIN_EMAIL: ci@example.test
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npx prisma generate
+      - run: npx prisma validate
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build

@@ -33,6 +33,7 @@ import {
   isAccessTokenFresh,
   hasSufficientScopes,
   computeExpiresAt,
+  ownsRefreshLock,
   exchangeSessionTokenForOfflineToken,
   type ShopifyTokenResponse,
   type TokenEndpointFn,
@@ -437,10 +438,11 @@ describe("Token refresh decision logic", () => {
 
     // Simulate lock acquisition: only the first caller wins
     let lockHolder: string | null = null;
-    const lockExpiry = NOW_MS + 30_000;
+    const nowMs = NOW_MS;
+    const lockExpiry = nowMs + 30_000;
 
     function tryAcquireLock(callerId: string): boolean {
-      if (lockHolder === null || Date.now() > lockExpiry) {
+      if (lockHolder === null || nowMs > lockExpiry) {
         lockHolder = callerId;
         return true;
       }
@@ -467,6 +469,34 @@ describe("Token refresh decision logic", () => {
     // Caller 2 would wait and then read the updated token from DB
     // (simulated: it would see the new token after the lock is released)
     assert.equal(networkCallCount, 1, "Only one network refresh call made");
+  });
+
+  test("(c) refresh failure does not release another caller's lease", () => {
+    const firstLease = "brand-a:first";
+    const secondLease = "brand-a:second";
+
+    assert.equal(ownsRefreshLock(secondLease, firstLease), false);
+    assert.equal(ownsRefreshLock(secondLease, secondLease), true);
+  });
+
+  test("(c) unrelated shops use independent refresh leases", () => {
+    const leases = new Map<string, string>();
+    leases.set("brand-a", "lease-a");
+    leases.set("brand-b", "lease-b");
+
+    assert.equal(ownsRefreshLock(leases.get("brand-a"), "lease-a"), true);
+    assert.equal(ownsRefreshLock(leases.get("brand-b"), "lease-b"), true);
+  });
+
+  test("(c) stale writer cannot overwrite a rotated refresh token", () => {
+    const currentLease = "newer-lease";
+    const staleWriterLease = "expired-lease";
+
+    assert.equal(
+      ownsRefreshLock(currentLease, staleWriterLease),
+      false,
+      "A superseded refresh response must not be persisted",
+    );
   });
 });
 

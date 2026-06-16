@@ -1,0 +1,36 @@
+# Prisma Migration Runbook
+
+Do not run `migrate dev` against production. Current migration history is divergent: production records fourteen legacy migrations absent from this checkout. Reconcile that history with a reviewed baseline before `prisma migrate deploy`.
+
+## Pending Order
+
+1. `20260615113320_campaign_unlock_anon_unique`: additive partial unique index. Preflight duplicate anonymous unlocks; index creation can briefly lock writes.
+2. `20260615120000_shopify_expiring_tokens`: additive enum value, enum type, and token lifecycle columns, including refresh lease ownership. Enum additions are not trivially reversible.
+3. `20260615140000_redemption_reconciliation`: additive reconciliation columns/index plus an exactly-once point-ledger unique index. Preflight duplicate `(shopifyRewardRedemptionId, reason)` rows.
+4. `20260615150000_evidence_based_indexes`: additive query indexes. Check `pg_indexes` for equivalent indexes first.
+
+## Preflight
+
+```sql
+SELECT "campaignId", "anonKey", count(*)
+FROM "CampaignUnlock"
+WHERE "anonKey" IS NOT NULL AND "userId" IS NULL
+GROUP BY 1, 2 HAVING count(*) > 1;
+
+SELECT "shopifyRewardRedemptionId", "reason", count(*)
+FROM "PointTransaction"
+WHERE "shopifyRewardRedemptionId" IS NOT NULL
+GROUP BY 1, 2 HAVING count(*) > 1;
+
+SELECT tablename, indexname, indexdef
+FROM pg_indexes
+WHERE tablename IN ('CampaignUnlock','ShopifyRewardRedemption','PointTransaction','EmailVerificationToken','TokenStore');
+```
+
+Also inspect `information_schema.columns` and `pg_type` for equivalent manually created token/reconciliation fields and enums.
+
+## Deployment
+
+Back up first, pause reward issuance briefly, run reviewed preflight SQL, then run `npx prisma migrate deploy` once from a controlled release job. Validate schema, token refresh, QR unlock deduplication, redemption/refund, and query plans afterward.
+
+Rollback is manual: indexes and additive columns can be dropped after application rollback, but enum values are not safely removed in place. Never delete point or redemption history.

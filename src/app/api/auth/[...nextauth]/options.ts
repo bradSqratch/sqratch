@@ -87,22 +87,60 @@ export const authOptions: NextAuthOptions = {
   },
   session: {
     strategy: "jwt",
+    maxAge: 60 * 60 * 24 * 7,
+  },
+  jwt: {
+    maxAge: 60 * 60 * 24 * 7,
   },
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
-        // Add custom fields to the token
+        // Initial sign-in: write all fields into the token.
         token.id = user.id?.toString();
         token.role = user.role;
         token.isEmailVerified = user.isEmailVerified;
         token.email = user.email;
         token.imageUrl = user.imageUrl;
-        token.isTemporary = user.isTemporary; // Add isTemporary field
+        token.isTemporary = user.isTemporary;
+        token.isActive = true; // newly signed-in users are always active
+        token.roleCheckedAt = Date.now();
+      } else {
+        // Subsequent requests: re-read role and isActive every 5 minutes.
+        const RECHECK_MS = 5 * 60 * 1000;
+        const lastCheck = (token.roleCheckedAt as number | undefined) ?? 0;
+        if (Date.now() - lastCheck > RECHECK_MS) {
+          try {
+            const fresh = await prisma.user.findUnique({
+              where: { id: token.id as string },
+              select: { role: true, isActive: true, isEmailVerified: true },
+            });
+            if (!fresh || !fresh.isActive) {
+              token.accountInvalidated = true;
+              delete token.id;
+              delete token.role;
+              delete token.email;
+              return token;
+            }
+            delete token.accountInvalidated;
+            token.role = fresh.role;
+            token.isActive = fresh.isActive;
+            token.isEmailVerified = fresh.isEmailVerified;
+            token.roleCheckedAt = Date.now();
+          } catch {
+            // On DB error keep the existing token rather than signing out.
+          }
+        }
       }
       return token;
     },
     async session({ session, token }) {
-      // Add custom fields to the session
+      if (token.accountInvalidated) {
+        return {
+          ...session,
+          user: undefined,
+        };
+      }
+
       if (token) {
         session.user.id = token.id;
         session.user.role = token.role;
@@ -110,7 +148,9 @@ export const authOptions: NextAuthOptions = {
         session.user.email = token.email;
         session.user.imageUrl = token.imageUrl;
         session.user.image = token.imageUrl || session.user.image;
-        session.user.isTemporary = token.isTemporary; // Add isTemporary field
+        session.user.isTemporary = token.isTemporary;
+        // isActive is checked server-side; expose it so middleware can gate routes
+        (session.user as Record<string, unknown>).isActive = token.isActive;
       }
       return session;
     },

@@ -43,7 +43,7 @@ export async function GET(
     }
 
     return NextResponse.json({ status: qr.status }, { status: 200 });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { status: "INVALID", error: "Server error." },
       { status: 500 }

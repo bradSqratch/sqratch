@@ -7,25 +7,13 @@ import {
   getShopifyShopCurrency,
 } from "@/lib/shopify";
 import { slugifyValue } from "@/lib/brand-auth";
+import {
+  parsePendingInstall,
+  type PendingInstallPayload,
+} from "@/lib/pending-install";
 
-type PendingInstallPayload = {
-  shop: string;
-  encryptedToken: string;
-};
-
-function parsePendingInstall(token: string): PendingInstallPayload | null {
-  try {
-    const payload = JSON.parse(token) as PendingInstallPayload;
-
-    if (!payload.shop || !payload.encryptedToken) {
-      return null;
-    }
-
-    return payload;
-  } catch {
-    return null;
-  }
-}
+// Re-export types for backward compatibility if needed elsewhere
+export type { PendingInstallPayload };
 
 async function getAuthorizedBrandMemberships(userId: string) {
   return prisma.brandMember.findMany({
@@ -261,11 +249,20 @@ export async function POST(
       brandId = created.id;
     }
 
+    // ---------------------------------------------------------------------------
+    // Query currency — resolve the encrypted access token for the API call
+    // regardless of which token shape is in use.
+    // ---------------------------------------------------------------------------
+    const encryptedTokenForCurrency =
+      payload.shape === "EXPIRING"
+        ? payload.encryptedAccessToken
+        : payload.encryptedToken;
+
     let shopifyCurrencyCode: string | null = null;
     try {
       const currencyResult = await getShopifyShopCurrency({
         shopDomain: payload.shop,
-        encryptedToken: payload.encryptedToken,
+        encryptedToken: encryptedTokenForCurrency,
       });
       if (currencyResult.ok) {
         shopifyCurrencyCode = currencyResult.currencyCode;
@@ -276,17 +273,40 @@ export async function POST(
       console.error("[shopify/installations/[installId]] Error querying currency:", err);
     }
 
+    // ---------------------------------------------------------------------------
+    // Build the brand update data object branched by token shape.
+    // ---------------------------------------------------------------------------
+    const sharedBrandData = {
+      shopifyShopDomain: payload.shop,
+      shopifyInstalledAt: new Date(),
+      shopifyDisconnectedAt: null,
+      shopifyUninstalledAt: null,
+      shopifyConnectionStatus: "CONNECTED" as const,
+      shopifyCurrencyCode,
+    };
+
+    const tokenBrandData =
+      payload.shape === "EXPIRING"
+        ? {
+            shopifyAdminAccessTokenEncrypted: payload.encryptedAccessToken,
+            shopifyAccessTokenExpiresAt: new Date(payload.accessTokenExpiresAt),
+            shopifyRefreshTokenEncrypted: payload.encryptedRefreshToken,
+            shopifyRefreshTokenExpiresAt: new Date(payload.refreshTokenExpiresAt),
+            shopifyGrantedScopes: payload.grantedScopes,
+            shopifyClientId: payload.clientId,
+            shopifyAuthMode: "EXPIRING_OFFLINE" as const,
+          }
+        : {
+            shopifyAdminAccessTokenEncrypted: payload.encryptedToken,
+            shopifyAuthMode: "LEGACY_OFFLINE" as const,
+          };
+
     const brand = await prisma.$transaction(async (tx) => {
       const updated = await tx.brand.update({
         where: { id: brandId },
         data: {
-          shopifyShopDomain: payload.shop,
-          shopifyAdminAccessTokenEncrypted: payload.encryptedToken,
-          shopifyInstalledAt: new Date(),
-          shopifyDisconnectedAt: null,
-          shopifyUninstalledAt: null,
-          shopifyConnectionStatus: "CONNECTED",
-          shopifyCurrencyCode,
+          ...sharedBrandData,
+          ...tokenBrandData,
         },
         select: {
           id: true,
@@ -302,6 +322,13 @@ export async function POST(
       });
 
       return updated;
+    });
+
+    // Sanitized state-transition log — no tokens, no encrypted values.
+    console.log("[shopify/installations]", {
+      transition: "LINKED",
+      authMode: payload.shape === "EXPIRING" ? "EXPIRING_OFFLINE" : "LEGACY_OFFLINE",
+      shop: payload.shop,
     });
 
     // Webhook subscriptions are declared via shopify.app.toml config and managed

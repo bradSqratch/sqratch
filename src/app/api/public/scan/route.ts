@@ -1,14 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import { awardQrScanPoint } from "@/lib/points";
 import { redeemQrCodeForUser } from "@/lib/qr-redemption";
+import { rateLimit, getRequestIp, rateLimitResponse } from "@/lib/rate-limit";
 
 const COOKIE_NAME = "sqr_session";
 
 export async function POST(request: NextRequest) {
   try {
+    const ip = getRequestIp(request);
+    const rl = rateLimit(`scan:${ip}`, 60, 60 * 60 * 1000);
+    if (!rl.success) {
+      return rateLimitResponse(rl.resetAt);
+    }
+
     const session = await getServerSession(authOptions);
     const body = await request.json();
     const qrCodeData = String(body?.qrCodeData || "").trim();
@@ -165,13 +173,25 @@ export async function POST(request: NextRequest) {
       });
 
       if (!existingAnonUnlock) {
-        await prisma.campaignUnlock.create({
-          data: {
-            campaignId: qr.campaign.id,
-            anonKey: sessionId,
-            qrCodeId: qr.id,
-          },
-        });
+        try {
+          await prisma.campaignUnlock.create({
+            data: {
+              campaignId: qr.campaign.id,
+              anonKey: sessionId,
+              qrCodeId: qr.id,
+            },
+          });
+        } catch (err) {
+          // P2002: concurrent scan already created this anon unlock — idempotent
+          if (
+            !(
+              err instanceof Prisma.PrismaClientKnownRequestError &&
+              err.code === "P2002"
+            )
+          ) {
+            throw err;
+          }
+        }
       }
     }
 

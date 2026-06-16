@@ -1,27 +1,29 @@
 // src/app/api/waitlist/route.ts
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { headers } from "next/headers"; // Import headers to get IP/User-Agent
+import { rateLimit, getRequestIp, rateLimitResponse } from "@/lib/rate-limit";
 
 function isValidEmail(email: string) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
 }
 
 export async function POST(req: Request) {
+  const ip = getRequestIp(req as { headers: { get(name: string): string | null } });
+  const rl = rateLimit(`waitlist:${ip}`, 10, 60 * 60 * 1000);
+  if (!rl.success) {
+    return rateLimitResponse(rl.resetAt);
+  }
+
   let body: { email?: string; source?: string };
 
   try {
     body = await req.json();
-  } catch (error) {
+  } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
   const email = (body.email || "").trim().toLowerCase();
   const source = body.source?.trim() || "homepage";
-
-  // Get Request Headers
-  const headerList = await headers();
-  const ip = headerList.get("x-forwarded-for") || "unknown";
 
   if (!email) {
     return NextResponse.json({ error: "Email required" }, { status: 400 });
@@ -42,8 +44,13 @@ export async function POST(req: Request) {
     });
 
     return NextResponse.json({ data: created }, { status: 201 });
-  } catch (err: any) {
-    if (err?.code === "P2002") {
+  } catch (error: unknown) {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      error.code === "P2002"
+    ) {
       // 200 OK because the user's intent (joining) is satisfied, even if they were already there.
       return NextResponse.json(
         { message: "You are already on the list!" },
@@ -51,7 +58,7 @@ export async function POST(req: Request) {
       );
     }
 
-    console.error("Waitlist API Error:", err); // Log the actual error for debugging
+    console.error("Waitlist API Error:", error);
     return NextResponse.json({ error: "Server error" }, { status: 500 });
   }
 }

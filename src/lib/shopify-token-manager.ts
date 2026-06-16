@@ -14,6 +14,7 @@
  */
 
 import { encryptSecret, decryptSecret } from "@/lib/crypto";
+import { randomUUID } from "node:crypto";
 
 // ---------------------------------------------------------------------------
 // Lazy DB access — import only when a DB operation is needed
@@ -104,6 +105,13 @@ export function computeExpiresAt(expiresInSeconds: number, nowMs: number = Date.
   return new Date(nowMs + expiresInSeconds * 1000);
 }
 
+export function ownsRefreshLock(
+  currentLockId: string | null | undefined,
+  expectedLockId: string,
+): boolean {
+  return currentLockId === expectedLockId;
+}
+
 // ---------------------------------------------------------------------------
 // Default Shopify token endpoint implementation
 // ---------------------------------------------------------------------------
@@ -162,6 +170,7 @@ type BrandShopifyFields = {
   shopifyGrantedScopes: string | null;
   shopifyClientId: string | null;
   shopifyTokenRefreshLockedUntil: Date | null;
+  shopifyTokenRefreshLockId: string | null;
 };
 
 /**
@@ -183,18 +192,23 @@ async function reloadBrand(brandId: string): Promise<BrandShopifyFields | null> 
       shopifyGrantedScopes: true,
       shopifyClientId: true,
       shopifyTokenRefreshLockedUntil: true,
+      shopifyTokenRefreshLockId: true,
     },
   });
 }
 
 /**
  * Attempts to acquire the refresh lock via a compare-and-swap UPDATE.
- * Returns true if this process now holds the lock, false otherwise.
+ * Returns the unique lease ID if this process now holds the lock, otherwise null.
  */
-async function acquireRefreshLock(brandId: string, nowMs: number): Promise<boolean> {
+async function acquireRefreshLock(
+  brandId: string,
+  nowMs: number,
+): Promise<string | null> {
   const db = await getDb();
   const now = new Date(nowMs);
   const lockUntil = new Date(nowMs + LOCK_DURATION_MS);
+  const lockId = randomUUID();
 
   const result = await db.brand.updateMany({
     where: {
@@ -204,20 +218,29 @@ async function acquireRefreshLock(brandId: string, nowMs: number): Promise<boole
         { shopifyTokenRefreshLockedUntil: { lt: now } },
       ],
     },
-    data: { shopifyTokenRefreshLockedUntil: lockUntil },
+    data: {
+      shopifyTokenRefreshLockedUntil: lockUntil,
+      shopifyTokenRefreshLockId: lockId,
+    },
   });
 
-  return result.count === 1;
+  return result.count === 1 ? lockId : null;
 }
 
 /**
  * Releases the refresh lock (sets it to null).
  */
-async function releaseRefreshLock(brandId: string): Promise<void> {
+async function releaseRefreshLock(
+  brandId: string,
+  lockId: string,
+): Promise<void> {
   const db = await getDb();
-  await db.brand.update({
-    where: { id: brandId },
-    data: { shopifyTokenRefreshLockedUntil: null },
+  await db.brand.updateMany({
+    where: { id: brandId, shopifyTokenRefreshLockId: lockId },
+    data: {
+      shopifyTokenRefreshLockedUntil: null,
+      shopifyTokenRefreshLockId: null,
+    },
   });
 }
 
@@ -245,10 +268,13 @@ async function waitForLockHolder(brandId: string): Promise<BrandShopifyFields | 
  * Persists a failed-reconnect state: marks the brand REQUIRES_RECONNECT
  * and clears all token fields atomically.
  */
-async function markRequiresReconnect(brandId: string): Promise<void> {
+async function markRequiresReconnect(
+  brandId: string,
+  lockId: string,
+): Promise<boolean> {
   const db = await getDb();
-  await db.brand.update({
-    where: { id: brandId },
+  const result = await db.brand.updateMany({
+    where: { id: brandId, shopifyTokenRefreshLockId: lockId },
     data: {
       shopifyConnectionStatus: "REQUIRES_RECONNECT",
       shopifyAdminAccessTokenEncrypted: null,
@@ -256,8 +282,10 @@ async function markRequiresReconnect(brandId: string): Promise<void> {
       shopifyAccessTokenExpiresAt: null,
       shopifyRefreshTokenExpiresAt: null,
       shopifyTokenRefreshLockedUntil: null,
+      shopifyTokenRefreshLockId: null,
     },
   });
+  return result.count === 1;
 }
 
 /**
@@ -268,6 +296,7 @@ async function markRequiresReconnect(brandId: string): Promise<void> {
  */
 async function performTokenRefresh(
   brand: BrandShopifyFields,
+  lockId: string,
   tokenEndpoint: TokenEndpointFn,
 ): Promise<string> {
   if (!brand.shopifyRefreshTokenEncrypted) {
@@ -314,8 +343,11 @@ async function performTokenRefresh(
   const encryptedRefreshToken = encryptSecret(newRefreshToken);
 
   const db = await getDb();
-  await db.brand.update({
-    where: { id: brand.id },
+  const result = await db.brand.updateMany({
+    where: {
+      id: brand.id,
+      shopifyTokenRefreshLockId: lockId,
+    },
     data: {
       shopifyAdminAccessTokenEncrypted: encryptedAccessToken,
       shopifyAccessTokenExpiresAt: computeExpiresAt(tokenResponse.expires_in, nowMs),
@@ -327,10 +359,39 @@ async function performTokenRefresh(
       shopifyGrantedScopes: tokenResponse.scope,
       shopifyConnectionStatus: "CONNECTED",
       shopifyTokenRefreshLockedUntil: null, // release lock atomically with save
+      shopifyTokenRefreshLockId: null,
     },
   });
 
+  if (result.count !== 1) {
+    throw Object.assign(new Error("Shopify token refresh lease was superseded"), {
+      staleWriter: true,
+      permanent: false,
+    });
+  }
+
   return newAccessToken;
+}
+
+async function readWinnerToken(
+  brandId: string,
+): Promise<GetValidAccessTokenResult | null> {
+  const current = await reloadBrand(brandId);
+  if (!current) return { ok: false, reason: "NOT_CONNECTED" };
+  if (current.shopifyConnectionStatus === "REQUIRES_RECONNECT") {
+    return { ok: false, reason: "NEEDS_RECONNECT" };
+  }
+  if (
+    current.shopifyAdminAccessTokenEncrypted &&
+    current.shopifyAccessTokenExpiresAt &&
+    current.shopifyAccessTokenExpiresAt.getTime() > Date.now()
+  ) {
+    return {
+      ok: true,
+      accessToken: decryptSecret(current.shopifyAdminAccessTokenEncrypted),
+    };
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -403,9 +464,9 @@ export async function getValidAccessToken(
   }
 
   // Token is stale — need to refresh. Try to acquire the DB compare-and-swap lock.
-  const gotLock = await acquireRefreshLock(brand.id, nowMs);
+  const lockId = await acquireRefreshLock(brand.id, nowMs);
 
-  if (!gotLock) {
+  if (!lockId) {
     // Another request holds the lock — wait for it to finish
     const refreshedBrand = await waitForLockHolder(brand.id);
     if (!refreshedBrand) {
@@ -436,8 +497,8 @@ export async function getValidAccessToken(
     const recheck = await reloadBrand(brand.id);
     if (!recheck) return { ok: false, reason: "NOT_CONNECTED" };
 
-    const gotLock2 = await acquireRefreshLock(recheck.id, Date.now());
-    if (!gotLock2) {
+    const takeoverLockId = await acquireRefreshLock(recheck.id, Date.now());
+    if (!takeoverLockId) {
       // Could not acquire lock again — give up gracefully
       if (
         recheck.shopifyAdminAccessTokenEncrypted &&
@@ -451,31 +512,67 @@ export async function getValidAccessToken(
     }
 
     try {
-      const accessToken = await performTokenRefresh(recheck, tokenEndpoint);
+      const accessToken = await performTokenRefresh(
+        recheck,
+        takeoverLockId,
+        tokenEndpoint,
+      );
       return { ok: true, accessToken };
     } catch (err: unknown) {
+      if ((err as { staleWriter?: boolean }).staleWriter) {
+        return (
+          (await readWinnerToken(recheck.id)) ?? {
+            ok: false,
+            reason: "NEEDS_RECONNECT",
+          }
+        );
+      }
       const isPermanent = (err as { permanent?: boolean }).permanent ?? false;
       if (isPermanent) {
-        await markRequiresReconnect(recheck.id);
+        const marked = await markRequiresReconnect(recheck.id, takeoverLockId);
+        if (!marked) {
+          return (
+            (await readWinnerToken(recheck.id)) ?? {
+              ok: false,
+              reason: "NEEDS_RECONNECT",
+            }
+          );
+        }
         return { ok: false, reason: "NEEDS_RECONNECT" };
       }
-      await releaseRefreshLock(recheck.id).catch(() => {});
+      await releaseRefreshLock(recheck.id, takeoverLockId).catch(() => {});
       return { ok: false, reason: "NEEDS_RECONNECT" };
     }
   }
 
   // We hold the lock — perform the refresh
   try {
-    const accessToken = await performTokenRefresh(brand, tokenEndpoint);
+    const accessToken = await performTokenRefresh(brand, lockId, tokenEndpoint);
     return { ok: true, accessToken };
   } catch (err: unknown) {
+    if ((err as { staleWriter?: boolean }).staleWriter) {
+      return (
+        (await readWinnerToken(brand.id)) ?? {
+          ok: false,
+          reason: "NEEDS_RECONNECT",
+        }
+      );
+    }
     const isPermanent = (err as { permanent?: boolean }).permanent ?? false;
     if (isPermanent) {
-      await markRequiresReconnect(brand.id);
+      const marked = await markRequiresReconnect(brand.id, lockId);
+      if (!marked) {
+        return (
+          (await readWinnerToken(brand.id)) ?? {
+            ok: false,
+            reason: "NEEDS_RECONNECT",
+          }
+        );
+      }
       return { ok: false, reason: "NEEDS_RECONNECT" };
     }
     // Transient failure — release lock and return a soft error
-    await releaseRefreshLock(brand.id).catch(() => {});
+    await releaseRefreshLock(brand.id, lockId).catch(() => {});
     return { ok: false, reason: "NEEDS_RECONNECT" };
   }
 }

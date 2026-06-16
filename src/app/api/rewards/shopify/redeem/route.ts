@@ -16,6 +16,7 @@ import {
   getRewardOfferAvailability,
   validateCurrencyMatch,
 } from "@/lib/reward-offers";
+import { idempotencyMatch } from "@/lib/redemption-idempotency";
 
 function cleanIdempotencyKey(value: unknown) {
   const key = String(value || "").trim();
@@ -124,13 +125,26 @@ export async function POST(request: NextRequest) {
     });
 
     if (existing) {
-      if (existing.userId !== session.user.id) {
+      // NOTE: experienceSlug / campaignId are request-time routing context that
+      // is NOT persisted on the redemption row.  offerId is the authoritative
+      // binding identity for idempotency purposes.
+      const matchResult = idempotencyMatch(
+        { userId: existing.userId, offerId: existing.offerId },
+        { userId: session.user.id, offerId },
+      );
+      if (matchResult === "USER_MISMATCH") {
         return NextResponse.json(
           { error: "Idempotency key is already in use." },
           { status: 409 },
         );
       }
-
+      if (matchResult === "OFFER_MISMATCH") {
+        return NextResponse.json(
+          { error: "Idempotency key was already used for a different reward." },
+          { status: 409 },
+        );
+      }
+      // MATCH — safe to return the cached redemption
       return NextResponse.json({ data: serializeRedemption(existing) });
     }
 
@@ -250,7 +264,6 @@ export async function POST(request: NextRequest) {
     }
 
     const issuedAt = new Date();
-    const code = generateRewardCode(offer.codePrefix);
     let reservation: {
       redemption: ShopifyRewardRedemption;
       discountConfig: {
@@ -270,161 +283,208 @@ export async function POST(request: NextRequest) {
       };
     } | null = null;
 
-    try {
-      reservation = await prisma.$transaction(async (tx) => {
-        const currentOffer = await tx.brandRewardOffer.findUnique({
-          where: {
-            id: offer.id,
-          },
-          include: {
-            brand: {
-              select: {
-                name: true,
-                shopifyConnectionStatus: true,
-                shopifyShopDomain: true,
-                shopifyAdminAccessTokenEncrypted: true,
-                shopifyCurrencyCode: true,
+    // Bounded retry loop: up to 3 attempts to handle the rare case where the
+    // generated `code` collides with an existing unique value (P2002 on `code`).
+    // Because the Serializable transaction rolls back atomically on any error —
+    // including a P2002 — the debit and PointTransaction writes are fully
+    // unwound before we ever reach the catch block, so retrying with a freshly
+    // generated code cannot double-debit the user.
+    // A P2002 on `idempotencyKey` (concurrent same-key request) is NOT retried
+    // here — it falls through to the concurrent-existing lookup below so that
+    // the already-committed row can be returned to the caller.
+    const MAX_CODE_COLLISION_RETRIES = 3;
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < MAX_CODE_COLLISION_RETRIES; attempt++) {
+      // Regenerate the code on every attempt so a collision gets a fresh value.
+      const code = generateRewardCode(offer.codePrefix);
+
+      try {
+        reservation = await prisma.$transaction(async (tx) => {
+          const currentOffer = await tx.brandRewardOffer.findUnique({
+            where: {
+              id: offer.id,
+            },
+            include: {
+              brand: {
+                select: {
+                  name: true,
+                  shopifyConnectionStatus: true,
+                  shopifyShopDomain: true,
+                  shopifyAdminAccessTokenEncrypted: true,
+                  shopifyCurrencyCode: true,
+                },
+              },
+              products: {
+                select: {
+                  shopifyProductGid: true,
+                },
               },
             },
-            products: {
-              select: {
-                shopifyProductGid: true,
+          });
+
+          if (!currentOffer || currentOffer.brandId !== offer.brandId) {
+            throw new Error("OFFER_NOT_AVAILABLE");
+          }
+
+          const shopifyConnected =
+            currentOffer.brand.shopifyConnectionStatus === "CONNECTED" &&
+            Boolean(currentOffer.brand.shopifyShopDomain) &&
+            Boolean(currentOffer.brand.shopifyAdminAccessTokenEncrypted);
+
+          if (!shopifyConnected) {
+            throw new Error("SHOPIFY_DISCONNECTED");
+          }
+
+          if (!currentOffer.brand.shopifyCurrencyCode) {
+            throw new Error("CURRENCY_MISMATCH");
+          }
+          validateCurrencyMatch(currentOffer.currencyCode, currentOffer.brand.shopifyCurrencyCode);
+
+          const [currentTotalRedemptions, currentUserRedemptions] =
+            await Promise.all([
+              currentOffer.maxTotalRedemptions
+                ? tx.shopifyRewardRedemption.count({
+                    where: {
+                      offerId: currentOffer.id,
+                      status: {
+                        in: [...CLAIM_COUNTED_REDEMPTION_STATUSES],
+                      },
+                    },
+                  })
+                : Promise.resolve(0),
+              currentOffer.maxRedemptionsPerUser
+                ? tx.shopifyRewardRedemption.count({
+                    where: {
+                      offerId: currentOffer.id,
+                      userId: user.id,
+                      status: {
+                        in: [...CLAIM_COUNTED_REDEMPTION_STATUSES],
+                      },
+                    },
+                  })
+                : Promise.resolve(0),
+            ]);
+          const currentAvailability = getRewardOfferAvailability({
+            offer: currentOffer,
+            shopifyConnected,
+            totalRedemptions: currentTotalRedemptions,
+            userRedemptions: currentUserRedemptions,
+            now: issuedAt,
+          });
+
+          if (!currentAvailability.claimable) {
+            throw new Error(currentAvailability.status);
+          }
+
+          const createdRedemption = await tx.shopifyRewardRedemption.create({
+            data: {
+              userId: user.id,
+              brandId: currentOffer.brandId,
+              offerId: currentOffer.id,
+              idempotencyKey,
+              code,
+              status: "PENDING",
+              pointsCost: currentOffer.pointsCost,
+              discountType: currentOffer.discountType,
+              discountAmountCents: currentOffer.discountAmountCents,
+              discountPercentageBasisPoints: currentOffer.discountPercentageBasisPoints,
+              currencyCode: currentOffer.currencyCode,
+              shopifyShopDomain: currentOffer.brand.shopifyShopDomain!,
+            },
+          });
+
+          const debit = await tx.user.updateMany({
+            where: {
+              id: user.id,
+              points: {
+                gte: currentOffer.pointsCost,
               },
             },
-          },
-        });
-
-        if (!currentOffer || currentOffer.brandId !== offer.brandId) {
-          throw new Error("OFFER_NOT_AVAILABLE");
-        }
-
-        const shopifyConnected =
-          currentOffer.brand.shopifyConnectionStatus === "CONNECTED" &&
-          Boolean(currentOffer.brand.shopifyShopDomain) &&
-          Boolean(currentOffer.brand.shopifyAdminAccessTokenEncrypted);
-
-        if (!shopifyConnected) {
-          throw new Error("SHOPIFY_DISCONNECTED");
-        }
-
-        if (!currentOffer.brand.shopifyCurrencyCode) {
-          throw new Error("CURRENCY_MISMATCH");
-        }
-        validateCurrencyMatch(currentOffer.currencyCode, currentOffer.brand.shopifyCurrencyCode);
-
-        const [currentTotalRedemptions, currentUserRedemptions] =
-          await Promise.all([
-            currentOffer.maxTotalRedemptions
-              ? tx.shopifyRewardRedemption.count({
-                  where: {
-                    offerId: currentOffer.id,
-                    status: {
-                      in: [...CLAIM_COUNTED_REDEMPTION_STATUSES],
-                    },
-                  },
-                })
-              : Promise.resolve(0),
-            currentOffer.maxRedemptionsPerUser
-              ? tx.shopifyRewardRedemption.count({
-                  where: {
-                    offerId: currentOffer.id,
-                    userId: user.id,
-                    status: {
-                      in: [...CLAIM_COUNTED_REDEMPTION_STATUSES],
-                    },
-                  },
-                })
-              : Promise.resolve(0),
-          ]);
-        const currentAvailability = getRewardOfferAvailability({
-          offer: currentOffer,
-          shopifyConnected,
-          totalRedemptions: currentTotalRedemptions,
-          userRedemptions: currentUserRedemptions,
-          now: issuedAt,
-        });
-
-        if (!currentAvailability.claimable) {
-          throw new Error(currentAvailability.status);
-        }
-
-        const createdRedemption = await tx.shopifyRewardRedemption.create({
-          data: {
-            userId: user.id,
-            brandId: currentOffer.brandId,
-            offerId: currentOffer.id,
-            idempotencyKey,
-            code,
-            status: "PENDING",
-            pointsCost: currentOffer.pointsCost,
-            discountType: currentOffer.discountType,
-            discountAmountCents: currentOffer.discountAmountCents,
-            discountPercentageBasisPoints: currentOffer.discountPercentageBasisPoints,
-            currencyCode: currentOffer.currencyCode,
-            shopifyShopDomain: currentOffer.brand.shopifyShopDomain!,
-          },
-        });
-
-        const debit = await tx.user.updateMany({
-          where: {
-            id: user.id,
-            points: {
-              gte: currentOffer.pointsCost,
+            data: {
+              points: {
+                decrement: currentOffer.pointsCost,
+              },
             },
-          },
-          data: {
-            points: {
-              decrement: currentOffer.pointsCost,
+          });
+
+          if (debit.count !== 1) {
+            throw new Error("INSUFFICIENT_POINTS");
+          }
+
+          await tx.pointTransaction.create({
+            data: {
+              userId: user.id,
+              points: -currentOffer.pointsCost,
+              reason: "SHOPIFY_REWARD_REDEMPTION",
+              shopifyRewardRedemptionId: createdRedemption.id,
             },
-          },
+          });
+
+          const debitedRedemption = await tx.shopifyRewardRedemption.update({
+            where: {
+              id: createdRedemption.id,
+            },
+            data: {
+              status: "POINTS_DEBITED",
+            },
+          });
+
+          return {
+            redemption: debitedRedemption,
+            discountConfig: {
+              brandName: currentOffer.brand.name,
+              shopDomain: currentOffer.brand.shopifyShopDomain!,
+              brandId: currentOffer.brandId,
+              title: currentOffer.title,
+              codeValidDays: currentOffer.codeValidDays,
+              discountType: currentOffer.discountType,
+              discountAmountCents: currentOffer.discountAmountCents,
+              discountPercentageBasisPoints: currentOffer.discountPercentageBasisPoints,
+              currencyCode: currentOffer.currencyCode,
+              appliesTo: currentOffer.appliesTo,
+              shopifyProductGids: currentOffer.products.map(
+                (product) => product.shopifyProductGid,
+              ),
+              minimumSubtotalCents: currentOffer.minimumSubtotalCents,
+              pointsCost: currentOffer.pointsCost,
+            },
+          };
+        }, {
+          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
         });
 
-        if (debit.count !== 1) {
-          throw new Error("INSUFFICIENT_POINTS");
+        // Transaction succeeded — exit the retry loop.
+        break;
+      } catch (error) {
+        // Retry ONLY for a P2002 unique violation on the `code` field.
+        // A P2002 on `idempotencyKey` means a concurrent request already
+        // committed a row for this key — do NOT retry; fall through to the
+        // concurrent-existing lookup so that row can be returned to the caller.
+        if (
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === "P2002"
+        ) {
+          const target = (error.meta?.target as string[] | undefined) ?? [];
+          if (target.includes("code") && !target.includes("idempotencyKey")) {
+            // Code collision — safe to retry because the Serializable TX rolled
+            // back fully: no debit or PointTransaction was persisted.
+            lastError = error;
+            continue;
+          }
         }
 
-        await tx.pointTransaction.create({
-          data: {
-            userId: user.id,
-            points: -currentOffer.pointsCost,
-            reason: "SHOPIFY_REWARD_REDEMPTION",
-            shopifyRewardRedemptionId: createdRedemption.id,
-          },
-        });
+        // For every other error (known domain errors, P2034 serialization
+        // failure, idempotencyKey P2002, etc.) drop out of the loop and handle
+        // below.
+        lastError = error;
+        break;
+      }
+    }
 
-        const debitedRedemption = await tx.shopifyRewardRedemption.update({
-          where: {
-            id: createdRedemption.id,
-          },
-          data: {
-            status: "POINTS_DEBITED",
-          },
-        });
+    if (!reservation) {
+      const error = lastError;
 
-        return {
-          redemption: debitedRedemption,
-          discountConfig: {
-            brandName: currentOffer.brand.name,
-            shopDomain: currentOffer.brand.shopifyShopDomain!,
-            brandId: currentOffer.brandId,
-            title: currentOffer.title,
-            codeValidDays: currentOffer.codeValidDays,
-            discountType: currentOffer.discountType,
-            discountAmountCents: currentOffer.discountAmountCents,
-            discountPercentageBasisPoints: currentOffer.discountPercentageBasisPoints,
-            currencyCode: currentOffer.currencyCode,
-            appliesTo: currentOffer.appliesTo,
-            shopifyProductGids: currentOffer.products.map(
-              (product) => product.shopifyProductGid,
-            ),
-            minimumSubtotalCents: currentOffer.minimumSubtotalCents,
-            pointsCost: currentOffer.pointsCost,
-          },
-        };
-      }, {
-        isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-      });
-    } catch (error) {
       const concurrentExisting =
         await prisma.shopifyRewardRedemption.findUnique({
           where: {
@@ -432,10 +492,18 @@ export async function POST(request: NextRequest) {
           },
         });
 
-      if (concurrentExisting?.userId === user.id) {
-        return NextResponse.json({
-          data: serializeRedemption(concurrentExisting),
-        });
+      if (concurrentExisting) {
+        // Apply the same user+offer match check as the upfront existing-key
+        // branch to guard against returning a row for the wrong offer.
+        const concurrentMatch = idempotencyMatch(
+          { userId: concurrentExisting.userId, offerId: concurrentExisting.offerId },
+          { userId: user.id, offerId },
+        );
+        if (concurrentMatch === "MATCH") {
+          return NextResponse.json({
+            data: serializeRedemption(concurrentExisting),
+          });
+        }
       }
 
       const errorCode = error instanceof Error ? error.message : "";
@@ -459,13 +527,6 @@ export async function POST(request: NextRequest) {
       }
 
       console.error("[rewards/shopify/redeem][reserve] Error:", error);
-      return NextResponse.json(
-        { error: "Failed to reserve this reward." },
-        { status: 500 },
-      );
-    }
-
-    if (!reservation) {
       return NextResponse.json(
         { error: "Failed to reserve this reward." },
         { status: 500 },

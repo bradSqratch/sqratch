@@ -1,5 +1,7 @@
 # Shopify GDPR Data Inventory
 
+Public-app installations also store encrypted expiring-token lifecycle fields and per-Brand refresh lease metadata. Disconnect or uninstall clears active credential material while preserving the shop domain and non-sensitive audit/history records.
+
 **Purpose:** Ground the implementation of the three mandatory Shopify compliance webhooks:
 `customers/data_request`, `customers/redact`, and `shop/redact`.
 

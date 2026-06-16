@@ -86,7 +86,7 @@ async function main() {
   console.log("✅ External user created:", redeemer.email);
 
   // 5. Mark QR code as redeemed
-  const redeemedQRCode = await prisma.qRCode.update({
+  await prisma.qRCode.update({
     where: { id: qr1.id },
     data: {
       status: QRStatus.USED,
@@ -98,7 +98,7 @@ async function main() {
   console.log("✅ QR code redeemed by:", redeemer.email);
 
   // 6. Create Email Verification Token
-  const token = await prisma.emailVerificationToken.create({
+  await prisma.emailVerificationToken.create({
     data: {
       userId: redeemer.id,
       emailVerifyToken: "verify-token-001",

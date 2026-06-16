@@ -21,6 +21,7 @@ export async function GET() {
             id: true,
             name: true,
             logoUrl: true,
+            shopifyShopDomain: true,
           },
         },
         offer: {
@@ -53,6 +54,9 @@ export async function GET() {
         shopifyDiscountStatus: redemption.shopifyDiscountStatus,
         shopifyAsyncUsageCount: redemption.shopifyAsyncUsageCount,
         shopifyLastCheckedAt: redemption.shopifyLastCheckedAt,
+        shopUrl: redemption.brand.shopifyShopDomain
+          ? `https://${redemption.brand.shopifyShopDomain}`
+          : null,
       })),
     });
   } catch (error) {

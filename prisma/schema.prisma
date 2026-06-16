@@ -105,6 +105,7 @@ model Brand {
   shopifyGrantedScopes             String?
   shopifyClientId                  String?
   shopifyTokenRefreshLockedUntil   DateTime?
+  shopifyTokenRefreshLockId        String?
   shopifyAuthMode                  ShopifyAuthMode           @default(LEGACY_OFFLINE)
   analyticsEvents                  AnalyticsEvent[]
   members                          BrandMember[]
@@ -490,6 +491,8 @@ model ShopifyRewardRedemption {
   @@index([offerId])
   @@index([status])
   @@index([status, needsManualReview, createdAt])
+  @@index([offerId, status])
+  @@index([offerId, userId, status])
 }
 
 model UserSession {
@@ -558,6 +561,8 @@ model EmailVerificationToken {
   expires          DateTime
   createdAt        DateTime @default(now())
   user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model TokenStore {
@@ -565,6 +570,8 @@ model TokenStore {
   token     String
   expiresAt DateTime
   updatedAt DateTime @updatedAt
+
+  @@index([expiresAt])
 }
 
 model EmailQueue {

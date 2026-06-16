@@ -25,6 +25,10 @@ export async function POST(request: NextRequest) {
   if (!session || session.user.role !== "ADMIN") {
     return NextResponse.json({ error: "Admins only" }, { status: 403 });
   }
+  const userId = session.user.id;
+  if (!userId) {
+    return NextResponse.json({ error: "Invalid session" }, { status: 401 });
+  }
 
   let body: { campaignId: string; quantity: number };
   try {
@@ -54,13 +58,29 @@ export async function POST(request: NextRequest) {
   const campaignFolder = `qrCodes/${campaign.name.replace(/[\\/]/g, "-")}`;
   try {
     await cloudinary.api.create_folder(campaignFolder);
-  } catch (e: any) {
-    if (!(e?.http_code === 409 || /already exists/i.test(e?.message || ""))) {
-      console.warn("Cloudinary create_folder warning:", e?.message || e);
+  } catch (error: unknown) {
+    const cloudinaryError = error as { http_code?: number; message?: string };
+    if (
+      !(
+        cloudinaryError.http_code === 409 ||
+        /already exists/i.test(cloudinaryError.message || "")
+      )
+    ) {
+      console.warn(
+        "Cloudinary create_folder warning:",
+        cloudinaryError.message || error,
+      );
     }
   }
 
-  const createdQRs: any[] = [];
+  type CreatedQr = {
+    qrCodeData: string;
+    qrCodeUrl: string;
+    status: "NEW";
+    campaignId: string;
+    createdById: string;
+  };
+  const createdQRs: CreatedQr[] = [];
   const batchSize = 50; // adjust for speed vs Cloudinary limits
 
   for (let i = 0; i < quantity; i += batchSize) {
@@ -93,7 +113,7 @@ export async function POST(request: NextRequest) {
             qrCodeUrl: uploadResult.secure_url,
             status: "NEW" as const,
             campaignId,
-            createdById: session.user.id,
+            createdById: userId,
           };
         } catch (err) {
           console.error("QR/Cloudinary error:", err);
@@ -105,8 +125,11 @@ export async function POST(request: NextRequest) {
     const results = await Promise.allSettled(batch);
 
     const validRecords = results
-      .filter((r) => r.status === "fulfilled" && r.value !== null)
-      .map((r: any) => r.value);
+      .filter(
+        (result): result is PromiseFulfilledResult<CreatedQr> =>
+          result.status === "fulfilled" && result.value !== null,
+      )
+      .map((result) => result.value);
 
     if (validRecords.length > 0) {
       try {

@@ -1,8 +1,6 @@
 import type { Metadata } from "next";
 import Script from "next/script";
-import { Button } from "@/components/ui/button";
-import prisma from "@/lib/prisma";
-import { isValidShopDomain } from "@/lib/shopify";
+import EmbeddedShellClient from "./embedded-shell-client";
 
 const shopifyApiKey =
   process.env.NEXT_PUBLIC_SHOPIFY_API_KEY || process.env.SHOPIFY_API_KEY || "";
@@ -32,37 +30,16 @@ export default async function ShopifyShellPage({
   searchParams: ShopifyShellSearchParams;
 }) {
   const params = await searchParams;
-  const rawShop = firstParam(params.shop);
-  const shop = String(rawShop || "")
-    .trim()
-    .toLowerCase();
-  const validShop = isValidShopDomain(shop);
-  const linkedBrand = validShop
-    ? await prisma.brand.findFirst({
-        where: {
-          shopifyShopDomain: shop,
-        },
-        select: {
-          name: true,
-          shopifyAdminAccessTokenEncrypted: true,
-          shopifyDisconnectedAt: true,
-          shopifyUninstalledAt: true,
-        },
-      })
-    : null;
-  const isConnected = Boolean(linkedBrand?.shopifyAdminAccessTokenEncrypted);
-  const continueHref = isConnected
-    ? "/dashboard/brand/shopify"
-    : validShop
-      ? `/api/shopify/oauth/start?shop=${encodeURIComponent(shop)}`
-      : "";
-  const connectionLabel = isConnected
-    ? `Connected to SQRATCH Brand${linkedBrand?.name ? `: ${linkedBrand.name}` : ""}`
-    : linkedBrand?.shopifyUninstalledAt
-      ? "Uninstalled from Shopify"
-      : linkedBrand?.shopifyDisconnectedAt
-        ? "Disconnected from SQRATCH"
-        : "Not connected";
+  // rawShop is passed to the client ONLY as an input to /api/shopify/oauth/start
+  // for the non-embedded / custom-distribution fallback.
+  // It is NEVER used to look up or display connection state.
+  const rawShop = firstParam(params.shop) ?? "";
+
+  // Server-read env — passed as a prop so the client component never reads
+  // server-only environment variables directly.
+  const distribution =
+    (process.env.SHOPIFY_APP_DISTRIBUTION as "public" | "custom" | undefined) ??
+    "public";
 
   return (
     <main className="min-h-screen bg-[#050714] px-5 py-8 text-white">
@@ -88,62 +65,11 @@ export default async function ShopifyShellPage({
             </p>
           </div>
 
-          <div className="space-y-6 px-7 py-7">
-            <div className="grid gap-3 sm:grid-cols-2">
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <p className="text-xs uppercase tracking-[0.2em] text-white/45">
-                  Shopify store
-                </p>
-                <p className="mt-2 text-sm text-white/85">
-                  {validShop ? shop : "No valid shop context detected"}
-                </p>
-              </div>
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <p className="text-xs uppercase tracking-[0.2em] text-white/45">
-                  SQRATCH link
-                </p>
-                <p className="mt-2 text-sm text-white/85">
-                  {connectionLabel}
-                </p>
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-[#b7a6e8]/20 bg-[#b7a6e8]/10 p-5 text-sm leading-6 text-white/75">
-              Link this Shopify store to a SQRATCH Brand account so Brand Admins
-              can display Shopify products inside SQRATCH experiences. SQRATCH
-              only requests product read access.
-            </div>
-
-            {!validShop ? (
-              <p className="rounded-2xl border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                Shopify did not provide a valid shop domain. Reopen SQRATCH from
-                Shopify Admin or install with a valid `*.myshopify.com` store.
-              </p>
-            ) : null}
-
-            <div className="flex flex-wrap gap-3">
-              {validShop ? (
-                <Button
-                  asChild
-                  className="rounded-full border border-white bg-white px-5 text-black hover:bg-white/90"
-                >
-                  <a href={continueHref} target="_top">
-                    {isConnected
-                      ? "Open SQRATCH Shopify dashboard"
-                      : "Continue to SQRATCH linking"}
-                  </a>
-                </Button>
-              ) : (
-                <Button
-                  type="button"
-                  disabled
-                  className="rounded-full border border-white bg-white px-5 text-black hover:bg-white/90"
-                >
-                  Continue to SQRATCH linking
-                </Button>
-              )}
-            </div>
-          </div>
+          <EmbeddedShellClient
+            shopifyApiKey={shopifyApiKey}
+            distribution={distribution}
+            rawShop={rawShop}
+          />
         </div>
       </section>
     </main>

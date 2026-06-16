@@ -3,6 +3,7 @@ import prisma from "@/lib/prisma";
 import { cookies } from "next/headers";
 import { awardQrScanPoint } from "@/lib/points";
 import { redeemQrCodeForUser } from "@/lib/qr-redemption";
+import { collectAnonMergeKeys } from "@/lib/anon-merge-keys";
 
 async function mergeAnonymousCampaignUnlocks(
   userId: string,
@@ -180,18 +181,23 @@ export async function POST(request: NextRequest) {
     });
 
     const cookieStore = await cookies();
-    const anonKeyFromCookie =
-      cookieStore.get("anonKey")?.value ||
-      cookieStore.get("deviceKey")?.value ||
-      null;
-
+    const anonKeyFromCookie = cookieStore.get("anonKey")?.value || null;
+    const deviceKeyCookie = cookieStore.get("deviceKey")?.value || null;
     const sessionIdFromCookie = cookieStore.get("sqr_session")?.value || null;
 
-    await mergeAnonymousCampaignUnlocks(
-      user.id,
-      user.email,
-      bodyAnonKey || anonKeyFromCookie || sessionIdFromCookie,
-    );
+    // Merge ALL distinct anon-key candidates so that a stale legacy cookie
+    // (anonKey / deviceKey) does NOT shadow the active sqr_session.  The active
+    // session is always processed first.
+    const mergeKeys = collectAnonMergeKeys({
+      bodyAnonKey,
+      anonKeyCookie: anonKeyFromCookie,
+      deviceKeyCookie,
+      sessionCookie: sessionIdFromCookie,
+    });
+
+    for (const key of mergeKeys) {
+      await mergeAnonymousCampaignUnlocks(user.id, user.email, key);
+    }
 
     if (sessionIdFromCookie) {
       await prisma.userSession.updateMany({

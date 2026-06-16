@@ -83,15 +83,30 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // Add point for successful QR scan and invite sent (DIRECT_INVITE case)
+      // Add point and create CampaignUnlock for successful QR scan (DIRECT_INVITE case)
       try {
+        const existingUnlock = await prisma.campaignUnlock.findFirst({
+          where: { campaignId: qr.campaignId, userId: existingUser.id },
+          select: { id: true },
+        });
+
+        if (!existingUnlock) {
+          await prisma.campaignUnlock.create({
+            data: {
+              campaignId: qr.campaignId,
+              userId: existingUser.id,
+              qrCodeId: qr.id,
+            },
+          });
+        }
+
         await awardQrScanPoint({
           userId: existingUser.id,
           qrCodeId: qr.id,
         });
       } catch (pointError) {
-        console.error("Failed to add points:", pointError);
-        // Don't fail the request if points can't be added
+        console.error("Failed to add points/unlock:", pointError);
+        // Don't fail the request if points or unlock can't be added
       }
 
       return NextResponse.json(
@@ -140,15 +155,24 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Add point for successful QR scan and invite sent (new user case)
+    // Add point and create CampaignUnlock for successful QR scan (new user case)
     try {
+      // New user — no prior unlock can exist, create unconditionally
+      await prisma.campaignUnlock.create({
+        data: {
+          campaignId: qr.campaignId,
+          userId: user.id,
+          qrCodeId: qr.id,
+        },
+      });
+
       await awardQrScanPoint({
         userId: user.id,
         qrCodeId: qr.id,
       });
     } catch (pointError) {
-      console.error("Failed to add points:", pointError);
-      // Don't fail the request if points can't be added
+      console.error("Failed to add points/unlock:", pointError);
+      // Don't fail the request if points or unlock can't be added
     }
 
     return NextResponse.json(

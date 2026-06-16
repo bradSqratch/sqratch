@@ -7,9 +7,16 @@ import {
   isValidShopDomain,
   SHOPIFY_SCOPES,
 } from "@/lib/shopify";
+import { rateLimit, getRequestIp, rateLimitResponse } from "@/lib/rate-limit";
 
 export async function GET(request: NextRequest) {
   try {
+    const ip = getRequestIp(request);
+    const rl = rateLimit(`shopify-oauth-start:${ip}`, 20, 60 * 60 * 1000);
+    if (!rl.success) {
+      return rateLimitResponse(rl.resetAt);
+    }
+
     const apiKey = process.env.SHOPIFY_API_KEY;
 
     if (!apiKey) {

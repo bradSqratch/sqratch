@@ -92,9 +92,18 @@ export async function PATCH(
     ).replace(/[\\/]/g, "-")}`;
     try {
       await cloudinary.api.create_folder(targetFolder);
-    } catch (e: any) {
-      if (!(e?.http_code === 409 || /already exists/i.test(e?.message || ""))) {
-        console.warn("Cloudinary create_folder warning:", e?.message || e);
+    } catch (error: unknown) {
+      const cloudinaryError = error as { http_code?: number; message?: string };
+      if (
+        !(
+          cloudinaryError.http_code === 409 ||
+          /already exists/i.test(cloudinaryError.message || "")
+        )
+      ) {
+        console.warn(
+          "Cloudinary create_folder warning:",
+          cloudinaryError.message || error,
+        );
       }
     }
 

@@ -21,7 +21,7 @@ export function DashboardTopbarUser() {
   }
 
   const name = session.user?.name ?? "SQRATCH";
-  const role = (session.user as any)?.role as string | undefined;
+  const role = session.user?.role;
 
   return (
     <div className="flex items-center gap-3 text-white/85">

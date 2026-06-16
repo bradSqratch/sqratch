@@ -1,5 +1,7 @@
 # Shopify Production Testing
 
+The public app uses App Bridge session tokens, token exchange, and expiring offline-token rotation. The custom test app remains `LEGACY_OFFLINE`. Use the matching TOML and credentials for each flow; never mix public and custom client IDs.
+
 This app uses Shopify only to read and display products in SQRATCH. Store ownership is tied to `Brand`, not the individual user.
 
 ## Vercel Environment Variables

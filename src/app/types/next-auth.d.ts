@@ -33,5 +33,6 @@ declare module "next-auth/jwt" {
     role?: "USER" | "CREATOR" | "BRAND_ADMIN" | "ADMIN" | "EXTERNAL";
     imageUrl?: string | null;
     isTemporary?: boolean;
+    accountInvalidated?: boolean;
   }
 }
