@@ -4,10 +4,13 @@ import assert from "node:assert/strict";
 import { test, describe, before } from "node:test";
 import { NextRequest } from "next/server";
 
+/** Narrowest type that satisfies node:test mock.method's overloads. */
+type MockableDelegate = Record<string, (...args: unknown[]) => unknown>;
+
 interface MockedPrismaClient {
-  campaign: Record<string, unknown>;
-  qRCode: Record<string, unknown>;
-  qRCodeBatch: Record<string, unknown>;
+  campaign: MockableDelegate;
+  qRCode: MockableDelegate;
+  qRCodeBatch: MockableDelegate;
 }
 
 let prisma: MockedPrismaClient;
@@ -25,25 +28,25 @@ before(async () => {
 
   // Unwrap Prisma Client proxy properties so node:test mock.method can see them
   prisma.campaign = {
-    findFirst: prismaModule.campaign.findFirst,
-    findUnique: prismaModule.campaign.findUnique,
-    findMany: prismaModule.campaign.findMany,
-    count: prismaModule.campaign.count,
+    findFirst: prismaModule.campaign.findFirst as MockableDelegate[string],
+    findUnique: prismaModule.campaign.findUnique as MockableDelegate[string],
+    findMany: prismaModule.campaign.findMany as MockableDelegate[string],
+    count: prismaModule.campaign.count as MockableDelegate[string],
   };
 
   prisma.qRCode = {
-    findFirst: prismaModule.qRCode.findFirst,
-    findUnique: prismaModule.qRCode.findUnique,
-    findMany: prismaModule.qRCode.findMany,
-    count: prismaModule.qRCode.count,
+    findFirst: prismaModule.qRCode.findFirst as MockableDelegate[string],
+    findUnique: prismaModule.qRCode.findUnique as MockableDelegate[string],
+    findMany: prismaModule.qRCode.findMany as MockableDelegate[string],
+    count: prismaModule.qRCode.count as MockableDelegate[string],
   };
 
   prisma.qRCodeBatch = {
-    findFirst: prismaModule.qRCodeBatch.findFirst,
-    findUnique: prismaModule.qRCodeBatch.findUnique,
-    findMany: prismaModule.qRCodeBatch.findMany,
-    count: prismaModule.qRCodeBatch.count,
-    update: prismaModule.qRCodeBatch.update,
+    findFirst: prismaModule.qRCodeBatch.findFirst as MockableDelegate[string],
+    findUnique: prismaModule.qRCodeBatch.findUnique as MockableDelegate[string],
+    findMany: prismaModule.qRCodeBatch.findMany as MockableDelegate[string],
+    count: prismaModule.qRCodeBatch.count as MockableDelegate[string],
+    update: prismaModule.qRCodeBatch.update as MockableDelegate[string],
   };
 
   getAllQRs = (await import("../src/app/api/qr/get-all-qrcodes/route")).GET;

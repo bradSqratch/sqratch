@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import { encryptSecret } from "@/lib/crypto";
 import prisma from "@/lib/prisma";
 import {
@@ -13,6 +11,7 @@ import {
   SHOPIFY_SCOPES,
   isValidShopDomain,
 } from "@/lib/shopify";
+import { resolveSession } from "@/lib/auth-session";
 
 export async function GET(request: NextRequest) {
   try {
@@ -166,7 +165,7 @@ export async function GET(request: NextRequest) {
     });
 
     const installPath = `/dashboard/brand/shopify/install?install=${encodeURIComponent(pendingInstallId)}`;
-    const session = await getServerSession(authOptions);
+    const session = await resolveSession();
     const redirectUrl = session?.user?.id
       ? new URL(installPath, request.nextUrl.origin)
       : new URL(

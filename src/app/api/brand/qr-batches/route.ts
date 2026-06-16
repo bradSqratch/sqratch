@@ -1,15 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/options";
-import { getBrandAdminContext, BrandAdminContext } from "@/lib/brand-auth";
+import { resolveSession, resolveBrandAdminContext } from "@/lib/auth-session";
 
-interface CustomSession {
-  user: {
-    id: string;
-    role: string;
-    email?: string | null;
-  };
-}
 import prisma from "@/lib/prisma";
 import QRCode from "qrcode";
 import { v2 as cloudinary } from "cloudinary";
@@ -28,13 +19,7 @@ function buildBatchName(baseName: string) {
 
 export async function GET(request: NextRequest) {
   try {
-    const g = globalThis as Record<string, unknown>;
-    const mockSession = g.__mockGetServerSession as
-      | ((options: unknown) => Promise<CustomSession | null>)
-      | undefined;
-    const session = mockSession
-      ? await mockSession(authOptions)
-      : ((await getServerSession(authOptions)) as CustomSession | null);
+    const session = await resolveSession();
 
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -42,10 +27,7 @@ export async function GET(request: NextRequest) {
 
     let brandId: string | null = null;
     if (session.user.role === "BRAND_ADMIN") {
-      const mockBrandCtx = g.__mockGetBrandAdminContext as (() => Promise<BrandAdminContext | null>) | undefined;
-      const brand = mockBrandCtx
-        ? await mockBrandCtx()
-        : await getBrandAdminContext();
+      const brand = await resolveBrandAdminContext();
       brandId = brand?.membership?.brand?.id || null;
     } else if (session.user.role === "ADMIN") {
       brandId = request.nextUrl.searchParams.get("brandId");
@@ -205,13 +187,7 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const g = globalThis as Record<string, unknown>;
-    const mockSession = g.__mockGetServerSession as
-      | ((options: unknown) => Promise<CustomSession | null>)
-      | undefined;
-    const session = mockSession
-      ? await mockSession(authOptions)
-      : ((await getServerSession(authOptions)) as CustomSession | null);
+    const session = await resolveSession();
 
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -246,10 +222,7 @@ export async function POST(request: NextRequest) {
     const userId = session.user.id;
 
     if (session.user.role === "BRAND_ADMIN") {
-      const mockBrandCtx = g.__mockGetBrandAdminContext as (() => Promise<BrandAdminContext | null>) | undefined;
-      const brand = mockBrandCtx
-        ? await mockBrandCtx()
-        : await getBrandAdminContext();
+      const brand = await resolveBrandAdminContext();
       if (!brand?.membership?.brand) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }

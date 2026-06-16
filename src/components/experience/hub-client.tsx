@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import { type MouseEvent, useEffect, useId, useRef, useState } from "react";
 import { Pause, Play } from "lucide-react";
 import {
@@ -668,9 +669,11 @@ function ExperienceWhyHero({
             {featuredStory ? (
               <>
                 {data?.coverImageUrl ? (
-                  <img
+                  <Image
                     src={data.coverImageUrl}
                     alt={data.title}
+                    fill
+                    unoptimized
                     className="absolute inset-0 h-full w-full scale-105 object-cover opacity-30 blur-2xl"
                   />
                 ) : (
@@ -716,9 +719,11 @@ function ExperienceWhyHero({
                 </div>
               </>
             ) : data?.coverImageUrl ? (
-              <img
+              <Image
                 src={data.coverImageUrl}
                 alt={data.title}
+                fill
+                unoptimized
                 className="absolute inset-0 h-full w-full object-cover"
               />
             ) : (

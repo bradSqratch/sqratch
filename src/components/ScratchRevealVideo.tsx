@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type Props = {
   backgroundSrc: string; // /assets/homepage/sqratch_qr_bg.png
@@ -15,6 +15,46 @@ type Props = {
   filmInset?: number; // px, default 44
   filmRadius?: number; // px, default 18
 };
+
+function pixelDissolve(
+  canvas: HTMLCanvasElement,
+  blockSize = 10,
+  iterations = 16,
+  totalMs = 350
+) {
+  return new Promise<void>((resolve) => {
+    const ctx = canvas.getContext("2d")!;
+    const w = canvas.width;
+    const h = canvas.height;
+
+    let i = 0;
+    const stepMs = totalMs / iterations;
+
+    const tick = () => {
+      // erase a batch of random blocks per iteration
+      const blocksPerTick = 240; // increase for faster “crumble”
+      ctx.save();
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.fillStyle = "rgba(0,0,0,1)";
+
+      for (let b = 0; b < blocksPerTick; b++) {
+        const x = Math.floor(Math.random() * (w / blockSize)) * blockSize;
+        const y = Math.floor(Math.random() * (h / blockSize)) * blockSize;
+        ctx.fillRect(x, y, blockSize, blockSize);
+      }
+      ctx.restore();
+
+      i++;
+      if (i >= iterations) {
+        resolve();
+        return;
+      }
+      window.setTimeout(tick, stepMs);
+    };
+
+    tick();
+  });
+}
 
 export default function ScratchRevealVideo({
   backgroundSrc,
@@ -45,18 +85,18 @@ export default function ScratchRevealVideo({
   );
 
   // --- helpers
-  function getLocalPoint(e: PointerEvent) {
+  const getLocalPoint = useCallback((e: PointerEvent) => {
     const canvas = canvasRef.current!;
     const rect = canvas.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * canvas.width;
     const y = ((e.clientY - rect.top) / rect.height) * canvas.height;
     return { x, y };
-  }
+  }, []);
 
-  function drawScratchLine(
+  const drawScratchLine = useCallback((
     from: { x: number; y: number },
     to: { x: number; y: number }
-  ) {
+  ) => {
     const canvas = canvasRef.current!;
     const ctx = canvas.getContext("2d")!;
     ctx.save();
@@ -77,9 +117,9 @@ export default function ScratchRevealVideo({
     ctx.fill();
 
     ctx.restore();
-  }
+  }, [brushRadius]);
 
-  function estimateScratchedPercent() {
+  const estimateScratchedPercent = useCallback(() => {
     // Don’t do this every pointermove (it’s expensive). We’ll throttle it.
     const canvas = canvasRef.current!;
     const { width, height } = canvas;
@@ -106,87 +146,9 @@ export default function ScratchRevealVideo({
     }
 
     return (transparent / total) * 100;
-  }
+  }, []);
 
-  function pixelDissolve(blockSize = 10, iterations = 16, totalMs = 350) {
-    return new Promise<void>((resolve) => {
-      const canvas = canvasRef.current!;
-      const ctx = canvas.getContext("2d")!;
-      const w = canvas.width;
-      const h = canvas.height;
-
-      let i = 0;
-      const stepMs = totalMs / iterations;
-
-      const tick = () => {
-        // erase a batch of random blocks per iteration
-        const blocksPerTick = 240; // increase for faster “crumble”
-        ctx.save();
-        ctx.globalCompositeOperation = "destination-out";
-        ctx.fillStyle = "rgba(0,0,0,1)";
-
-        for (let b = 0; b < blocksPerTick; b++) {
-          const x = Math.floor(Math.random() * (w / blockSize)) * blockSize;
-          const y = Math.floor(Math.random() * (h / blockSize)) * blockSize;
-          ctx.fillRect(x, y, blockSize, blockSize);
-        }
-        ctx.restore();
-
-        i++;
-        if (i >= iterations) {
-          resolve();
-          return;
-        }
-        window.setTimeout(tick, stepMs);
-      };
-
-      tick();
-    });
-  }
-
-  async function revealNow() {
-    if (isRevealed || isFinishing) return;
-
-    setIsFinishing(true);
-
-    const vid = videoRef.current;
-    if (vid) {
-      vid.currentTime = 0;
-      const attempt = vid.play();
-      if (attempt && typeof attempt.catch === "function") {
-        attempt.catch(() => {
-          vid.muted = true;
-          vid.play().catch(() => {});
-        });
-      }
-    }
-
-    // nice dissolve (fake pixelation) for ~350ms
-    await pixelDissolve(10, 18, 350);
-
-    // then mark revealed + play
-    setIsRevealed(true);
-
-    // fully clear after fade
-    const canvas = canvasRef.current!;
-    const ctx = canvas.getContext("2d")!;
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-  }
-
-  function resetAll() {
-    setIsRevealed(false);
-    setShowReplay(false);
-    setIsFinishing(false);
-
-    const vid = videoRef.current!;
-    vid.pause();
-    vid.currentTime = 0;
-
-    // redraw film
-    drawFilmToCanvas();
-  }
-
-  function drawFilmToCanvas() {
+  const drawFilmToCanvas = useCallback(() => {
     const canvas = canvasRef.current;
     const wrap = filmWrapRef.current;
     const film = filmImgRef.current;
@@ -222,7 +184,49 @@ export default function ScratchRevealVideo({
     const dy = (ch - dh) / 2;
 
     ctx.drawImage(film, dx, dy, dw, dh);
-  }
+  }, []);
+
+  const revealNow = useCallback(async () => {
+    if (isRevealed || isFinishing) return;
+
+    setIsFinishing(true);
+
+    const vid = videoRef.current;
+    if (vid) {
+      vid.currentTime = 0;
+      const attempt = vid.play();
+      if (attempt && typeof attempt.catch === "function") {
+        attempt.catch(() => {
+          vid.muted = true;
+          vid.play().catch(() => {});
+        });
+      }
+    }
+
+    // nice dissolve (fake pixelation) for ~350ms
+    await pixelDissolve(canvasRef.current!, 10, 18, 350);
+
+    // then mark revealed + play
+    setIsRevealed(true);
+
+    // fully clear after fade
+    const canvas = canvasRef.current!;
+    const ctx = canvas.getContext("2d")!;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }, [isRevealed, isFinishing]);
+
+  const resetAll = useCallback(() => {
+    setIsRevealed(false);
+    setShowReplay(false);
+    setIsFinishing(false);
+
+    const vid = videoRef.current!;
+    vid.pause();
+    vid.currentTime = 0;
+
+    // redraw film
+    drawFilmToCanvas();
+  }, [drawFilmToCanvas]);
 
   // Load film image once
   useEffect(() => {
@@ -232,7 +236,7 @@ export default function ScratchRevealVideo({
       filmImgRef.current = img;
       drawFilmToCanvas();
     };
-  }, [filmSrc]);
+  }, [filmSrc, drawFilmToCanvas]);
 
   // Resize observer to keep canvas aligned
   useEffect(() => {
@@ -242,8 +246,7 @@ export default function ScratchRevealVideo({
     });
     ro.observe(filmWrapRef.current);
     return () => ro.disconnect();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isRevealed]);
+  }, [isRevealed, drawFilmToCanvas]);
 
   // Pointer events on canvas
   useEffect(() => {
@@ -296,7 +299,7 @@ export default function ScratchRevealVideo({
       canvas.removeEventListener("pointermove", onPointerMove);
       window.removeEventListener("pointerup", onPointerUp);
     };
-  }, [isRevealed, threshold, brushRadius]);
+  }, [isRevealed, threshold, brushRadius, getLocalPoint, drawScratchLine, estimateScratchedPercent, revealNow]);
 
   // Video ended -> show replay
   useEffect(() => {

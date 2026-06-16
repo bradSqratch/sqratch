@@ -1,9 +1,7 @@
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
 import { v2 as cloudinary } from "cloudinary";
-import { getBrandAdminContext, BrandAdminContext } from "@/lib/brand-auth";
+import { resolveSession, resolveBrandAdminContext } from "@/lib/auth-session";
 
 // Configure Cloudinary (from env)
 cloudinary.config({
@@ -13,25 +11,11 @@ cloudinary.config({
   secure: true,
 });
 
-interface CustomSession {
-  user: {
-    id: string;
-    role: string;
-    email?: string | null;
-  };
-}
-
 export async function DELETE(
   req: Request,
   context: { params: Promise<{ id: string }> } // ← params is a Promise
 ) {
-  const g = globalThis as Record<string, unknown>;
-  const mockSession = g.__mockGetServerSession as
-    | ((options: unknown) => Promise<CustomSession | null>)
-    | undefined;
-  const session = mockSession
-    ? await mockSession(authOptions)
-    : ((await getServerSession(authOptions)) as CustomSession | null);
+  const session = await resolveSession();
 
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -39,10 +23,7 @@ export async function DELETE(
 
   let brandId: string | null = null;
   if (session.user.role === "BRAND_ADMIN") {
-    const mockBrandCtx = g.__mockGetBrandAdminContext as (() => Promise<BrandAdminContext | null>) | undefined;
-    const brand = mockBrandCtx
-      ? await mockBrandCtx()
-      : await getBrandAdminContext();
+    const brand = await resolveBrandAdminContext();
     if (!brand?.membership?.brand) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }

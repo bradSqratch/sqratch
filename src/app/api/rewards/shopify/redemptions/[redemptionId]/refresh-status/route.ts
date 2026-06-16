@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
 import { ShopifyRewardRedemptionStatus } from "@prisma/client";
-import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
+import { resolveSession } from "@/lib/auth-session";
+
 import { getShopifyDiscountUsageStatus } from "@/lib/shopify-discounts";
 import { getValidAccessToken } from "@/lib/shopify-token-manager";
 import { canRefresh, assertTransition } from "@/lib/reward-redemption-state";
@@ -12,7 +12,7 @@ export async function POST(
   context: { params: Promise<{ redemptionId: string }> },
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await resolveSession();
 
     if (!session?.user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

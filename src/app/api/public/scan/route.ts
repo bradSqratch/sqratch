@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import { awardQrScanPoint } from "@/lib/points";
 import { redeemQrCodeForUser } from "@/lib/qr-redemption";
 import { rateLimit, getRequestIp, rateLimitResponse } from "@/lib/rate-limit";
+import { resolveSession } from "@/lib/auth-session";
 
 const COOKIE_NAME = "sqr_session";
 
@@ -17,7 +16,7 @@ export async function POST(request: NextRequest) {
       return rateLimitResponse(rl.resetAt);
     }
 
-    const session = await getServerSession(authOptions);
+    const session = await resolveSession();
     const body = await request.json();
     const qrCodeData = String(body?.qrCodeData || "").trim();
 

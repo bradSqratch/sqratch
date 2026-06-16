@@ -1,14 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/options";
-import { awardQrScanPoint } from "@/lib/points";
 import prisma from "@/lib/prisma";
+import { awardQrScanPoint } from "@/lib/points";
 import { redeemQrCodeForUser } from "@/lib/qr-redemption";
 import { SESSION_COOKIE_NAME } from "@/lib/session";
+import { resolveSession } from "@/lib/auth-session";
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await resolveSession();
     const userId = session?.user?.id || null;
     const userEmail = session?.user?.email || null;
     const sessionId = request.cookies.get(SESSION_COOKIE_NAME)?.value || null;

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import { useParams } from "next/navigation";
 import CommonNavbar from "@/components/commonNavbar";
 import { Card, CardContent } from "@/components/ui/card";
@@ -161,9 +162,12 @@ export default function CampaignPage() {
                         <CardContent className="p-5 space-y-4">
                           <div className="h-40 rounded-2xl bg-white/5 border border-white/10 overflow-hidden">
                             {exp.coverImageUrl ? (
-                              <img
+                              <Image
                                 src={exp.coverImageUrl}
                                 alt={exp.title}
+                                width={400}
+                                height={160}
+                                unoptimized
                                 className="h-full w-full object-cover"
                               />
                             ) : (

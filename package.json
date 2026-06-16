@@ -43,7 +43,7 @@
     "next": "^15.3.6",
     "next-auth": "^4.24.11",
     "next-themes": "^0.4.6",
-    "nodemailer": "^7.0.11",
+    "nodemailer": "^9.0.0",
     "papaparse": "^5.5.3",
     "pg": "^8.16.3",
     "qrcode": "^1.5.4",
@@ -78,5 +78,12 @@
   },
   "prisma": {
     "seed": "ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts"
+  },
+  "overrides": {
+    "form-data": "^4.0.6",
+    "@hono/node-server": "^1.19.13",
+    "postcss": "^8.5.10",
+    "uuid": "^11.1.1",
+    "nodemailer": "^9.0.0"
   }
 }

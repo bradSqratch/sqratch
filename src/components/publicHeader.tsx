@@ -2,6 +2,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 
 type PublicHeaderProps = {
   showAdminLogin?: boolean;
@@ -15,9 +16,12 @@ export default function PublicHeader({
       <div className="mx-auto px-3 sm:px-6">
         <div className="h-15 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-2">
-            <img
+            <Image
               src="/sqratchLogo.png"
               alt="SQRATCH Logo"
+              width={120}
+              height={40}
+              priority
               className="h-10 w-auto"
             />
           </Link>

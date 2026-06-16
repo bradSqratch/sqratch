@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import Image from "next/image";
 import {
   BookOpen,
   HelpCircle,
@@ -80,9 +81,11 @@ export function ExperienceShell({
                 <CardContent className="h-full p-0">
                   <div className="relative flex h-full min-h-[280px] flex-col justify-end overflow-hidden">
                     {experience.coverImageUrl ? (
-                      <img
+                      <Image
                         src={experience.coverImageUrl}
                         alt={experience.title}
+                        fill
+                        unoptimized
                         className="absolute inset-0 h-full w-full object-cover"
                       />
                     ) : (

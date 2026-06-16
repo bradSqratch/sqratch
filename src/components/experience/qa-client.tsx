@@ -163,8 +163,6 @@ export function ExperienceQAClient({
     } finally {
       setQaLoading(false);
     }
-    // experienceSlug is stable in the callback deps below
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [experienceSlug]);
 
   useEffect(() => {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Image from "next/image";
 import {
   ErrorView,
   ExperienceShell,
@@ -179,9 +180,12 @@ export function ExperienceShopClient({
                 <div className="flex h-full flex-col">
                   <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/20">
                     {product.imageUrl ? (
-                      <img
+                      <Image
                         src={product.imageUrl}
                         alt={product.title}
+                        width={400}
+                        height={300}
+                        unoptimized
                         className="aspect-[4/3] w-full object-cover"
                       />
                     ) : (

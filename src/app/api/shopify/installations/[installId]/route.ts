@@ -1,6 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
 import {
   buildShopifyPendingInstallService,
@@ -11,6 +9,8 @@ import {
   parsePendingInstall,
   type PendingInstallPayload,
 } from "@/lib/pending-install";
+import { resolveSession } from "@/lib/auth-session";
+
 
 // Re-export types for backward compatibility if needed elsewhere
 export type { PendingInstallPayload };
@@ -47,7 +47,7 @@ export async function GET(
   context: { params: Promise<{ installId: string }> },
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await resolveSession();
     const userId = session?.user?.id;
 
     if (!userId) {
@@ -103,7 +103,7 @@ export async function POST(
   context: { params: Promise<{ installId: string }> },
 ) {
   try {
-    const session = await getServerSession(authOptions);
+    const session = await resolveSession();
     const userId = session?.user?.id;
 
     if (!userId) {
