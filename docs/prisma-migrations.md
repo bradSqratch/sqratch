@@ -1,8 +1,12 @@
 # Prisma Migration Runbook
 
-Do not run `migrate dev` against production. Current migration history is divergent: production records fourteen legacy migrations absent from this checkout. Reconcile that history with a reviewed baseline before `prisma migrate deploy`.
+Do not run `migrate dev` against production.
 
-## Pending Order
+## Current status (resolved)
+
+The four hardening migrations below have been **successfully applied** to production. `npx prisma migrate status` reports **"Database schema is up to date!"** and the schema↔database diff is empty. The earlier migration-history divergence is **resolved** and is no longer an active deployment blocker. The notes below are retained as reference for future deploys of equivalent migrations.
+
+## Hardening migrations (applied, in order)
 
 1. `20260615113320_campaign_unlock_anon_unique`: additive partial unique index. Preflight duplicate anonymous unlocks; index creation can briefly lock writes.
 2. `20260615120000_shopify_expiring_tokens`: additive enum value, enum type, and token lifecycle columns, including refresh lease ownership. Enum additions are not trivially reversible.

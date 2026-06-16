@@ -189,9 +189,9 @@ See `docs/env-vars.md`, `docs/prisma-migrations.md`, `docs/points-ledger.md`, an
 5. **next-auth v4 with App Router** — uses `getServerSession(authOptions)` (server components/routes), not `useSession` (client only). Mixing these up is a common source of auth bugs.
 6. **Shopify GraphQL API version** is `2026-04` (set in `src/lib/shopify.ts:SHOPIFY_API_VERSION`). Never hardcode it elsewhere.
 7. **`APP_ENCRYPTION_KEY` fallback chain**: `APP_ENCRYPTION_KEY` → `SHOPIFY_TOKEN_ENCRYPTION_KEY` → `NEXTAUTH_SECRET`. If you change any of these, all existing encrypted tokens become unreadable.
-8. **Test hooks in `auth-session.ts`** — `globalThis.__mockGetServerSession` and `__mockGetBrandAdminContext` are test-only. They only fire when the globalThis slot is set by a test. Do NOT add test hooks elsewhere.
+8. **Auth dependency injection in `auth-session.ts`** — there are no global test hooks. Routes that need test injection export an implementation function `…Impl(req[, ctx], deps: AuthResolvers)`; the production `GET`/`POST` export is a thin wrapper that binds `realAuthResolvers`. Tests call the `…Impl` function directly with mock resolvers. Other routes call the standalone `resolveSession()` / `resolveBrandAdminContext()` wrappers (real implementation).
 9. **User deletion returns 409** if the user has campaigns or QR codes. Deactivation is the recommended alternative.
-10. **`/dev/email-preview`** is NOT gated by middleware or auth — accessible in production.
+10. **`/dev/email-preview`** and `/dev/email-preview/invite` return HTTP 404 when `NODE_ENV === "production"`; they are dev-only email template previews.
 
 ---
 

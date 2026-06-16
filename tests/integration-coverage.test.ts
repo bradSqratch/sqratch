@@ -9,6 +9,11 @@ import { NextRequest } from "next/server";
 import * as crypto from "crypto";
 import { encryptSecret } from "../src/lib/crypto";
 import { getValidAccessToken } from "../src/lib/shopify-token-manager";
+import type {
+  AuthResolvers,
+  CustomSession,
+  BrandAdminContext,
+} from "../src/lib/auth-session";
 
 interface MockedPrismaClient {
   brand: Record<string, (...args: unknown[]) => unknown>;
@@ -33,16 +38,45 @@ let appUninstalledPOST: (req: NextRequest) => Promise<Response>;
 let shopRedactPOST: (req: NextRequest) => Promise<Response>;
 let customersDataRequestPOST: (req: NextRequest) => Promise<Response>;
 let customersRedactPOST: (req: NextRequest) => Promise<Response>;
-let oauthCallbackGET: (req: NextRequest) => Promise<Response>;
-let installationsGET: (req: NextRequest, context: { params: Promise<{ installId: string }> }) => Promise<Response>;
-let installationsPOST: (req: NextRequest, context: { params: Promise<{ installId: string }> }) => Promise<Response>;
-
-let redeemPOST: (req: NextRequest) => Promise<Response>;
-let refreshStatusPOST: (req: NextRequest, context: { params: Promise<{ redemptionId: string }> }) => Promise<Response>;
-let scanPOST: (req: NextRequest) => Promise<Response>;
-let mergePOST: (req: NextRequest) => Promise<Response>;
-let exportGET: (req: NextRequest, context: { params: Promise<{ id: string }> }) => Promise<Response>;
+// Route implementation functions accept an explicit AuthResolvers dependency.
+let oauthCallbackImpl: (req: NextRequest, deps: AuthResolvers) => Promise<Response>;
+let installationsGetImpl: (req: NextRequest, context: { params: Promise<{ installId: string }> }, deps: AuthResolvers) => Promise<Response>;
+let installationsPostImpl: (req: NextRequest, context: { params: Promise<{ installId: string }> }, deps: AuthResolvers) => Promise<Response>;
+let redeemImpl: (req: NextRequest, deps: AuthResolvers) => Promise<Response>;
+let refreshStatusImpl: (req: NextRequest, context: { params: Promise<{ redemptionId: string }> }, deps: AuthResolvers) => Promise<Response>;
+let scanImpl: (req: NextRequest, deps: AuthResolvers) => Promise<Response>;
+let mergeImpl: (req: NextRequest, deps: AuthResolvers) => Promise<Response>;
+let exportBatchImpl: (req: NextRequest, context: { params: Promise<{ id: string }> }, deps: AuthResolvers) => Promise<Response>;
 let authOptions: Record<string, unknown> & { callbacks?: Record<string, (...args: unknown[]) => unknown> };
+
+// Per-test injected resolvers, populated by setupMocks/clearMocks.
+let currentDeps: AuthResolvers = {
+  resolveSession: async () => null,
+  resolveBrandAdminContext: async () => null,
+};
+
+// Thin wrappers that keep the existing call sites unchanged while threading the
+// per-test injected dependencies into the route implementations.
+const oauthCallbackGET = (req: NextRequest) => oauthCallbackImpl(req, currentDeps);
+const installationsGET = (
+  req: NextRequest,
+  context: { params: Promise<{ installId: string }> },
+) => installationsGetImpl(req, context, currentDeps);
+const installationsPOST = (
+  req: NextRequest,
+  context: { params: Promise<{ installId: string }> },
+) => installationsPostImpl(req, context, currentDeps);
+const redeemPOST = (req: NextRequest) => redeemImpl(req, currentDeps);
+const refreshStatusPOST = (
+  req: NextRequest,
+  context: { params: Promise<{ redemptionId: string }> },
+) => refreshStatusImpl(req, context, currentDeps);
+const scanPOST = (req: NextRequest) => scanImpl(req, currentDeps);
+const mergePOST = (req: NextRequest) => mergeImpl(req, currentDeps);
+const exportGET = (
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> },
+) => exportBatchImpl(req, context, currentDeps);
 
 before(async () => {
   const prismaModule = (await import("../src/lib/prisma")).default as unknown as Record<string, unknown>;
@@ -108,16 +142,16 @@ before(async () => {
   customersDataRequestPOST = (await import("../src/app/api/shopify/webhooks/customers/data_request/route")).POST;
   customersRedactPOST = (await import("../src/app/api/shopify/webhooks/customers/redact/route")).POST;
 
-  oauthCallbackGET = (await import("../src/app/api/shopify/oauth/callback/route")).GET;
+  oauthCallbackImpl = (await import("../src/app/api/shopify/oauth/callback/route")).oauthCallbackImpl;
   const installationsRoute = await import("../src/app/api/shopify/installations/[installId]/route");
-  installationsGET = installationsRoute.GET;
-  installationsPOST = installationsRoute.POST;
+  installationsGetImpl = installationsRoute.installationsGetImpl;
+  installationsPostImpl = installationsRoute.installationsPostImpl;
 
-  redeemPOST = (await import("../src/app/api/rewards/shopify/redeem/route")).POST;
-  refreshStatusPOST = (await import("../src/app/api/rewards/shopify/redemptions/[redemptionId]/refresh-status/route")).POST;
-  scanPOST = (await import("../src/app/api/public/scan/route")).POST;
-  mergePOST = (await import("../src/app/api/progress/merge/route")).POST;
-  exportGET = (await import("../src/app/api/brand/qr-batches/[id]/export/route")).GET;
+  redeemImpl = (await import("../src/app/api/rewards/shopify/redeem/route")).redeemImpl;
+  refreshStatusImpl = (await import("../src/app/api/rewards/shopify/redemptions/[redemptionId]/refresh-status/route")).refreshStatusImpl;
+  scanImpl = (await import("../src/app/api/public/scan/route")).scanImpl;
+  mergeImpl = (await import("../src/app/api/progress/merge/route")).mergeImpl;
+  exportBatchImpl = (await import("../src/app/api/brand/qr-batches/[id]/export/route")).exportBatchImpl;
   authOptions = (await import("../src/app/api/auth/[...nextauth]/options")).authOptions as never;
 });
 
@@ -141,15 +175,18 @@ function makeWebhookRequest(url: string, body: string, hmac: string | null, shop
 }
 
 function setupMocks(session: unknown, brandAdminContext: unknown = null) {
-  const g = globalThis as Record<string, unknown>;
-  g.__mockGetServerSession = async () => session;
-  g.__mockGetBrandAdminContext = async () => brandAdminContext;
+  currentDeps = {
+    resolveSession: async () => session as CustomSession | null,
+    resolveBrandAdminContext: async () =>
+      brandAdminContext as BrandAdminContext | null,
+  };
 }
 
 function clearMocks() {
-  const g = globalThis as Record<string, unknown>;
-  delete g.__mockGetServerSession;
-  delete g.__mockGetBrandAdminContext;
+  currentDeps = {
+    resolveSession: async () => null,
+    resolveBrandAdminContext: async () => null,
+  };
 }
 
 describe("Route Scenario 1: Shopify Webhooks", () => {
@@ -275,9 +312,29 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
       return { count: 1 };
     });
 
-    t.mock.method(prisma.tokenStore, "deleteMany", async () => {
+    // Service keys are random nonces; the shop lives only inside the token JSON.
+    t.mock.method(prisma.tokenStore, "findMany", async () => [
+      // Matches this shop → should be deleted.
+      {
+        service: "shopify_oauth_state:nonce-1",
+        token: JSON.stringify({ shop: "redact-shop.myshopify.com" }),
+      },
+      // Different shop → must be preserved.
+      {
+        service: "shopify_pending_install:nonce-2",
+        token: JSON.stringify({
+          shop: "other-shop.myshopify.com",
+          encryptedToken: "enc",
+        }),
+      },
+    ]);
+
+    let deletedServices: string[] = [];
+    t.mock.method(prisma.tokenStore, "deleteMany", async (args: unknown) => {
       tokensDeleted = true;
-      return { count: 1 };
+      const typedArgs = args as { where: { service: { in: string[] } } };
+      deletedServices = typedArgs.where.service.in;
+      return { count: deletedServices.length };
     });
 
     const res = await shopRedactPOST(req);
@@ -286,6 +343,64 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     assert.ok(brandUpdated);
     assert.ok(redemptionAnonymized);
     assert.ok(tokensDeleted);
+    // Only the matching shop's temp token is deleted; the other shop is preserved.
+    assert.deepEqual(deletedServices, ["shopify_oauth_state:nonce-1"]);
+  });
+
+  test("shop/redact cleans only matching temp tokens even when no brand is linked", async (t) => {
+    const payload = JSON.stringify({ test: "data" });
+    const hmac = buildWebhookHmac(payload);
+    const req = makeWebhookRequest(
+      "http://localhost/api/shopify/webhooks/shop/redact",
+      payload,
+      hmac,
+      "abandoned-shop.myshopify.com",
+    );
+
+    // No brand holds this domain (e.g. an OAuth flow that was never completed).
+    t.mock.method(prisma.brand, "findFirst", async () => null);
+
+    let brandUpdated = false;
+    t.mock.method(prisma.brand, "update", async () => {
+      brandUpdated = true;
+      return {};
+    });
+
+    t.mock.method(prisma.tokenStore, "findMany", async () => [
+      {
+        service: "shopify_oauth_state:abc",
+        token: JSON.stringify({ shop: "abandoned-shop.myshopify.com" }),
+      },
+      {
+        service: "shopify_pending_install:def",
+        token: JSON.stringify({
+          shop: "abandoned-shop.myshopify.com",
+          encryptedToken: "enc",
+        }),
+      },
+      {
+        service: "shopify_oauth_state:ghi",
+        token: JSON.stringify({ shop: "unrelated.myshopify.com" }),
+      },
+      // Unparseable payload — left for TTL expiry, never matched.
+      { service: "shopify_pending_install:bad", token: "not-json" },
+    ]);
+
+    let deletedServices: string[] = [];
+    t.mock.method(prisma.tokenStore, "deleteMany", async (args: unknown) => {
+      const typedArgs = args as { where: { service: { in: string[] } } };
+      deletedServices = typedArgs.where.service.in;
+      return { count: deletedServices.length };
+    });
+
+    const res = await shopRedactPOST(req);
+    assert.equal(res.status, 200);
+    // Brand cleanup is skipped (no brand) but matching temp tokens are removed.
+    assert.equal(brandUpdated, false);
+    assert.deepEqual(
+      [...deletedServices].sort(),
+      ["shopify_oauth_state:abc", "shopify_pending_install:def"],
+    );
   });
 
   test("customers/data_request compliance webhook returns 200 with no data found", async () => {

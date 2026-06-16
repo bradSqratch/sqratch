@@ -5,7 +5,7 @@ import {
   type ShopifyRewardRedemption,
 } from "@prisma/client";
 import prisma from "@/lib/prisma";
-import { resolveSession } from "@/lib/auth-session";
+import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
 import { getRewardClaimContext } from "@/lib/reward-access";
 import { createShopifyRewardDiscountCode } from "@/lib/shopify-discounts";
 import { getValidAccessToken } from "@/lib/shopify-token-manager";
@@ -95,8 +95,12 @@ function serializeRedemption(redemption: {
 }
 
 export async function POST(request: NextRequest) {
+  return redeemImpl(request, realAuthResolvers);
+}
+
+export async function redeemImpl(request: NextRequest, deps: AuthResolvers) {
   try {
-    const session = await resolveSession();
+    const session = await deps.resolveSession();
 
     if (!session?.user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });

@@ -11,9 +11,16 @@ import {
   SHOPIFY_SCOPES,
   isValidShopDomain,
 } from "@/lib/shopify";
-import { resolveSession } from "@/lib/auth-session";
+import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
 
 export async function GET(request: NextRequest) {
+  return oauthCallbackImpl(request, realAuthResolvers);
+}
+
+export async function oauthCallbackImpl(
+  request: NextRequest,
+  deps: AuthResolvers,
+) {
   try {
     const apiKey = process.env.SHOPIFY_API_KEY;
     const apiSecret = process.env.SHOPIFY_API_SECRET;
@@ -165,7 +172,7 @@ export async function GET(request: NextRequest) {
     });
 
     const installPath = `/dashboard/brand/shopify/install?install=${encodeURIComponent(pendingInstallId)}`;
-    const session = await resolveSession();
+    const session = await deps.resolveSession();
     const redirectUrl = session?.user?.id
       ? new URL(installPath, request.nextUrl.origin)
       : new URL(

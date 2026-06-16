@@ -4,11 +4,15 @@ import { Prisma } from "@prisma/client";
 import { awardQrScanPoint } from "@/lib/points";
 import { redeemQrCodeForUser } from "@/lib/qr-redemption";
 import { rateLimit, getRequestIp, rateLimitResponse } from "@/lib/rate-limit";
-import { resolveSession } from "@/lib/auth-session";
+import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
 
 const COOKIE_NAME = "sqr_session";
 
 export async function POST(request: NextRequest) {
+  return scanImpl(request, realAuthResolvers);
+}
+
+export async function scanImpl(request: NextRequest, deps: AuthResolvers) {
   try {
     const ip = getRequestIp(request);
     const rl = rateLimit(`scan:${ip}`, 60, 60 * 60 * 1000);
@@ -16,7 +20,7 @@ export async function POST(request: NextRequest) {
       return rateLimitResponse(rl.resetAt);
     }
 
-    const session = await resolveSession();
+    const session = await deps.resolveSession();
     const body = await request.json();
     const qrCodeData = String(body?.qrCodeData || "").trim();
 

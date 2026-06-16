@@ -9,7 +9,7 @@ import {
   parsePendingInstall,
   type PendingInstallPayload,
 } from "@/lib/pending-install";
-import { resolveSession } from "@/lib/auth-session";
+import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
 
 
 // Re-export types for backward compatibility if needed elsewhere
@@ -43,11 +43,19 @@ async function getAuthorizedBrandMemberships(userId: string) {
 }
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ installId: string }> },
 ) {
+  return installationsGetImpl(request, context, realAuthResolvers);
+}
+
+export async function installationsGetImpl(
+  _request: NextRequest,
+  context: { params: Promise<{ installId: string }> },
+  deps: AuthResolvers,
+) {
   try {
-    const session = await resolveSession();
+    const session = await deps.resolveSession();
     const userId = session?.user?.id;
 
     if (!userId) {
@@ -102,8 +110,16 @@ export async function POST(
   request: NextRequest,
   context: { params: Promise<{ installId: string }> },
 ) {
+  return installationsPostImpl(request, context, realAuthResolvers);
+}
+
+export async function installationsPostImpl(
+  request: NextRequest,
+  context: { params: Promise<{ installId: string }> },
+  deps: AuthResolvers,
+) {
   try {
-    const session = await resolveSession();
+    const session = await deps.resolveSession();
     const userId = session?.user?.id;
 
     if (!userId) {

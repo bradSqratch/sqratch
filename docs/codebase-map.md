@@ -145,7 +145,7 @@ sqratch/
 | `/x/[experienceSlug]/qa` | `...qa/page.tsx` | Experience Q&A |
 | `/shopify` | `shopify/page.tsx` | Shopify app install landing (embedded); no shop query leak |
 | `/approval-pending` | `approval-pending/page.tsx` | Brand/creator approval pending screen |
-| `/dev/email-preview` | `dev/email-preview/route.ts` | Dev email preview (NOT gated in production) |
+| `/dev/email-preview` | `dev/email-preview/route.ts` | Dev email preview — returns 404 when `NODE_ENV === "production"` |
 
 ### Auth Routes
 
@@ -228,7 +228,7 @@ sqratch/
 | GET | `/api/public/experience/[slug]/products` | — | Fetch experience shop products | `ExperienceProductLink`, Shopify API |
 | GET | `/api/public/experience/[slug]/lessons/[id]/products` | — | Fetch lesson products | `LessonProductLink`, Shopify API |
 | GET | `/api/public/campaign/[campaignSlug]` | — | Fetch campaign data | `Campaign`, `Experience` |
-| GET | `/api/public/get-campaign-from-qrid` | — | Resolve QR → campaign | `QRCode`, `Campaign` |
+| GET | `/api/public/get-campaign-name?campaignId=` | — | Resolve campaign name (public) | `Campaign` |
 | GET | `/api/public/viewer-status` | — | Get viewer unlock status | `CampaignUnlock` |
 | POST | `/api/public/session` | — | Create/update session cookie | `UserSession` |
 | POST | `/api/public/waitlist` | 10/60 min per IP | Join waitlist | `WaitlistEntry` |
@@ -634,7 +634,7 @@ Merchant uninstalls app from Shopify admin
 
 ### `src/lib/auth-session.ts`
 
-Centralised session resolution wrapper. Hosts `globalThis.__mockGetServerSession` and `globalThis.__mockGetBrandAdminContext` test hooks. All integration tests that need mock sessions use these hooks instead of per-route branching. The test hooks are confined to this single file — do NOT add them elsewhere.
+Centralised session resolution. Exports the typed `AuthResolvers` dependency interface and `realAuthResolvers` (backed by NextAuth + brand-auth), plus the standalone `resolveSession()` / `resolveBrandAdminContext()` wrappers used by routes that do not need test injection. There are **no global test hooks** and no `NODE_ENV` auth bypass. Routes that tests exercise expose a `…Impl(req[, ctx], deps: AuthResolvers)` function; the production `GET`/`POST` export wraps it with `realAuthResolvers`, and tests pass mock resolvers explicitly.
 
 ### Middleware vs Route-Level Auth
 
@@ -707,26 +707,26 @@ On Vercel serverless, each function instance has its own `Map` that resets on co
 
 Node.js built-in test runner (`node:test` + `assert/strict`). All tests in `tests/*.test.ts`, executed via `tsx --test tests/*.test.ts`.
 
-### Current Test Files (220 tests, 219 passing, 1 pre-existing failure)
+### Current Test Files (273 tests, all passing)
 
-| File | Tests | Coverage Area |
-|---|---|---|
-| `account-session-integrity.test.ts` | 10 | Email normalization, deletion blocking, JWT recheck, role propagation |
-| `anon-merge-keys.test.ts` | 9 | Anonymous merge key collection priority/dedup |
-| `integration-coverage.test.ts` | varies | Route integration coverage + dependency safety |
-| `lesson-video-playback.test.ts` | varies | Lesson video signed URL playback |
-| `lesson-video-upload.test.ts` | varies | Lesson video upload lifecycle |
-| `pending-install.test.ts` | 18 | Pending install payload build/parse/serialize (LEGACY + EXPIRING) |
-| `qr-routes-hardening.test.ts` | varies | QR route boundary checks |
-| `rate-limit.test.ts` | 8 | Rate limiter pass/reject/reset, IP parsing |
-| `redemption-idempotency.test.ts` | 4 | Idempotency match: user/offer/experience mismatch |
-| `reward-reconciliation.test.ts` | 23 | Reconciliation decisions, CAS locking, refund exactly-once |
-| `reward-redemption-state.test.ts` | 22 | State machine transitions, terminal, refresh-eligible |
-| `reward-ux.test.ts` | 15 | formatDate, displayStatus, button label logic |
-| `shopify-rewards.test.ts` | varies | Shopify reward redeem flow mocks |
-| `shopify-scope-drift.test.ts` | varies | Scope consistency across modules |
-| `shopify-session-token.test.ts` | 25 | Session token verification: signature, claims, time, destination |
-| `shopify-token-manager.test.ts` | 30 | Token refresh, CAS lock, scope check, expiry |
+| File | Tests | Kind | Coverage Area |
+|---|---|---|---|
+| `account-session-integrity.test.ts` | 11 | unit | Email normalization, deletion blocking, JWT recheck, role propagation |
+| `anon-merge-keys.test.ts` | 9 | unit | Anonymous merge key collection priority/dedup |
+| `integration-coverage.test.ts` | 36 | route integration (mocked persistence/services) | Route auth/ownership + dependency safety, shop/redact temp-token cleanup |
+| `lesson-video-playback.test.ts` | 10 | unit | Lesson video signed URL playback |
+| `lesson-video-upload.test.ts` | 8 | unit | Lesson video upload lifecycle |
+| `pending-install.test.ts` | 19 | unit | Pending install payload build/parse/serialize (LEGACY + EXPIRING) |
+| `qr-routes-hardening.test.ts` | 12 | route integration (mocked persistence/services) | QR route boundary checks |
+| `rate-limit.test.ts` | 8 | unit | Rate limiter pass/reject/reset, IP parsing |
+| `redemption-idempotency.test.ts` | 4 | unit | Idempotency match: user/offer/experience mismatch |
+| `reward-reconciliation.test.ts` | 23 | unit | Reconciliation decisions, CAS locking, refund exactly-once |
+| `reward-redemption-state.test.ts` | 22 | unit | State machine transitions, terminal, refresh-eligible |
+| `reward-ux.test.ts` | 15 | unit | formatDate, displayStatus, button label logic |
+| `shopify-rewards.test.ts` | 34 | unit | Shopify reward redeem flow with mocked deps |
+| `shopify-scope-drift.test.ts` | 1 | unit | Scope consistency across modules |
+| `shopify-session-token.test.ts` | 26 | unit | Session token verification: signature, claims, time, destination |
+| `shopify-token-manager.test.ts` | 35 | unit | Token refresh, CAS lock, scope check, expiry |
 
 ### CI Pipeline (`.github/workflows/ci.yml`)
 
@@ -743,16 +743,23 @@ No database required in CI — tests use mocked Prisma and injected dependencies
 
 ### Test Architecture
 
-- **Pure unit tests:** Most tests import pure functions and test them with injected mock dependencies (no real DB, no HTTP)
-- **Route integration tests:** Use `globalThis.__mockGetServerSession` / `__mockGetBrandAdminContext` from `src/lib/auth-session.ts` to mock auth context
-- **Shopify network mocking:** Token manager, session token verifier, and reconciliation tests use injected `deps` objects instead of real Shopify API calls
-- **Pre-existing failure:** 1 test in `shopify-token-manager.test.ts` (concurrent refresh lock) — timing-sensitive, known issue
+- **Pure unit tests:** Most tests import pure functions and test them with injected mock dependencies (no real DB, no HTTP).
+- **Route integration tests (mocked persistence/services):** `integration-coverage.test.ts` and `qr-routes-hardening.test.ts` import a route's `…Impl` function and call it directly, injecting a typed `AuthResolvers` object for auth and mutating the shared Prisma singleton's methods for persistence. Shopify network calls are mocked via injected `deps` or `globalThis.fetch` stubs. These are NOT real end-to-end tests — no Next.js server, no HTTP layer, no database, and no live Shopify API are exercised.
+- **No real end-to-end tests:** There is currently no test that drives the running Next.js server, a real database, or the live Shopify API. The flows that require those (embedded launch, token exchange/refresh, real discount creation/redemption, SMTP delivery, webhook delivery) must be verified manually — see the manual-test list in any pre-merge review.
+- **Shopify network mocking:** Token manager, session token verifier, and reconciliation tests use injected `deps` objects instead of real Shopify API calls.
+- **Auth injection:** No global hooks. Each route's `…Impl(req[, ctx], deps: AuthResolvers)` takes the resolvers explicitly; production `GET`/`POST` wrappers bind `realAuthResolvers`; tests pass mock resolvers.
 
 ---
 
 ## K. Database Migrations
 
 ### Applied Migration Order
+
+All migrations below — including the four hardening migrations
+(`20260615113320_campaign_unlock_anon_unique`, `20260615120000_shopify_expiring_tokens`,
+`20260615140000_redemption_reconciliation`, `20260615150000_evidence_based_indexes`) —
+have been applied. `npx prisma migrate status` reports **"Database schema is up to date!"**
+and the schema↔database diff is empty.
 
 | Migration | Purpose | Type |
 |---|---|---|
@@ -767,9 +774,9 @@ No database required in CI — tests use mocked Prisma and injected dependencies
 | `20260615140000_redemption_reconciliation` | Reconciliation fields on `ShopifyRewardRedemption`, composite unique on `PointTransaction(shopifyRewardRedemptionId, reason)` | Additive + Index |
 | `20260615150000_evidence_based_indexes` | Composite indexes for offer cap queries, verification token lookup, TokenStore expiry | Index |
 
-### Historical Divergence
+### Historical Divergence (resolved)
 
-Production records fourteen legacy migrations absent from this checkout. Reconcile that history with a reviewed baseline before running `prisma migrate deploy`. See `docs/prisma-migrations.md` for full runbook.
+An earlier checkout had a divergent migration history relative to production. This has been **resolved**: the checkout now carries the full ordered migration set, production has the same migrations applied, and `prisma migrate status` reports the schema is up to date. Migration divergence is **no longer an active deployment blocker**. The runbook in `docs/prisma-migrations.md` is retained as reference for future deploys.
 
 ### Key Index Summary
 
@@ -789,11 +796,11 @@ Production records fourteen legacy migrations absent from this checkout. Reconci
 
 ### Auth-Sensitive Files
 - `src/middleware.ts` — route protection; removing a route from `matcher` or `isProtectedRoute` exposes it publicly
-- `src/lib/auth-session.ts` — hosts test-only `globalThis` hooks; ensure these never run in production (they only fire when the globalThis slot is set by a test)
+- `src/lib/auth-session.ts` — typed `AuthResolvers` DI seam; `realAuthResolvers` is the only production resolver. No global hooks, no `NODE_ENV` bypass — tests inject mocks by calling `…Impl` functions directly
 - `src/lib/brand-auth.ts` — `getBrandAdminContext()` / `getBrandManagementContext()` — called in every brand API
 - `src/lib/admin-auth.ts` — `getAdminContext()` — called in every admin API
 - `src/lib/creator-auth.ts` — creator gating
-- `src/app/api/auth/[...nextauth]/options.ts` — JWT callback adds `role`, `isActive`, `roleCheckedAt` to token; `null` return forces sign-out
+- `src/app/api/auth/[...nextauth]/options.ts` — JWT callback adds `role`, `isActive`, `roleCheckedAt` to token; deactivated/missing users set `token.accountInvalidated = true`, and the session callback then returns `user: undefined` (forced sign-out)
 
 ### Payment / Discount / Points-Sensitive Files
 - `src/app/api/rewards/shopify/redeem/route.ts` — **HIGHEST RISK** — serializable transaction, point debit, Shopify discount creation, idempotency, bounded code-collision retry, refund logic
@@ -820,9 +827,9 @@ Production records fourteen legacy migrations absent from this checkout. Reconci
 - No rate limit on `/api/rewards/shopify/redeem` (relies on point balance + idempotency instead)
 
 ### Production Exposure Risks
-- `/dev/email-preview` and `/dev/email-preview/invite` — NOT gated by middleware or auth; accessible in production
+- `/dev/email-preview` and `/dev/email-preview/invite` — dev-only; both return HTTP 404 when `NODE_ENV === "production"`
 - User deletion returns 409 for users with campaigns/QR codes — deactivation is the recommended alternative
-- JWT `null as any` return for forced sign-out relies on next-auth v4 runtime behavior — monitor on next-auth upgrades
+- Forced sign-out uses the `token.accountInvalidated` flag (JWT callback) + `user: undefined` (session callback); this relies on next-auth v4 runtime behavior — monitor on next-auth upgrades
 
 ### Files That Can Break Shopify Review
 - `src/app/api/shopify/webhooks/` — all 4 GDPR webhooks must respond 200 (Shopify tests these)
@@ -907,4 +914,4 @@ Read these files first:
 2. Supabase project handles both PostgreSQL and file storage.
 3. The Shopify app has two configurations: public (for Shopify app review) and custom (for testing).
 4. `APP_ENCRYPTION_KEY` is the primary encryption key; `NEXTAUTH_SECRET` is the fallback.
-5. Migrations 20260615113320 through 20260615150000 need to be applied to production in order.
+5. Migrations 20260615113320 through 20260615150000 have been applied to production in order; `prisma migrate status` reports the schema is up to date.

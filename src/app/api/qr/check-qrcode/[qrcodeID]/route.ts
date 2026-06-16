@@ -1,12 +1,20 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { resolveSession, resolveBrandAdminContext } from "@/lib/auth-session";
+import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
 
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ qrcodeID: string }> }
 ) {
-  const session = await resolveSession();
+  return checkQrCodeImpl(request, context, realAuthResolvers);
+}
+
+export async function checkQrCodeImpl(
+  request: NextRequest,
+  context: { params: Promise<{ qrcodeID: string }> },
+  deps: AuthResolvers,
+) {
+  const session = await deps.resolveSession();
 
   if (!session) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -14,7 +22,7 @@ export async function GET(
 
   let brandId: string | null = null;
   if (session.user.role === "BRAND_ADMIN") {
-    const brand = await resolveBrandAdminContext();
+    const brand = await deps.resolveBrandAdminContext();
     if (!brand?.membership?.brand) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }

@@ -3,6 +3,11 @@ process.env.DATABASE_URL = "postgres://dummy:dummy@localhost:5432/dummy";
 import assert from "node:assert/strict";
 import { test, describe, before } from "node:test";
 import { NextRequest } from "next/server";
+import type {
+  AuthResolvers,
+  CustomSession,
+  BrandAdminContext,
+} from "../src/lib/auth-session";
 
 /** Narrowest type that satisfies node:test mock.method's overloads. */
 type MockableDelegate = Record<string, (...args: unknown[]) => unknown>;
@@ -14,10 +19,32 @@ interface MockedPrismaClient {
 }
 
 let prisma: MockedPrismaClient;
-let getAllQRs: (req: NextRequest) => Promise<Response>;
-let getSingleQR: (req: NextRequest) => Promise<Response>;
-let checkQR: (req: NextRequest, context: { params: Promise<{ qrcodeID: string }> }) => Promise<Response>;
-let exportBatch: (req: NextRequest, context: { params: Promise<{ id: string }> }) => Promise<Response>;
+
+// Route implementation functions accept an explicit AuthResolvers dependency.
+let getAllQrCodesImpl: (req: NextRequest, deps: AuthResolvers) => Promise<Response>;
+let getSingleQrImpl: (req: NextRequest, deps: AuthResolvers) => Promise<Response>;
+let checkQrCodeImpl: (req: NextRequest, context: { params: Promise<{ qrcodeID: string }> }, deps: AuthResolvers) => Promise<Response>;
+let exportBatchImpl: (req: NextRequest, context: { params: Promise<{ id: string }> }, deps: AuthResolvers) => Promise<Response>;
+
+// Per-test injected resolvers, populated by setupMocks/clearMocks.
+let currentDeps: AuthResolvers = {
+  resolveSession: async () => null,
+  resolveBrandAdminContext: async () => null,
+};
+
+// Thin wrappers that keep the existing call sites unchanged while threading the
+// per-test injected dependencies into the route implementations.
+const getAllQRs = (req: NextRequest) => getAllQrCodesImpl(req, currentDeps);
+const getSingleQR = (req: NextRequest) => getSingleQrImpl(req, currentDeps);
+const checkQR = (
+  req: NextRequest,
+  context: { params: Promise<{ qrcodeID: string }> },
+) => checkQrCodeImpl(req, context, currentDeps);
+const exportBatch = (
+  req: NextRequest,
+  context: { params: Promise<{ id: string }> },
+) => exportBatchImpl(req, context, currentDeps);
+
 before(async () => {
   const prismaModule = (await import("../src/lib/prisma")).default as unknown as {
     campaign: Record<string, (...args: unknown[]) => unknown>;
@@ -49,23 +76,26 @@ before(async () => {
     update: prismaModule.qRCodeBatch.update as MockableDelegate[string],
   };
 
-  getAllQRs = (await import("../src/app/api/qr/get-all-qrcodes/route")).GET;
-  getSingleQR = (await import("../src/app/api/qr/get-single-qr/route")).GET;
-  checkQR = (await import("../src/app/api/qr/check-qrcode/[qrcodeID]/route")).GET;
-  exportBatch = (await import("../src/app/api/brand/qr-batches/[id]/export/route")).GET;
+  getAllQrCodesImpl = (await import("../src/app/api/qr/get-all-qrcodes/route")).getAllQrCodesImpl;
+  getSingleQrImpl = (await import("../src/app/api/qr/get-single-qr/route")).getSingleQrImpl;
+  checkQrCodeImpl = (await import("../src/app/api/qr/check-qrcode/[qrcodeID]/route")).checkQrCodeImpl;
+  exportBatchImpl = (await import("../src/app/api/brand/qr-batches/[id]/export/route")).exportBatchImpl;
 });
 
-// Helper to set up global mocks
+// Inject canned session / brand-admin resolvers for the next handler call.
 function setupMocks(session: unknown, brandAdminContext: unknown = null) {
-  const g = globalThis as Record<string, unknown>;
-  g.__mockGetServerSession = async () => session;
-  g.__mockGetBrandAdminContext = async () => brandAdminContext;
+  currentDeps = {
+    resolveSession: async () => session as CustomSession | null,
+    resolveBrandAdminContext: async () =>
+      brandAdminContext as BrandAdminContext | null,
+  };
 }
 
 function clearMocks() {
-  const g = globalThis as Record<string, unknown>;
-  delete g.__mockGetServerSession;
-  delete g.__mockGetBrandAdminContext;
+  currentDeps = {
+    resolveSession: async () => null,
+    resolveBrandAdminContext: async () => null,
+  };
 }
 
 describe("QR Hardening Route-Level Tests", () => {

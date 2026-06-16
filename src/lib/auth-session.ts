@@ -4,16 +4,18 @@
  * Centralised helpers for resolving the NextAuth server session and the brand-
  * admin context inside API route handlers.
  *
- * In production these simply call the real NextAuth / brand-auth helpers.
+ * Dependency injection model
+ * --------------------------
+ * Production route handlers depend on the real NextAuth / brand-auth helpers.
+ * Tests that exercise a handler supply their own implementations by passing an
+ * {@link AuthResolvers} object directly into the handler's implementation
+ * function (see the `*Impl` exports on the route modules).  There are NO global
+ * test hooks, no module mutation, and no `NODE_ENV` auth bypasses — the only way
+ * to substitute the resolvers is to pass them explicitly as a typed argument.
  *
- * During tests, the `node:test` suite may set `globalThis.__mockGetServerSession`
- * and / or `globalThis.__mockGetBrandAdminContext` before invoking a route.  By
- * concentrating those reads here we keep every route file free of test-only
- * branching while still allowing lightweight integration tests that do not need
- * a live NextAuth stack.
- *
- * NOTE: The globalThis hooks are intentionally confined to this single file.
- *       Do NOT add them anywhere else in production source.
+ * Routes that do not need test injection may call the standalone
+ * {@link resolveSession} / {@link resolveBrandAdminContext} wrappers, which
+ * always use the real implementation.
  */
 
 import { getServerSession } from "next-auth/next";
@@ -31,41 +33,42 @@ export interface CustomSession {
   };
 }
 
-// ---- internal types used only for the test-hook slot ----------------------
-
-type SessionResolver = (options: unknown) => Promise<CustomSession | null>;
-type BrandCtxResolver = () => Promise<BrandAdminContext | null>;
-
-interface TestHooks {
-  __mockGetServerSession?: SessionResolver;
-  __mockGetBrandAdminContext?: BrandCtxResolver;
+/**
+ * Typed dependency object injected into route handler implementations.
+ *
+ * Production code uses {@link realAuthResolvers}; tests pass an object with the
+ * same shape whose methods return canned sessions / brand contexts.
+ */
+export interface AuthResolvers {
+  resolveSession: () => Promise<CustomSession | null>;
+  resolveBrandAdminContext: () => Promise<BrandAdminContext | null>;
 }
 
-// ---------------------------------------------------------------------------
+/**
+ * The real, production resolvers backed by NextAuth and the brand-auth helper.
+ */
+export const realAuthResolvers: AuthResolvers = {
+  resolveSession: async () =>
+    (await getServerSession(authOptions)) as CustomSession | null,
+  resolveBrandAdminContext: () => getBrandAdminContext(),
+};
 
 /**
- * Resolves the current user session.
+ * Resolves the current user session using the real NextAuth stack.
  *
  * Returns `null` when there is no authenticated user.
  */
 export async function resolveSession(): Promise<CustomSession | null> {
-  const g = globalThis as unknown as TestHooks;
-  if (typeof g.__mockGetServerSession === "function") {
-    return g.__mockGetServerSession(authOptions);
-  }
-  return (await getServerSession(authOptions)) as CustomSession | null;
+  return realAuthResolvers.resolveSession();
 }
 
 /**
- * Resolves the brand-admin context for the current request.
+ * Resolves the brand-admin context for the current request using the real
+ * brand-auth helper.
  *
  * Returns `null` when the caller is not a brand admin or has no associated
  * brand membership.
  */
 export async function resolveBrandAdminContext(): Promise<BrandAdminContext | null> {
-  const g = globalThis as unknown as TestHooks;
-  if (typeof g.__mockGetBrandAdminContext === "function") {
-    return g.__mockGetBrandAdminContext();
-  }
-  return getBrandAdminContext();
+  return realAuthResolvers.resolveBrandAdminContext();
 }

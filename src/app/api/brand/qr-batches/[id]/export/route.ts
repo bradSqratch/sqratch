@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { resolveSession, resolveBrandAdminContext } from "@/lib/auth-session";
+import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
 
 export const dynamic = "force-dynamic";
 
@@ -18,8 +18,16 @@ export async function GET(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
 ) {
+  return exportBatchImpl(request, context, realAuthResolvers);
+}
+
+export async function exportBatchImpl(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> },
+  deps: AuthResolvers,
+) {
   try {
-    const session = await resolveSession();
+    const session = await deps.resolveSession();
 
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -47,7 +55,7 @@ export async function GET(
 
     let brandId: string | null = null;
     if (session.user.role === "BRAND_ADMIN") {
-      const brand = await resolveBrandAdminContext();
+      const brand = await deps.resolveBrandAdminContext();
       if (!brand?.membership?.brand) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }

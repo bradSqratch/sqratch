@@ -21,6 +21,39 @@ export async function POST(request: NextRequest) {
   if (verification.shop) {
     const shopDomain = verification.shop;
 
+    // Identify short-lived OAuth-state / pending-install TokenStore rows for this
+    // shop. Their service keys are random nonces (shopify_oauth_state:<nonce>,
+    // shopify_pending_install:<nonce>) and therefore do NOT contain the shop
+    // domain — the shop is only present as a top-level plaintext `shop` field
+    // inside the stored JSON payload (true for both the OAuth-state record and
+    // both pending-install shapes). The previous `service contains shopDomain`
+    // filter could never match, so this is a bounded scan that parses only the
+    // small set of shopify_* temp rows and matches on the parsed `shop`. No
+    // token value is decrypted — only the plaintext `shop` field is read.
+    const TEMP_TOKEN_SCAN_LIMIT = 1000;
+    const tempRows = await prisma.tokenStore.findMany({
+      where: {
+        OR: [
+          { service: { startsWith: "shopify_oauth_state:" } },
+          { service: { startsWith: "shopify_pending_install:" } },
+        ],
+      },
+      select: { service: true, token: true },
+      take: TEMP_TOKEN_SCAN_LIMIT,
+    });
+
+    const orphanServices = tempRows
+      .filter((row) => {
+        try {
+          const parsed = JSON.parse(row.token) as { shop?: unknown };
+          return parsed?.shop === shopDomain;
+        } catch {
+          // Unparseable rows are left for TTL expiry rather than guessed at.
+          return false;
+        }
+      })
+      .map((row) => row.service);
+
     // Find the brand holding this domain first so we can use its id in the
     // redemption update. updateMany on Brand will null the domain, so we need
     // the id before we null it.
@@ -29,13 +62,15 @@ export async function POST(request: NextRequest) {
       select: { id: true },
     });
 
+    const operations: Prisma.PrismaPromise<unknown>[] = [];
+
     if (brand) {
-      await prisma.$transaction([
-        // Clear all Shopify credentials, token metadata, and the shop domain
-        // on the Brand. Nulling shopifyShopDomain releases the @unique slot so
-        // the same shop can re-install in future. Timestamps are retained as
-        // an anonymised audit trail (no personal data). Business records are
-        // not touched.
+      // Clear all Shopify credentials, token metadata, and the shop domain on
+      // the Brand. Nulling shopifyShopDomain releases the @unique slot so the
+      // same shop can re-install in future. Timestamps are retained as an
+      // anonymised audit trail (no personal data). Business records are not
+      // touched.
+      operations.push(
         prisma.brand.update({
           where: { id: brand.id },
           data: {
@@ -62,16 +97,22 @@ export async function POST(request: NextRequest) {
             shopifyUserErrors: Prisma.JsonNull,
           },
         }),
-        // Delete any orphaned OAuth state / pending install tokens for this shop.
+      );
+    }
+
+    // Delete only the temp tokens whose payload shop matches this shop. An empty
+    // `in` list deletes nothing, so this is safe when no orphans were found and
+    // never touches other shops' OAuth states or pending installs.
+    if (orphanServices.length > 0) {
+      operations.push(
         prisma.tokenStore.deleteMany({
-          where: {
-            OR: [
-              { service: { startsWith: `shopify_oauth_state:`, contains: shopDomain } },
-              { service: { startsWith: `shopify_pending_install:`, contains: shopDomain } },
-            ],
-          },
+          where: { service: { in: orphanServices } },
         }),
-      ]);
+      );
+    }
+
+    if (operations.length > 0) {
+      await prisma.$transaction(operations);
     }
 
     // Sanitized audit log: topic + shop domain (the domain itself is being
@@ -84,6 +125,7 @@ export async function POST(request: NextRequest) {
         shopDomain,
         brandFound: !!brand,
         redactionPerformed: !!brand,
+        orphanTokensDeleted: orphanServices.length,
       }),
     );
   }
