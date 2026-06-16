@@ -304,20 +304,33 @@ export default function BrandQRBatchesPage() {
                       <td className="py-3">{formatDateTime(batch.createdAt)}</td>
                       <td className="py-3">{batch.quantity}</td>
                       <td className="py-3">
-                        <Button
-                          type="button"
-                          variant="destructive"
-                          disabled={deletingBatchId === batch.id}
-                          className="h-8 rounded-xl bg-[#C85A63] px-5 text-white hover:bg-[#b94b54]"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void handleDeleteBatch(batch.id);
-                          }}
-                        >
-                          {deletingBatchId === batch.id
-                            ? "Deleting..."
-                            : "Delete Batch"}
-                        </Button>
+                        <div className="flex gap-2">
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="h-8 rounded-xl border-white/20 bg-white/10 px-4 text-white hover:bg-white/20"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              window.location.href = `/api/brand/qr-batches/${batch.id}/export`;
+                            }}
+                          >
+                            Export CSV
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="destructive"
+                            disabled={deletingBatchId === batch.id}
+                            className="h-8 rounded-xl bg-[#C85A63] px-5 text-white hover:bg-[#b94b54]"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleDeleteBatch(batch.id);
+                            }}
+                          >
+                            {deletingBatchId === batch.id
+                              ? "Deleting..."
+                              : "Delete Batch"}
+                          </Button>
+                        </div>
                       </td>
                     </tr>
                   ))}

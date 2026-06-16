@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import { v2 as cloudinary } from "cloudinary";
 import prisma from "@/lib/prisma";
-import { getBrandAdminContext } from "@/lib/brand-auth";
+import { getBrandAdminContext, BrandAdminContext } from "@/lib/brand-auth";
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -9,6 +11,14 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
   secure: true,
 });
+
+interface CustomSession {
+  user: {
+    id: string;
+    role: string;
+    email?: string | null;
+  };
+}
 
 function extractCloudinaryPublicId(imageUrl: string) {
   const url = new URL(imageUrl);
@@ -28,13 +38,30 @@ export async function DELETE(
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
-    const context = await getBrandAdminContext();
+    const g = globalThis as Record<string, unknown>;
+    const mockSession = g.__mockGetServerSession as
+      | ((options: unknown) => Promise<CustomSession | null>)
+      | undefined;
+    const session = mockSession
+      ? await mockSession(authOptions)
+      : ((await getServerSession(authOptions)) as CustomSession | null);
 
-    if (!context?.membership?.brand) {
-      return NextResponse.json(
-        { error: "Brand admin access required." },
-        { status: 403 },
-      );
+    if (!session) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    let brandId: string | null = null;
+    if (session.user.role === "BRAND_ADMIN") {
+      const mockBrandCtx = g.__mockGetBrandAdminContext as (() => Promise<BrandAdminContext | null>) | undefined;
+      const brand = mockBrandCtx
+        ? await mockBrandCtx()
+        : await getBrandAdminContext();
+      if (!brand?.membership?.brand) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+      brandId = brand.membership.brand.id;
+    } else if (session.user.role !== "ADMIN") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     const { id } = await params;
@@ -42,10 +69,9 @@ export async function DELETE(
     const batch = await prisma.qRCodeBatch.findFirst({
       where: {
         id,
-        campaign: {
-          brandId: context.membership.brand.id,
-        },
+        ...(brandId ? { campaign: { brandId } } : {}),
       },
+
       select: {
         id: true,
         qrCodes: {

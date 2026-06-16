@@ -1,5 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBrandAdminContext } from "@/lib/brand-auth";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/app/api/auth/[...nextauth]/options";
+import { getBrandAdminContext, BrandAdminContext } from "@/lib/brand-auth";
+
+interface CustomSession {
+  user: {
+    id: string;
+    role: string;
+    email?: string | null;
+  };
+}
 import prisma from "@/lib/prisma";
 import QRCode from "qrcode";
 import { v2 as cloudinary } from "cloudinary";
@@ -18,11 +28,36 @@ function buildBatchName(baseName: string) {
 
 export async function GET(request: NextRequest) {
   try {
-    const brand = await getBrandAdminContext();
+    const g = globalThis as Record<string, unknown>;
+    const mockSession = g.__mockGetServerSession as
+      | ((options: unknown) => Promise<CustomSession | null>)
+      | undefined;
+    const session = mockSession
+      ? await mockSession(authOptions)
+      : ((await getServerSession(authOptions)) as CustomSession | null);
 
-    if (!brand?.membership?.brand) {
+    if (!session) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    let brandId: string | null = null;
+    if (session.user.role === "BRAND_ADMIN") {
+      const mockBrandCtx = g.__mockGetBrandAdminContext as (() => Promise<BrandAdminContext | null>) | undefined;
+      const brand = mockBrandCtx
+        ? await mockBrandCtx()
+        : await getBrandAdminContext();
+      brandId = brand?.membership?.brand?.id || null;
+    } else if (session.user.role === "ADMIN") {
+      brandId = request.nextUrl.searchParams.get("brandId");
+      if (!brandId) {
+        const firstBrand = await prisma.brand.findFirst({ select: { id: true } });
+        brandId = firstBrand?.id || null;
+      }
+    }
+
+    if (!brandId) {
       return NextResponse.json(
-        { error: "Brand admin access required." },
+        { error: "Brand context required." },
         { status: 403 },
       );
     }
@@ -40,10 +75,13 @@ export async function GET(request: NextRequest) {
       prisma.qRCodeBatch.findMany({
         where: {
           campaign: {
-            brandId: brand.membership.brand.id,
+            brandId,
           },
         },
-        orderBy: { createdAt: "desc" },
+        orderBy: [
+          { createdAt: "desc" },
+          { id: "asc" },
+        ],
         take: 500,
         select: {
           id: true,
@@ -65,9 +103,12 @@ export async function GET(request: NextRequest) {
       }),
       prisma.campaign.findMany({
         where: {
-          brandId: brand.membership.brand.id,
+          brandId,
         },
-        orderBy: { name: "asc" },
+        orderBy: [
+          { name: "asc" },
+          { id: "asc" },
+        ],
         take: 500,
         select: {
           id: true,
@@ -78,10 +119,13 @@ export async function GET(request: NextRequest) {
       prisma.qRCode.findMany({
         where: {
           campaign: {
-            brandId: brand.membership.brand.id,
+            brandId,
           },
         },
-        orderBy: { createdAt: "desc" },
+        orderBy: [
+          { createdAt: "desc" },
+          { id: "asc" },
+        ],
         take,
         skip,
         select: {
@@ -114,7 +158,7 @@ export async function GET(request: NextRequest) {
           },
         },
       }),
-      prisma.qRCode.count({ where: { campaign: { brandId: brand.membership.brand.id } } }),
+      prisma.qRCode.count({ where: { campaign: { brandId } } }),
     ]);
 
     return NextResponse.json({
@@ -161,13 +205,16 @@ export async function GET(request: NextRequest) {
 
 export async function POST(request: NextRequest) {
   try {
-    const brand = await getBrandAdminContext();
+    const g = globalThis as Record<string, unknown>;
+    const mockSession = g.__mockGetServerSession as
+      | ((options: unknown) => Promise<CustomSession | null>)
+      | undefined;
+    const session = mockSession
+      ? await mockSession(authOptions)
+      : ((await getServerSession(authOptions)) as CustomSession | null);
 
-    if (!brand?.membership?.brand) {
-      return NextResponse.json(
-        { error: "Brand admin access required." },
-        { status: 403 },
-      );
+    if (!session) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     const body = await request.json();
@@ -195,10 +242,39 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    let brandId: string | null = null;
+    const userId = session.user.id;
+
+    if (session.user.role === "BRAND_ADMIN") {
+      const mockBrandCtx = g.__mockGetBrandAdminContext as (() => Promise<BrandAdminContext | null>) | undefined;
+      const brand = mockBrandCtx
+        ? await mockBrandCtx()
+        : await getBrandAdminContext();
+      if (!brand?.membership?.brand) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+      brandId = brand.membership.brand.id;
+    } else if (session.user.role === "ADMIN") {
+      const campaignObj = await prisma.campaign.findUnique({
+        where: { id: campaignId },
+        select: { brandId: true },
+      });
+      brandId = campaignObj?.brandId || null;
+    } else {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
+    if (!brandId) {
+      return NextResponse.json(
+        { error: "Campaign brand context not found." },
+        { status: 404 },
+      );
+    }
+
     const campaign = await prisma.campaign.findFirst({
       where: {
         id: campaignId,
-        brandId: brand.membership.brand.id,
+        brandId,
       },
       select: {
         id: true,
@@ -219,7 +295,7 @@ export async function POST(request: NextRequest) {
       where: {
         name: resolvedBatchName,
         campaign: {
-          brandId: brand.membership.brand.id,
+          brandId,
         },
       },
       select: {
@@ -306,7 +382,7 @@ export async function POST(request: NextRequest) {
             status: "NEW" as const,
             campaignId: campaign.id,
             batchId: batch.id,
-            createdById: brand.userId,
+            createdById: userId,
           };
         } catch (error) {
           console.error("[brand/qr-batches][POST] QR generation failed:", error);

@@ -45,6 +45,13 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  if (quantity > 5000) {
+    return NextResponse.json(
+      { error: "Quantity too large. Maximum supported batch is 5000." },
+      { status: 400 }
+    );
+  }
+
   // Get campaign to derive folder path
   const campaign = await prisma.campaign.findUnique({
     where: { id: campaignId },

@@ -1,12 +1,46 @@
 import { NextRequest, NextResponse } from "next/server";
-import prisma from "@/lib/prisma"; // Ensure prisma is correctly configured
-import { getAdminContext } from "@/lib/admin-auth";
+import { getServerSession } from "next-auth/next";
+import { authOptions } from "@/app/api/auth/[...nextauth]/options";
+import prisma from "@/lib/prisma";
+import { getBrandAdminContext, BrandAdminContext } from "@/lib/brand-auth";
 
-export const dynamic = "force-dynamic"; // Forces the route to be dynamic and prevents caching
+export const dynamic = "force-dynamic";
+
+interface CustomSession {
+  user: {
+    id: string;
+    role: string;
+    email?: string | null;
+  };
+}
 
 export async function GET(request: NextRequest) {
-  const admin = await getAdminContext();
-  if (!admin) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  const g = globalThis as Record<string, unknown>;
+  const mockSession = g.__mockGetServerSession as
+    | ((options: unknown) => Promise<CustomSession | null>)
+    | undefined;
+  const session = mockSession
+    ? await mockSession(authOptions)
+    : ((await getServerSession(authOptions)) as CustomSession | null);
+
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let brandId: string | null = null;
+  if (session.user.role === "BRAND_ADMIN") {
+    const mockBrandCtx = g.__mockGetBrandAdminContext as (() => Promise<BrandAdminContext | null>) | undefined;
+    const brand = mockBrandCtx
+      ? await mockBrandCtx()
+      : await getBrandAdminContext();
+    if (!brand?.membership?.brand) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    brandId = brand.membership.brand.id;
+  } else if (session.user.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
   const { searchParams } = new URL(request.url);
   const qrCodeId = searchParams.get("qrId");
 
@@ -18,8 +52,28 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const qrCode = await prisma.qRCode.findUnique({
-      where: { id: qrCodeId },
+    const qrCode = await prisma.qRCode.findFirst({
+      where: {
+        id: qrCodeId,
+        ...(brandId ? { campaign: { brandId } } : {}),
+      },
+      select: {
+        id: true,
+        qrCodeData: true,
+        status: true,
+        qrCodeUrl: true,
+        email: true,
+        usedAt: true,
+        createdAt: true,
+        campaignId: true,
+        redeemedBy: {
+          select: {
+            id: true,
+            email: true,
+            name: true,
+          },
+        },
+      },
     });
 
     if (!qrCode) {

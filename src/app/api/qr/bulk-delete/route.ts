@@ -1,9 +1,9 @@
-// src/app/api/qr/bulk-delete/route.ts
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
 import { v2 as cloudinary } from "cloudinary";
+import { getBrandAdminContext, BrandAdminContext } from "@/lib/brand-auth";
 
 // configure cloudinary same as other route
 cloudinary.config({
@@ -13,11 +13,39 @@ cloudinary.config({
   secure: true,
 });
 
+interface CustomSession {
+  user: {
+    id: string;
+    role: string;
+    email?: string | null;
+  };
+}
+
 export async function POST(req: Request) {
-  // auth
-  const session = await getServerSession(authOptions);
-  if (!session || session.user.role !== "ADMIN") {
-    return NextResponse.json({ error: "Admins only" }, { status: 403 });
+  const g = globalThis as Record<string, unknown>;
+  const mockSession = g.__mockGetServerSession as
+    | ((options: unknown) => Promise<CustomSession | null>)
+    | undefined;
+  const session = mockSession
+    ? await mockSession(authOptions)
+    : ((await getServerSession(authOptions)) as CustomSession | null);
+
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let brandId: string | null = null;
+  if (session.user.role === "BRAND_ADMIN") {
+    const mockBrandCtx = g.__mockGetBrandAdminContext as (() => Promise<BrandAdminContext | null>) | undefined;
+    const brand = mockBrandCtx
+      ? await mockBrandCtx()
+      : await getBrandAdminContext();
+    if (!brand?.membership?.brand) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    brandId = brand.membership.brand.id;
+  } else if (session.user.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   let body: { ids?: string[] };
@@ -34,7 +62,10 @@ export async function POST(req: Request) {
 
   // get all qrcodes so we can delete from cloudinary
   const qrCodes = await prisma.qRCode.findMany({
-    where: { id: { in: ids } },
+    where: {
+      id: { in: ids },
+      ...(brandId ? { campaign: { brandId } } : {}),
+    },
     select: { id: true, qrCodeUrl: true },
   });
 
@@ -57,13 +88,15 @@ export async function POST(req: Request) {
     }
   }
 
+  const qrCodeIdsToDelete = qrCodes.map((q) => q.id);
+
   // now delete from DB in ONE query
   await prisma.qRCode.deleteMany({
-    where: { id: { in: ids } },
+    where: { id: { in: qrCodeIdsToDelete } },
   });
 
   return NextResponse.json({
     success: true,
-    deletedCount: ids.length,
+    deletedCount: qrCodeIdsToDelete.length,
   });
 }

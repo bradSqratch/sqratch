@@ -4,6 +4,7 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
 import QRCode from "qrcode";
 import { v2 as cloudinary } from "cloudinary";
+import { getBrandAdminContext, BrandAdminContext } from "@/lib/brand-auth";
 
 // Cloudinary config
 cloudinary.config({
@@ -13,13 +14,42 @@ cloudinary.config({
   secure: true,
 });
 
+interface CustomSession {
+  user: {
+    id: string;
+    role: string;
+    email?: string | null;
+  };
+}
+
 export async function PATCH(
   req: Request,
   context: { params: Promise<{ id: string }> }
 ) {
-  const session = await getServerSession(authOptions);
-  if (!session || session.user.role !== "ADMIN") {
-    return NextResponse.json({ error: "Admins only" }, { status: 403 });
+  const g = globalThis as Record<string, unknown>;
+  const mockSession = g.__mockGetServerSession as
+    | ((options: unknown) => Promise<CustomSession | null>)
+    | undefined;
+  const session = mockSession
+    ? await mockSession(authOptions)
+    : ((await getServerSession(authOptions)) as CustomSession | null);
+
+  if (!session) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  let brandId: string | null = null;
+  if (session.user.role === "BRAND_ADMIN") {
+    const mockBrandCtx = g.__mockGetBrandAdminContext as (() => Promise<BrandAdminContext | null>) | undefined;
+    const brand = mockBrandCtx
+      ? await mockBrandCtx()
+      : await getBrandAdminContext();
+    if (!brand?.membership?.brand) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+    brandId = brand.membership.brand.id;
+  } else if (session.user.role !== "ADMIN") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   const { id } = await context.params;
@@ -34,8 +64,11 @@ export async function PATCH(
     }
   }
 
-  const existingQRCode = await prisma.qRCode.findUnique({
-    where: { id },
+  const existingQRCode = await prisma.qRCode.findFirst({
+    where: {
+      id,
+      ...(brandId ? { campaign: { brandId } } : {}),
+    },
   });
 
   if (!existingQRCode) {
@@ -83,12 +116,18 @@ export async function PATCH(
     const dataUri = "data:image/png;base64," + buffer.toString("base64");
 
     // Ensure folder for target campaign exists
-    const targetCampaign = await prisma.campaign.findUnique({
-      where: { id: campaignId },
+    const targetCampaign = await prisma.campaign.findFirst({
+      where: {
+        id: campaignId,
+        ...(brandId ? { brandId } : {}),
+      },
       select: { name: true },
     });
+    if (!targetCampaign) {
+      return NextResponse.json({ error: "Target campaign not found" }, { status: 404 });
+    }
     const targetFolder = `qrCodes/${(
-      targetCampaign?.name ?? "_unknown"
+      targetCampaign.name
     ).replace(/[\\/]/g, "-")}`;
     try {
       await cloudinary.api.create_folder(targetFolder);
