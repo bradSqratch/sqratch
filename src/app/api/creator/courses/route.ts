@@ -1,6 +1,28 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCreatorContext } from "@/lib/creator-auth";
+import {
+  resolveLessonVideoStorageReference,
+  type LessonVideoStorageReference,
+} from "@/lib/lesson-video-reference";
 import prisma from "@/lib/prisma";
+import { deleteFileFromStorage } from "@/lib/storage-upload";
+
+async function cleanupLessonVideo(
+  reference: LessonVideoStorageReference | null,
+  context: string,
+) {
+  if (!reference) {
+    return;
+  }
+
+  const deleted = await deleteFileFromStorage(reference.bucket, reference.path);
+
+  if (!deleted) {
+    console.error(
+      `[creator/courses][${context}] Failed to delete lesson video object.`,
+    );
+  }
+}
 
 export async function GET(request: NextRequest) {
   try {
@@ -248,6 +270,89 @@ export async function PATCH(request: NextRequest) {
     console.error("[creator/courses][PATCH] Error:", error);
     return NextResponse.json(
       { error: "Failed to update course." },
+      { status: 500 },
+    );
+  }
+}
+
+export async function DELETE(request: NextRequest) {
+  try {
+    const creator = await getCreatorContext();
+
+    if (!creator) {
+      return NextResponse.json(
+        { error: "Creator access required." },
+        { status: 403 },
+      );
+    }
+
+    const body = await request.json().catch(() => null);
+    const id = String(body?.id || "").trim();
+
+    if (!id) {
+      return NextResponse.json(
+        { error: "Course id is required." },
+        { status: 400 },
+      );
+    }
+
+    const course = await prisma.course.findFirst({
+      where: {
+        id,
+        experience: {
+          creator: {
+            userId: creator.userId,
+          },
+        },
+      },
+      select: {
+        id: true,
+        lessons: {
+          select: {
+            id: true,
+            courseId: true,
+            videoUploadUrl: true,
+            videoStorageBucket: true,
+            videoStoragePath: true,
+            course: {
+              select: {
+                experience: {
+                  select: {
+                    slug: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    if (!course) {
+      return NextResponse.json({ error: "Course not found." }, { status: 404 });
+    }
+
+    const videoReferences = course.lessons.map((lesson) =>
+      resolveLessonVideoStorageReference({
+        lesson,
+        courseId: lesson.courseId,
+        experienceSlug: lesson.course.experience.slug,
+      }),
+    );
+
+    await prisma.course.delete({ where: { id: course.id } });
+
+    await Promise.all(
+      videoReferences.map((reference) =>
+        cleanupLessonVideo(reference, "DELETE"),
+      ),
+    );
+
+    return NextResponse.json({ data: { id: course.id } });
+  } catch (error) {
+    console.error("[creator/courses][DELETE] Error:", error);
+    return NextResponse.json(
+      { error: "Failed to delete course." },
       { status: 500 },
     );
   }

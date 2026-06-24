@@ -1,6 +1,14 @@
 "use client";
 
-import { use, useCallback, useEffect, useRef, useState } from "react";
+import {
+  type ReactNode,
+  use,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
+import { toast } from "sonner";
 import {
   LessonProductLinksSection,
   type LessonProductLinkItem,
@@ -118,6 +126,7 @@ export default function CreatorCourseLessonsPage({
   const [draft, setDraft] = useState<LessonDraft>(emptyLessonDraft);
   const [saving, setSaving] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [operation, setOperation] = useState<LessonOperation | null>(null);
   const [error, setError] = useState<string | null>(null);
   const uploadAbortControllerRef = useRef<AbortController | null>(null);
@@ -297,6 +306,43 @@ export default function CreatorCourseLessonsPage({
     }
   }
 
+  async function deleteLesson(lessonId: string) {
+    if (submissionInFlightRef.current || saving || savingId || deletingId) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Delete this lesson? This cannot be undone.",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    submissionInFlightRef.current = true;
+    setDeletingId(lessonId);
+    setError(null);
+
+    try {
+      await fetchJson("/api/creator/lessons", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: lessonId }),
+      });
+      await load();
+      toast.success("Lesson deleted", {
+        description: "The lesson was removed from this course.",
+      });
+    } catch (deleteError) {
+      setError(getErrorMessage(deleteError, "Failed to delete lesson."));
+    } finally {
+      submissionInFlightRef.current = false;
+      setDeletingId(null);
+    }
+  }
+
+  const isMutating = saving || savingId !== null || deletingId !== null;
+
   return (
     <CreatorPageShell
       title={data ? `${data.course.title} Lessons` : "Manage Lessons"}
@@ -314,7 +360,7 @@ export default function CreatorCourseLessonsPage({
           submitLabel={saving ? "Creating..." : "Create lesson"}
           onSubmit={() => void createLesson()}
           operation={operation?.key === "new" ? operation : null}
-          busy={saving}
+          busy={isMutating}
           onCancelUpload={cancelUpload}
           onValidationError={setError}
         />
@@ -341,8 +387,11 @@ export default function CreatorCourseLessonsPage({
               key={lesson.id}
               lesson={lesson}
               saving={savingId === lesson.id}
+              deleting={deletingId === lesson.id}
+              disabled={isMutating}
               operation={operation?.key === lesson.id ? operation : null}
               onSave={updateLesson}
+              onDelete={deleteLesson}
               onRefresh={load}
               onCancelUpload={cancelUpload}
               onValidationError={setError}
@@ -357,16 +406,22 @@ export default function CreatorCourseLessonsPage({
 function EditableLessonCard({
   lesson,
   saving,
+  deleting,
+  disabled,
   operation,
   onSave,
+  onDelete,
   onRefresh,
   onCancelUpload,
   onValidationError,
 }: {
   lesson: Lesson;
   saving: boolean;
+  deleting: boolean;
+  disabled: boolean;
   operation: LessonOperation | null;
   onSave: (id: string, lessonDraft: LessonDraft) => Promise<void>;
+  onDelete: (lessonId: string) => Promise<void>;
   onRefresh: () => Promise<void>;
   onCancelUpload: () => void;
   onValidationError: (message: string | null) => void;
@@ -406,9 +461,20 @@ function EditableLessonCard({
           submitLabel={saving ? "Saving..." : "Save lesson"}
           onSubmit={() => void onSave(lesson.id, draft)}
           operation={operation}
-          busy={saving}
+          busy={disabled}
           onCancelUpload={onCancelUpload}
           onValidationError={onValidationError}
+          secondaryAction={
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => void onDelete(lesson.id)}
+              disabled={disabled}
+              className="rounded-full border-red-400/45 bg-red-500/10 px-4 text-red-200 hover:border-red-300/70 hover:bg-red-500/20 hover:text-red-100 sm:px-6"
+            >
+              {deleting ? "Deleting..." : "Delete lesson"}
+            </Button>
+          }
         />
         <LessonProductLinksSection
           lessonId={lesson.id}
@@ -429,6 +495,7 @@ function LessonEditor({
   busy,
   onCancelUpload,
   onValidationError,
+  secondaryAction,
 }: {
   draft: LessonDraft;
   onChange: (draft: LessonDraft) => void;
@@ -438,6 +505,7 @@ function LessonEditor({
   busy: boolean;
   onCancelUpload: () => void;
   onValidationError: (message: string | null) => void;
+  secondaryAction?: ReactNode;
 }) {
   return (
     <div className="space-y-4">
@@ -603,21 +671,24 @@ function LessonEditor({
         </div>
       ) : null}
 
-      <Button
-        type="button"
-        onClick={onSubmit}
-        disabled={
-          busy ||
-          !draft.title.trim() ||
-          (draft.videoSource === "YOUTUBE" && !draft.youtubeUrl.trim()) ||
-          (draft.videoSource === "UPLOAD" &&
-            !draft.videoAssetUrl.trim() &&
-            !draft.file)
-        }
-        className="rounded-full border border-white bg-white text-black"
-      >
-        {submitLabel}
-      </Button>
+      <div className="flex w-full items-center justify-between gap-3">
+        <Button
+          type="button"
+          onClick={onSubmit}
+          disabled={
+            busy ||
+            !draft.title.trim() ||
+            (draft.videoSource === "YOUTUBE" && !draft.youtubeUrl.trim()) ||
+            (draft.videoSource === "UPLOAD" &&
+              !draft.videoAssetUrl.trim() &&
+              !draft.file)
+          }
+          className="rounded-full border border-white bg-white px-4 text-black sm:px-6"
+        >
+          {submitLabel}
+        </Button>
+        {secondaryAction}
+      </div>
     </div>
   );
 }

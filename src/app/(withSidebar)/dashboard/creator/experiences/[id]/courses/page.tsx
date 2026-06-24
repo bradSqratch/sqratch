@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { use, useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 import { CreatorPageShell } from "@/components/creator/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
@@ -49,6 +50,7 @@ export default function CreatorExperienceCoursesPage({
   const [newCourse, setNewCourse] = useState(emptyCourse);
   const [savingNew, setSavingNew] = useState(false);
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -73,7 +75,7 @@ export default function CreatorExperienceCoursesPage({
   }, [experienceId, load]);
 
   async function createCourse() {
-    if (!newCourse.title.trim()) {
+    if (!newCourse.title.trim() || savingNew || savingId || deletingId) {
       return;
     }
 
@@ -101,6 +103,10 @@ export default function CreatorExperienceCoursesPage({
   }
 
   async function saveCourse(course: Course) {
+    if (savingNew || savingId || deletingId) {
+      return;
+    }
+
     setSavingId(course.id);
     setError(null);
 
@@ -117,6 +123,39 @@ export default function CreatorExperienceCoursesPage({
       setError(getErrorMessage(saveError, "Failed to update course."));
     } finally {
       setSavingId(null);
+    }
+  }
+
+  async function deleteCourse(courseId: string) {
+    if (savingNew || savingId || deletingId) {
+      return;
+    }
+
+    const confirmed = window.confirm(
+      "Delete this course? This will also delete all lessons inside it. This cannot be undone.",
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    setDeletingId(courseId);
+    setError(null);
+
+    try {
+      await fetchJson("/api/creator/courses", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: courseId }),
+      });
+      await load();
+      toast.success("Course deleted", {
+        description: "The course and its lessons were removed.",
+      });
+    } catch (deleteError) {
+      setError(getErrorMessage(deleteError, "Failed to delete course."));
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -203,7 +242,12 @@ export default function CreatorExperienceCoursesPage({
           <Button
             type="button"
             onClick={() => void createCourse()}
-            disabled={savingNew || !newCourse.title.trim()}
+            disabled={
+              savingNew ||
+              savingId !== null ||
+              deletingId !== null ||
+              !newCourse.title.trim()
+            }
             className="rounded-full border border-white bg-white text-black"
           >
             {savingNew ? "Creating..." : "Create course"}
@@ -234,7 +278,10 @@ export default function CreatorExperienceCoursesPage({
               key={course.id}
               course={course}
               saving={savingId === course.id}
+              deleting={deletingId === course.id}
+              disabled={savingNew || savingId !== null || deletingId !== null}
               onSave={saveCourse}
+              onDelete={deleteCourse}
             />
           ))}
         </div>
@@ -246,17 +293,25 @@ export default function CreatorExperienceCoursesPage({
 function EditableCourseCard({
   course,
   saving,
+  deleting,
+  disabled,
   onSave,
+  onDelete,
 }: {
   course: Course;
   saving: boolean;
+  deleting: boolean;
+  disabled: boolean;
   onSave: (course: Course) => Promise<void>;
+  onDelete: (courseId: string) => Promise<void>;
 }) {
   const [draft, setDraft] = useState(course);
 
   useEffect(() => {
     setDraft(course);
   }, [course]);
+
+  const lessonManagementHref = `/dashboard/creator/courses/${course.id}/lessons`;
 
   return (
     <PageCard>
@@ -314,20 +369,34 @@ function EditableCourseCard({
         <Button
           type="button"
           onClick={() => void onSave(draft)}
-          disabled={saving || !draft.title.trim()}
+          disabled={disabled || !draft.title.trim()}
           className="rounded-full border border-white bg-white text-black"
         >
           {saving ? "Saving..." : "Save course"}
         </Button>
         <Button
-          asChild
+          asChild={!disabled}
+          disabled={disabled}
           variant="outline"
           className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
         >
-          <Link href={`/dashboard/creator/courses/${course.id}/lessons`}>
-            Manage lessons
-          </Link>
+          {disabled ? (
+            <span>Manage lessons</span>
+          ) : (
+            <Link href={lessonManagementHref}>Manage lessons</Link>
+          )}
         </Button>
+        <div className="mt-2 w-full border-t border-red-300/20 pt-4 sm:mt-0 sm:w-auto sm:border-l sm:border-t-0 sm:pl-4 sm:pt-0">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void onDelete(course.id)}
+            disabled={disabled}
+            className="rounded-full border-red-400/45 bg-red-500/10 text-red-200 hover:border-red-300/70 hover:bg-red-500/20 hover:text-red-100"
+          >
+            {deleting ? "Deleting..." : "Delete course"}
+          </Button>
+        </div>
       </div>
 
       <div className="mt-6 grid gap-3 md:grid-cols-2">
