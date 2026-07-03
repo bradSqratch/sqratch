@@ -23,6 +23,7 @@
  */
 
 import { Prisma } from "@prisma/client";
+import { refundShopifyRewardPoints } from "@/lib/points";
 import {
   assertTransition,
   ShopifyRewardRedemptionStatus,
@@ -436,34 +437,37 @@ function buildProductionDeps(): ReconciliationDeps {
             return "skipped" as const;
           }
 
-          // Create refund ledger row — exactly-once guard via composite unique
-          // May throw P2002 which aborts this TX; caught OUTSIDE the transaction below
-          await tx.pointTransaction.create({
-            data: {
-              userId: row.userId,
-              points: row.pointsCost,
-              reason: "SHOPIFY_REWARD_REFUND",
-              shopifyRewardRedemptionId: row.id,
-            },
+          // Central refund helper: restores spendable points, raises lifetime
+          // refunded (never lifetime earned), keeps legacy User.points in sync,
+          // and writes the positive SHOPIFY_REWARD_REFUND ledger row — all inside
+          // this TX. Exactly-once is preserved by the ledger's unique constraints:
+          //   * A refund row already carrying an idempotencyKey → helper returns
+          //     applied:false (no double increment); flip status idempotently here.
+          //   * A historical refund row without an idempotencyKey → helper's create
+          //     hits P2002 and throws, aborting this TX; handled by the OUTSIDE
+          //     catch below, which flips status without incrementing again.
+          const refund = await refundShopifyRewardPoints({
+            userId: row.userId,
+            points: row.pointsCost,
+            shopifyRewardRedemptionId: row.id,
+            db: tx,
           });
 
-          // Refund row created successfully — also increment points
-          await tx.user.update({
-            where: { id: row.userId },
-            data: { points: { increment: row.pointsCost } },
-          });
+          const settledReason = refund.applied
+            ? "reconciled: discount not found"
+            : "reconciled: discount not found (idempotent)";
 
           await tx.shopifyRewardRedemption.update({
             where: { id: row.id },
             data: {
               status: ShopifyRewardRedemptionStatus.REFUNDED,
-              errorMessage: "reconciled: discount not found",
-              lastReconcileReason: "reconciled: discount not found",
+              errorMessage: settledReason,
+              lastReconcileReason: settledReason,
               reconcileLockedUntil: null,
             },
           });
 
-          return "refunded" as const;
+          return refund.applied ? ("refunded" as const) : ("already_refunded" as const);
         });
       } catch (err: unknown) {
         // P2002 = unique constraint violation on uq_point_tx_redemption_reason.

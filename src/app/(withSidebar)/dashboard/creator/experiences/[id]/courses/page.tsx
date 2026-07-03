@@ -16,6 +16,7 @@ type Course = {
   description: string | null;
   access: "PUBLIC" | "PRIVATE";
   sortOrder: number;
+  completionPointsReward: number;
   lessons: Array<{
     id: string;
     title: string;
@@ -38,6 +39,7 @@ const emptyCourse = {
   description: "",
   access: "PUBLIC" as "PUBLIC" | "PRIVATE",
   sortOrder: 0,
+  completionPointsReward: 0,
 };
 
 export default function CreatorExperienceCoursesPage({
@@ -213,6 +215,27 @@ export default function CreatorExperienceCoursesPage({
             />
             <p className="text-xs text-white/45">Lower numbers appear first.</p>
           </div>
+          <div className="space-y-2">
+            <p className="text-sm text-white/70">Course completion points</p>
+            <Input
+              type="number"
+              min={0}
+              max={1000}
+              value={newCourse.completionPointsReward}
+              onChange={(event) =>
+                setNewCourse((current) => ({
+                  ...current,
+                  completionPointsReward: Number(event.target.value || 0),
+                }))
+              }
+              placeholder="0"
+              className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+            />
+            <p className="text-xs text-white/45">
+              Awarded once when a user completes all active lessons in this
+              course. Use 0 for no reward.
+            </p>
+          </div>
         </div>
         <Textarea
           value={newCourse.description}
@@ -340,6 +363,26 @@ function EditableCourseCard({
             className="border-white/10 bg-black/20 text-white"
           />
           <p className="text-xs text-white/45">Lower numbers appear first.</p>
+        </div>
+        <div className="space-y-2">
+          <p className="text-sm text-white/70">Course completion points</p>
+          <Input
+            type="number"
+            min={0}
+            max={1000}
+            value={draft.completionPointsReward}
+            onChange={(event) =>
+              setDraft((current) => ({
+                ...current,
+                completionPointsReward: Number(event.target.value || 0),
+              }))
+            }
+            className="border-white/10 bg-black/20 text-white"
+          />
+          <p className="text-xs text-white/45">
+            Awarded once when a user completes all active lessons. Use 0 for no
+            reward.
+          </p>
         </div>
       </div>
       <Textarea

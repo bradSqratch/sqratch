@@ -136,6 +136,39 @@ before(async () => {
 
   prisma = prismaModule as unknown as MockedPrismaClient;
 
+  // Two-balance point ledger: safe defaults so route tests that don't assert on
+  // points never touch the real database. Per-test t.mock.method overrides win.
+  prismaModule.userPointAccount = {
+    findUnique: async () => ({
+      userId: "user",
+      spendablePoints: 1_000_000,
+      lifetimeEarnedPoints: 0,
+      lifetimeSpentPoints: 0,
+      lifetimeRefundedPoints: 0,
+      version: 0,
+    }),
+    create: async () => ({
+      userId: "user",
+      spendablePoints: 0,
+      lifetimeEarnedPoints: 0,
+      lifetimeSpentPoints: 0,
+      lifetimeRefundedPoints: 0,
+      version: 0,
+    }),
+    update: async () => ({}),
+    updateMany: async () => ({ count: 1 }),
+  };
+  const pointTx = prismaModule.pointTransaction as Record<string, unknown>;
+  pointTx.findUnique = async () => null;
+  pointTx.groupBy = async () => [];
+  pointTx.create = async () => ({ id: "pt-default" });
+  (prismaModule.user as Record<string, unknown>).update = async () => ({});
+  prismaModule.lesson = {
+    findUnique: async () => null,
+    findMany: async () => [],
+  };
+  prismaModule.course = { findUnique: async () => null };
+
   // Import route handlers
   appUninstalledPOST = (await import("../src/app/api/shopify/webhooks/app/uninstalled/route")).POST;
   shopRedactPOST = (await import("../src/app/api/shopify/webhooks/shop/redact/route")).POST;

@@ -6,6 +6,7 @@ import {
 } from "@/lib/lesson-video-reference";
 import prisma from "@/lib/prisma";
 import { deleteFileFromStorage } from "@/lib/storage-upload";
+import { parseRewardPoints } from "@/lib/reward-points-input";
 
 async function cleanupLessonVideo(
   reference: LessonVideoStorageReference | null,
@@ -54,6 +55,7 @@ export async function GET(request: NextRequest) {
           description: true,
           access: true,
           sortOrder: true,
+          completionPointsReward: true,
           experience: {
             select: {
               id: true,
@@ -110,6 +112,7 @@ export async function GET(request: NextRequest) {
         description: true,
         access: true,
         sortOrder: true,
+        completionPointsReward: true,
         lessons: {
           where: { isActive: true },
           orderBy: [{ sortOrder: "asc" }, { createdAt: "asc" }],
@@ -155,12 +158,20 @@ export async function POST(request: NextRequest) {
     const description = String(body?.description || "").trim();
     const access = String(body?.access || "PUBLIC").trim().toUpperCase();
     const sortOrder = Number(body?.sortOrder || 0);
+    const reward = parseRewardPoints(
+      body?.completionPointsReward,
+      "Course completion points",
+    );
 
     if (!experienceId || !title) {
       return NextResponse.json(
         { error: "experienceId and title are required." },
         { status: 400 },
       );
+    }
+
+    if (!reward.ok) {
+      return NextResponse.json({ error: reward.error }, { status: 400 });
     }
 
     const experience = await prisma.experience.findFirst({
@@ -187,6 +198,7 @@ export async function POST(request: NextRequest) {
         description: description || null,
         access: access === "PRIVATE" ? "PRIVATE" : "PUBLIC",
         sortOrder: Number.isFinite(sortOrder) ? sortOrder : 0,
+        completionPointsReward: reward.value,
       },
       select: {
         id: true,
@@ -194,6 +206,7 @@ export async function POST(request: NextRequest) {
         description: true,
         access: true,
         sortOrder: true,
+        completionPointsReward: true,
       },
     });
 
@@ -224,12 +237,20 @@ export async function PATCH(request: NextRequest) {
     const description = String(body?.description || "").trim();
     const access = String(body?.access || "PUBLIC").trim().toUpperCase();
     const sortOrder = Number(body?.sortOrder || 0);
+    const reward = parseRewardPoints(
+      body?.completionPointsReward,
+      "Course completion points",
+    );
 
     if (!id || !title) {
       return NextResponse.json(
         { error: "Course id and title are required." },
         { status: 400 },
       );
+    }
+
+    if (!reward.ok) {
+      return NextResponse.json({ error: reward.error }, { status: 400 });
     }
 
     const existing = await prisma.course.findFirst({
@@ -255,6 +276,7 @@ export async function PATCH(request: NextRequest) {
         description: description || null,
         access: access === "PRIVATE" ? "PRIVATE" : "PUBLIC",
         sortOrder: Number.isFinite(sortOrder) ? sortOrder : 0,
+        completionPointsReward: reward.value,
       },
       select: {
         id: true,
@@ -262,6 +284,7 @@ export async function PATCH(request: NextRequest) {
         description: true,
         access: true,
         sortOrder: true,
+        completionPointsReward: true,
       },
     });
 

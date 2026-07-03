@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import { awardQrScanPoint } from "@/lib/points";
+import {
+  awardQrScanPoint,
+  awardLessonCompletionPoints,
+  awardCourseCompletionPoints,
+} from "@/lib/points";
 import { redeemQrCodeForUser } from "@/lib/qr-redemption";
 import { SESSION_COOKIE_NAME } from "@/lib/session";
 import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
@@ -46,6 +50,10 @@ export async function mergeImpl(request: NextRequest, deps: AuthResolvers) {
     let mergedUnlocks = 0;
     let pointsAwarded = 0;
 
+    // Lessons that are completed for the user after the merge — used to award
+    // creator-configured lesson/course completion rewards below.
+    const completedLessonIds = new Set<string>();
+
     for (const anonRow of anonProgressRows) {
       const existingUserRow = await prisma.lessonProgress.findUnique({
         where: {
@@ -65,6 +73,9 @@ export async function mergeImpl(request: NextRequest, deps: AuthResolvers) {
             isCompleted: anonRow.isCompleted,
           },
         });
+        if (anonRow.isCompleted) {
+          completedLessonIds.add(anonRow.lessonId);
+        }
         mergedLessons += 1;
         continue;
       }
@@ -79,6 +90,9 @@ export async function mergeImpl(request: NextRequest, deps: AuthResolvers) {
           isCompleted: existingUserRow.isCompleted || anonRow.isCompleted,
         },
       });
+      if (existingUserRow.isCompleted || anonRow.isCompleted) {
+        completedLessonIds.add(anonRow.lessonId);
+      }
       mergedLessons += 1;
     }
 
@@ -86,6 +100,33 @@ export async function mergeImpl(request: NextRequest, deps: AuthResolvers) {
       await prisma.lessonProgress.deleteMany({
         where: { sessionId },
       });
+    }
+
+    // Award completion rewards for lessons that became (or already were)
+    // completed by this now-logged-in user. Idempotent via the ledger, so a
+    // reward already granted before the merge is never granted twice. Course
+    // rewards fire only when all active lessons in a course are complete.
+    if (completedLessonIds.size > 0) {
+      try {
+        const mergedLessonRows = await prisma.lesson.findMany({
+          where: { id: { in: Array.from(completedLessonIds) } },
+          select: { id: true, courseId: true },
+        });
+        for (const lessonRow of mergedLessonRows) {
+          await awardLessonCompletionPoints({ userId, lessonId: lessonRow.id });
+        }
+        const affectedCourseIds = new Set(
+          mergedLessonRows.map((lessonRow) => lessonRow.courseId),
+        );
+        for (const courseId of affectedCourseIds) {
+          await awardCourseCompletionPoints({ userId, courseId });
+        }
+      } catch (rewardError) {
+        console.error(
+          "[progress/merge] completion reward error:",
+          rewardError,
+        );
+      }
     }
 
     for (const unlock of anonUnlocks) {

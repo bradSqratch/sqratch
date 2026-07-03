@@ -38,6 +38,7 @@ type Lesson = {
   title: string;
   description: string | null;
   sortOrder: number;
+  completionPointsReward: number;
   videoSource: "YOUTUBE" | "UPLOAD";
   youtubeUrl: string | null;
   videoAssetUrl: string | null;
@@ -64,6 +65,7 @@ type LessonDraft = {
   title: string;
   description: string;
   sortOrder: number;
+  completionPointsReward: number;
   videoSource: "YOUTUBE" | "UPLOAD";
   youtubeUrl: string;
   videoAssetUrl: string;
@@ -82,6 +84,7 @@ const emptyLessonDraft: LessonDraft = {
   title: "",
   description: "",
   sortOrder: 0,
+  completionPointsReward: 0,
   videoSource: "YOUTUBE",
   youtubeUrl: "",
   videoAssetUrl: "",
@@ -219,6 +222,7 @@ export default function CreatorCourseLessonsPage({
           title: draft.title,
           description: draft.description,
           sortOrder: draft.sortOrder,
+          completionPointsReward: draft.completionPointsReward,
           videoSource: draft.videoSource,
           youtubeUrl: draft.youtubeUrl,
           videoAssetUrl,
@@ -279,6 +283,7 @@ export default function CreatorCourseLessonsPage({
           title: lessonDraft.title,
           description: lessonDraft.description,
           sortOrder: lessonDraft.sortOrder,
+          completionPointsReward: lessonDraft.completionPointsReward,
           videoSource: lessonDraft.videoSource,
           youtubeUrl: lessonDraft.youtubeUrl,
           videoAssetUrl,
@@ -430,6 +435,7 @@ function EditableLessonCard({
     title: lesson.title,
     description: lesson.description || "",
     sortOrder: lesson.sortOrder,
+    completionPointsReward: lesson.completionPointsReward,
     videoSource: lesson.videoSource,
     youtubeUrl: lesson.youtubeUrl || "",
     videoAssetUrl: lesson.videoAssetUrl || "",
@@ -443,6 +449,7 @@ function EditableLessonCard({
       title: lesson.title,
       description: lesson.description || "",
       sortOrder: lesson.sortOrder,
+      completionPointsReward: lesson.completionPointsReward,
       videoSource: lesson.videoSource,
       youtubeUrl: lesson.youtubeUrl || "",
       videoAssetUrl: lesson.videoAssetUrl || "",
@@ -538,6 +545,27 @@ function LessonEditor({
             className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
           />
           <p className="text-xs text-white/45">Lower numbers appear first.</p>
+        </div>
+        <div className="space-y-2">
+          <p className="text-sm text-white/70">Lesson completion points</p>
+          <Input
+            type="number"
+            min={0}
+            max={1000}
+            value={draft.completionPointsReward}
+            disabled={busy}
+            onChange={(event) =>
+              onChange({
+                ...draft,
+                completionPointsReward: Number(event.target.value || 0),
+              })
+            }
+            placeholder="0"
+            className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+          />
+          <p className="text-xs text-white/45">
+            Awarded once when a user completes this lesson. Use 0 for no reward.
+          </p>
         </div>
       </div>
 

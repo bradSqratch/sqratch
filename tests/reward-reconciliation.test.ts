@@ -15,6 +15,7 @@
  *  (h) Token unavailable / shop disconnected → RETAIN with reason
  */
 
+import "./env-setup"; // sets DATABASE_URL before reward-reconciliation → points → prisma loads
 import assert from "node:assert/strict";
 import test from "node:test";
 

@@ -6,6 +6,10 @@ import {
   getViewerContext,
 } from "@/lib/experience-access";
 import { attachSessionCookie, ensureViewerSession } from "@/lib/session";
+import {
+  awardLessonCompletionPoints,
+  awardCourseCompletionPoints,
+} from "@/lib/points";
 
 function buildProgressWhere(
   userId: string | null,
@@ -407,6 +411,28 @@ export async function POST(request: NextRequest) {
             updatedAt: true,
           },
         });
+
+    // Award creator-configured completion rewards for logged-in users only.
+    // Anonymous completions are rewarded later, on progress merge. Awards are
+    // idempotent per (user, lesson/course) via the ledger, so retries and repeat
+    // POSTs never double-award. Failures here must not block the progress save.
+    if (access.viewer.userId && progress.isCompleted) {
+      try {
+        await awardLessonCompletionPoints({
+          userId: access.viewer.userId,
+          lessonId,
+        });
+        await awardCourseCompletionPoints({
+          userId: access.viewer.userId,
+          courseId: lesson.courseId,
+        });
+      } catch (rewardError) {
+        console.error(
+          "[progress/lesson][POST] completion reward error:",
+          rewardError,
+        );
+      }
+    }
 
     const normalizedEventName = new Set([
       "lesson_started",

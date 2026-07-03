@@ -1,4 +1,17 @@
-import { Coins, Hammer, Info, QrCode } from "lucide-react";
+import {
+  Award,
+  BookOpen,
+  Coins,
+  Gift,
+  GraduationCap,
+  Hammer,
+  Info,
+  QrCode,
+  RotateCcw,
+  ShoppingBag,
+  Sparkles,
+} from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
@@ -20,6 +33,38 @@ function formatDate(value: Date) {
   }).format(value);
 }
 
+type OverviewTransaction = NonNullable<
+  Awaited<ReturnType<typeof getUserPointsOverview>>
+>["transactions"][number];
+
+/** Human-readable label + icon for a ledger row, keyed by sourceType then reason. */
+function describeTransaction(transaction: OverviewTransaction): {
+  label: string;
+  Icon: LucideIcon;
+} {
+  const key = transaction.sourceType ?? transaction.reason;
+  switch (key) {
+    case "QR_SCAN":
+      return { label: "QR scan reward", Icon: QrCode };
+    case "LESSON_COMPLETION":
+      return { label: "Lesson completed", Icon: GraduationCap };
+    case "COURSE_COMPLETION":
+      return { label: "Course completed", Icon: BookOpen };
+    case "VIDEO_WATCH":
+      return { label: "Video watched", Icon: Sparkles };
+    case "BONUS":
+      return { label: "Bonus points", Icon: Gift };
+    case "REFERRAL":
+      return { label: "Referral reward", Icon: Gift };
+    case "SHOPIFY_REWARD_REDEMPTION":
+      return { label: "Reward redeemed", Icon: ShoppingBag };
+    case "SHOPIFY_REWARD_REFUND":
+      return { label: "Reward refunded", Icon: RotateCcw };
+    default:
+      return { label: "Points activity", Icon: Coins };
+  }
+}
+
 export default async function DashboardPointsPage() {
   const session = await getServerSession(authOptions);
 
@@ -33,9 +78,44 @@ export default async function DashboardPointsPage() {
     redirect("/dashboard");
   }
 
-  const qrTransactions = overview.transactions.filter(
-    (transaction) => transaction.reason === "QR_SCAN",
-  );
+  const { totals, transactions } = overview;
+
+  const summaryCards: Array<{
+    label: string;
+    value: number;
+    hint: string;
+    Icon: LucideIcon;
+    accent: string;
+  }> = [
+    {
+      label: "Current Balance",
+      value: totals.spendablePoints,
+      hint: "Spendable on rewards",
+      Icon: Coins,
+      accent: "text-amber-300",
+    },
+    {
+      label: "Lifetime Earned",
+      value: totals.lifetimeEarnedPoints,
+      hint: "Total participation — never reduced by spending",
+      Icon: Award,
+      accent: "text-emerald-300",
+    },
+    {
+      label: "Lifetime Spent",
+      value: totals.lifetimeSpentPoints,
+      hint: "Redeemed on rewards",
+      Icon: ShoppingBag,
+      accent: "text-sky-300",
+    },
+    {
+      label: "Lifetime Refunded",
+      value: totals.lifetimeRefundedPoints,
+      hint: "Returned to your balance",
+      Icon: RotateCcw,
+      accent: "text-white/70",
+    },
+  ];
 
   return (
     <div className="min-h-screen p-8 text-white">
@@ -49,8 +129,10 @@ export default async function DashboardPointsPage() {
               Points
             </h1>
             <p className="mt-3 max-w-2xl text-sm leading-6 text-white/65">
-              Your current SQRATCH points from redeemed QR codes. Each eligible
-              QR code adds one point once.
+              Your <span className="text-white/85">current balance</span> can be
+              spent on rewards. Your{" "}
+              <span className="text-white/85">lifetime earned</span> points track
+              your total participation and are never reduced when you spend.
             </p>
           </div>
 
@@ -61,40 +143,50 @@ export default async function DashboardPointsPage() {
                 Current Balance
               </p>
               <p className="text-2xl font-semibold text-white">
-                {overview.totals.currentPoints}
+                {totals.spendablePoints}
               </p>
             </div>
           </div>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          {summaryCards.map((card) => (
+            <Card
+              key={card.label}
+              className="rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl"
+            >
+              <CardContent className="flex flex-col gap-3 p-6">
+                <div className="flex items-center gap-2 text-white/60">
+                  <card.Icon className={`h-4 w-4 ${card.accent}`} />
+                  <p className="text-xs uppercase tracking-[0.2em]">
+                    {card.label}
+                  </p>
+                </div>
+                <p className="text-4xl font-semibold tracking-tight text-white">
+                  {card.value}
+                </p>
+                <p className="text-xs text-white/45">{card.hint}</p>
+              </CardContent>
+            </Card>
+          ))}
         </div>
 
         <Card className="rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
           <CardContent className="flex flex-col gap-4 p-8 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="text-sm uppercase tracking-[0.22em] text-white/45">
-                Current Balance
+                Lifetime Earned
               </p>
               <h2 className="mt-3 text-6xl font-semibold tracking-tight text-white">
-                {overview.totals.currentPoints}
+                {totals.lifetimeEarnedPoints}
               </h2>
               <p className="mt-3 text-sm text-white/55">
-                {qrTransactions.length} redeemed QR
-                {qrTransactions.length === 1 ? "" : "s"} recorded
+                Future SQRATCH minting is based on your lifetime earned points —
+                spending on rewards never lowers it.
               </p>
             </div>
 
             <div className="flex w-full flex-col gap-3 md:w-auto md:items-end">
-              <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/20 px-5 py-4 text-white/80">
-                <QrCode className="h-5 w-5 text-amber-300" />
-                <div>
-                  <p className="text-xs uppercase tracking-[0.2em] text-white/45">
-                    Rule
-                  </p>
-                  <p className="text-sm text-white/75">
-                    1 point per redeemed QR code
-                  </p>
-                </div>
-              </div>
-
               <div className="flex flex-wrap items-center gap-2">
                 <Button
                   type="button"
@@ -121,7 +213,7 @@ export default async function DashboardPointsPage() {
                     className="max-w-xs border border-white/10 bg-[#111827] text-white"
                   >
                     Only people who go through the SQRATCH experience will be
-                    able to mint.
+                    able to mint, based on lifetime earned points.
                   </TooltipContent>
                 </Tooltip>
               </div>
@@ -129,27 +221,30 @@ export default async function DashboardPointsPage() {
           </CardContent>
         </Card>
 
-        <ShopifyRewardsClient currentPoints={overview.totals.currentPoints} />
+        <ShopifyRewardsClient currentPoints={totals.spendablePoints} />
 
         <Card className="rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
           <CardContent className="p-6">
             <div className="flex items-center justify-between gap-4">
               <div>
-                <h2 className="text-xl font-semibold">Reward History</h2>
+                <h2 className="text-xl font-semibold">Points Activity</h2>
                 <p className="mt-1 text-sm text-white/55">
-                  Most recent points activity for your account.
+                  Recent activity across QR scans, lessons, courses, rewards,
+                  refunds and bonuses.
                 </p>
               </div>
             </div>
 
             <div className="mt-6 space-y-3">
-              {qrTransactions.length === 0 ? (
+              {transactions.length === 0 ? (
                 <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 px-5 py-8 text-sm text-white/55">
-                  No points earned yet. Scan an eligible QR code and log in to
+                  No points activity yet. Scan an eligible QR code and log in to
                   start earning SQRATCH points.
                 </div>
               ) : (
-                qrTransactions.map((transaction) => {
+                transactions.map((transaction) => {
+                  const { label, Icon } = describeTransaction(transaction);
+                  const isPositive = transaction.points >= 0;
                   return (
                     <div
                       key={transaction.id}
@@ -157,12 +252,12 @@ export default async function DashboardPointsPage() {
                     >
                       <div className="flex items-start gap-4">
                         <div className="rounded-2xl border border-white/10 bg-white/8 p-3">
-                          <QrCode className="h-5 w-5 text-white/80" />
+                          <Icon className="h-5 w-5 text-white/80" />
                         </div>
 
                         <div>
                           <p className="text-sm font-semibold text-white">
-                            QR scan reward
+                            {label}
                           </p>
                           {transaction.campaign ? (
                             <p className="mt-1 text-sm text-white/65">
@@ -181,8 +276,13 @@ export default async function DashboardPointsPage() {
                       </div>
 
                       <div className="flex items-center justify-between gap-4 md:flex-col md:items-end">
-                        <p className="text-xl font-semibold text-emerald-300">
-                          +{transaction.points}
+                        <p
+                          className={`text-xl font-semibold ${
+                            isPositive ? "text-emerald-300" : "text-red-300"
+                          }`}
+                        >
+                          {isPositive ? "+" : "−"}
+                          {Math.abs(transaction.points)}
                         </p>
                         <p className="text-xs text-white/45">
                           {formatDate(transaction.createdAt)}

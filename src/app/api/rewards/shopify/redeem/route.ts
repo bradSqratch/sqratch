@@ -6,6 +6,10 @@ import {
 } from "@prisma/client";
 import prisma from "@/lib/prisma";
 import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
+import {
+  debitShopifyRewardPoints,
+  refundShopifyRewardPoints,
+} from "@/lib/points";
 import { getRewardClaimContext } from "@/lib/reward-access";
 import { createShopifyRewardDiscountCode } from "@/lib/shopify-discounts";
 import { getValidAccessToken } from "@/lib/shopify-token-manager";
@@ -397,32 +401,26 @@ export async function redeemImpl(request: NextRequest, deps: AuthResolvers) {
             },
           });
 
-          const debit = await tx.user.updateMany({
-            where: {
-              id: user.id,
-              points: {
-                gte: currentOffer.pointsCost,
-              },
-            },
-            data: {
-              points: {
-                decrement: currentOffer.pointsCost,
-              },
-            },
+          // Central ledger debit: decrements spendable points (conditional, so
+          // the balance can never go negative), records lifetime spent, keeps
+          // legacy User.points in sync, and writes the negative PointTransaction
+          // — all inside this Serializable transaction. Lifetime earned is NOT
+          // reduced. Idempotency is enforced by the ledger's unique constraints.
+          const debit = await debitShopifyRewardPoints({
+            userId: user.id,
+            pointsCost: currentOffer.pointsCost,
+            shopifyRewardRedemptionId: createdRedemption.id,
+            db: tx,
           });
 
-          if (debit.count !== 1) {
-            throw new Error("INSUFFICIENT_POINTS");
+          if (!debit.applied) {
+            if (debit.reason === "INSUFFICIENT_POINTS") {
+              throw new Error("INSUFFICIENT_POINTS");
+            }
+            // DUPLICATE / INVALID here would be a genuine anomaly for a freshly
+            // created redemption id — roll the reservation back.
+            throw new Error("OFFER_NOT_AVAILABLE");
           }
-
-          await tx.pointTransaction.create({
-            data: {
-              userId: user.id,
-              points: -currentOffer.pointsCost,
-              reason: "SHOPIFY_REWARD_REDEMPTION",
-              shopifyRewardRedemptionId: createdRedemption.id,
-            },
-          });
 
           const debitedRedemption = await tx.shopifyRewardRedemption.update({
             where: {
@@ -550,17 +548,13 @@ export async function redeemImpl(request: NextRequest, deps: AuthResolvers) {
             where: { id: redemption.id },
           });
         }
-        await tx.user.update({
-          where: { id: user.id },
-          data: { points: { increment: discountConfig.pointsCost } },
-        });
-        await tx.pointTransaction.create({
-          data: {
-            userId: user.id,
-            points: discountConfig.pointsCost,
-            reason: "SHOPIFY_REWARD_REFUND",
-            shopifyRewardRedemptionId: redemption.id,
-          },
+        // Restore spendable points + lifetime refunded (never lifetime earned),
+        // keeping the account and legacy User.points in sync.
+        await refundShopifyRewardPoints({
+          userId: user.id,
+          points: discountConfig.pointsCost,
+          shopifyRewardRedemptionId: redemption.id,
+          db: tx,
         });
         return tx.shopifyRewardRedemption.update({
           where: { id: redemption.id },
@@ -613,24 +607,13 @@ export async function redeemImpl(request: NextRequest, deps: AuthResolvers) {
           });
         }
 
-        await tx.user.update({
-          where: {
-            id: user.id,
-          },
-          data: {
-            points: {
-              increment: discountConfig.pointsCost,
-            },
-          },
-        });
-
-        await tx.pointTransaction.create({
-          data: {
-            userId: user.id,
-            points: discountConfig.pointsCost,
-            reason: "SHOPIFY_REWARD_REFUND",
-            shopifyRewardRedemptionId: redemption.id,
-          },
+        // Restore spendable points + lifetime refunded (never lifetime earned),
+        // keeping the account and legacy User.points in sync.
+        await refundShopifyRewardPoints({
+          userId: user.id,
+          points: discountConfig.pointsCost,
+          shopifyRewardRedemptionId: redemption.id,
+          db: tx,
         });
 
         return tx.shopifyRewardRedemption.update({

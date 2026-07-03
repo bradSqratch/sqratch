@@ -12,6 +12,7 @@ import {
   resolveLessonVideoStorageReference,
   type LessonVideoStorageReference,
 } from "@/lib/lesson-video-reference";
+import { parseRewardPoints } from "@/lib/reward-points-input";
 
 function normalizeVideoSource(value: unknown) {
   const normalized = String(value || "YOUTUBE")
@@ -138,6 +139,7 @@ export async function GET(request: NextRequest) {
         title: true,
         description: true,
         sortOrder: true,
+        completionPointsReward: true,
         videoSource: true,
         youtubeUrl: true,
         videoUploadUrl: true,
@@ -175,6 +177,7 @@ export async function GET(request: NextRequest) {
           title: lesson.title,
           description: lesson.description,
           sortOrder: lesson.sortOrder,
+          completionPointsReward: lesson.completionPointsReward,
           videoSource: lesson.videoSource,
           youtubeUrl: lesson.youtubeUrl,
           videoAssetUrl:
@@ -233,12 +236,20 @@ export async function POST(request: NextRequest) {
       body?.videoStorageBucket || "",
     ).trim();
     const videoStoragePath = String(body?.videoStoragePath || "").trim();
+    const reward = parseRewardPoints(
+      body?.completionPointsReward,
+      "Lesson completion points",
+    );
 
     if (!courseId || !title) {
       return NextResponse.json(
         { error: "courseId and title are required." },
         { status: 400 },
       );
+    }
+
+    if (!reward.ok) {
+      return NextResponse.json({ error: reward.error }, { status: 400 });
     }
 
     if (videoSource === "YOUTUBE" && !youtubeUrl) {
@@ -310,6 +321,7 @@ export async function POST(request: NextRequest) {
         title,
         description: description || null,
         sortOrder: Number.isFinite(sortOrder) ? sortOrder : 0,
+        completionPointsReward: reward.value,
         videoSource,
         youtubeUrl: videoSource === "YOUTUBE" ? youtubeUrl : null,
         videoUploadUrl: null,
@@ -321,6 +333,7 @@ export async function POST(request: NextRequest) {
         title: true,
         description: true,
         sortOrder: true,
+        completionPointsReward: true,
         videoSource: true,
         youtubeUrl: true,
         videoUploadUrl: true,
@@ -370,12 +383,20 @@ export async function PATCH(request: NextRequest) {
       body?.videoStorageBucket || "",
     ).trim();
     const videoStoragePath = String(body?.videoStoragePath || "").trim();
+    const reward = parseRewardPoints(
+      body?.completionPointsReward,
+      "Lesson completion points",
+    );
 
     if (!id || !title) {
       return NextResponse.json(
         { error: "Lesson id and title are required." },
         { status: 400 },
       );
+    }
+
+    if (!reward.ok) {
+      return NextResponse.json({ error: reward.error }, { status: 400 });
     }
 
     if (videoSource === "YOUTUBE" && !youtubeUrl) {
@@ -462,6 +483,7 @@ export async function PATCH(request: NextRequest) {
         title,
         description: description || null,
         sortOrder: Number.isFinite(sortOrder) ? sortOrder : 0,
+        completionPointsReward: reward.value,
         videoSource,
         youtubeUrl: videoSource === "YOUTUBE" ? youtubeUrl : null,
         videoUploadUrl: null,
@@ -473,6 +495,7 @@ export async function PATCH(request: NextRequest) {
         title: true,
         description: true,
         sortOrder: true,
+        completionPointsReward: true,
         videoSource: true,
         youtubeUrl: true,
         videoUploadUrl: true,
