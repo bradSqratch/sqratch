@@ -441,24 +441,6 @@ function EditableCourseCard({
           </Button>
         </div>
       </div>
-
-      <div className="mt-6 grid gap-3 md:grid-cols-2">
-        {course.lessons.length === 0 ? (
-          <div className="rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-white/60">
-            No lessons in this course yet.
-          </div>
-        ) : (
-          course.lessons.map((lesson) => (
-            <div
-              key={lesson.id}
-              className="rounded-2xl border border-white/10 bg-black/20 p-4"
-            >
-              <h3 className="font-medium">{lesson.title}</h3>
-              <p className="mt-2 text-sm text-white/55">{lesson.videoSource}</p>
-            </div>
-          ))
-        )}
-      </div>
     </PageCard>
   );
 }
