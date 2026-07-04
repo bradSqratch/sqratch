@@ -26,7 +26,10 @@ import {
   SHOPIFY_PENDING_INSTALL_TTL_MS,
 } from "@/lib/shopify";
 import prisma from "@/lib/prisma";
-import { buildExpiringPendingInstall, serializeExpiringPendingInstall } from "@/lib/pending-install";
+import {
+  buildExpiringPendingInstall,
+  serializeExpiringPendingInstall,
+} from "@/lib/pending-install";
 
 export async function POST(req: Request): Promise<NextResponse> {
   // ---------------------------------------------------------------------------
@@ -34,12 +37,21 @@ export async function POST(req: Request): Promise<NextResponse> {
   // ---------------------------------------------------------------------------
   const verified = verifySessionTokenFromRequest(req);
   if (!verified.ok) {
-    console.log("[shopify/embedded/session]", { outcome: "verify_failed", status: verified.status });
-    return NextResponse.json({ error: verified.reason }, { status: verified.status });
+    console.log("[shopify/embedded/session]", {
+      outcome: "verify_failed",
+      status: verified.status,
+    });
+    return NextResponse.json(
+      { error: verified.reason },
+      { status: verified.status },
+    );
   }
 
   // Sanitized log — shop sourced from verified token only, no raw token values.
-  console.log("[shopify/embedded/session]", { outcome: "verified", shop: verified.shop });
+  console.log("[shopify/embedded/session]", {
+    outcome: "verified",
+    shop: verified.shop,
+  });
 
   // ---------------------------------------------------------------------------
   // Step 2: Distribution guard — token exchange is only for public apps.
@@ -80,7 +92,10 @@ export async function POST(req: Request): Promise<NextResponse> {
   const apiSecret = process.env.SHOPIFY_API_SECRET;
 
   if (!apiKey || !apiSecret) {
-    return NextResponse.json({ error: "authentication unavailable" }, { status: 401 });
+    return NextResponse.json(
+      { error: "authentication unavailable" },
+      { status: 401 },
+    );
   }
 
   // ---------------------------------------------------------------------------
@@ -110,10 +125,16 @@ export async function POST(req: Request): Promise<NextResponse> {
   // Step 7: Scope check — do not store anything if scopes are insufficient.
   // ---------------------------------------------------------------------------
   if (!hasSufficientScopes(result.scope)) {
+    console.warn("[shopify/embedded/session] insufficient scopes", {
+      grantedScopes: result.scope,
+      requiredScopes: "read_products,read_discounts,write_discounts",
+      shop,
+    });
+
     return NextResponse.json(
       {
         error:
-          "SQRATCH requires product, discount read and discount write permissions.",
+          "The installed Shopify app does not have the required scopes. Reinstall or update the app after deploying the latest Shopify app configuration.",
       },
       { status: 403 },
     );

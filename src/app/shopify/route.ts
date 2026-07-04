@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
-const shopifyApiKey =
-  process.env.NEXT_PUBLIC_SHOPIFY_API_KEY || process.env.SHOPIFY_API_KEY || "";
+const shopifyApiKey = process.env.SHOPIFY_API_KEY || "";
 
 export const dynamic = "force-dynamic";
 
@@ -24,9 +23,13 @@ function firstParam(value: string | null) {
 
 export function GET(request: NextRequest) {
   const rawShop = firstParam(request.nextUrl.searchParams.get("shop"));
-  const distribution =
-    (process.env.SHOPIFY_APP_DISTRIBUTION as "public" | "custom" | undefined) ??
-    "public";
+  const rawDistribution = process.env.SHOPIFY_APP_DISTRIBUTION;
+
+  const distribution: "public" | "custom" =
+    rawDistribution === "public" || rawDistribution === "custom"
+      ? rawDistribution
+      : "custom";
+
   const showOAuthFallback = distribution === "custom" || !shopifyApiKey;
 
   const actionMarkup =
@@ -223,7 +226,7 @@ export function GET(request: NextRequest) {
               </div>
             </div>
 
-            <div class="notice">Link this Shopify store to a SQRATCH Brand account so Brand Admins can display Shopify products inside SQRATCH experiences. SQRATCH only requests product read access.</div>
+            <div class="notice">Link this Shopify store to a SQRATCH Brand account so Brand Admins can display Shopify products inside SQRATCH experiences. SQRATCH requests product access to display Shopify products inside SQRATCH experiences and discount access to create reward codes when brands enable loyalty rewards.</div>
             <p class="error" id="error-message"></p>
             <div class="actions">${actionMarkup}</div>
           </div>
@@ -259,6 +262,11 @@ export function GET(request: NextRequest) {
         }
 
         try {
+          console.log("[SQRATCH Shopify]", {
+          distribution,
+          rawShopPresent: Boolean(rawShop),
+          embedded: isEmbedded(),
+          });
           if (distribution === "public" && isEmbedded()) {
             if (!window.shopify) {
               throw new Error("App Bridge is not loaded yet. Please reopen SQRATCH from your Shopify Admin.");
