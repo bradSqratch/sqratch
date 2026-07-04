@@ -34,7 +34,7 @@ export function GET(request: NextRequest) {
 
   const actionMarkup =
     showOAuthFallback && rawShop
-      ? `<a class="button" href="/api/shopify/oauth/start?shop=${encodeURIComponent(rawShop)}">Continue to SQRATCH linking</a>`
+      ? `<a class="button" target="_top" rel="noopener" href="/api/shopify/oauth/start?shop=${encodeURIComponent(rawShop)}">Continue to SQRATCH linking</a>`
       : showOAuthFallback
         ? `<button class="button" type="button" disabled>Continue to SQRATCH linking</button>`
         : `<button class="button" id="continue-button" type="button">Continue to SQRATCH linking</button>`;
