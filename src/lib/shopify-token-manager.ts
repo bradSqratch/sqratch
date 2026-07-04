@@ -42,7 +42,11 @@ const LOCK_WAIT_MS = 3_000;
 const LOCK_POLL_INTERVAL_MS = 250;
 
 /** Required scopes — changing this list is intentional and reviewed. */
-const REQUIRED_SCOPES = ["read_products", "read_discounts", "write_discounts"] as const;
+const REQUIRED_SCOPES = [
+  "read_products",
+  "read_discounts",
+  "write_discounts",
+] as const;
 
 // ---------------------------------------------------------------------------
 // Shopify token endpoint types
@@ -89,19 +93,40 @@ export function isAccessTokenFresh(
  * Returns true when the granted scopes cover all required ones.
  * grantedScopes is a comma-separated string (may have spaces).
  */
-export function hasSufficientScopes(grantedScopes: string | null | undefined): boolean {
+export function hasSufficientScopes(
+  grantedScopes: string | null | undefined,
+): boolean {
   if (!grantedScopes) return false;
+
   const granted = grantedScopes
     .split(",")
     .map((s) => s.trim())
     .filter(Boolean);
-  return REQUIRED_SCOPES.every((required) => granted.includes(required));
+
+  const grantedSet = new Set(granted);
+
+  return REQUIRED_SCOPES.every((required) => {
+    if (grantedSet.has(required)) {
+      return true;
+    }
+
+    // Shopify may return only write_discounts even when discount read/write access
+    // is configured. Treat write_discounts as satisfying read_discounts.
+    if (required === "read_discounts" && grantedSet.has("write_discounts")) {
+      return true;
+    }
+
+    return false;
+  });
 }
 
 /**
  * Builds a new expiry Date from a Shopify `expires_in` seconds value.
  */
-export function computeExpiresAt(expiresInSeconds: number, nowMs: number = Date.now()): Date {
+export function computeExpiresAt(
+  expiresInSeconds: number,
+  nowMs: number = Date.now(),
+): Date {
   return new Date(nowMs + expiresInSeconds * 1000);
 }
 
@@ -145,9 +170,13 @@ async function defaultTokenEndpoint(
     } catch {
       // ignore parse error
     }
-    const err = new Error(`Shopify token endpoint responded with ${response.status}`);
-    (err as Error & { status: number; shopifyError: unknown }).status = response.status;
-    (err as Error & { status: number; shopifyError: unknown }).shopifyError = errorPayload;
+    const err = new Error(
+      `Shopify token endpoint responded with ${response.status}`,
+    );
+    (err as Error & { status: number; shopifyError: unknown }).status =
+      response.status;
+    (err as Error & { status: number; shopifyError: unknown }).shopifyError =
+      errorPayload;
     throw err;
   }
 
@@ -176,7 +205,9 @@ type BrandShopifyFields = {
 /**
  * Fetches fresh brand shopify fields from DB.
  */
-async function reloadBrand(brandId: string): Promise<BrandShopifyFields | null> {
+async function reloadBrand(
+  brandId: string,
+): Promise<BrandShopifyFields | null> {
   const db = await getDb();
   return db.brand.findUnique({
     where: { id: brandId },
@@ -248,7 +279,9 @@ async function releaseRefreshLock(
  * Waits for another process holding the lock to finish refreshing.
  * Returns the re-read brand data after the wait.
  */
-async function waitForLockHolder(brandId: string): Promise<BrandShopifyFields | null> {
+async function waitForLockHolder(
+  brandId: string,
+): Promise<BrandShopifyFields | null> {
   const deadline = Date.now() + LOCK_WAIT_MS;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_INTERVAL_MS));
@@ -300,7 +333,9 @@ async function performTokenRefresh(
   tokenEndpoint: TokenEndpointFn,
 ): Promise<string> {
   if (!brand.shopifyRefreshTokenEncrypted) {
-    throw Object.assign(new Error("No refresh token available"), { permanent: true });
+    throw Object.assign(new Error("No refresh token available"), {
+      permanent: true,
+    });
   }
 
   const shop = brand.shopifyShopDomain!;
@@ -328,10 +363,9 @@ async function performTokenRefresh(
     const status = (err as { status?: number }).status;
     // 400/401 = permanent failure (invalid_grant, token expired/revoked)
     const isPermanent = status === 400 || status === 401;
-    throw Object.assign(
-      err instanceof Error ? err : new Error(String(err)),
-      { permanent: isPermanent },
-    );
+    throw Object.assign(err instanceof Error ? err : new Error(String(err)), {
+      permanent: isPermanent,
+    });
   }
 
   const nowMs = Date.now();
@@ -350,7 +384,10 @@ async function performTokenRefresh(
     },
     data: {
       shopifyAdminAccessTokenEncrypted: encryptedAccessToken,
-      shopifyAccessTokenExpiresAt: computeExpiresAt(tokenResponse.expires_in, nowMs),
+      shopifyAccessTokenExpiresAt: computeExpiresAt(
+        tokenResponse.expires_in,
+        nowMs,
+      ),
       shopifyRefreshTokenEncrypted: encryptedRefreshToken,
       shopifyRefreshTokenExpiresAt: computeExpiresAt(
         tokenResponse.refresh_token_expires_in,
@@ -364,10 +401,13 @@ async function performTokenRefresh(
   });
 
   if (result.count !== 1) {
-    throw Object.assign(new Error("Shopify token refresh lease was superseded"), {
-      staleWriter: true,
-      permanent: false,
-    });
+    throw Object.assign(
+      new Error("Shopify token refresh lease was superseded"),
+      {
+        staleWriter: true,
+        permanent: false,
+      },
+    );
   }
 
   return newAccessToken;
@@ -480,7 +520,9 @@ export async function getValidAccessToken(
       refreshedBrand.shopifyAdminAccessTokenEncrypted &&
       isAccessTokenFresh(refreshedBrand.shopifyAccessTokenExpiresAt, Date.now())
     ) {
-      const token = decryptSecret(refreshedBrand.shopifyAdminAccessTokenEncrypted);
+      const token = decryptSecret(
+        refreshedBrand.shopifyAdminAccessTokenEncrypted,
+      );
       return { ok: true, accessToken: token };
     }
     // Fallback: token not yet expired (but within safety buffer) — still usable
@@ -489,7 +531,9 @@ export async function getValidAccessToken(
       refreshedBrand.shopifyAccessTokenExpiresAt &&
       refreshedBrand.shopifyAccessTokenExpiresAt.getTime() > Date.now()
     ) {
-      const token = decryptSecret(refreshedBrand.shopifyAdminAccessTokenEncrypted);
+      const token = decryptSecret(
+        refreshedBrand.shopifyAdminAccessTokenEncrypted,
+      );
       return { ok: true, accessToken: token };
     }
 

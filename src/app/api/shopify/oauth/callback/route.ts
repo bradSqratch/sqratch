@@ -163,8 +163,27 @@ export async function oauthCallbackImpl(
       .map((scope) => scope.trim())
       .filter(Boolean);
 
+    const grantedScopeSet = new Set(grantedScopes);
+
+    function isScopeSatisfied(scope: string) {
+      if (grantedScopeSet.has(scope)) {
+        return true;
+      }
+
+      // Shopify may return only write_discounts even when discount read/write access
+      // is configured. Treat write_discounts as satisfying read_discounts.
+      if (
+        scope === "read_discounts" &&
+        grantedScopeSet.has("write_discounts")
+      ) {
+        return true;
+      }
+
+      return false;
+    }
+
     const missingScopes = requiredScopes.filter(
-      (scope) => !grantedScopes.includes(scope),
+      (scope) => !isScopeSatisfied(scope),
     );
 
     if (missingScopes.length > 0) {
