@@ -12,6 +12,10 @@ import {
   isValidShopDomain,
 } from "@/lib/shopify";
 import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
+import {
+  buildExpiringPendingInstall,
+  serializeExpiringPendingInstall,
+} from "@/lib/pending-install";
 
 export async function GET(request: NextRequest) {
   return oauthCallbackImpl(request, realAuthResolvers);
@@ -97,9 +101,9 @@ export async function oauthCallbackImpl(
       );
     }
 
-    const payload = JSON.parse(stateRecord.token) as { shop: string };
+    const statePayload = JSON.parse(stateRecord.token) as { shop: string };
 
-    if (payload.shop !== shop) {
+    if (statePayload.shop !== shop) {
       return NextResponse.redirect(
         buildShopifyDashboardRedirect({
           origin: request.nextUrl.origin,
@@ -138,6 +142,7 @@ export async function oauthCallbackImpl(
           client_id: apiKey,
           client_secret: apiSecret,
           code,
+          expiring: 1,
         }),
       },
     );
@@ -149,6 +154,29 @@ export async function oauthCallbackImpl(
         buildShopifyDashboardRedirect({
           origin: request.nextUrl.origin,
           error: "token_exchange_failed",
+        }),
+      );
+    }
+
+    if (
+      !tokenJson.expires_in ||
+      !tokenJson.refresh_token ||
+      !tokenJson.refresh_token_expires_in
+    ) {
+      console.warn(
+        "[shopify/oauth/callback] expiring offline token fields missing",
+        {
+          shop,
+          hasExpiresIn: Boolean(tokenJson.expires_in),
+          hasRefreshToken: Boolean(tokenJson.refresh_token),
+          hasRefreshTokenExpiresIn: Boolean(tokenJson.refresh_token_expires_in),
+        },
+      );
+
+      return NextResponse.redirect(
+        buildShopifyDashboardRedirect({
+          origin: request.nextUrl.origin,
+          error: "expiring_token_fields_missing",
         }),
       );
     }
@@ -204,14 +232,27 @@ export async function oauthCallbackImpl(
 
     const pendingInstallId = createOauthState();
 
+    const now = Date.now();
+
+    const pendingInstallPayload = buildExpiringPendingInstall({
+      shop,
+      clientId: apiKey,
+      encryptedAccessToken: encryptSecret(tokenJson.access_token),
+      accessTokenExpiresAt: new Date(
+        now + Number(tokenJson.expires_in || 3600) * 1000,
+      ).toISOString(),
+      encryptedRefreshToken: encryptSecret(tokenJson.refresh_token),
+      refreshTokenExpiresAt: new Date(
+        now + Number(tokenJson.refresh_token_expires_in || 7776000) * 1000,
+      ).toISOString(),
+      grantedScopes: String(tokenJson.scope || ""),
+    });
+
     await prisma.tokenStore.create({
       data: {
         service: buildShopifyPendingInstallService(pendingInstallId),
-        token: JSON.stringify({
-          shop,
-          encryptedToken: encryptSecret(tokenJson.access_token),
-        }),
-        expiresAt: new Date(Date.now() + SHOPIFY_PENDING_INSTALL_TTL_MS),
+        token: serializeExpiringPendingInstall(pendingInstallPayload),
+        expiresAt: new Date(now + SHOPIFY_PENDING_INSTALL_TTL_MS),
       },
     });
 
