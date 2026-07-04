@@ -16,7 +16,15 @@ export async function POST() {
     const brand = await prisma.brand.update({
       where: { id: context.membership.brand.id },
       data: {
+        shopifyShopDomain: null,
         shopifyAdminAccessTokenEncrypted: null,
+        shopifyRefreshTokenEncrypted: null,
+        shopifyAccessTokenExpiresAt: null,
+        shopifyRefreshTokenExpiresAt: null,
+        shopifyGrantedScopes: null,
+        shopifyClientId: null,
+        shopifyTokenRefreshLockedUntil: null,
+        shopifyTokenRefreshLockId: null,
         shopifyDisconnectedAt: new Date(),
         shopifyUninstalledAt: null,
         shopifyConnectionStatus: "DISCONNECTED",
