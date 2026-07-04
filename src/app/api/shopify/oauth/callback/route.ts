@@ -38,7 +38,9 @@ export async function oauthCallbackImpl(
       .trim()
       .toLowerCase();
     const code = String(request.nextUrl.searchParams.get("code") || "").trim();
-    const state = String(request.nextUrl.searchParams.get("state") || "").trim();
+    const state = String(
+      request.nextUrl.searchParams.get("state") || "",
+    ).trim();
     const hmac = String(request.nextUrl.searchParams.get("hmac") || "").trim();
 
     if (!shop || !code || !state || !hmac || !isValidShopDomain(shop)) {
@@ -50,7 +52,10 @@ export async function oauthCallbackImpl(
       );
     }
 
-    const expectedHmac = buildShopifyHmac(request.nextUrl.searchParams, apiSecret);
+    const expectedHmac = buildShopifyHmac(
+      request.nextUrl.searchParams,
+      apiSecret,
+    );
 
     // (a) Timing-safe HMAC comparison
     if (!safeHmacEqual(expectedHmac, hmac)) {
@@ -65,7 +70,10 @@ export async function oauthCallbackImpl(
     // (b) Timestamp freshness — reject if |now - timestamp| > 60 s
     const timestampStr = request.nextUrl.searchParams.get("timestamp");
     const timestampSec = timestampStr ? parseInt(timestampStr, 10) : NaN;
-    if (isNaN(timestampSec) || Math.abs(Date.now() / 1000 - timestampSec) > 60) {
+    if (
+      isNaN(timestampSec) ||
+      Math.abs(Date.now() / 1000 - timestampSec) > 60
+    ) {
       return NextResponse.redirect(
         buildShopifyDashboardRedirect({
           origin: request.nextUrl.origin,
@@ -146,14 +154,31 @@ export async function oauthCallbackImpl(
     }
 
     // (c) Verify returned scopes include all required scopes
-    const requiredScopes = SHOPIFY_SCOPES.split(",");
-    const grantedScopes = (tokenJson.scope as string | undefined)?.split(",") ?? [];
-    const missingScopes = requiredScopes.filter((s) => !grantedScopes.includes(s));
+    const requiredScopes = SHOPIFY_SCOPES.split(",")
+      .map((scope) => scope.trim())
+      .filter(Boolean);
+
+    const grantedScopes = String(tokenJson.scope || "")
+      .split(",")
+      .map((scope) => scope.trim())
+      .filter(Boolean);
+
+    const missingScopes = requiredScopes.filter(
+      (scope) => !grantedScopes.includes(scope),
+    );
+
     if (missingScopes.length > 0) {
+      console.warn("[shopify/oauth/callback] insufficient scopes", {
+        shop,
+        requiredScopes,
+        grantedScopes,
+        missingScopes,
+      });
+
       return NextResponse.redirect(
         buildShopifyDashboardRedirect({
           origin: request.nextUrl.origin,
-          error: "insufficient_scopes",
+          error: `insufficient_scopes_${missingScopes.join("_")}`,
         }),
       );
     }
