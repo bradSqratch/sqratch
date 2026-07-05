@@ -1,167 +1,83 @@
 import { NextRequest, NextResponse } from "next/server";
-import { decryptSecret } from "@/lib/crypto";
 import {
   createAnalyticsEvent,
   getExperienceAccessContext,
 } from "@/lib/experience-access";
 import prisma from "@/lib/prisma";
 import { attachSessionCookie, ensureViewerSession } from "@/lib/session";
-import { SHOPIFY_API_VERSION } from "@/lib/shopify";
+import { fetchNormalizedShopifyProducts } from "@/lib/shopify-products";
 
-type ShopifyProductImage = {
-  url: string | null;
-};
-
-type ShopifyProductVariant = {
-  id: number | string;
-  price: string | null;
-};
-
-type ShopifyProduct = {
-  id: number | string;
+type PublicShopProduct = {
+  id: string;
+  productId: string;
+  productLinkId: string | null;
   title: string;
-  handle: string;
-  onlineStoreUrl?: string | null;
-  featuredImage?: ShopifyProductImage | null;
-  images?: {
-    nodes?: ShopifyProductImage[];
-  };
-  variants?: {
-    nodes?: ShopifyProductVariant[];
-  };
+  imageUrl: string | null;
+  priceText: string | null;
+  productUrl: string;
+  brand: {
+    id: string;
+    name: string;
+    slug: string;
+  } | null;
+  source: "LINKED" | "CAMPAIGN";
 };
 
-type ShopifyProductsResponse = {
-  data?: {
-    products?: {
-      nodes?: ShopifyProduct[];
-    };
-  };
+type CampaignFallbackBrand = {
+  id: string;
+  name: string;
+  slug: string;
+  shopifyShopDomain: string | null;
+  shopifyConnectionStatus: string;
 };
 
-function getProductHandle(productUrl: string) {
-  try {
-    const url = new URL(productUrl);
-    const match = url.pathname.match(/\/products\/([^/?#]+)/i);
-    return match?.[1] || null;
-  } catch {
-    return null;
-  }
-}
-
-function formatPriceText(prices: number[]) {
-  const numericPrices = prices.filter((price) => Number.isFinite(price));
-
-  if (numericPrices.length === 0) {
-    return null;
-  }
-
-  const minPrice = Math.min(...numericPrices);
-  const maxPrice = Math.max(...numericPrices);
-  const formatter = new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
+function logCampaignFallbackIssue(options: {
+  experienceSlug: string;
+  experienceId: string;
+  directProductCount: number;
+  fallbackProductCount: number;
+  primaryBrand: CampaignFallbackBrand | null;
+  reason: string;
+  tokenReason?: string;
+}) {
+  console.warn("[public/experience/products][GET] Campaign fallback skipped:", {
+    experienceSlug: options.experienceSlug,
+    experienceId: options.experienceId,
+    directProductCount: options.directProductCount,
+    fallbackProductCount: options.fallbackProductCount,
+    primaryBrand: options.primaryBrand
+      ? {
+          id: options.primaryBrand.id,
+          name: options.primaryBrand.name,
+        }
+      : null,
+    shopifyConnectionStatus:
+      options.primaryBrand?.shopifyConnectionStatus || null,
+    reason: options.reason,
+    tokenResultReason: options.tokenReason || null,
   });
-
-  if (minPrice === maxPrice) {
-    return formatter.format(minPrice);
-  }
-
-  return `${formatter.format(minPrice)} - ${formatter.format(maxPrice)}`;
 }
 
-async function fetchProductByHandle(options: {
-  shopDomain: string;
-  encryptedToken: string;
-  handle: string;
+function logPublicShopProductResult(options: {
+  experienceSlug: string;
+  experienceId: string;
+  directProductCount: number;
+  fallbackProductCount: number;
+  primaryBrand: CampaignFallbackBrand | null;
 }) {
-  const accessToken = decryptSecret(options.encryptedToken);
-  const response = await fetch(
-    `https://${options.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
-    {
-      method: "POST",
-      headers: {
-        "X-Shopify-Access-Token": accessToken,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        query: `
-          query SqratchProductByHandle($handleQuery: String!) {
-            products(first: 1, query: $handleQuery) {
-              nodes {
-                id
-                title
-                handle
-                onlineStoreUrl
-                featuredImage { url }
-                images(first: 1) { nodes { url } }
-                variants(first: 100) { nodes { id price } }
-              }
-            }
-          }
-        `,
-        variables: {
-          handleQuery: `handle:${options.handle} status:active`,
-        },
-      }),
-      cache: "no-store",
-    },
-  );
-
-  if (!response.ok) {
-    return null;
-  }
-
-  const json = (await response.json().catch(() => null)) as
-    | ShopifyProductsResponse
-    | null;
-
-  return json?.data?.products?.nodes?.[0] || null;
-}
-
-async function fetchCampaignProducts(options: {
-  shopDomain: string;
-  encryptedToken: string;
-}) {
-  const accessToken = decryptSecret(options.encryptedToken);
-  const response = await fetch(
-    `https://${options.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
-    {
-      method: "POST",
-      headers: {
-        "X-Shopify-Access-Token": accessToken,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        query: `
-          query SqratchCampaignProducts {
-            products(first: 12, query: "status:active") {
-              nodes {
-                id
-                title
-                handle
-                onlineStoreUrl
-                featuredImage { url }
-                images(first: 1) { nodes { url } }
-                variants(first: 100) { nodes { id price } }
-              }
-            }
-          }
-        `,
-      }),
-      cache: "no-store",
-    },
-  );
-
-  if (!response.ok) {
-    return [];
-  }
-
-  const json = (await response.json().catch(() => null)) as
-    | ShopifyProductsResponse
-    | null;
-
-  return json?.data?.products?.nodes || [];
+  console.info("[public/experience/products][GET] Products loaded:", {
+    experienceSlug: options.experienceSlug,
+    experienceId: options.experienceId,
+    directProductCount: options.directProductCount,
+    fallbackProductCount: options.fallbackProductCount,
+    primaryBrand: options.primaryBrand
+      ? {
+          id: options.primaryBrand.id,
+          name: options.primaryBrand.name,
+          shopifyConnectionStatus: options.primaryBrand.shopifyConnectionStatus,
+        }
+      : null,
+  });
 }
 
 export async function GET(
@@ -230,6 +146,7 @@ export async function GET(
             shopifyShopDomain: true,
             shopifyAdminAccessTokenEncrypted: true,
             shopifyConnectionStatus: true,
+            shopifyCurrencyCode: true,
           },
         })
       : [];
@@ -239,89 +156,30 @@ export async function GET(
       ? brandMap.get(primaryCampaign.campaign.brand.id) || null
       : null;
 
-    const linkedProducts = await Promise.all(
-      productLinks.map(async (link) => {
-        const linkedBrand =
-          (link.brandId ? brandMap.get(link.brandId) : null) || primaryBrand;
-        const handle = getProductHandle(link.productUrl);
-        const shopifyProduct =
-          linkedBrand?.shopifyShopDomain &&
-          linkedBrand.shopifyAdminAccessTokenEncrypted &&
-          linkedBrand.shopifyConnectionStatus === "CONNECTED" &&
-          handle
-            ? await fetchProductByHandle({
-                shopDomain: linkedBrand.shopifyShopDomain,
-                encryptedToken:
-                  linkedBrand.shopifyAdminAccessTokenEncrypted,
-                handle,
-              })
-            : null;
+    const linkedProducts: PublicShopProduct[] = productLinks.map((link) => {
+      const linkedBrand =
+        (link.brandId ? brandMap.get(link.brandId) : null) || primaryBrand;
 
-        if (shopifyProduct) {
-          const prices = (shopifyProduct.variants?.nodes || []).map((variant) =>
-            variant.price === null || variant.price === ""
-              ? Number.NaN
-              : Number(variant.price),
-          );
+      return {
+        id: link.id,
+        productId: link.id,
+        productLinkId: link.id,
+        title: link.title || "Shop product",
+        imageUrl: link.imageUrl,
+        priceText: link.priceText,
+        productUrl: link.productUrl,
+        brand: linkedBrand
+          ? {
+              id: linkedBrand.id,
+              name: linkedBrand.name,
+              slug: linkedBrand.slug,
+            }
+          : null,
+        source: "LINKED",
+      };
+    });
 
-          return {
-            id: link.id,
-            productId: String(shopifyProduct.id),
-            productLinkId: link.id,
-            title: shopifyProduct.title,
-            imageUrl:
-              shopifyProduct.featuredImage?.url ||
-              shopifyProduct.images?.nodes?.[0]?.url ||
-              link.imageUrl ||
-              null,
-            priceText: formatPriceText(prices) || link.priceText || null,
-            productUrl: link.productUrl,
-            brand: linkedBrand
-              ? {
-                  id: linkedBrand.id,
-                  name: linkedBrand.name,
-                  slug: linkedBrand.slug,
-                }
-              : null,
-            source: "LINKED" as const,
-          };
-        }
-
-        return {
-          id: link.id,
-          productId: link.id,
-          productLinkId: link.id,
-          title: link.title || "Shop product",
-          imageUrl: link.imageUrl,
-          priceText: link.priceText,
-          productUrl: link.productUrl,
-          brand: linkedBrand
-            ? {
-                id: linkedBrand.id,
-                name: linkedBrand.name,
-                slug: linkedBrand.slug,
-              }
-            : null,
-          source: "LINKED" as const,
-        };
-      }),
-    );
-
-    let campaignProducts: Array<{
-      id: string;
-      productId: string;
-      productLinkId: null;
-      title: string;
-      imageUrl: string | null;
-      priceText: string | null;
-      productUrl: string;
-      brand: {
-        id: string;
-        name: string;
-        slug: string;
-      } | null;
-      source: "CAMPAIGN";
-    }> = [];
+    let campaignProducts: PublicShopProduct[] = [];
 
     if (
       linkedProducts.length === 0 &&
@@ -329,35 +187,60 @@ export async function GET(
       primaryBrand.shopifyAdminAccessTokenEncrypted &&
       primaryBrand.shopifyConnectionStatus === "CONNECTED"
     ) {
-      const products = await fetchCampaignProducts({
+      const products = await fetchNormalizedShopifyProducts({
         shopDomain: primaryBrand.shopifyShopDomain,
-        encryptedToken: primaryBrand.shopifyAdminAccessTokenEncrypted,
+        brandId: primaryBrand.id,
+        limit: 100,
+        currency: primaryBrand.shopifyCurrencyCode || "USD",
       });
 
-      campaignProducts = products.map((product) => ({
-        id: `campaign-${product.id}`,
-        productId: String(product.id),
-        productLinkId: null,
-        title: product.title,
-        imageUrl: product.featuredImage?.url || product.images?.nodes?.[0]?.url || null,
-        priceText: formatPriceText(
-          (product.variants?.nodes || []).map((variant) =>
-            variant.price === null || variant.price === ""
-              ? Number.NaN
-              : Number(variant.price),
-          ),
-        ),
-        productUrl:
-          product.onlineStoreUrl ||
-          `https://${primaryBrand.shopifyShopDomain}/products/${product.handle}`,
-        brand: {
-          id: primaryBrand.id,
-          name: primaryBrand.name,
-          slug: primaryBrand.slug,
-        },
-        source: "CAMPAIGN",
-      }));
+      if (products.ok) {
+        campaignProducts = products.items.map((product) => ({
+          id: `campaign-${product.id}`,
+          productId: product.id,
+          productLinkId: null,
+          title: product.title,
+          imageUrl: product.imageUrl,
+          priceText: product.priceText,
+          productUrl: product.productUrl,
+          brand: {
+            id: primaryBrand.id,
+            name: primaryBrand.name,
+            slug: primaryBrand.slug,
+          },
+          source: "CAMPAIGN",
+        }));
+      } else {
+        logCampaignFallbackIssue({
+          experienceSlug,
+          experienceId: access.experience.id,
+          directProductCount: linkedProducts.length,
+          fallbackProductCount: campaignProducts.length,
+          primaryBrand,
+          reason: products.error,
+          tokenReason: products.tokenReason,
+        });
+      }
+    } else if (linkedProducts.length === 0) {
+      logCampaignFallbackIssue({
+        experienceSlug,
+        experienceId: access.experience.id,
+        directProductCount: linkedProducts.length,
+        fallbackProductCount: campaignProducts.length,
+        primaryBrand,
+        reason: primaryBrand?.shopifyShopDomain
+          ? "Primary brand Shopify connection is not connected."
+          : "Primary brand Shopify shop domain is missing.",
+      });
     }
+
+    logPublicShopProductResult({
+      experienceSlug,
+      experienceId: access.experience.id,
+      directProductCount: linkedProducts.length,
+      fallbackProductCount: campaignProducts.length,
+      primaryBrand,
+    });
 
     const response = NextResponse.json({
       data: {

@@ -154,6 +154,7 @@ export async function fetchNormalizedShopifyProducts(options: {
     return {
       ok: false as const,
       status: 401,
+      tokenReason: tokenResult.reason,
       error:
         tokenResult.reason === "NEEDS_RECONNECT"
           ? "Shopify connection requires reconnection."
@@ -218,6 +219,7 @@ export async function fetchNormalizedShopifyProducts(options: {
     return {
       ok: false as const,
       status: response.ok ? 502 : response.status || 500,
+      tokenReason: undefined,
       error: formatShopifyErrors(json?.errors),
     };
   }

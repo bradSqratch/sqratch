@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import {
   ErrorView,
@@ -15,6 +15,8 @@ import {
 import { useExperience } from "@/components/experience/use-experience";
 import { ShopifyShopRewardCard } from "@/components/rewards/shopify-shop-reward-card";
 import { Button } from "@/components/ui/button";
+
+const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
 
 type ShopResponse = {
   experience: {
@@ -58,6 +60,9 @@ export function ExperienceShopClient({
   const [shopLoading, setShopLoading] = useState(false);
   const [shopError, setShopError] = useState<string | null>(null);
   const [clickingId, setClickingId] = useState<string | null>(null);
+  const [pageSize, setPageSize] =
+    useState<(typeof PAGE_SIZE_OPTIONS)[number]>(25);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const loadProducts = useCallback(async () => {
     setShopLoading(true);
@@ -68,6 +73,7 @@ export function ExperienceShopClient({
         `/api/public/experience/${experienceSlug}/products`,
       );
       setShopData(result);
+      setCurrentPage(1);
     } catch (loadError) {
       setShopError(getErrorMessage(loadError, "Failed to load shop products."));
     } finally {
@@ -82,6 +88,10 @@ export function ExperienceShopClient({
 
     void loadProducts();
   }, [data, loadProducts]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [pageSize]);
 
   function handleOpenProduct(product: ShopResponse["products"][number]) {
     setClickingId(product.id);
@@ -108,6 +118,18 @@ export function ExperienceShopClient({
     shopData?.campaign?.brand?.id ||
     shopData?.products.find((product) => product.brand?.id)?.brand?.id ||
     null;
+  const productCount = shopData?.products.length ?? 0;
+  const totalPages = Math.max(1, Math.ceil(productCount / pageSize));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const pageStartIndex = productCount
+    ? (safeCurrentPage - 1) * pageSize
+    : 0;
+  const pageEndIndex = Math.min(pageStartIndex + pageSize, productCount);
+  const visibleProducts = useMemo(
+    () => shopData?.products.slice(pageStartIndex, pageEndIndex) ?? [],
+    [pageEndIndex, pageStartIndex, shopData?.products],
+  );
+  const showPaginationControls = productCount > pageSize;
 
   if (loading) {
     return <LoadingView label="Loading shop..." />;
@@ -174,8 +196,61 @@ export function ExperienceShopClient({
             experienceSlug={experienceSlug}
           />
 
+          {showPaginationControls && (
+            <div className="flex flex-col gap-3 rounded-3xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/65 sm:flex-row sm:items-center sm:justify-between">
+              <p>
+                Showing {pageStartIndex + 1}&ndash;{pageEndIndex} of{" "}
+                {productCount} products
+              </p>
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 text-white/60">
+                  <span>Page size</span>
+                  <select
+                    value={pageSize}
+                    onChange={(event) =>
+                      setPageSize(
+                        Number(event.target.value) as typeof pageSize,
+                      )
+                    }
+                    className="rounded-full border border-white/10 bg-black/30 px-3 py-2 text-white outline-none transition focus:border-[#988dbf]"
+                  >
+                    {PAGE_SIZE_OPTIONS.map((option) => (
+                      <option key={option} value={option} className="bg-[#120f1f]">
+                        {option}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() =>
+                      setCurrentPage((page) => Math.max(1, page - 1))
+                    }
+                    disabled={safeCurrentPage === 1}
+                    className="rounded-full border-white/15 bg-transparent text-white/75 hover:bg-white/10 hover:text-white"
+                  >
+                    Previous
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() =>
+                      setCurrentPage((page) => Math.min(totalPages, page + 1))
+                    }
+                    disabled={safeCurrentPage === totalPages}
+                    className="rounded-full border-white/15 bg-transparent text-white/75 hover:bg-white/10 hover:text-white"
+                  >
+                    Next
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-            {shopData.products.map((product) => (
+            {visibleProducts.map((product) => (
               <PageCard key={product.id} className="h-full">
                 <div className="flex h-full flex-col">
                   <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/20">
