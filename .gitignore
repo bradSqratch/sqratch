@@ -47,3 +47,8 @@ exports/
 
 # AI tooling output
 graphify-out/
+
+# Local AI / agent tooling
+.agents/
+.claude/
+skills-lock.json
