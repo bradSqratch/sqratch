@@ -261,7 +261,7 @@ export async function oauthCallbackImpl(
     const redirectUrl = session?.user?.id
       ? new URL(installPath, request.nextUrl.origin)
       : new URL(
-          `/login?next=${encodeURIComponent(installPath)}`,
+          `/login?callbackUrl=${encodeURIComponent(installPath)}`,
           request.nextUrl.origin,
         );
 

@@ -16,16 +16,9 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import CommonNavbar from "@/components/commonNavbar";
+import { normalizeInternalRedirectPath } from "@/lib/safe-redirect";
 
 type Message = { type: "error" | "success"; text: React.ReactNode };
-
-function normalizeNextPath(value: string | null) {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) {
-    return "/dashboard";
-  }
-
-  return value;
-}
 
 function shouldCheckQrWarningForPath(nextPath: string) {
   return (
@@ -38,7 +31,9 @@ function shouldCheckQrWarningForPath(nextPath: string) {
 function LoginPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const nextPath = normalizeNextPath(searchParams.get("next"));
+  const nextPath = normalizeInternalRedirectPath(
+    searchParams.get("callbackUrl") || searchParams.get("next"),
+  );
   const shouldCheckQrWarning = shouldCheckQrWarningForPath(nextPath);
   const signupHref = `/signup?next=${encodeURIComponent(nextPath)}`;
 

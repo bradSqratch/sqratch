@@ -1,7 +1,9 @@
 "use client";
 
+import { useEffect } from "react";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import { buildLoginPathWithCallback } from "@/lib/safe-redirect";
 
 function roleLabel(role?: string) {
   if (!role) return "UNKNOWN";
@@ -12,11 +14,22 @@ export function DashboardTopbarUser() {
   const router = useRouter();
   const { data: session, status } = useSession();
 
+  useEffect(() => {
+    if (status === "loading" || session) {
+      return;
+    }
+
+    router.replace(
+      buildLoginPathWithCallback(
+        `${window.location.pathname}${window.location.search}`,
+      ),
+    );
+  }, [router, session, status]);
+
   // Layout-level auth guard (in addition to middleware)
   if (status === "loading") return null;
 
   if (!session) {
-    router.replace("/login");
     return null;
   }
 
