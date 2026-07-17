@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBrandAdminContext } from "@/lib/brand-auth";
+import {
+  getBrandAdminContext,
+  getBrandContextFailure,
+} from "@/lib/brand-auth";
 import { getMaxUploadBytes, uploadFileToStorage } from "@/lib/storage-upload";
 
 const ALLOWED_IMAGE_TYPES = new Set([
@@ -35,9 +38,10 @@ export async function POST(request: NextRequest) {
     const brandAdmin = await getBrandAdminContext();
 
     if (!brandAdmin?.membership) {
+      const failure = getBrandContextFailure(brandAdmin);
       return NextResponse.json(
-        { error: "Brand admin access required." },
-        { status: 403 },
+        { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+        { status: failure.status },
       );
     }
 

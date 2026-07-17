@@ -66,6 +66,7 @@ export const authOptions: NextAuthOptions = {
               role: user.role,
               isEmailVerified: user.isEmailVerified,
               imageUrl: user.imageUrl,
+              sessionVersion: user.sessionVersion,
             };
           } else {
             throw new Error("Invalid email or password");
@@ -101,34 +102,46 @@ export const authOptions: NextAuthOptions = {
         token.isEmailVerified = user.isEmailVerified;
         token.email = user.email;
         token.imageUrl = user.imageUrl;
+        token.sessionVersion = user.sessionVersion;
         token.isTemporary = user.isTemporary;
         token.isActive = true; // newly signed-in users are always active
         token.roleCheckedAt = Date.now();
       } else {
-        // Subsequent requests: re-read role and isActive every 5 minutes.
-        const RECHECK_MS = 5 * 60 * 1000;
-        const lastCheck = (token.roleCheckedAt as number | undefined) ?? 0;
-        if (Date.now() - lastCheck > RECHECK_MS) {
-          try {
-            const fresh = await prisma.user.findUnique({
-              where: { id: token.id as string },
-              select: { role: true, isActive: true, isEmailVerified: true },
-            });
-            if (!fresh || !fresh.isActive) {
-              token.accountInvalidated = true;
-              delete token.id;
-              delete token.role;
-              delete token.email;
-              return token;
-            }
-            delete token.accountInvalidated;
-            token.role = fresh.role;
-            token.isActive = fresh.isActive;
-            token.isEmailVerified = fresh.isEmailVerified;
-            token.roleCheckedAt = Date.now();
-          } catch {
-            // On DB error keep the existing token rather than signing out.
+        // Session revocation is checked on every JWT callback. Tokens created
+        // before sessionVersion existed are treated as version zero.
+        try {
+          const fresh = await prisma.user.findUnique({
+            where: { id: token.id as string },
+            select: {
+              role: true,
+              isActive: true,
+              isEmailVerified: true,
+              sessionVersion: true,
+            },
+          });
+          const versionMismatch =
+            typeof fresh?.sessionVersion === "number" &&
+            (token.sessionVersion ?? 0) !== fresh.sessionVersion;
+          if (!fresh || !fresh.isActive || versionMismatch) {
+            token.accountInvalidated = true;
+            delete token.id;
+            delete token.role;
+            delete token.email;
+            return token;
           }
+          delete token.accountInvalidated;
+          token.role = fresh.role;
+          token.isActive = fresh.isActive;
+          token.isEmailVerified = fresh.isEmailVerified;
+          if (typeof fresh.sessionVersion === "number") {
+            token.sessionVersion = fresh.sessionVersion;
+          }
+          token.roleCheckedAt = Date.now();
+        } catch {
+          token.accountInvalidated = true;
+          delete token.id;
+          delete token.role;
+          delete token.email;
         }
       }
       return token;
@@ -148,6 +161,7 @@ export const authOptions: NextAuthOptions = {
         session.user.email = token.email;
         session.user.imageUrl = token.imageUrl;
         session.user.image = token.imageUrl || session.user.image;
+        session.user.sessionVersion = token.sessionVersion;
         session.user.isTemporary = token.isTemporary;
         // isActive is checked server-side; expose it so middleware can gate routes
         (session.user as Record<string, unknown>).isActive = token.isActive;

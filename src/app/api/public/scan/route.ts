@@ -5,6 +5,7 @@ import { awardQrScanPoint } from "@/lib/points";
 import { redeemQrCodeForUser } from "@/lib/qr-redemption";
 import { rateLimit, getRequestIp, rateLimitResponse } from "@/lib/rate-limit";
 import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
+import { isValidSessionId } from "@/lib/session-id";
 
 const COOKIE_NAME = "sqr_session";
 
@@ -55,7 +56,8 @@ export async function scanImpl(request: NextRequest, deps: AuthResolvers) {
       );
     }
 
-    const sessionId = request.cookies.get(COOKIE_NAME)?.value || null;
+    const rawSessionId = request.cookies.get(COOKIE_NAME)?.value || null;
+    const sessionId = isValidSessionId(rawSessionId) ? rawSessionId : null;
     const userId = session?.user?.id || null;
     const userEmail = session?.user?.email || null;
     const brandId = qr.campaign.brandId || null;

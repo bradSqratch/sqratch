@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBrandAdminContext, slugifyValue } from "@/lib/brand-auth";
+import {
+  getBrandAdminContext,
+  getBrandContextFailure,
+  slugifyValue,
+} from "@/lib/brand-auth";
 import { deleteStorageObjectByUrl } from "@/lib/storage-upload";
 import prisma from "@/lib/prisma";
 
@@ -8,9 +12,18 @@ export async function GET() {
     const context = await getBrandAdminContext({ allowWithoutBrand: true });
 
     if (!context) {
+      const failure = getBrandContextFailure(context);
       return NextResponse.json(
-        { error: "Brand admin access required." },
-        { status: 403 },
+        { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+        { status: failure.status },
+      );
+    }
+
+    if (context.selectionRequired) {
+      const failure = getBrandContextFailure(context);
+      return NextResponse.json(
+        { error: failure.error, code: failure.code },
+        { status: failure.status },
       );
     }
 
@@ -51,9 +64,18 @@ export async function POST(request: NextRequest) {
     const context = await getBrandAdminContext({ allowWithoutBrand: true });
 
     if (!context) {
+      const failure = getBrandContextFailure(context);
       return NextResponse.json(
-        { error: "Brand admin access required." },
-        { status: 403 },
+        { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+        { status: failure.status },
+      );
+    }
+
+    if (context.selectionRequired) {
+      const failure = getBrandContextFailure(context);
+      return NextResponse.json(
+        { error: failure.error, code: failure.code },
+        { status: failure.status },
       );
     }
 
@@ -131,9 +153,10 @@ export async function PATCH(request: NextRequest) {
     const context = await getBrandAdminContext();
 
     if (!context?.membership?.brand) {
+      const failure = getBrandContextFailure(context);
       return NextResponse.json(
-        { error: "Brand admin access required." },
-        { status: 403 },
+        { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+        { status: failure.status },
       );
     }
 

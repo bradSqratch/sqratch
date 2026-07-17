@@ -2,6 +2,7 @@ import crypto from "crypto";
 import { cookies } from "next/headers";
 import type { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
+import { isValidSessionId } from "@/lib/session-id";
 
 export const SESSION_COOKIE_NAME = "sqr_session";
 export const SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 365;
@@ -12,11 +13,13 @@ export function generateSessionId() {
 
 export async function getSessionIdFromRequest(request?: NextRequest) {
   if (request) {
-    return request.cookies.get(SESSION_COOKIE_NAME)?.value || null;
+    const value = request.cookies.get(SESSION_COOKIE_NAME)?.value || null;
+    return isValidSessionId(value) ? value : null;
   }
 
   const cookieStore = await cookies();
-  return cookieStore.get(SESSION_COOKIE_NAME)?.value || null;
+  const value = cookieStore.get(SESSION_COOKIE_NAME)?.value || null;
+  return isValidSessionId(value) ? value : null;
 }
 
 export async function getViewerSessionRecord(request?: NextRequest) {

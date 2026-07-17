@@ -190,9 +190,11 @@ describe("QR Hardening Route-Level Tests", () => {
     }
   });
 
-  // Test Case 5: ADMIN access is globally authorized
-  test("ADMIN access is globally authorized without brand restriction checks", async (t) => {
-    setupMocks({ user: { id: "admin-1", role: "ADMIN" } });
+  // Test Case 5: ADMIN access is scoped to the selected brand
+  test("ADMIN access is scoped to the active brand", async (t) => {
+    setupMocks({ user: { id: "admin-1", role: "ADMIN" } }, { membership: { brand: { id: "brand-1" } } });
+
+    t.mock.method(prisma.campaign, "findFirst", async () => ({ id: "any-campaign" }));
 
     t.mock.method(prisma.qRCode, "findFirst", async () => {
       return { status: "NEW" };
@@ -211,7 +213,7 @@ describe("QR Hardening Route-Level Tests", () => {
 
   // Test Case 6: Empty results handling
   test("empty results handles pagination and formats data correctly", async (t) => {
-    setupMocks({ user: { id: "admin-1", role: "ADMIN" } });
+    setupMocks({ user: { id: "admin-1", role: "ADMIN" } }, { membership: { brand: { id: "brand-1" } } });
 
     t.mock.method(prisma.qRCode, "findMany", async () => []);
     t.mock.method(prisma.qRCode, "count", async () => 0);
@@ -231,7 +233,7 @@ describe("QR Hardening Route-Level Tests", () => {
 
   // Test Case 7: Pagination boundaries and maximum page size limits
   test("enforces max pageSize limit", async (t) => {
-    setupMocks({ user: { id: "admin-1", role: "ADMIN" } });
+    setupMocks({ user: { id: "admin-1", role: "ADMIN" } }, { membership: { brand: { id: "brand-1" } } });
 
     let capturedTake = 0;
     t.mock.method(prisma.qRCode, "findMany", async (args: Record<string, unknown>) => {
@@ -253,7 +255,7 @@ describe("QR Hardening Route-Level Tests", () => {
 
   // Test Case 8: Stable ordering with tie-breaker
   test("specifies stable ordering with deterministic tie-breaker", async (t) => {
-    setupMocks({ user: { id: "admin-1", role: "ADMIN" } });
+    setupMocks({ user: { id: "admin-1", role: "ADMIN" } }, { membership: { brand: { id: "brand-1" } } });
 
     let capturedOrderBy: unknown = null;
     t.mock.method(prisma.qRCode, "findMany", async (args: Record<string, unknown>) => {
@@ -276,7 +278,7 @@ describe("QR Hardening Route-Level Tests", () => {
 
   // Test Case 9: Bounded export under limit works
   test("small batch export returns CSV data successfully", async (t) => {
-    setupMocks({ user: { id: "admin-1", role: "ADMIN" } });
+    setupMocks({ user: { id: "admin-1", role: "ADMIN" } }, { membership: { brand: { id: "brand-1" } } });
 
     // Mock batch lookup
     t.mock.method(prisma.qRCodeBatch, "findUnique", async () => ({
@@ -313,7 +315,7 @@ describe("QR Hardening Route-Level Tests", () => {
 
   // Test Case 10: Maximum allowed export limits
   test("batch export rejects requests exceeding hard limit", async (t) => {
-    setupMocks({ user: { id: "admin-1", role: "ADMIN" } });
+    setupMocks({ user: { id: "admin-1", role: "ADMIN" } }, { membership: { brand: { id: "brand-1" } } });
 
     t.mock.method(prisma.qRCodeBatch, "findUnique", async () => ({
       id: "batch-1",
@@ -336,7 +338,7 @@ describe("QR Hardening Route-Level Tests", () => {
 
   // Test Case 11: Preventing PII and Raw Secrets leakage
   test("export does not include sensitive fields or user PII", async (t) => {
-    setupMocks({ user: { id: "admin-1", role: "ADMIN" } });
+    setupMocks({ user: { id: "admin-1", role: "ADMIN" } }, { membership: { brand: { id: "brand-1" } } });
 
     t.mock.method(prisma.qRCodeBatch, "findUnique", async () => ({
       id: "batch-1",
@@ -365,7 +367,7 @@ describe("QR Hardening Route-Level Tests", () => {
 
   // Test Case 12: CSV Formula Injection handling
   test("sanitizes CSV cells starting with formula trigger chars", async (t) => {
-    setupMocks({ user: { id: "admin-1", role: "ADMIN" } });
+    setupMocks({ user: { id: "admin-1", role: "ADMIN" } }, { membership: { brand: { id: "brand-1" } } });
 
     t.mock.method(prisma.qRCodeBatch, "findUnique", async () => ({
       id: "batch-1",

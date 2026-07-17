@@ -9,6 +9,7 @@ import {
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { signOut } from "next-auth/react";
 
 type UserProfile = {
   id: string;
@@ -166,7 +167,7 @@ export default function ProfilePage() {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      setPasswordSuccess("Password updated.");
+      await signOut({ callbackUrl: "/login" });
     } catch (saveError) {
       setPasswordError(
         getErrorMessage(saveError, "Failed to change password."),

@@ -1518,7 +1518,7 @@ describe("Route Scenario 5: QR Redemption and Unlock", () => {
     ]);
 
     t.mock.method(prisma.campaignUnlock, "findMany", async () => [
-      { id: "anon-unlock-1", campaignId: "campaign-123", qrCodeId: "qr-123", anonKey: "anon-session-id" },
+      { id: "anon-unlock-1", campaignId: "campaign-123", qrCodeId: "qr-123", anonKey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
     ]);
 
     t.mock.method(prisma.lessonProgress, "findUnique", async () => null);
@@ -1540,7 +1540,7 @@ describe("Route Scenario 5: QR Redemption and Unlock", () => {
     t.mock.method(prisma.userSession, "updateMany", async () => ({ count: 1 }));
 
     const req = makeJsonRequest("http://localhost/api/progress/merge", {}, "POST", {
-      sqr_session: "anon-session-id",
+      sqr_session: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     });
 
     const res = await mergePOST(req);
@@ -1579,7 +1579,10 @@ describe("Route Scenario 6: QR Exports", () => {
   });
 
   test("export enforces 5000 hard maximum and protects PII", async (t) => {
-    setupMocks({ user: { id: "user-123", role: "ADMIN" } });
+    setupMocks(
+      { user: { id: "user-123", role: "ADMIN" } },
+      { membership: { brand: { id: "brand-123" } } },
+    );
 
     t.mock.method(prisma.qRCodeBatch, "findUnique", async () => ({
       id: "batch-123",

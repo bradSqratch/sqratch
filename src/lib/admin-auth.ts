@@ -33,7 +33,6 @@ export function normalizeUserRole(value: unknown): Role | null {
     case "CREATOR":
     case "BRAND_ADMIN":
     case "ADMIN":
-    case "EXTERNAL":
       return normalized;
     default:
       return null;

@@ -18,15 +18,17 @@ export async function getAllQrCodesImpl(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let brandId: string | null = null;
-  if (session.user.role === "BRAND_ADMIN") {
-    const brand = await deps.resolveBrandAdminContext();
-    if (!brand?.membership?.brand) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-    brandId = brand.membership.brand.id;
-  } else if (session.user.role !== "ADMIN") {
+  if (session.user.role !== "BRAND_ADMIN" && session.user.role !== "ADMIN") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const brand = await deps.resolveBrandAdminContext();
+  const brandId = brand?.membership?.brand?.id || null;
+  if (!brandId) {
+    return NextResponse.json(
+      { error: "Select an active brand.", code: "ACTIVE_BRAND_REQUIRED" },
+      { status: 409 },
+    );
   }
 
   const { searchParams } = new URL(request.url);
@@ -39,7 +41,7 @@ export async function getAllQrCodesImpl(
   );
   const skip = (page - 1) * take;
 
-  const where = brandId ? { campaign: { brandId } } : {};
+  const where = { campaign: { brandId } };
 
   const [qrCodes, qrCodeTotal] = await Promise.all([
     prisma.qRCode.findMany({

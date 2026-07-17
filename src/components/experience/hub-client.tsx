@@ -284,6 +284,7 @@ export function ExperienceHubClient({
           ) : (
             <GatePanel
               experience={data}
+              returnTo={`/x/${data.slug}/posts`}
               title="Posts Are Locked"
               description="Log in and unlock the linked campaign to join the creator feed and comment on posts."
             />
@@ -316,6 +317,7 @@ export function ExperienceHubClient({
           ) : (
             <GatePanel
               experience={data}
+              returnTo={`/x/${data.slug}/qa`}
               title="Q&A Is Locked"
               description="Log in and unlock the linked campaign to ask questions and follow creator answers."
             />

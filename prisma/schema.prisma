@@ -15,6 +15,7 @@ model User {
   createdAt                DateTime                  @default(now())
   updatedAt                DateTime                  @updatedAt
   password                 String?
+  sessionVersion           Int                       @default(0)
   role                     Role                      @default(USER)
   isActive                 Boolean                   @default(true)
   points                   Int                       @default(0)
@@ -558,14 +559,21 @@ model AnalyticsEvent {
 }
 
 model EmailVerificationToken {
-  id               String   @id @default(cuid())
-  userId           String
-  emailVerifyToken String   @unique
-  expires          DateTime
-  createdAt        DateTime @default(now())
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id              String    @id @default(cuid())
+  userId          String
+  email           String
+  codeHash        String
+  welcomeEligible Boolean   @default(false)
+  failedAttempts  Int       @default(0)
+  consumedAt      DateTime?
+  expires         DateTime
+  createdAt       DateTime  @default(now())
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
+  @@index([email])
+  @@index([userId, consumedAt, expires])
+  @@index([email, consumedAt, expires])
 }
 
 model TokenStore {
@@ -578,16 +586,17 @@ model TokenStore {
 }
 
 model EmailQueue {
-  id        BigInt        @id @default(autoincrement())
-  userId    String
-  email     String
-  status    EmailStatus   @default(PENDING)
-  attempts  Int           @default(0)
-  lastError String?
-  createdAt DateTime      @default(now())
-  sentAt    DateTime?
-  template  EmailTemplate
-  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                   BigInt        @id @default(autoincrement())
+  userId               String
+  email                String
+  status               EmailStatus   @default(PENDING)
+  attempts             Int           @default(0)
+  lastError            String?
+  createdAt            DateTime      @default(now())
+  sentAt               DateTime?
+  template             EmailTemplate
+  verificationEligible Boolean       @default(false)
+  user                 User          @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, template], name: "uq_email_queue_user_template")
   @@index([status, createdAt], map: "idx_email_queue_status_created")
@@ -650,7 +659,6 @@ model UserPointAccount {
 enum Role {
   USER
   ADMIN
-  EXTERNAL
   CREATOR
   BRAND_ADMIN
 }
@@ -733,6 +741,7 @@ enum EmailStatus {
   SENDING
   SENT
   FAILED
+  SKIPPED
 }
 
 enum PointReason {

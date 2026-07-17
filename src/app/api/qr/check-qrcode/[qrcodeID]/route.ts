@@ -20,15 +20,14 @@ export async function checkQrCodeImpl(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let brandId: string | null = null;
-  if (session.user.role === "BRAND_ADMIN") {
-    const brand = await deps.resolveBrandAdminContext();
-    if (!brand?.membership?.brand) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-    brandId = brand.membership.brand.id;
-  } else if (session.user.role !== "ADMIN") {
+  if (session.user.role !== "BRAND_ADMIN" && session.user.role !== "ADMIN") {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const brand = await deps.resolveBrandAdminContext();
+  const brandId = brand?.membership?.brand?.id || null;
+  if (!brandId) {
+    return NextResponse.json({ error: "Select an active brand.", code: "ACTIVE_BRAND_REQUIRED" }, { status: 409 });
   }
 
   const { qrcodeID } = await context.params;
@@ -42,18 +41,12 @@ export async function checkQrCodeImpl(
   }
 
   // If BRAND_ADMIN, verify the requested campaign belongs to their brand
-  if (brandId) {
-    const campaignObj = await prisma.campaign.findFirst({
-      where: {
-        id: campaignId,
-        brandId,
-      },
-      select: { id: true },
-    });
-
-    if (!campaignObj) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
+  const campaignObj = await prisma.campaign.findFirst({
+    where: { id: campaignId, brandId },
+    select: { id: true },
+  });
+  if (!campaignObj) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   try {

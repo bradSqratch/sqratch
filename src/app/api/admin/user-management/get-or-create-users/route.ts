@@ -4,10 +4,9 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import bcrypt from "bcryptjs";
 import { sendVerificationEmail } from "@/helpers/mailer";
-
-function generateOtp() {
-  return String(Math.floor(100000 + Math.random() * 900000));
-}
+import { issueEmailVerificationChallenge } from "@/lib/auth/email-verification";
+import { PASSWORD_POLICY_MESSAGE, validatePassword } from "@/lib/password-policy";
+import { normalizeUserRole } from "@/lib/admin-auth";
 
 export async function GET(request: Request) {
   const session = await getServerSession(authOptions);
@@ -103,18 +102,36 @@ export async function POST(request: Request) {
     );
   }
 
-  try {
-    const hashed = await bcrypt.hash(password, 10);
+  const cleanEmail = String(email).trim().toLowerCase();
+  const requestedRole = normalizeUserRole(role);
+  if (!cleanEmail) {
+    return NextResponse.json({ error: "Email is required" }, { status: 400 });
+  }
+  if (!requestedRole) {
+    return NextResponse.json({ error: "Invalid role" }, { status: 400 });
+  }
 
-    // Prepare token BEFORE the DB write, but don't send email yet
-    const otpCode = generateOtp();
-    const expires = new Date(Date.now() + 10 * 60 * 1000);
+  const passwordError = validatePassword(String(password));
+  if (passwordError) {
+    return NextResponse.json(
+      { error: PASSWORD_POLICY_MESSAGE },
+      { status: 400 },
+    );
+  }
+
+  try {
+    const hashed = await bcrypt.hash(password, 12);
 
     // Prisma 7 safe transaction: use the "array of queries" form
     const newUser = await prisma.$transaction(async (tx) => {
       // 1) Create user
       const created = await tx.user.create({
-        data: { name, email, password: hashed, role },
+        data: {
+          name,
+          email: cleanEmail,
+          password: hashed,
+          role: requestedRole,
+        },
         select: {
           id: true,
           name: true,
@@ -125,7 +142,7 @@ export async function POST(request: Request) {
         },
       });
 
-      if (role === "CREATOR") {
+      if (requestedRole === "CREATOR") {
         await tx.creatorProfile.upsert({
           where: { userId: created.id },
           update: {
@@ -140,24 +157,23 @@ export async function POST(request: Request) {
         });
       }
 
-      // 2) Clear existing tokens
-      await tx.emailVerificationToken.deleteMany({
-        where: { userId: created.id },
-      });
+      const challenge = await issueEmailVerificationChallenge(
+        tx,
+        created.id,
+        created.email,
+        {
+          welcomeEligible: false,
+        },
+      );
 
-      // 3) Create fresh token
-      await tx.emailVerificationToken.create({
-        data: { userId: created.id, emailVerifyToken: otpCode, expires },
-      });
-
-      return created;
+      return { user: created, code: challenge.code };
     });
 
     // 4) Send verification email AFTER transaction commits
-    await sendVerificationEmail(newUser.email, otpCode);
+    await sendVerificationEmail(newUser.user.email, newUser.code);
 
     return NextResponse.json(
-      { data: newUser, message: "User created; verification email sent." },
+      { data: newUser.user, message: "User created; verification email sent." },
       { status: 201 },
     );
   } catch (error: unknown) {
@@ -169,7 +185,7 @@ export async function POST(request: Request) {
         { status: 409 },
       );
     }
-    console.error("Create user error:", error);
+    console.error("Create user error", { outcome: "request_failed" });
     return NextResponse.json(
       { error: "Failed to create user" },
       { status: 500 },

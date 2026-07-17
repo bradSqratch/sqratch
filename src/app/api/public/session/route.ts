@@ -1,18 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
-import crypto from "crypto";
+import { generateSessionId } from "@/lib/session";
+import { isValidSessionId } from "@/lib/session-id";
 
-const COOKIE_NAME = "sqr_session";
 const COOKIE_MAX_AGE = 60 * 60 * 24 * 365; // 1 year
-
-function generateSessionId() {
-  return crypto.randomBytes(24).toString("hex");
-}
 
 export async function POST(request: NextRequest) {
   try {
-    const existingSessionId = request.cookies.get(COOKIE_NAME)?.value;
-    const sessionId = existingSessionId || generateSessionId();
+    const existingSessionId = request.cookies.get("sqr_session")?.value;
+    const sessionId = isValidSessionId(existingSessionId)
+      ? existingSessionId
+      : generateSessionId();
 
     const existingSession = await prisma.userSession.findUnique({
       where: { id: sessionId },
@@ -35,12 +33,10 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    const response = NextResponse.json({
-      ok: true,
-      sessionId,
-    });
+    const response = NextResponse.json({ ok: true });
+    response.headers.set("Cache-Control", "no-store");
 
-    response.cookies.set(COOKIE_NAME, sessionId, {
+    response.cookies.set("sqr_session", sessionId, {
       httpOnly: true,
       sameSite: "lax",
       secure: process.env.NODE_ENV === "production",
@@ -49,11 +45,11 @@ export async function POST(request: NextRequest) {
     });
 
     return response;
-  } catch (error) {
-    console.error("[public/session] Error:", error);
+  } catch {
+    console.error("[public/session] Error", { outcome: "request_failed" });
     return NextResponse.json(
       { error: "Failed to initialize session." },
-      { status: 500 },
+      { status: 500, headers: { "Cache-Control": "no-store" } },
     );
   }
 }

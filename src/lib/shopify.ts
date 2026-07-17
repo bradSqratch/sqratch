@@ -17,7 +17,18 @@ export const SHOPIFY_SCOPES = [
 export const SHOPIFY_PENDING_INSTALL_TTL_MS = 24 * 60 * 60 * 1000;
 
 export function isValidShopDomain(value: string) {
-  return /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/i.test(value.trim());
+  return /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.myshopify\.com$/i.test(
+    value.trim().toLowerCase(),
+  );
+}
+
+export function buildShopifyFrameAncestorsCsp(rawShop: string | null | undefined) {
+  const shop = rawShop?.trim().toLowerCase() || "";
+  const frameAncestors = isValidShopDomain(shop)
+    ? `https://${shop} https://admin.shopify.com`
+    : "https://admin.shopify.com";
+
+  return `frame-ancestors ${frameAncestors};`;
 }
 
 export function buildShopifyHmac(

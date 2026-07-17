@@ -16,6 +16,7 @@ import type { ExperienceShellData } from "@/components/experience/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
+import { normalizeInternalRedirectPath } from "@/lib/safe-redirect";
 
 type ExperienceTab = "hub" | "learn" | "posts" | "qa" | "shop";
 
@@ -227,12 +228,15 @@ export function GatePanel({
   experience,
   title,
   description,
+  returnTo,
 }: {
   experience: ExperienceShellData;
   title: string;
   description: string;
+  returnTo?: string;
 }) {
-  const nextHref = `/x/${experience.slug}`;
+  const hubHref = `/x/${experience.slug}`;
+  const nextHref = normalizeInternalRedirectPath(returnTo, hubHref);
   const loginHref = `/login?next=${encodeURIComponent(nextHref)}`;
   const signupHref = `/signup?next=${encodeURIComponent(nextHref)}`;
   const canOfferSignup =

@@ -19,7 +19,7 @@ type ApprovalUser = {
   id: string;
   name: string | null;
   email: string;
-  role: "USER" | "CREATOR" | "BRAND_ADMIN" | "ADMIN" | "EXTERNAL";
+  role: "USER" | "CREATOR" | "BRAND_ADMIN" | "ADMIN";
   isEmailVerified: boolean;
   createdAt: string;
 };

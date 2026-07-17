@@ -22,15 +22,10 @@ export async function PATCH(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let brandId: string | null = null;
-  if (session.user.role === "BRAND_ADMIN") {
-    const brand = await resolveBrandAdminContext();
-    if (!brand?.membership?.brand) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
-    brandId = brand.membership.brand.id;
-  } else if (session.user.role !== "ADMIN") {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  const brand = await resolveBrandAdminContext();
+  const brandId = brand?.membership?.brand?.id || null;
+  if (!brandId) {
+    return NextResponse.json({ error: "Select an active brand.", code: "ACTIVE_BRAND_REQUIRED" }, { status: 409 });
   }
 
   const { id } = await context.params;
@@ -48,7 +43,7 @@ export async function PATCH(
   const existingQRCode = await prisma.qRCode.findFirst({
     where: {
       id,
-      ...(brandId ? { campaign: { brandId } } : {}),
+      campaign: { brandId },
     },
   });
 
@@ -100,7 +95,7 @@ export async function PATCH(
     const targetCampaign = await prisma.campaign.findFirst({
       where: {
         id: campaignId,
-        ...(brandId ? { brandId } : {}),
+        brandId,
       },
       select: { name: true },
     });

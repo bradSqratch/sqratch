@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { sendWelcomeEmail } from "@/helpers/mailer";
+import { isWelcomeEmailEligible } from "@/lib/welcome-email";
 
 function requireCronSecret(req: Request) {
   const got = req.headers.get("x-cron-secret");
@@ -13,10 +14,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const now = new Date();
-  const cutoffMinutes = 45;
-  const cutoff = new Date(now.getTime() - cutoffMinutes * 60 * 1000); // 45 minutes ago
-
   // pick a small batch each run (adjust later)
   const BATCH = 25;
 
@@ -25,17 +22,17 @@ export async function POST(req: Request) {
     where: {
       status: "PENDING",
       template: "WELCOME",
-      createdAt: { lte: cutoff },
     },
     orderBy: { createdAt: "asc" },
     take: BATCH,
   });
 
   if (jobs.length === 0) {
-    return NextResponse.json({ ok: true, processed: 0 });
+    return NextResponse.json({ ok: true, processed: 0, skipped: 0 });
   }
 
   let processed = 0;
+  let skipped = 0;
 
   for (const job of jobs) {
     // 2) “Claim” the job so two workers don’t send twice
@@ -52,7 +49,54 @@ export async function POST(req: Request) {
     if (claimed.count !== 1) continue; // someone else took it
 
     try {
-      await sendWelcomeEmail(job.email);
+      const user = await prisma.user.findUnique({
+        where: { id: job.userId },
+        select: {
+          email: true,
+          name: true,
+          role: true,
+          isEmailVerified: true,
+          creatorRequests: {
+            select: { id: true },
+            take: 1,
+          },
+          brandRequests: {
+            select: { id: true },
+            take: 1,
+          },
+        },
+      });
+
+      const eligible =
+        user !== null &&
+        job.verificationEligible &&
+        isWelcomeEmailEligible({
+          isEmailVerified: user.isEmailVerified,
+          role: user.role,
+          hasCreatorRequest: user.creatorRequests.length > 0,
+          hasBrandRequest: user.brandRequests.length > 0,
+        });
+
+      if (!eligible) {
+        await prisma.emailQueue.updateMany({
+          where: { id: job.id, status: "SENDING" },
+          data: {
+            status: "SKIPPED",
+            lastError: "Skipped: account is not eligible for a welcome email.",
+          },
+        });
+        skipped += 1;
+        continue;
+      }
+
+      if (!user) {
+        continue;
+      }
+
+      await sendWelcomeEmail({
+        email: user.email,
+        name: user.name,
+      });
 
       await prisma.emailQueue.update({
         where: { id: job.id },
@@ -81,5 +125,5 @@ export async function POST(req: Request) {
     }
   }
 
-  return NextResponse.json({ ok: true, processed });
+  return NextResponse.json({ ok: true, processed, skipped });
 }

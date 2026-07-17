@@ -2,15 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import bcryptjs from "bcryptjs";
 import { rateLimit, getRequestIp, rateLimitResponse } from "@/lib/rate-limit";
+import { issueEmailVerificationChallenge } from "@/lib/auth/email-verification";
+import { PASSWORD_POLICY_MESSAGE, validatePassword } from "@/lib/password-policy";
 
 type RequestedRole = "CREATOR" | "BRAND" | null;
 
 function optionalString(value: unknown) {
   return typeof value === "string" ? value : "";
-}
-
-function generateOtp() {
-  return String(Math.floor(100000 + Math.random() * 900000));
 }
 
 export async function POST(request: NextRequest) {
@@ -57,9 +55,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (cleanPassword.length < 6) {
+    if (validatePassword(cleanPassword)) {
       return NextResponse.json(
-        { error: "Password must be at least 6 characters." },
+        { error: PASSWORD_POLICY_MESSAGE },
         { status: 400 }
       );
     }
@@ -88,11 +86,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const salt = await bcryptjs.genSalt(10);
+    const salt = await bcryptjs.genSalt(12);
     const hashedPassword = await bcryptjs.hash(cleanPassword, salt);
-
-    const otpCode = generateOtp();
-    const expires = new Date(Date.now() + 10 * 60 * 1000);
 
     const created = await prisma.$transaction(async (tx) => {
       const user = await tx.user.create({
@@ -135,40 +130,39 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      await tx.emailVerificationToken.deleteMany({
-        where: { userId: user.id },
-      });
-
-      await tx.emailVerificationToken.create({
-        data: {
-          userId: user.id,
-          emailVerifyToken: otpCode,
-          expires,
+      const challenge = await issueEmailVerificationChallenge(
+        tx,
+        user.id,
+        normalizedEmail,
+        {
+          welcomeEligible: requestedRole == null,
         },
-      });
+      );
 
-      return user;
+      return { user, code: challenge.code };
     });
 
     // Best-effort email sending.
     // Replace this with your exact mailer helper if needed.
     try {
       const { sendVerificationEmail } = await import("@/helpers/mailer");
-      await sendVerificationEmail(normalizedEmail, otpCode);
-    } catch (mailError) {
-      console.warn("[auth/signup] Failed to send verification email:", mailError);
+      await sendVerificationEmail(normalizedEmail, created.code);
+    } catch {
+      console.warn("[auth/signup] Verification email delivery failed", {
+        outcome: "delivery_failed",
+      });
     }
 
     return NextResponse.json(
       {
         ok: true,
         message: "Signup successful. Please verify your email.",
-        email: created.email,
+        email: created.user.email,
       },
       { status: 201 }
     );
-  } catch (error) {
-    console.error("[auth/signup] Error:", error);
+  } catch {
+    console.error("[auth/signup] Error", { outcome: "request_failed" });
     return NextResponse.json(
       { error: "An error occurred during signup." },
       { status: 500 }

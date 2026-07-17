@@ -229,6 +229,7 @@ export function ExperienceQAClient({
       {!data.canInteract ? (
         <GatePanel
           experience={data}
+          returnTo={`/x/${data.slug}/qa`}
           title="Q&A Is Locked"
           description="Log in and unlock the linked campaign to submit questions and see creator answers."
         />

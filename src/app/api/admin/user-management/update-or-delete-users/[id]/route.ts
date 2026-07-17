@@ -3,7 +3,7 @@ import prisma from "@/lib/prisma";
 import { deleteStorageObjectByUrl } from "@/lib/storage-upload";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
-import { Role } from "@prisma/client";
+import { normalizeUserRole } from "@/lib/admin-auth";
 
 export async function PATCH(
   request: Request,
@@ -22,7 +22,7 @@ export async function PATCH(
   let body: {
     name?: string;
     email?: string;
-    role?: Role;
+    role?: unknown;
     isActive?: boolean;
   };
 
@@ -34,7 +34,7 @@ export async function PATCH(
 
   const name = String(body.name || "").trim();
   const email = String(body.email || "").trim().toLowerCase();
-  const role = body.role;
+  const role = normalizeUserRole(body.role);
   const isActive =
     typeof body.isActive === "boolean" ? body.isActive : undefined;
 

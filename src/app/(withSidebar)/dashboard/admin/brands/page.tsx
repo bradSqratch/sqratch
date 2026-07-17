@@ -23,7 +23,7 @@ type BrandListItem = {
       id: string;
       name: string | null;
       email: string;
-      role: "USER" | "CREATOR" | "BRAND_ADMIN" | "ADMIN" | "EXTERNAL";
+      role: "USER" | "CREATOR" | "BRAND_ADMIN" | "ADMIN";
       isActive: boolean;
     };
   }>;

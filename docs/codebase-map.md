@@ -212,10 +212,10 @@ sqratch/
 
 | Method | Path | Auth | Rate Limit | Purpose | Side Effects |
 |---|---|---|---|---|---|
-| POST | `/api/auth/signup` | None | 5/15 min per IP | User signup (email+password) | Creates `User`, queues welcome email |
-| POST | `/api/auth/send-email-verification` | Session | 5/15 min per IP | Triggers email verification send | Creates `EmailVerificationToken`, queues email |
-| POST | `/api/auth/verify-email` | None | — | Consume email token; merge anon unlocks | Sets `isEmailVerified=true`, merges `CampaignUnlock` via `collectAnonMergeKeys` |
-| * | `/api/auth/[...nextauth]` | — | — | next-auth handler (signin/signout/session) | Creates/updates `UserSession`; JWT recheck every 5 min |
+| POST | `/api/auth/signup` | None | 5/15 min per IP | User signup (email+password) | Creates an unverified `USER` plus an HMAC-backed verification challenge |
+| POST | `/api/auth/send-email-verification` | Session | 5/15 min per IP | Triggers email verification send | Replaces a peppered HMAC challenge and queues email; public response is generic |
+| POST | `/api/auth/verify-email` | None | — | Consume six-digit challenge; merge anon unlocks | Atomically verifies the user and queues one welcome email only for ordinary self-service users without Creator/Brand applications |
+| * | `/api/auth/[...nextauth]` | — | — | next-auth handler (signin/signout/session) | JWT callback checks `User.sessionVersion` and account state against the database |
 
 ### Public APIs (no auth required)
 
@@ -311,7 +311,7 @@ sqratch/
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| POST | `/api/internal/email-worker` | `x-cron-secret` | Process pending emails from `EmailQueue` |
+| POST | `/api/internal/email-worker` | `x-cron-secret` | Revalidate and process pending welcome emails from `EmailQueue`; ineligible jobs become `SKIPPED` |
 | POST | `/api/internal/reconcile-redemptions` | `x-cron-secret` | Reconcile stuck `POINTS_DEBITED` redemptions (limit 20, 5 min minimum age, 5 max attempts) |
 
 ### Progress APIs (session or auth)
@@ -340,9 +340,9 @@ sqratch/
 
 | Model | Purpose | Key Relationships | Lifecycle Notes |
 |---|---|---|---|
-| `User` | End user, brand admin, creator, or SQRATCH admin | Has many `BrandMember`, `CreatorProfile`, `CampaignUnlock`, `PointTransaction`, `ShopifyRewardRedemption`, `UserSession` | `role` enum controls access everywhere; `points` is a denormalized counter backed by `PointTransaction`; `isActive` checked every 5 min in JWT callback |
+| `User` | End user, brand admin, creator, or SQRATCH admin | Has many `BrandMember`, `CreatorProfile`, `CampaignUnlock`, `PointTransaction`, `ShopifyRewardRedemption`, `UserSession` | `role` enum controls access everywhere; `points` is a denormalized counter backed by `PointTransaction`; `isActive` and `sessionVersion` are checked in the JWT callback |
 | `UserSession` | Anonymous + authenticated browsing session | Belongs to `User?`, `Campaign?`, `QRCode?` | Created on QR scan; promoted to userId on login via `/api/progress/merge` |
-| `EmailVerificationToken` | Email verification token | Belongs to `User` | Consumed on verify; `expires` field must be checked |
+| `EmailVerificationToken` | HMAC-backed email verification challenge | Belongs to `User` | Six-digit code is never stored; expires after 10 minutes, exhausts after five failed attempts, and is atomically consumed |
 
 ### Brand & Campaign Models
 
@@ -350,6 +350,8 @@ sqratch/
 |---|---|---|---|
 | `Brand` | A brand entity (e.g. retailer using Shopify) | Has `BrandMember[]`, `Campaign[]`, `BrandRewardOffer[]`, `ShopifyRewardRedemption[]` | Token fields: `shopifyAdminAccessTokenEncrypted`, `shopifyRefreshTokenEncrypted` (AES-256-GCM); `shopifyAuthMode` enum (`LEGACY_OFFLINE` or `EXPIRING_OFFLINE`); `shopifyTokenRefreshLockedUntil` (CAS refresh lease); `shopifyConnectionStatus` drives all Shopify features; `REQUIRES_RECONNECT` for permanent refresh failure |
 | `BrandMember` | User ↔ Brand membership | `User`, `Brand` | `role: ADMIN\|MANAGER\|VIEWER`; only ADMIN+MANAGER can take actions |
+
+Brand-scoped requests resolve through `src/lib/brand-context.ts` and the HttpOnly `sqratch_active_brand_id` cookie. The cookie is accepted only when the current user still has the required membership; multi-brand requests without a selection return `ACTIVE_BRAND_REQUIRED` instead of choosing an arbitrary membership.
 | `BrandRequest` | Request to become a brand admin | `User` (owner), `User` (reviewer) | `ApprovalStatus: PENDING\|APPROVED\|REJECTED` |
 | `Campaign` | A marketing campaign tied to a brand | `Brand?`, `QRCode[]`, `CampaignExperience[]`, `CampaignUnlock[]`, `QRCodeBatch[]` | Can exist without a Brand (admin campaigns); `slug` is the URL identifier |
 | `CampaignUnlock` | Records that a user (or anon) has unlocked a campaign | `Campaign`, `User?`, `QRCode?` | Unique on `(campaignId, userId)`. Anon unlocks use `anonKey`. Merged to userId on verify-email via `collectAnonMergeKeys`. Partial unique index `(campaignId, anonKey) WHERE anonKey IS NOT NULL AND userId IS NULL` in migration 20260615113320 (intentional Prisma/DB divergence) |
@@ -393,7 +395,7 @@ sqratch/
 | Model | Purpose |
 |---|---|
 | `TokenStore` | Key-value store for short-lived tokens (Shopify OAuth state, pending install payloads — both LEGACY and EXPIRING shapes). Keyed by `service` string. Always check `expiresAt` |
-| `EmailQueue` | Async email queue; processed by `/api/internal/email-worker` |
+| `EmailQueue` | Async email queue created after successful ordinary-user verification; processed by `/api/internal/email-worker` |
 | `WaitlistEntry` | Marketing waitlist signups |
 | `AnalyticsEvent` | Internal analytics events (QR scans, lesson views, etc.) |
 
@@ -401,7 +403,7 @@ sqratch/
 
 | Enum | Values |
 |---|---|
-| `Role` | `USER`, `CREATOR`, `BRAND_ADMIN`, `ADMIN`, `EXTERNAL` |
+| `Role` | `USER`, `ADMIN`, `CREATOR`, `BRAND_ADMIN` |
 | `ApprovalStatus` | `PENDING`, `APPROVED`, `REJECTED` |
 | `QRStatus` | `NEW`, `USED`, `INVALID` |
 | `ShopifyConnectionStatus` | `DISCONNECTED`, `CONNECTED`, `UNINSTALLED`, `REQUIRES_RECONNECT` |
@@ -420,18 +422,21 @@ sqratch/
 ```
 User submits signup form
 → POST /api/auth/signup (rate limited: 5/15 min)
-  → Creates User (bcrypt password hash, role=USER, email lowercased)
-  → Queues WELCOME email (EmailQueue)
+  → Creates User (bcrypt cost 12, shared 8–72 letter+number policy, role=USER)
 → POST /api/auth/send-email-verification (rate limited: 5/15 min)
-  → Creates EmailVerificationToken (expires in 24h)
-  → Sends email via SMTP
-→ User clicks email link → POST /api/auth/verify-email
-  → Validates token, sets User.isEmailVerified=true
+  → Replaces the HMAC challenge (expires in 10 minutes)
+  → Sends six-digit code via SMTP
+→ User submits code → POST /api/auth/verify-email
+  → Atomically consumes the challenge, sets User.isEmailVerified=true
+  → Queues one WELCOME job only for self-service USER accounts with no CreatorRequest or BrandRequest
   → Merges anonymous CampaignUnlocks via collectAnonMergeKeys (sqr_session first)
+→ POST /api/internal/email-worker (CRON_SECRET)
+  → Revalidates verified USER role and absence of Creator/Brand applications
+  → Sends the welcome email with a /login CTA, or marks the job SKIPPED
 → User signs in via next-auth credentials provider (email lowercased)
-  → JWT contains: id, email, role, name, isActive, roleCheckedAt
+  → JWT contains: id, email, role, name, isActive, sessionVersion
   → JWT maxAge: 7 days
-  → Every 5 minutes: re-read role + isActive from DB
+  → Every authenticated JWT callback: re-read role, isActive, email verification, and sessionVersion from DB
   → Deactivated users → forced sign-out (jwt callback returns null)
 ```
 
@@ -773,6 +778,9 @@ and the schema↔database diff is empty.
 | `20260615120000_shopify_expiring_tokens` | Brand expiring-token fields, `ShopifyAuthMode` enum, `REQUIRES_RECONNECT` status | Additive + Enum |
 | `20260615140000_redemption_reconciliation` | Reconciliation fields on `ShopifyRewardRedemption`, composite unique on `PointTransaction(shopifyRewardRedemptionId, reason)` | Additive + Index |
 | `20260615150000_evidence_based_indexes` | Composite indexes for offer cap queries, verification token lookup, TokenStore expiry | Index |
+| `20260716120000_harden_auth_sessions_and_verification` | `User.sessionVersion`, HMAC-backed verification challenges, failed-attempt/consumed state, and lookup indexes; legacy plaintext challenges are invalidated | Additive + Data cleanup + Index |
+
+The auth-hardening migration above is a local pending migration and must be reviewed and deployed separately; it has not been applied to a remote or production database.
 
 ### Historical Divergence (resolved)
 

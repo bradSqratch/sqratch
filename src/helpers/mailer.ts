@@ -118,16 +118,17 @@ export async function sendInviteEmail(
   });
 }
 
-/**
- * Sends a welcome email to a new user with signup link 30 to 90 minutes from when he has redeemed a QR code.
- */
-export async function sendWelcomeEmail(email: string, name?: string) {
+export async function sendWelcomeEmail({
+  email,
+  name,
+}: {
+  email: string;
+  name?: string | null;
+}) {
   const from = process.env.ADMIN_EMAIL;
 
   const safeName = name && name.trim() ? name.trim() : "there";
-  const ctaUrl = `https://sqratch.com/signup?registeredemail=${encodeURIComponent(
-    email,
-  )}`;
+  const ctaUrl = `${getAppBaseUrl().replace(/\/+$/, "")}/login`;
 
   const html = buildWelcomeEmailHtml({
     name: safeName,
@@ -138,7 +139,12 @@ export async function sendWelcomeEmail(email: string, name?: string) {
     to: email,
     subject: "Welcome to SQRATCH!",
     html,
-    text: `Welcome to SQRATCH!\n\nHi ${safeName},\nYou found a SQRATCH sticker. You scratched it. You scanned it. Now you're in. From here, you can keep collecting SQRATCH by scanning more stickers-each one adds to your balance and unlocks new drops, rewards, and access. The more you collect, the more your membership grows across participating brands and communities.\nComplete your setup: https://sqratch.com/signup\n`,
+    text:
+      `Welcome to SQRATCH!\n\n` +
+      `Hi ${safeName},\n\n` +
+      "Welcome to SQRATCH. Explore experiences unlocked through participating campaigns, learn from creators, join conversations, ask questions, collect points, and discover rewards connected to the brands and communities you engage with.\n\n" +
+      `Log in to SQRATCH: ${ctaUrl}\n\n` +
+      "If you did not create a SQRATCH account, you can safely ignore this email.\n",
   };
 
   return transporter.sendMail(mailOptions);

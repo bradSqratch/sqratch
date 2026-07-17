@@ -38,7 +38,7 @@ import {
 import { NavUser } from "@/components/nav-user";
 import { toast } from "sonner";
 
-type Role = "ADMIN" | "BRAND_ADMIN" | "CREATOR" | "USER" | "EXTERNAL";
+type Role = "ADMIN" | "BRAND_ADMIN" | "CREATOR" | "USER";
 
 type NavItem = {
   title: string;

@@ -3,20 +3,7 @@ import { getServerSession } from "next-auth";
 import bcrypt from "bcryptjs";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
-
-const MIN_PASSWORD_LENGTH = 8;
-const MAX_PASSWORD_LENGTH = 72;
-
-function isValidPassword(password: string) {
-  if (password.length < MIN_PASSWORD_LENGTH || password.length > MAX_PASSWORD_LENGTH) {
-    return false;
-  }
-
-  const hasLetter = /[A-Za-z]/.test(password);
-  const hasNumber = /\d/.test(password);
-
-  return hasLetter && hasNumber;
-}
+import { PASSWORD_POLICY_MESSAGE, validatePassword } from "@/lib/password-policy";
 
 export async function POST(request: NextRequest) {
   try {
@@ -53,12 +40,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (!isValidPassword(newPassword)) {
+    if (validatePassword(newPassword)) {
       return NextResponse.json(
-        {
-          error:
-            "Password must be 8-72 characters and include at least one letter and one number.",
-        },
+        { error: PASSWORD_POLICY_MESSAGE },
         { status: 400 },
       );
     }
@@ -89,16 +73,21 @@ export async function POST(request: NextRequest) {
 
     const hashed = await bcrypt.hash(newPassword, 12);
 
-    await prisma.user.update({
-      where: { id: user.id },
-      data: {
-        password: hashed,
-      },
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: user.id },
+        data: {
+          password: hashed,
+          sessionVersion: { increment: 1 },
+        },
+      });
     });
 
     return NextResponse.json({ data: { success: true } });
-  } catch (error) {
-    console.error("[user/change-password][POST] Error:", error);
+  } catch {
+    console.error("[user/change-password][POST] Error", {
+      outcome: "request_failed",
+    });
     return NextResponse.json(
       { error: "Failed to change password." },
       { status: 500 },

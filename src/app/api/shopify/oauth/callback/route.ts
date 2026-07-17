@@ -158,29 +158,6 @@ export async function oauthCallbackImpl(
       );
     }
 
-    if (
-      !tokenJson.expires_in ||
-      !tokenJson.refresh_token ||
-      !tokenJson.refresh_token_expires_in
-    ) {
-      console.warn(
-        "[shopify/oauth/callback] expiring offline token fields missing",
-        {
-          shop,
-          hasExpiresIn: Boolean(tokenJson.expires_in),
-          hasRefreshToken: Boolean(tokenJson.refresh_token),
-          hasRefreshTokenExpiresIn: Boolean(tokenJson.refresh_token_expires_in),
-        },
-      );
-
-      return NextResponse.redirect(
-        buildShopifyDashboardRedirect({
-          origin: request.nextUrl.origin,
-          error: "expiring_token_fields_missing",
-        }),
-      );
-    }
-
     // (c) Verify returned scopes include all required scopes
     const requiredScopes = SHOPIFY_SCOPES.split(",")
       .map((scope) => scope.trim())
@@ -234,24 +211,37 @@ export async function oauthCallbackImpl(
 
     const now = Date.now();
 
-    const pendingInstallPayload = buildExpiringPendingInstall({
-      shop,
-      clientId: apiKey,
-      encryptedAccessToken: encryptSecret(tokenJson.access_token),
-      accessTokenExpiresAt: new Date(
-        now + Number(tokenJson.expires_in || 3600) * 1000,
-      ).toISOString(),
-      encryptedRefreshToken: encryptSecret(tokenJson.refresh_token),
-      refreshTokenExpiresAt: new Date(
-        now + Number(tokenJson.refresh_token_expires_in || 7776000) * 1000,
-      ).toISOString(),
-      grantedScopes: String(tokenJson.scope || ""),
-    });
+    const hasExpiringTokenFields = Boolean(
+      tokenJson.expires_in &&
+        tokenJson.refresh_token &&
+        tokenJson.refresh_token_expires_in,
+    );
+    const pendingInstallPayload = hasExpiringTokenFields
+      ? buildExpiringPendingInstall({
+          shop,
+          clientId: apiKey,
+          encryptedAccessToken: encryptSecret(tokenJson.access_token),
+          accessTokenExpiresAt: new Date(
+            now + Number(tokenJson.expires_in) * 1000,
+          ).toISOString(),
+          encryptedRefreshToken: encryptSecret(tokenJson.refresh_token),
+          refreshTokenExpiresAt: new Date(
+            now + Number(tokenJson.refresh_token_expires_in) * 1000,
+          ).toISOString(),
+          grantedScopes: String(tokenJson.scope || ""),
+        })
+      : {
+          shop,
+          encryptedToken: encryptSecret(tokenJson.access_token),
+        };
 
     await prisma.tokenStore.create({
       data: {
         service: buildShopifyPendingInstallService(pendingInstallId),
-        token: serializeExpiringPendingInstall(pendingInstallPayload),
+        token:
+          "shape" in pendingInstallPayload
+            ? serializeExpiringPendingInstall(pendingInstallPayload)
+            : JSON.stringify(pendingInstallPayload),
         expiresAt: new Date(now + SHOPIFY_PENDING_INSTALL_TTL_MS),
       },
     });
@@ -266,8 +256,10 @@ export async function oauthCallbackImpl(
         );
 
     return NextResponse.redirect(redirectUrl);
-  } catch (error) {
-    console.error("[shopify/oauth/callback][GET] Error:", error);
+  } catch {
+    console.error("[shopify/oauth/callback][GET] Error", {
+      outcome: "callback_failed",
+    });
     return NextResponse.redirect(
       buildShopifyDashboardRedirect({
         origin: request.nextUrl.origin,

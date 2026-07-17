@@ -2,7 +2,7 @@ import type { DefaultSession } from "next-auth";
 import "next-auth";
 
 declare module "next-auth" {
-  type AppRole = "USER" | "CREATOR" | "BRAND_ADMIN" | "ADMIN" | "EXTERNAL";
+  type AppRole = "USER" | "CREATOR" | "BRAND_ADMIN" | "ADMIN";
 
   interface User {
     id?: string;
@@ -11,6 +11,7 @@ declare module "next-auth" {
     isTemporary?: boolean;
     role?: AppRole;
     imageUrl?: string | null;
+    sessionVersion?: number;
   }
 
   interface Session {
@@ -21,6 +22,7 @@ declare module "next-auth" {
       isTemporary?: boolean;
       role?: AppRole;
       imageUrl?: string | null;
+      sessionVersion?: number;
     } & DefaultSession["user"];
   }
 }
@@ -30,9 +32,10 @@ declare module "next-auth/jwt" {
     id?: string;
     isEmailVerified?: boolean;
     email?: string;
-    role?: "USER" | "CREATOR" | "BRAND_ADMIN" | "ADMIN" | "EXTERNAL";
+    role?: "USER" | "CREATOR" | "BRAND_ADMIN" | "ADMIN";
     imageUrl?: string | null;
     isTemporary?: boolean;
     accountInvalidated?: boolean;
+    sessionVersion?: number;
   }
 }

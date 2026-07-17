@@ -35,7 +35,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 
-type UserRole = "USER" | "CREATOR" | "BRAND_ADMIN" | "ADMIN" | "EXTERNAL";
+type UserRole = "USER" | "CREATOR" | "BRAND_ADMIN" | "ADMIN";
 
 type UserRecord = {
   id: string;
@@ -73,14 +73,13 @@ const roles: UserRole[] = [
   "CREATOR",
   "BRAND_ADMIN",
   "ADMIN",
-  "EXTERNAL",
 ];
 
 const emptyCreateForm: CreateForm = {
   name: "",
   email: "",
   password: "",
-  role: "EXTERNAL",
+  role: "USER",
 };
 
 const shortDateFormatter = new Intl.DateTimeFormat(undefined, {

@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBrandAdminContext } from "@/lib/brand-auth";
+import {
+  getBrandAdminContext,
+  getBrandContextFailure,
+} from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
 
 function getDateRange(request: NextRequest) {
@@ -21,9 +24,10 @@ export async function GET(request: NextRequest) {
     const context = await getBrandAdminContext();
 
     if (!context?.membership?.brand) {
+      const failure = getBrandContextFailure(context);
       return NextResponse.json(
-        { error: "Brand admin access required." },
-        { status: 403 },
+        { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+        { status: failure.status },
       );
     }
 

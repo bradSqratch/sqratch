@@ -25,22 +25,13 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    let brandId: string | null = null;
-    if (session.user.role === "BRAND_ADMIN") {
-      const brand = await resolveBrandAdminContext();
-      brandId = brand?.membership?.brand?.id || null;
-    } else if (session.user.role === "ADMIN") {
-      brandId = request.nextUrl.searchParams.get("brandId");
-      if (!brandId) {
-        const firstBrand = await prisma.brand.findFirst({ select: { id: true } });
-        brandId = firstBrand?.id || null;
-      }
-    }
+    const brand = await resolveBrandAdminContext();
+    const brandId = brand?.membership?.brand?.id || null;
 
     if (!brandId) {
       return NextResponse.json(
-        { error: "Brand context required." },
-        { status: 403 },
+        { error: "Select an active brand.", code: "ACTIVE_BRAND_REQUIRED" },
+        { status: 409 },
       );
     }
 
@@ -218,29 +209,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    let brandId: string | null = null;
+    const brand = await resolveBrandAdminContext();
+    const brandId = brand?.membership?.brand?.id || null;
     const userId = session.user.id;
-
-    if (session.user.role === "BRAND_ADMIN") {
-      const brand = await resolveBrandAdminContext();
-      if (!brand?.membership?.brand) {
-        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-      }
-      brandId = brand.membership.brand.id;
-    } else if (session.user.role === "ADMIN") {
-      const campaignObj = await prisma.campaign.findUnique({
-        where: { id: campaignId },
-        select: { brandId: true },
-      });
-      brandId = campaignObj?.brandId || null;
-    } else {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
 
     if (!brandId) {
       return NextResponse.json(
-        { error: "Campaign brand context not found." },
-        { status: 404 },
+        { error: "Select an active brand.", code: "ACTIVE_BRAND_REQUIRED" },
+        { status: 409 },
       );
     }
 

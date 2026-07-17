@@ -7,6 +7,7 @@ import {
 } from "@/lib/points";
 import { redeemQrCodeForUser } from "@/lib/qr-redemption";
 import { SESSION_COOKIE_NAME } from "@/lib/session";
+import { isValidSessionId } from "@/lib/session-id";
 import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
 
 export async function POST(request: NextRequest) {
@@ -18,7 +19,8 @@ export async function mergeImpl(request: NextRequest, deps: AuthResolvers) {
     const session = await deps.resolveSession();
     const userId = session?.user?.id || null;
     const userEmail = session?.user?.email || null;
-    const sessionId = request.cookies.get(SESSION_COOKIE_NAME)?.value || null;
+    const rawSessionId = request.cookies.get(SESSION_COOKIE_NAME)?.value || null;
+    const sessionId = isValidSessionId(rawSessionId) ? rawSessionId : null;
 
     if (!userId) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 });

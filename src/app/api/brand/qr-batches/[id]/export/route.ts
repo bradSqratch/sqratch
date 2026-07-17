@@ -33,6 +33,10 @@ export async function exportBatchImpl(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    if (session.user.role !== "BRAND_ADMIN" && session.user.role !== "ADMIN") {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const { id: batchId } = await context.params;
 
     // Load batch with campaign detail to verify ownership
@@ -53,18 +57,12 @@ export async function exportBatchImpl(
       return NextResponse.json({ error: "Batch not found." }, { status: 404 });
     }
 
-    let brandId: string | null = null;
-    if (session.user.role === "BRAND_ADMIN") {
-      const brand = await deps.resolveBrandAdminContext();
-      if (!brand?.membership?.brand) {
-        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-      }
-      brandId = brand.membership.brand.id;
-
-      if (batch.campaign.brandId !== brandId) {
-        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-      }
-    } else if (session.user.role !== "ADMIN") {
+    const brand = await deps.resolveBrandAdminContext();
+    const brandId = brand?.membership?.brand?.id || null;
+    if (!brandId) {
+      return NextResponse.json({ error: "Select an active brand.", code: "ACTIVE_BRAND_REQUIRED" }, { status: 409 });
+    }
+    if (batch.campaign.brandId !== brandId) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 

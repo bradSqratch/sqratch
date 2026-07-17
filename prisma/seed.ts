@@ -21,7 +21,10 @@ async function main() {
       "SEED_ADMIN_PASSWORD must be set to seed the admin user."
     );
   }
-  const adminPassword = bcrypt.hashSync(rawAdminPassword, 10);
+  if (!/[A-Za-z]/.test(rawAdminPassword) || !/\d/.test(rawAdminPassword) || rawAdminPassword.length < 8 || rawAdminPassword.length > 72) {
+    throw new Error("SEED_ADMIN_PASSWORD must be 8-72 characters and include a letter and a number.");
+  }
+  const adminPassword = bcrypt.hashSync(rawAdminPassword, 12);
   const adminEmail =
     process.env.SEED_ADMIN_EMAIL ?? "admin@gmail.com";
   const admin = await prisma.user.upsert({
@@ -73,17 +76,17 @@ async function main() {
 
   console.log("✅ QR codes created:", qr1.qrCodeData, qr2.qrCodeData);
 
-  // 4. Create External User who redeems a QR code
+  // 4. Create ordinary participant who redeems a QR code
   const redeemer = await prisma.user.create({
     data: {
       name: "Jane Doe",
       email: "jane@example.com",
       isEmailVerified: true,
       emailVerifiedAt: new Date(),
-      role: Role.EXTERNAL,
+      role: Role.USER,
     },
   });
-  console.log("✅ External user created:", redeemer.email);
+  console.log("✅ Participant user created:", redeemer.email);
 
   // 5. Mark QR code as redeemed
   await prisma.qRCode.update({
@@ -97,15 +100,6 @@ async function main() {
   });
   console.log("✅ QR code redeemed by:", redeemer.email);
 
-  // 6. Create Email Verification Token
-  await prisma.emailVerificationToken.create({
-    data: {
-      userId: redeemer.id,
-      emailVerifyToken: "verify-token-001",
-      expires: new Date(Date.now() + 1000 * 60 * 60), // 1 hour
-    },
-  });
-  console.log("✅ Email verification token created for:", redeemer.email);
 }
 
 main()

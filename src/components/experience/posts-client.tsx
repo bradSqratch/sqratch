@@ -308,6 +308,7 @@ export function ExperiencePostsClient({
       {!data.canInteract ? (
         <GatePanel
           experience={data}
+          returnTo={`/x/${data.slug}/posts`}
           title="Posts Are Locked"
           description="Log in and unlock the linked campaign to read the creator feed and join the comments."
         />

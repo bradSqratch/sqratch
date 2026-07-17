@@ -17,6 +17,7 @@ import CommonNavbar from "@/components/commonNavbar";
 import Link from "next/link";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { normalizeInternalRedirectPath } from "@/lib/safe-redirect";
 
 type Message = { type: "error" | "success"; text: React.ReactNode };
 type RequestedRole = "CREATOR" | "BRAND" | null;
@@ -47,14 +48,6 @@ function getErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
-function normalizeNextPath(value: string | null) {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) {
-    return "/dashboard";
-  }
-
-  return value;
-}
-
 function shouldCheckQrWarningForPath(nextPath: string) {
   return (
     nextPath.startsWith("/c/") ||
@@ -67,11 +60,8 @@ function SignupPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const invitedEmail = searchParams.get("registeredemail");
-  const nextPath = normalizeNextPath(searchParams.get("next"));
-  const isInvitedClaimFlow = Boolean(invitedEmail);
-  const shouldCheckQrWarning =
-    !isInvitedClaimFlow && shouldCheckQrWarningForPath(nextPath);
+  const nextPath = normalizeInternalRedirectPath(searchParams.get("next"));
+  const shouldCheckQrWarning = shouldCheckQrWarningForPath(nextPath);
   const loginHref = `/login?next=${encodeURIComponent(nextPath)}`;
 
   const [user, setUser] = React.useState({
@@ -106,12 +96,6 @@ function SignupPageInner() {
     shouldCheckQrWarning && viewerStatusLoaded && hasRedeemedQrWarning;
   const waitingForViewerStatus =
     shouldCheckQrWarning && !viewerStatusLoaded;
-
-  useEffect(() => {
-    if (invitedEmail) {
-      setUser((u) => ({ ...u, email: invitedEmail.toLowerCase() }));
-    }
-  }, [invitedEmail]);
 
   useEffect(() => {
     setButtonDisabled(!(user.name && user.email && user.password));
@@ -183,20 +167,6 @@ function SignupPageInner() {
         password: user.password,
       };
 
-      // 1) KEEP existing invited EXTERNAL claim flow intact
-      if (isInvitedClaimFlow) {
-        const res = await axios.post("/api/users/signup", normalizedUser);
-
-        setMessage({
-          type: "success",
-          text: res.data?.message || "Signup successful! Redirecting…",
-        });
-
-        setTimeout(() => router.push("/login"), 700);
-        return;
-      }
-
-      // 2) New self-serve signup flow
       let application: Record<string, string> | null = null;
 
       if (requestedRole === "CREATOR") {
@@ -258,11 +228,7 @@ function SignupPageInner() {
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
           <div className="flex flex-col items-center gap-4">
             <div className="h-12 w-12 animate-spin rounded-full border-4 border-white border-t-transparent" />
-            <p className="text-lg text-white">
-              {isInvitedClaimFlow
-                ? "Activating your account..."
-                : "Creating your account..."}
-            </p>
+            <p className="text-lg text-white">Creating your account...</p>
           </div>
         </div>
       )}
@@ -288,9 +254,7 @@ function SignupPageInner() {
             <p className="mt-3 text-[16px] sm:text-[18px] leading-[160%] text-[#ECECEC]/75">
               {redeemedQrBlocksSignup
                 ? "Log in to browse public content"
-                : isInvitedClaimFlow
-                  ? "Claim your invited account"
-                  : "Create your account to get started"}
+                : "Create your account to get started"}
             </p>
 
             {viewerStatusLoaded && hasRedeemedQrWarning && (
@@ -347,7 +311,7 @@ function SignupPageInner() {
                 </Button>
               </CardContent>
             </Card>
-          ) : !showApplyCard || isInvitedClaimFlow ? (
+          ) : !showApplyCard ? (
             <Card
               className="
                 relative mt-10 w-full max-w-md
@@ -410,7 +374,6 @@ function SignupPageInner() {
                         id="email"
                         type="email"
                         autoComplete="email"
-                        disabled={isInvitedClaimFlow}
                         value={user.email}
                         onChange={(e) =>
                           setUser({
@@ -418,7 +381,7 @@ function SignupPageInner() {
                             email: e.target.value.toLowerCase(),
                           })
                         }
-                        className="mt-2 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25 disabled:opacity-70"
+                        className="mt-2 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25"
                       />
                     </div>
 
@@ -446,23 +409,21 @@ function SignupPageInner() {
                     disabled={buttonDisabled || loading}
                     className="w-full rounded-full py-6 border border-white bg-white text-black hover:scale-[1.01] active:scale-[0.99] transition"
                   >
-                    {isInvitedClaimFlow ? "Activate Account" : "Signup"}
+                    Signup
                   </Button>
 
-                  {!isInvitedClaimFlow && (
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      onClick={() => {
-                        setRequestedRole("CREATOR");
-                        setShowApplyCard(true);
-                        setMessage(null);
-                      }}
-                      className="w-full rounded-full border border-white/15 bg-white/5 text-white hover:bg-white/10"
-                    >
-                      Apply as Creator or Brand
-                    </Button>
-                  )}
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    onClick={() => {
+                      setRequestedRole("CREATOR");
+                      setShowApplyCard(true);
+                      setMessage(null);
+                    }}
+                    className="w-full rounded-full border border-white/15 bg-white/5 text-white hover:bg-white/10"
+                  >
+                    Apply as Creator or Brand
+                  </Button>
 
                   <Button
                     variant="link"

@@ -115,6 +115,7 @@ export function ExperienceCourseClient({
       {!data.canAccess ? (
         <GatePanel
           experience={data.experience}
+          returnTo={`/x/${experienceSlug}/courses/${courseSlug}`}
           title="This Course Is Locked"
           description="Private courses require a logged-in account and an unlocked campaign before lessons become available."
         />

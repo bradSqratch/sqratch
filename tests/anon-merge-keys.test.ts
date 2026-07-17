@@ -120,22 +120,11 @@ test("collectAnonMergeKeys — dedupes after trimming", () => {
 //    - Expected: exactly ONE CampaignUnlock for (campaignId, userId) — the merge
 //      loop detects existingUserUnlock on the second key and deletes the anon row.
 //
-// 5. KIOSK FLOW (existing user)
-//    - Submit kiosk form (add-user-send-verify-email) with an email that already
-//      exists in the DB and a NEW QR code.
-//    - Expected: QR redeemed (status USED), CampaignUnlock created for user,
-//      PointTransaction created.
-//
-// 6. KIOSK FLOW (new user)
-//    - Submit kiosk form with a brand-new email and a NEW QR code.
-//    - Expected: User created, QR redeemed, CampaignUnlock created, PointTransaction
-//      created.
-//
-// 7. LOCKED BRAND — reward access denied
+// 5. LOCKED BRAND — reward access denied
 //    - Attempt to redeem a BrandRewardOffer for a brand the user has NOT unlocked
 //      (no CampaignUnlock for that brand's campaigns).
 //    - Expected: 403 "Unlock this experience before claiming rewards."
 //
-// 8. UNLOCKED BRAND — reward access granted
+// 6. UNLOCKED BRAND — reward access granted
 //    - Scan QR → CampaignUnlock created → attempt redeem for that brand.
 //    - Expected: 200 with discount code.

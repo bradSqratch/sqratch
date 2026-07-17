@@ -13,50 +13,17 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
+import { normalizeInternalRedirectPath } from "@/lib/safe-redirect";
 
 type Message = { type: "error" | "success"; text: string };
 type LoadingAction = "verify" | "resend" | null;
-
-function normalizeNextPath(value: string | null) {
-  if (!value || !value.startsWith("/") || value.startsWith("//")) {
-    return "/dashboard";
-  }
-
-  return value;
-}
-
-function getErrorMessage(error: unknown, fallback: string) {
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "response" in error &&
-    typeof (error as { response?: unknown }).response === "object" &&
-    (error as { response?: { data?: unknown } }).response !== null &&
-    "data" in ((error as { response?: { data?: unknown } }).response || {}) &&
-    typeof (error as { response?: { data?: { error?: unknown } } }).response
-      ?.data === "object" &&
-    (error as { response?: { data?: { error?: unknown } } }).response?.data !==
-      null &&
-    typeof (error as { response?: { data?: { error?: unknown } } }).response
-      ?.data?.error === "string"
-  ) {
-    return (error as { response?: { data?: { error?: string } } }).response!
-      .data!.error!;
-  }
-
-  if (error instanceof Error && error.message) {
-    return error.message;
-  }
-
-  return fallback;
-}
 
 function VerifyEmailPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
   const email = searchParams.get("email") || "";
-  const nextPath = normalizeNextPath(searchParams.get("next"));
+  const nextPath = normalizeInternalRedirectPath(searchParams.get("next"));
 
   const [loading, setLoading] = useState(false);
   const [code, setCode] = useState("");
@@ -110,11 +77,9 @@ function VerifyEmailPageInner() {
       setTimeout(() => {
         router.push(`/login?next=${encodeURIComponent(nextPath)}`);
       }, 900);
-    } catch (error: unknown) {
-      const errorMessage = getErrorMessage(
-        error,
-        "Failed to verify email.",
-      );
+    } catch {
+      const errorMessage =
+        "Unable to verify this code. Request a new code and try again.";
 
       setMessage({
         type: "error",
@@ -151,11 +116,9 @@ function VerifyEmailPageInner() {
       });
 
       setCooldown(30);
-    } catch (error: unknown) {
-      const errorMessage = getErrorMessage(
-        error,
-        "Failed to resend verification code.",
-      );
+    } catch {
+      const errorMessage =
+        "Unable to send a verification code right now. Please try again.";
 
       setMessage({
         type: "error",

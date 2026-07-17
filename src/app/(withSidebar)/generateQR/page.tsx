@@ -15,6 +15,19 @@ export default async function GenerateQRRedirectPage() {
     if (context?.membership) {
       redirect("/dashboard/brand/qr-batches/new");
     }
+    if (context?.selectionRequired) {
+      redirect("/dashboard/brand/profile");
+    }
+  }
+
+  if (session.user.role === "ADMIN") {
+    const context = await getBrandAdminContext();
+    if (context?.membership) {
+      redirect("/dashboard/brand/qr-batches/new");
+    }
+    if (context?.selectionRequired) {
+      redirect("/dashboard/brand/profile");
+    }
   }
 
   // Redirect all others (including unauthorized brand admins and old users)

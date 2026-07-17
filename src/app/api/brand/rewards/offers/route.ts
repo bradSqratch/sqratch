@@ -1,5 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBrandManagementContext } from "@/lib/brand-auth";
+import {
+  getBrandContextFailure,
+  getBrandManagementContext,
+} from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
 import { getShopifyShopCurrency } from "@/lib/shopify";
 import {
@@ -26,9 +29,10 @@ export async function GET() {
     const context = await getBrandManagementContext();
 
     if (!context?.membership?.brand) {
+      const failure = getBrandContextFailure(context);
       return NextResponse.json(
-        { error: "Brand admin access required." },
-        { status: 403 },
+        { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+        { status: failure.status },
       );
     }
 
@@ -139,9 +143,10 @@ export async function POST(request: NextRequest) {
     const context = await getBrandManagementContext();
 
     if (!context?.membership?.brand) {
+      const failure = getBrandContextFailure(context);
       return NextResponse.json(
-        { error: "Brand admin access required." },
-        { status: 403 },
+        { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+        { status: failure.status },
       );
     }
 

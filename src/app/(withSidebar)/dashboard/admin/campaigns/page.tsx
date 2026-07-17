@@ -95,7 +95,9 @@ export default function AdminCampaignsPage() {
       );
       setCreateForm((current) => ({
         ...current,
-        brandId: current.brandId || result.brands[0]?.id || "",
+        brandId: result.brands.some((brand) => brand.id === current.brandId)
+          ? current.brandId
+          : "",
       }));
     } catch (loadError) {
       setError(getErrorMessage(loadError, "Failed to load campaigns."));
@@ -121,7 +123,7 @@ export default function AdminCampaignsPage() {
         name: "",
         slug: "",
         description: "",
-        brandId: data?.brands[0]?.id || "",
+        brandId: "",
         isActive: true,
       });
       setCreateSlugTouched(false);

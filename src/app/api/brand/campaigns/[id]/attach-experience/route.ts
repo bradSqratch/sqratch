@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getBrandAdminContext, getOwnedBrandCampaign } from "@/lib/brand-auth";
+import {
+  getBrandAdminContext,
+  getBrandContextFailure,
+  getOwnedBrandCampaign,
+} from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
 
 export async function GET(
@@ -10,9 +14,10 @@ export async function GET(
     const brand = await getBrandAdminContext();
 
     if (!brand?.membership?.brand) {
+      const failure = getBrandContextFailure(brand);
       return NextResponse.json(
-        { error: "Brand admin access required." },
-        { status: 403 },
+        { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+        { status: failure.status },
       );
     }
 
@@ -101,9 +106,10 @@ export async function POST(
     const brand = await getBrandAdminContext();
 
     if (!brand?.membership?.brand) {
+      const failure = getBrandContextFailure(brand);
       return NextResponse.json(
-        { error: "Brand admin access required." },
-        { status: 403 },
+        { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+        { status: failure.status },
       );
     }
 

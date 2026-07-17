@@ -1,5 +1,8 @@
 import { NextResponse } from "next/server";
-import { getBrandManagementContext } from "@/lib/brand-auth";
+import {
+  getBrandContextFailure,
+  getBrandManagementContext,
+} from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
 
 export async function GET() {
@@ -7,9 +10,10 @@ export async function GET() {
     const context = await getBrandManagementContext();
 
     if (!context?.membership?.brand) {
+      const failure = getBrandContextFailure(context);
       return NextResponse.json(
-        { error: "Authorized brand member access required." },
-        { status: 403 },
+        { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+        { status: failure.status },
       );
     }
 

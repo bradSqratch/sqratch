@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { rateLimit, getRequestIp, rateLimitResponse } from "@/lib/rate-limit";
-
-function generateOtp() {
-  return String(Math.floor(100000 + Math.random() * 900000));
-}
+import { issueEmailVerificationChallenge } from "@/lib/auth/email-verification";
 
 export async function POST(request: NextRequest) {
   try {
@@ -35,51 +32,43 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    if (!user) {
-      return NextResponse.json(
-        { error: "No user found with this email." },
-        { status: 404 },
-      );
-    }
+    if (user && !user.isEmailVerified) {
+      try {
+        const challenge = await prisma.$transaction(async (tx) => {
+          const previousChallenge =
+            await tx.emailVerificationToken.findFirst({
+              where: { userId: user.id },
+              orderBy: { createdAt: "desc" },
+              select: { welcomeEligible: true },
+            });
 
-    if (user.isEmailVerified) {
-      return NextResponse.json(
-        { error: "Email is already verified." },
-        { status: 400 },
-      );
-    }
-
-    const otpCode = generateOtp();
-    const expires = new Date(Date.now() + 10 * 60 * 1000);
-
-    await prisma.emailVerificationToken.deleteMany({
-      where: { userId: user.id },
-    });
-
-    await prisma.emailVerificationToken.create({
-      data: {
-        userId: user.id,
-        emailVerifyToken: otpCode,
-        expires,
-      },
-    });
-
-    try {
-      const { sendVerificationEmail } = await import("@/helpers/mailer");
-      await sendVerificationEmail(email, otpCode);
-    } catch (mailError) {
-      console.warn(
-        "[auth/send-email-verification] Failed to send verification email:",
-        mailError,
-      );
+          return issueEmailVerificationChallenge(
+            tx,
+            user.id,
+            user.email,
+            {
+              welcomeEligible:
+                previousChallenge?.welcomeEligible ?? false,
+            },
+          );
+        });
+        const { sendVerificationEmail } = await import("@/helpers/mailer");
+        await sendVerificationEmail(email, challenge.code);
+      } catch {
+        console.warn("[auth/send-email-verification] challenge delivery failed", {
+          outcome: "delivery_failed",
+        });
+      }
     }
 
     return NextResponse.json({
       ok: true,
-      message: "Verification code sent successfully.",
+      message: "If an account needs verification, a code will be sent.",
     });
-  } catch (error) {
-    console.error("[auth/send-email-verification] Error:", error);
+  } catch {
+    console.error("[auth/send-email-verification] Error", {
+      outcome: "request_failed",
+    });
     return NextResponse.json(
       { error: "Failed to send verification code." },
       { status: 500 },

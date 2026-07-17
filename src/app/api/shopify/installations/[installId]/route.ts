@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { Prisma } from "@prisma/client";
 import prisma from "@/lib/prisma";
 import {
   buildShopifyPendingInstallService,
@@ -10,6 +11,7 @@ import {
   type PendingInstallPayload,
 } from "@/lib/pending-install";
 import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
+import { ACTIVE_BRAND_COOKIE } from "@/lib/brand-context";
 
 
 // Re-export types for backward compatibility if needed elsewhere
@@ -19,6 +21,7 @@ async function getAuthorizedBrandMemberships(userId: string) {
   return prisma.brandMember.findMany({
     where: {
       userId,
+      brand: { isActive: true },
       role: {
         in: ["ADMIN", "MANAGER"],
       },
@@ -38,6 +41,20 @@ async function getAuthorizedBrandMemberships(userId: string) {
           shopifyConnectionStatus: true,
         },
       },
+    },
+  });
+}
+
+async function getAllBrandsForGlobalAdmin() {
+  return prisma.brand.findMany({
+    where: { isActive: true },
+    orderBy: { createdAt: "asc" },
+    select: {
+      id: true,
+      name: true,
+      slug: true,
+      shopifyShopDomain: true,
+      shopifyConnectionStatus: true,
     },
   });
 }
@@ -79,7 +96,14 @@ export async function installationsGetImpl(
       );
     }
 
-    const memberships = await getAuthorizedBrandMemberships(userId);
+    const memberships =
+      session.user.role === "ADMIN"
+        ? (await getAllBrandsForGlobalAdmin()).map((brand) => ({
+            id: brand.id,
+            role: "ADMIN" as const,
+            brand,
+          }))
+        : await getAuthorizedBrandMemberships(userId);
     const canCreateBrand =
       session.user.role === "BRAND_ADMIN" || session.user.role === "ADMIN";
 
@@ -97,8 +121,10 @@ export async function installationsGetImpl(
         brands: memberships.map((membership) => membership.brand),
       },
     });
-  } catch (error) {
-    console.error("[shopify/installations/[installId]][GET] Error:", error);
+  } catch {
+    console.error("[shopify/installations/[installId]][GET] Error", {
+      outcome: "load_failed",
+    });
     return NextResponse.json(
       { error: "Failed to load Shopify install." },
       { status: 500 },
@@ -127,9 +153,10 @@ export async function installationsPostImpl(
     }
 
     const { installId } = await context.params;
+    const pendingService = buildShopifyPendingInstallService(installId);
     const pendingInstall = await prisma.tokenStore.findUnique({
       where: {
-        service: buildShopifyPendingInstallService(installId),
+        service: pendingService,
       },
     });
     const payload = pendingInstall
@@ -146,123 +173,18 @@ export async function installationsPostImpl(
     const body = await request.json().catch(() => null);
     const requestedBrandId = String(body?.brandId || "").trim();
     const createBrand = body?.createBrand || null;
-    const memberships = await getAuthorizedBrandMemberships(userId);
     const canCreateBrand =
       session.user.role === "BRAND_ADMIN" || session.user.role === "ADMIN";
 
-    if (memberships.length === 0 && !canCreateBrand) {
+    const name = String(createBrand?.name || "").trim();
+    const slug = slugifyValue(String(createBrand?.slug || "").trim() || name);
+    const websiteUrl = String(createBrand?.websiteUrl || "").trim();
+
+    if (!requestedBrandId && (!canCreateBrand || !name || !slug)) {
       return NextResponse.json(
-        { error: "Brand admin access required." },
-        { status: 403 },
+        { error: canCreateBrand ? "Brand name and slug are required." : "Select an authorized brand." },
+        { status: canCreateBrand ? 400 : 403 },
       );
-    }
-
-    const existingShopBrand = await prisma.brand.findFirst({
-      where: {
-        shopifyShopDomain: payload.shop,
-        ...(requestedBrandId ? { id: { not: requestedBrandId } } : {}),
-      },
-      select: { id: true, shopifyConnectionStatus: true },
-    });
-
-    if (existingShopBrand) {
-      if (existingShopBrand.shopifyConnectionStatus === "UNINSTALLED") {
-        // Relink policy: if the existing brand holding the domain is UNINSTALLED,
-        // release it (null its domain and clear its Shopify credential/token fields)
-        // so the new brand can claim the domain. The release + new-link happen in
-        // a single transaction so the @unique constraint is never violated.
-        await prisma.$transaction(async (tx) => {
-          await tx.brand.update({
-            where: { id: existingShopBrand.id },
-            data: {
-              shopifyShopDomain: null,
-              shopifyAdminAccessTokenEncrypted: null,
-              shopifyRefreshTokenEncrypted: null,
-              shopifyAccessTokenExpiresAt: null,
-              shopifyRefreshTokenExpiresAt: null,
-              shopifyGrantedScopes: null,
-            },
-          });
-          // The domain is now free; the main brand.update below (outside this
-          // tx) will claim it. We commit early here so the slot is released.
-        });
-      } else {
-        // Brand is CONNECTED (or some other non-UNINSTALLED status) — conflict.
-        return NextResponse.json(
-          { error: "This Shopify store is already linked to another brand." },
-          { status: 409 },
-        );
-      }
-    }
-
-    let brandId = requestedBrandId;
-
-    if (brandId) {
-      const allowed = memberships.some(
-        (membership) => membership.brand.id === brandId,
-      );
-
-      if (!allowed) {
-        return NextResponse.json(
-          { error: "You are not authorized for this brand." },
-          { status: 403 },
-        );
-      }
-    } else {
-      if (!canCreateBrand) {
-        return NextResponse.json(
-          { error: "Select an authorized brand." },
-          { status: 400 },
-        );
-      }
-
-      const name = String(createBrand?.name || "").trim();
-      const slug = slugifyValue(String(createBrand?.slug || "").trim() || name);
-      const websiteUrl = String(createBrand?.websiteUrl || "").trim();
-
-      if (!name || !slug) {
-        return NextResponse.json(
-          { error: "Brand name and slug are required." },
-          { status: 400 },
-        );
-      }
-
-      const conflicting = await prisma.brand.findFirst({
-        where: {
-          OR: [{ name }, { slug }],
-        },
-        select: { id: true },
-      });
-
-      if (conflicting) {
-        return NextResponse.json(
-          { error: "Brand name or slug is already in use." },
-          { status: 409 },
-        );
-      }
-
-      const created = await prisma.$transaction(async (tx) => {
-        const brand = await tx.brand.create({
-          data: {
-            name,
-            slug,
-            websiteUrl: websiteUrl || null,
-          },
-          select: { id: true },
-        });
-
-        await tx.brandMember.create({
-          data: {
-            brandId: brand.id,
-            userId,
-            role: "ADMIN",
-          },
-        });
-
-        return brand;
-      });
-
-      brandId = created.id;
     }
 
     // ---------------------------------------------------------------------------
@@ -285,21 +207,26 @@ export async function installationsPostImpl(
       } else {
         console.warn("[shopify/installations/[installId]] Failed to query currency:", currencyResult.error);
       }
-    } catch (err) {
-      console.error("[shopify/installations/[installId]] Error querying currency:", err);
+    } catch {
+      console.error("[shopify/installations/[installId]] Error querying currency", {
+        outcome: "currency_lookup_failed",
+      });
     }
 
     // ---------------------------------------------------------------------------
     // Build the brand update data object branched by token shape.
     // ---------------------------------------------------------------------------
-    const sharedBrandData = {
-      shopifyShopDomain: payload.shop,
-      shopifyInstalledAt: new Date(),
-      shopifyDisconnectedAt: null,
-      shopifyUninstalledAt: null,
-      shopifyConnectionStatus: "CONNECTED" as const,
-      shopifyCurrencyCode,
-    };
+  const sharedBrandData = {
+    shopifyShopDomain: payload.shop,
+    shopifyInstalledAt: new Date(),
+    shopifyDisconnectedAt: null,
+    shopifyUninstalledAt: null,
+    shopifyConnectionStatus: "CONNECTED" as const,
+    shopifyCurrencyCode,
+    shopifyClientId: null,
+    shopifyTokenRefreshLockedUntil: null,
+    shopifyTokenRefreshLockId: null,
+  };
 
     const tokenBrandData =
       payload.shape === "EXPIRING"
@@ -314,31 +241,115 @@ export async function installationsPostImpl(
           }
         : {
             shopifyAdminAccessTokenEncrypted: payload.encryptedToken,
+            shopifyRefreshTokenEncrypted: null,
+            shopifyAccessTokenExpiresAt: null,
+            shopifyRefreshTokenExpiresAt: null,
+            shopifyGrantedScopes: null,
             shopifyAuthMode: "LEGACY_OFFLINE" as const,
           };
 
     const brand = await prisma.$transaction(async (tx) => {
+      const currentPending = await tx.tokenStore.findUnique({
+        where: { service: pendingService },
+      });
+      const currentPayload = currentPending
+        ? parsePendingInstall(currentPending.token)
+        : null;
+      const now = new Date();
+
+      if (
+        !currentPending ||
+        !currentPayload ||
+        currentPending.expiresAt <= now ||
+        currentPayload.shop !== payload.shop
+      ) {
+        throw new Error("PENDING_INSTALL_UNAVAILABLE");
+      }
+
+      let destinationBrandId = requestedBrandId;
+      if (destinationBrandId) {
+        const hasDestinationAccess =
+          session.user.role === "ADMIN"
+            ? Boolean(
+                await tx.brand.findUnique({
+                  where: { id: destinationBrandId, isActive: true },
+                  select: { id: true },
+                }),
+              )
+            : (
+                await tx.brandMember.findMany({
+                  where: {
+                    userId,
+                    brandId: destinationBrandId,
+                    brand: { isActive: true },
+                    role: { in: ["ADMIN", "MANAGER"] },
+                  },
+                  select: { id: true },
+                })
+              ).length > 0;
+        if (!hasDestinationAccess) {
+          throw new Error("UNAUTHORIZED_BRAND");
+        }
+      } else {
+        const created = await tx.brand.create({
+          data: {
+            name,
+            slug,
+            websiteUrl: websiteUrl || null,
+          },
+          select: { id: true },
+        });
+        await tx.brandMember.create({
+          data: { brandId: created.id, userId, role: "ADMIN" },
+        });
+        destinationBrandId = created.id;
+      }
+
+      const owner = await tx.brand.findFirst({
+        where: { shopifyShopDomain: currentPayload.shop },
+        select: { id: true, shopifyConnectionStatus: true },
+      });
+
+      if (owner && owner.id !== destinationBrandId) {
+        if (owner.shopifyConnectionStatus !== "UNINSTALLED") {
+          throw new Error("SHOP_ALREADY_LINKED");
+        }
+        await tx.brand.update({
+          where: { id: owner.id },
+          data: {
+            shopifyShopDomain: null,
+            shopifyAdminAccessTokenEncrypted: null,
+            shopifyRefreshTokenEncrypted: null,
+            shopifyAccessTokenExpiresAt: null,
+            shopifyRefreshTokenExpiresAt: null,
+            shopifyGrantedScopes: null,
+            shopifyClientId: null,
+            shopifyTokenRefreshLockedUntil: null,
+            shopifyTokenRefreshLockId: null,
+            shopifyDisconnectedAt: now,
+            shopifyUninstalledAt: null,
+            shopifyConnectionStatus: "DISCONNECTED",
+          },
+        });
+      }
+
       const updated = await tx.brand.update({
-        where: { id: brandId },
+        where: { id: destinationBrandId },
         data: {
           ...sharedBrandData,
           ...tokenBrandData,
         },
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-        },
+        select: { id: true, name: true, slug: true },
       });
 
-      await tx.tokenStore.delete({
-        where: {
-          service: pendingInstall.service,
-        },
-      });
+      try {
+        await tx.tokenStore.delete({ where: { service: pendingService } });
+      } catch {
+        throw new Error("PENDING_INSTALL_UNAVAILABLE");
+      }
 
       return updated;
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
 
     // Sanitized state-transition log — no tokens, no encrypted values.
     console.log("[shopify/installations]", {
@@ -350,14 +361,48 @@ export async function installationsPostImpl(
     // Webhook subscriptions are declared via shopify.app.toml config and managed
     // by Shopify — no runtime registration call is needed here.
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       data: {
         brand,
         redirectTo: "/dashboard/brand/shopify?connected=1",
       },
     });
+    response.cookies.set(ACTIVE_BRAND_COOKIE, brand.id, {
+      httpOnly: true,
+      sameSite: "lax",
+      secure: process.env.NODE_ENV === "production",
+      path: "/",
+    });
+    return response;
   } catch (error) {
-    console.error("[shopify/installations/[installId]][POST] Error:", error);
+    if (error instanceof Error) {
+      if (error.message === "UNAUTHORIZED_BRAND") {
+        return NextResponse.json({ error: "You are not authorized for this brand." }, { status: 403 });
+      }
+      if (error.message === "SHOP_ALREADY_LINKED") {
+        return NextResponse.json({ error: "This Shopify store is already linked to another brand." }, { status: 409 });
+      }
+      if (error.message === "PENDING_INSTALL_UNAVAILABLE") {
+        return NextResponse.json({ error: "Shopify install session expired or already used." }, { status: 409 });
+      }
+    }
+    if (error instanceof Prisma.PrismaClientKnownRequestError) {
+      if (error.code === "P2034") {
+        return NextResponse.json(
+          { error: "Shopify install changed or was already claimed." },
+          { status: 409 },
+        );
+      }
+      if (error.code === "P2002") {
+        return NextResponse.json(
+          { error: "This Shopify store or brand is already linked." },
+          { status: 409 },
+        );
+      }
+    }
+    console.error("[shopify/installations/[installId]][POST] Error", {
+      outcome: "link_failed",
+    });
     return NextResponse.json(
       { error: "Failed to link Shopify install." },
       { status: 500 },

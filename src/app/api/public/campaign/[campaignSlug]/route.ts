@@ -2,7 +2,11 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
-import { getViewerSessionRecord, hasRedeemedQrWarning } from "@/lib/session";
+import {
+  getViewerSessionRecord,
+  hasRedeemedQrWarning,
+} from "@/lib/session";
+import { isValidSessionId } from "@/lib/session-id";
 
 const COOKIE_NAME = "sqr_session";
 
@@ -52,7 +56,8 @@ export async function GET(
     }
 
     const userId = session?.user?.id || null;
-    const sessionId = request.cookies.get(COOKIE_NAME)?.value || null;
+    const rawSessionId = request.cookies.get(COOKIE_NAME)?.value || null;
+    const sessionId = isValidSessionId(rawSessionId) ? rawSessionId : null;
     const viewerSession = await getViewerSessionRecord(request);
 
     let isUnlocked = false;

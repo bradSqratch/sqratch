@@ -10,6 +10,7 @@ import {
   validateLessonVideoStorageObject,
   validateLessonVideoStorageUrl,
 } from "@/lib/storage-upload";
+import { resolveActiveBrandContext } from "@/lib/brand-context";
 
 /**
  * Returns the brand-asset bucket name (mirrors brand-asset/route.ts convention).
@@ -205,15 +206,19 @@ export async function DELETE(request: NextRequest) {
 
     // BRAND_ADMIN: only delete objects under their own brand's path.
     if (role === "BRAND_ADMIN") {
-      const membership = await prisma.brandMember.findFirst({
-        where: {
-          userId: session.user.id,
-          role: { in: ["ADMIN", "MANAGER"] },
-        },
-        select: { brand: { select: { id: true } } },
+      const active = await resolveActiveBrandContext({
+        userId: session.user.id,
+        minimumRole: "MANAGER",
       });
+      const membership = active?.membership;
 
       if (!membership?.brand) {
+        if (active?.selectionRequired) {
+          return NextResponse.json(
+            { error: "Select an active brand.", code: "ACTIVE_BRAND_REQUIRED" },
+            { status: 409 },
+          );
+        }
         return NextResponse.json(
           { error: "Brand membership not found." },
           { status: 403 },

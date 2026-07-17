@@ -272,7 +272,6 @@ export function ExperienceLessonClient({
 
     try {
       const progressResult = await fetchJson<{
-        sessionId: string;
         progress: {
           lessonId: string;
           lastPositionSeconds: number;
@@ -522,6 +521,7 @@ export function ExperienceLessonClient({
       {!data.canAccess ? (
         <GatePanel
           experience={data.experience}
+          returnTo={`/x/${experienceSlug}/lessons/${lessonId}`}
           title="This Lesson Is Locked"
           description="Private lesson playback opens after you log in and unlock the linked campaign."
         />

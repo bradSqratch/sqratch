@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { buildShopifyFrameAncestorsCsp } from "@/lib/shopify";
 
 const shopifyApiKey = process.env.SHOPIFY_API_KEY || "";
 
@@ -323,6 +324,7 @@ export function GET(request: NextRequest) {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "private, no-store",
+      "Content-Security-Policy": buildShopifyFrameAncestorsCsp(rawShop),
     },
   });
 }

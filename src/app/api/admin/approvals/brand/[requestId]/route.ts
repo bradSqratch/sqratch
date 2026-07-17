@@ -123,7 +123,7 @@ export async function POST(
           data: { role: "BRAND_ADMIN" },
         });
 
-        const existingMembership = await tx.brandMember.findFirst({
+        const existingMemberships = await tx.brandMember.findMany({
           where: { userId: brandRequest.userId },
           select: {
             brand: {
@@ -136,10 +136,14 @@ export async function POST(
           },
         });
 
-        if (existingMembership?.brand) {
+        if (existingMemberships.length > 1) {
+          throw new Error("USER_HAS_MULTIPLE_BRANDS");
+        }
+
+        if (existingMemberships[0]?.brand) {
           return {
             request: updatedRequest,
-            brand: existingMembership.brand,
+            brand: existingMemberships[0].brand,
           };
         }
 
@@ -211,6 +215,12 @@ export async function POST(
 
     return NextResponse.json({ data: response });
   } catch (error) {
+    if (error instanceof Error && error.message === "USER_HAS_MULTIPLE_BRANDS") {
+      return NextResponse.json(
+        { error: "This user has multiple brands; choose the destination explicitly." },
+        { status: 409 },
+      );
+    }
     console.error("[admin/approvals/brand][POST] Error:", error);
     return NextResponse.json(
       { error: "Failed to process brand request." },

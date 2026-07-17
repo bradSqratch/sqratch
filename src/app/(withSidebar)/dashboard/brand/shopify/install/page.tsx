@@ -56,7 +56,6 @@ export default function ShopifyInstallPage() {
           `/api/shopify/installations/${installId}`,
         );
         setData(result);
-        setSelectedBrandId(result.brands[0]?.id || "");
       } catch (loadError) {
         setError(getErrorMessage(loadError, "Failed to load Shopify install."));
       } finally {

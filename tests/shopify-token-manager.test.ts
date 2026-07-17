@@ -124,10 +124,10 @@ describe("hasSufficientScopes", () => {
     );
   });
 
-  test("returns false when read_discounts is missing", () => {
+  test("write_discounts also satisfies the Shopify discount read scope", () => {
     assert.equal(
       hasSufficientScopes("read_products,write_discounts"),
-      false,
+      true,
     );
   });
 

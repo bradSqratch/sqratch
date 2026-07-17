@@ -3,8 +3,8 @@ import { getServerSession } from "next-auth";
 
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
-
-type Role = "ADMIN" | "BRAND_ADMIN" | "CREATOR" | "USER" | "EXTERNAL";
+import { normalizeUserRole } from "@/lib/admin-auth";
+import { resolveActiveBrandContext } from "@/lib/brand-context";
 
 type RecentActivityItem = {
   label: string;
@@ -73,27 +73,18 @@ async function getAdminCards() {
 async function getBrandAdminCards(userId: string) {
   const recentWindow = getStartOfLastDays(7);
 
-  const membership = await prisma.brandMember.findFirst({
-    where: {
-      userId,
-      role: {
-        in: ["ADMIN", "MANAGER"],
-      },
-    },
-    select: {
-      brand: {
-        select: {
-          id: true,
-          shopifyShopDomain: true,
-          shopifyAdminAccessTokenEncrypted: true,
-          shopifyConnectionStatus: true,
-          shopifyLastProductSyncAt: true,
-        },
-      },
-    },
+  const active = await resolveActiveBrandContext({
+    userId,
+    minimumRole: "MANAGER",
   });
+  const brand = active?.membership?.brand;
 
-  const brand = membership?.brand;
+  if (active?.selectionRequired) {
+    return {
+      selectionRequired: true,
+      brands: active.brands,
+    };
+  }
 
   if (!brand) {
     return {
@@ -365,8 +356,12 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const role = (session.user.role || "USER") as Role;
+  const role = normalizeUserRole(session.user.role);
   const userId = session.user.id || null;
+
+  if (!role) {
+    return NextResponse.json({ error: "Invalid account role." }, { status: 403 });
+  }
 
   const base = {
     role,
@@ -399,12 +394,18 @@ export async function GET() {
     }
 
     if (role === "BRAND_ADMIN") {
-      return NextResponse.json({
-        data: {
-          ...base,
-          cards: await getBrandAdminCards(userId),
-        },
-      });
+      const cards = await getBrandAdminCards(userId);
+      if ("selectionRequired" in cards && cards.selectionRequired) {
+        return NextResponse.json(
+          {
+            code: "ACTIVE_BRAND_REQUIRED",
+            error: "Select an active brand before loading dashboard data.",
+            data: { ...base, cards },
+          },
+          { status: 409 },
+        );
+      }
+      return NextResponse.json({ data: { ...base, cards } });
     }
 
     if (role === "CREATOR") {

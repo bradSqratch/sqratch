@@ -11,7 +11,7 @@ import Papa from "papaparse";
 // --------------------
 // Types (existing + new)
 // --------------------
-type Role = "ADMIN" | "BRAND_ADMIN" | "CREATOR" | "USER" | "EXTERNAL";
+type Role = "ADMIN" | "BRAND_ADMIN" | "CREATOR" | "USER";
 
 type CampaignStats = {
   campaignId: string;
@@ -24,14 +24,6 @@ type DashboardStats = {
   totalRedemptions: number;
   activeCampaigns: number;
   campaignStats: CampaignStats[];
-};
-
-type UserData = {
-  id: string;
-  name: string | null;
-  email: string;
-  points: number;
-  role: string;
 };
 
 type DashboardSummary = {
@@ -166,11 +158,9 @@ export default function DashboardPage() {
     useState<DashboardStats | null>(null);
   const [allTimeStats, setAllTimeStats] = useState<DashboardStats | null>(null);
 
-  // Existing EXTERNAL userData (points)
-  const [userData, setUserData] = useState<UserData | null>(null);
-
   // NEW: unified summary
   const [summary, setSummary] = useState<DashboardSummary | null>(null);
+  const [activeBrandRequired, setActiveBrandRequired] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -194,16 +184,6 @@ export default function DashboardPage() {
     }
   }, []);
 
-  const fetchUserData = useCallback(async () => {
-    try {
-      const res = await axios.get<{ data: UserData }>("/api/user/me");
-      setUserData(res.data.data);
-    } catch (err) {
-      console.error("Failed to load user data", err);
-      setErrorMsg("Failed to load user data.");
-    }
-  }, []);
-
   const fetchSummary = useCallback(async () => {
     try {
       const res = await axios.get<{ data: DashboardSummary }>(
@@ -211,6 +191,17 @@ export default function DashboardPage() {
       );
       setSummary(res.data.data);
     } catch (err) {
+      const responseData = axios.isAxiosError(err)
+        ? (err.response?.data as { code?: string } | undefined)
+        : undefined;
+      if (
+        axios.isAxiosError(err) &&
+        err.response?.status === 409 &&
+        responseData?.code === "ACTIVE_BRAND_REQUIRED"
+      ) {
+        setActiveBrandRequired(true);
+        return;
+      }
       console.error("Failed to load dashboard summary", err);
       setErrorMsg("Failed to load dashboard summary.");
     }
@@ -225,6 +216,7 @@ export default function DashboardPage() {
 
     setLoading(true);
     setErrorMsg(null);
+    setActiveBrandRequired(false);
 
     // What we load depends on role
     const jobs: Array<Promise<void>> = [];
@@ -232,14 +224,9 @@ export default function DashboardPage() {
     // Always load summary for unified cards (all roles)
     jobs.push(fetchSummary());
 
-    // Keep your existing behavior:
-    // - ADMIN loads stats (plus summary)
-    // - EXTERNAL loads userData (plus summary)
+    // Keep the existing ADMIN analytics behavior.
     if (role === "ADMIN") {
       jobs.push(fetchStats());
-    }
-    if (role === "EXTERNAL") {
-      jobs.push(fetchUserData());
     }
 
     Promise.allSettled(jobs).finally(() => setLoading(false));
@@ -252,7 +239,7 @@ export default function DashboardPage() {
       }, 45_000);
       return () => clearInterval(iv);
     }
-  }, [status, session, router, role, fetchStats, fetchUserData, fetchSummary]);
+  }, [status, session, router, role, fetchStats, fetchSummary]);
 
   const handleExport = () => {
     if (!allTimeStats || !currentMonthStats) return;
@@ -306,69 +293,24 @@ export default function DashboardPage() {
     );
   }
 
-  // --------------------
-  // EXTERNAL: keep your points page first, then add unified cards below if summary exists
-  // --------------------
-  if (role === "EXTERNAL" && userData) {
+  if (role === "BRAND_ADMIN" && activeBrandRequired) {
     return (
-      <div className="relative min-h-screen bg-[#020015] text-white overflow-hidden">
-        <div className="pointer-events-none absolute inset-0">
-          <div className="absolute inset-0 bg-[radial-gradient(1100px_600px_at_50%_10%,rgba(99,102,241,0.30),rgba(2,0,21,0)_70%)]" />
-          <div className="absolute inset-0 bg-[radial-gradient(900px_520px_at_50%_55%,rgba(99,102,241,0.13),rgba(2,0,21,0)_65%)]" />
-          <div className="absolute inset-0 bg-[radial-gradient(900px_600px_at_10%_90%,rgba(236,72,153,0.10),rgba(2,0,21,0)_65%)]" />
-          <div className="absolute inset-0 bg-[radial-gradient(1200px_900px_at_50%_50%,rgba(2,0,21,0)_35%,rgba(2,0,21,0.85)_100%)]" />
-          <div className="absolute inset-x-0 bottom-0 h-64 bg-linear-to-b from-transparent to-[#020121]" />
-        </div>
-
-        <div className="relative z-10 flex min-h-screen flex-col">
-          <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col items-center justify-center px-6 pt-28 pb-12 sm:pt-32">
-            <Card
-              className={[
-                "relative w-full max-w-215",
-                "rounded-[28px] border border-white/15 bg-white/6 backdrop-blur-xl",
-                "shadow-[0_30px_90px_rgba(0,0,0,0.55)] overflow-hidden",
-                "min-h-80 sm:min-h-105",
-                "grid place-items-center",
-              ].join(" ")}
+      <div className="flex min-h-screen items-center justify-center px-6 text-white">
+        <Card className="w-full max-w-lg rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl">
+          <CardContent className="space-y-5 p-8 text-center">
+            <h1 className="text-2xl font-semibold">Select an active brand</h1>
+            <p className="text-sm leading-6 text-white/65">
+              Choose which brand you want to manage before loading brand dashboard data.
+            </p>
+            <Button
+              type="button"
+              onClick={() => router.push("/dashboard/brand/profile")}
+              className="rounded-full bg-white text-black hover:bg-white/90"
             >
-              <div className="pointer-events-none absolute inset-0 rounded-[28px] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]" />
-
-              <CardContent className="relative z-10 text-center py-10">
-                <div className="text-[84px] sm:text-[220px] font-semibold tracking-[-0.04em] text-white drop-shadow-[0_10px_60px_rgba(168,85,247,0.25)]">
-                  {userData.points}
-                </div>
-
-                <div className="mt-2 text-[14px] sm:text-[16px] font-semibold tracking-[0.22em] text-white/70">
-                  YOUR SQRATCH POINTS
-                </div>
-              </CardContent>
-            </Card>
-
-            {/* NEW unified cards (below points card) */}
-            {summary ? (
-              <div className="w-full max-w-215 mt-10">
-                {errorMsg ? (
-                  <div className="mb-4 text-sm text-red-300">{errorMsg}</div>
-                ) : null}
-
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  <SimpleOverviewCard
-                    title="Unlocked Campaigns"
-                    value={summaryCards.unlockedCampaignsCount ?? 0}
-                  />
-                  <SimpleOverviewCard
-                    title="Continue Watching"
-                    value={summaryCards.continueWatchingLessonsCount ?? 0}
-                  />
-                  <SimpleOverviewCard
-                    title="Recent Activity"
-                    value={summaryCards.recentActivityCount ?? 0}
-                  />
-                </div>
-              </div>
-            ) : null}
-          </main>
-        </div>
+              Choose brand
+            </Button>
+          </CardContent>
+        </Card>
       </div>
     );
   }
@@ -565,7 +507,7 @@ export default function DashboardPage() {
           </div>
         ) : null}
 
-        {summary.role === "USER" || summary.role === "EXTERNAL" ? (
+        {summary.role === "USER" ? (
           <>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <SimpleOverviewCard

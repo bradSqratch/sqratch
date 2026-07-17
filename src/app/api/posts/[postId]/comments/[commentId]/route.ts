@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getViewerContext } from "@/lib/experience-access";
 import prisma from "@/lib/prisma";
+import { resolveActiveBrandContext } from "@/lib/brand-context";
 
 async function canDeleteComment(options: {
   viewerUserId: string;
@@ -28,18 +29,11 @@ async function canDeleteComment(options: {
     return false;
   }
 
-  const brandMember = await prisma.brandMember.findFirst({
-    where: {
-      userId: viewerUserId,
-      brandId: {
-        in: brandIds,
-      },
-      role: { in: ["ADMIN", "MANAGER"] },
-    },
-    select: { id: true },
+  const active = await resolveActiveBrandContext({
+    userId: viewerUserId,
+    minimumRole: "MANAGER",
   });
-
-  return Boolean(brandMember);
+  return Boolean(active?.membership && brandIds.includes(active.membership.brand.id));
 }
 
 export async function DELETE(

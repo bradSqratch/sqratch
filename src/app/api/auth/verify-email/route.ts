@@ -4,6 +4,8 @@ import { cookies } from "next/headers";
 import { awardQrScanPoint } from "@/lib/points";
 import { redeemQrCodeForUser } from "@/lib/qr-redemption";
 import { collectAnonMergeKeys } from "@/lib/anon-merge-keys";
+import { verifyAndConsumeEmailVerificationCode } from "@/lib/auth/email-verification";
+import { isValidSessionId } from "@/lib/session-id";
 
 async function mergeAnonymousCampaignUnlocks(
   userId: string,
@@ -50,11 +52,10 @@ async function mergeAnonymousCampaignUnlocks(
                 qrCodeId: unlock.qrCodeId,
                 db: tx,
               });
-            } catch (error) {
-              console.error(
-                "Failed to add QR scan point during verification:",
-                error,
-              );
+            } catch {
+              console.error("[auth/verify-email] QR reward failed", {
+                outcome: "reward_failed",
+              });
             }
           }
         }
@@ -94,8 +95,10 @@ async function mergeAnonymousCampaignUnlocks(
           qrCodeId: unlock.qrCodeId,
           db: tx,
         });
-      } catch (error) {
-        console.error("Failed to add QR scan point during verification:", error);
+      } catch {
+        console.error("[auth/verify-email] QR reward failed", {
+          outcome: "reward_failed",
+        });
       }
     });
   }
@@ -107,91 +110,59 @@ export async function POST(request: NextRequest) {
     const {
       email,
       code,
-      token,
       anonKey: bodyAnonKey,
     }: {
       email?: string;
       code?: string;
-      token?: string;
       anonKey?: string;
     } = body || {};
 
-    let verificationToken = null;
+    const normalizedEmail = String(email || "").trim().toLowerCase();
+    const cleanCode = String(code || "").trim();
+    const genericFailure =
+      "Unable to verify this code. Request a new code and try again.";
 
-    if (token) {
-      verificationToken = await prisma.emailVerificationToken.findFirst({
-        where: {
-          emailVerifyToken: token,
-        },
-      });
-    } else {
-      const normalizedEmail = String(email || "")
-        .trim()
-        .toLowerCase();
-      const cleanCode = String(code || "").trim();
-
-      if (!normalizedEmail || !cleanCode) {
-        return NextResponse.json(
-          { error: "Email and code are required." },
-          { status: 400 },
-        );
-      }
-
-      const user = await prisma.user.findUnique({
-        where: { email: normalizedEmail },
-        select: { id: true, email: true },
-      });
-
-      if (!user) {
-        return NextResponse.json({ error: "User not found." }, { status: 404 });
-      }
-
-      verificationToken = await prisma.emailVerificationToken.findFirst({
-        where: {
-          userId: user.id,
-          emailVerifyToken: cleanCode,
-        },
-      });
+    if (!normalizedEmail || !/^\d{6}$/.test(cleanCode)) {
+      return NextResponse.json({ error: genericFailure }, { status: 400 });
     }
 
-    if (!verificationToken) {
-      return NextResponse.json(
-        { error: "Invalid or expired verification code." },
-        { status: 400 },
-      );
+    const outcome = await verifyAndConsumeEmailVerificationCode(
+      normalizedEmail,
+      cleanCode,
+    );
+
+    if (outcome !== "verified") {
+      return NextResponse.json({ error: genericFailure }, { status: 400 });
     }
 
-    if (verificationToken.expires < new Date()) {
-      return NextResponse.json(
-        { error: "Verification code has expired." },
-        { status: 400 },
-      );
-    }
-
-    const user = await prisma.user.update({
-      where: { id: verificationToken.userId },
-      data: {
-        isEmailVerified: true,
-        emailVerifiedAt: new Date(),
-      },
-      select: {
-        id: true,
-        email: true,
-      },
+    const user = await prisma.user.findUnique({
+      where: { email: normalizedEmail },
+      select: { id: true, email: true },
     });
+
+    if (!user) {
+      return NextResponse.json({ error: genericFailure }, { status: 400 });
+    }
 
     const cookieStore = await cookies();
     const anonKeyFromCookie = cookieStore.get("anonKey")?.value || null;
     const deviceKeyCookie = cookieStore.get("deviceKey")?.value || null;
-    const sessionIdFromCookie = cookieStore.get("sqr_session")?.value || null;
+    const rawSessionId = cookieStore.get("sqr_session")?.value || null;
+    const sessionIdFromCookie = isValidSessionId(rawSessionId)
+      ? rawSessionId
+      : null;
+    const validAnonymousKey = (value: string | null | undefined) => {
+      const trimmed = value?.trim() || null;
+      return isValidSessionId(trimmed) ? trimmed : null;
+    };
 
     // Merge ALL distinct anon-key candidates so that a stale legacy cookie
     // (anonKey / deviceKey) does NOT shadow the active sqr_session.  The active
     // session is always processed first.
     const mergeKeys = collectAnonMergeKeys({
-      bodyAnonKey,
-      anonKeyCookie: anonKeyFromCookie,
-      deviceKeyCookie,
+      bodyAnonKey: validAnonymousKey(bodyAnonKey),
+      anonKeyCookie: validAnonymousKey(anonKeyFromCookie),
+      deviceKeyCookie: validAnonymousKey(deviceKeyCookie),
       sessionCookie: sessionIdFromCookie,
     });
 
@@ -261,17 +232,13 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    await prisma.emailVerificationToken.deleteMany({
-      where: { userId: user.id },
-    });
-
     return NextResponse.json({
       ok: true,
       message: "Email verified successfully.",
       user,
     });
-  } catch (error) {
-    console.error("[auth/verify-email] Error:", error);
+  } catch {
+    console.error("[auth/verify-email] Error", { outcome: "request_failed" });
     return NextResponse.json(
       { error: "An error occurred during verification." },
       { status: 500 },

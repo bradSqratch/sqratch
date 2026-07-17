@@ -20,7 +20,7 @@ export function buildWelcomeEmailHtml(params: WelcomeTemplateParams) {
         </head>
         <body style="margin:0; padding:0; background:transparent;">
             <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:transparent;">
-                Welcome to SQRATCH — scratch, scan, and connect to real people.
+                Welcome to SQRATCH — explore experiences, creators, communities, and rewards.
             </div>
 
             <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:transparent;">
@@ -69,7 +69,7 @@ export function buildWelcomeEmailHtml(params: WelcomeTemplateParams) {
                             <div style="color:#ffffff; font-weight:700; font-size:16px; margin-bottom:6px;">
                             Hi ${escapeHtml(name)},
                             </div>
-                            You found a SQRATCH sticker. You scratched it. You scanned it. Now you're in. From here, you can keep collecting SQRATCH by scanning more stickers-each one adds to your balance and unlocks new drops, rewards, and access. The more you collect, the more your membership grows across participating brands and communities.
+                            Welcome to SQRATCH. Explore experiences unlocked through participating campaigns, learn from creators, join conversations, ask questions, collect points, and discover rewards connected to the brands and communities you engage with.
                         </div>
                         </td>
                     </tr>
@@ -82,7 +82,7 @@ export function buildWelcomeEmailHtml(params: WelcomeTemplateParams) {
                             rel="noreferrer"
                             style="display:inline-block; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif; font-size:15px; font-weight:700; color:#ffffff; text-decoration:none; background:#ff4d8d; padding:14px 22px; border-radius:999px; width:320px; text-align:center; box-shadow:0 14px 32px rgba(255,77,141,0.35);"
                         >
-                            LET ME IN
+                            LOG IN TO SQRATCH
                         </a>
                         </td>
                     </tr>
