@@ -6,10 +6,10 @@ Use separate Vercel values for Development, Preview, and Production. Never place
 
 - `DATABASE_URL`: pooled PostgreSQL URL used by the application.
 - `DIRECT_URL`: direct PostgreSQL URL used by Prisma CLI workflows.
-- `NEXTAUTH_SECRET`, `NEXTAUTH_URL`: NextAuth signing secret and canonical URL.
+- `NEXTAUTH_SECRET`, `NEXTAUTH_URL`: NextAuth session-signing secret and canonical URL. Rotate `NEXTAUTH_SECRET` independently to invalidate authentication sessions; it does not affect Shopify credential decryption.
 - `EMAIL_VERIFICATION_CODE_PEPPER`: server-only HMAC pepper for email verification codes. Use a randomly generated 32-byte-or-longer value; production must not start verification issuance without it.
 - `DOMAIN`, `APP_BASE_URL`: canonical application origin.
-- `APP_ENCRYPTION_KEY`: stable secret used to encrypt Shopify credentials. Rotating it requires a credential migration or reconnect.
+- `APP_ENCRYPTION_KEY`: stable, server-only secret used to encrypt Shopify access and refresh tokens. It must be independently generated and managed from `NEXTAUTH_SECRET`. Rotating it makes existing encrypted credentials unreadable and requires a credential migration or store reconnection.
 
 ## Shopify
 
@@ -27,6 +27,20 @@ Deploy config explicitly with `shopify app deploy --config shopify.app.toml` or 
 - `CRON_SECRET`: required in `x-cron-secret` for email and redemption reconciliation workers.
 - `MAILTRAP_HOST`, `MAILTRAP_PORT`, `MAILTRAP_USER`, `MAILTRAP_PASSWORD`, `ADMIN_EMAIL`: current SMTP delivery configuration.
 - Supabase and Cloudinary variables are documented in `.env.example`; service-role and API secrets remain server-only.
+
+Supabase Cron is manually managed outside this repository. It calls `POST /api/internal/email-worker` every five minutes and `POST /api/internal/reconcile-redemptions` every ten minutes, each with `x-cron-secret: <CRON_SECRET>`. Do not add Vercel Cron configuration for either worker.
+
+The welcome-email worker retries transient delivery failures after 5 minutes, 15 minutes, 1 hour, and 6 hours. Its fifth actual send attempt is terminal `FAILED`; stale `SENDING` claims are recovered after 15 minutes using the same schedule. To inspect terminal jobs, filter `EmailQueue` by `template = 'WELCOME'` and `status = 'FAILED'`. After correcting the underlying delivery issue, an operator may intentionally requeue one reviewed job (never a broad set) with this controlled update; the worker revalidates eligibility before sending:
+
+```sql
+UPDATE "EmailQueue"
+SET "status" = 'PENDING', "attempts" = 0, "nextAttemptAt" = NULL,
+    "claimedAt" = NULL, "lastError" = 'Manually requeued after review.'
+WHERE "id" = :reviewed_job_id
+  AND "template" = 'WELCOME'
+  AND "status" = 'FAILED'
+  AND "sentAt" IS NULL;
+```
 
 ## Rate Limiting
 

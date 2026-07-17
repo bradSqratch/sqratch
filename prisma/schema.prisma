@@ -592,6 +592,8 @@ model EmailQueue {
   status               EmailStatus   @default(PENDING)
   attempts             Int           @default(0)
   lastError            String?
+  nextAttemptAt        DateTime?
+  claimedAt            DateTime?
   createdAt            DateTime      @default(now())
   sentAt               DateTime?
   template             EmailTemplate
@@ -600,6 +602,8 @@ model EmailQueue {
 
   @@unique([userId, template], name: "uq_email_queue_user_template")
   @@index([status, createdAt], map: "idx_email_queue_status_created")
+  @@index([template, status, nextAttemptAt, createdAt], map: "idx_email_queue_ready")
+  @@index([template, status, claimedAt], map: "idx_email_queue_stale_claim")
 }
 
 model WaitlistEntry {

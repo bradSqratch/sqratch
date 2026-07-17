@@ -2,8 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { rateLimit, getRequestIp, rateLimitResponse } from "@/lib/rate-limit";
 import { issueEmailVerificationChallenge } from "@/lib/auth/email-verification";
+import { withAuthNoStore } from "@/lib/auth/auth-response";
 
-export async function POST(request: NextRequest) {
+async function handlePost(request: NextRequest) {
   try {
     const ip = getRequestIp(request);
     const rl = rateLimit(`send-verify-email:${ip}`, 5, 15 * 60 * 1000);
@@ -74,4 +75,8 @@ export async function POST(request: NextRequest) {
       { status: 500 },
     );
   }
+}
+
+export async function POST(request: NextRequest) {
+  return withAuthNoStore(await handlePost(request));
 }

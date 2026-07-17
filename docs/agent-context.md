@@ -142,8 +142,8 @@ For production-wide enforcement, replace with Upstash Redis or Vercel KV.
 |---|---|---|
 | `DATABASE_URL` | Prisma (pooled) | Yes |
 | `DIRECT_URL` | Prisma (migrations) | Yes |
-| `NEXTAUTH_SECRET` | next-auth JWT signing; fallback encryption key | Yes |
-| `APP_ENCRYPTION_KEY` | `src/lib/crypto.ts` — Shopify token encryption | Yes — changing breaks all stored tokens |
+| `NEXTAUTH_SECRET` | NextAuth/JWT session signing | Yes — rotating invalidates authentication sessions, not Shopify credentials |
+| `APP_ENCRYPTION_KEY` | `src/lib/crypto.ts` — Shopify access and refresh token encryption | Yes — rotating makes stored credentials unreadable until migrated or stores reconnect |
 | `SHOPIFY_API_KEY` | OAuth start/callback, session token verification | Yes for Shopify features |
 | `SHOPIFY_API_SECRET` | HMAC verification (OAuth + webhooks) | Yes — must match Shopify partner dashboard |
 | `SHOPIFY_APP_URL` | OAuth redirect base URL | Yes — must be public HTTPS URL |
@@ -188,7 +188,7 @@ See `docs/env-vars.md`, `docs/prisma-migrations.md`, `docs/points-ledger.md`, an
 4. **`CampaignUnlock` supports both authenticated and anonymous users** — `userId` is nullable; `anonKey` is used for anonymous. Both must be handled in any unlock-checking logic.
 5. **next-auth v4 with App Router** — uses `getServerSession(authOptions)` (server components/routes), not `useSession` (client only). Mixing these up is a common source of auth bugs.
 6. **Shopify GraphQL API version** is `2026-04` (set in `src/lib/shopify.ts:SHOPIFY_API_VERSION`). Never hardcode it elsewhere.
-7. **`APP_ENCRYPTION_KEY` fallback chain**: `APP_ENCRYPTION_KEY` → `SHOPIFY_TOKEN_ENCRYPTION_KEY` → `NEXTAUTH_SECRET`. If you change any of these, all existing encrypted tokens become unreadable.
+7. **Credential and session secrets are independent**: `APP_ENCRYPTION_KEY` is the sole server-only key for Shopify access and refresh token encryption. `NEXTAUTH_SECRET` signs application authentication sessions. Generate and manage them separately: rotating `NEXTAUTH_SECRET` does not affect Shopify credentials, while rotating `APP_ENCRYPTION_KEY` requires token migration or store reconnection.
 8. **Auth dependency injection in `auth-session.ts`** — there are no global test hooks. Routes that need test injection export an implementation function `…Impl(req[, ctx], deps: AuthResolvers)`; the production `GET`/`POST` export is a thin wrapper that binds `realAuthResolvers`. Tests call the `…Impl` function directly with mock resolvers. Other routes call the standalone `resolveSession()` / `resolveBrandAdminContext()` wrappers (real implementation).
 9. **User deletion returns 409** if the user has campaigns or QR codes. Deactivation is the recommended alternative.
 10. **`/dev/email-preview`** and `/dev/email-preview/invite` return HTTP 404 when `NODE_ENV === "production"`; they are dev-only email template previews.

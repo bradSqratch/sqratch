@@ -1,15 +1,10 @@
 import crypto from "crypto";
 
 function getEncryptionKey() {
-  const secret =
-    process.env.APP_ENCRYPTION_KEY ||
-    process.env.SHOPIFY_TOKEN_ENCRYPTION_KEY ||
-    process.env.NEXTAUTH_SECRET;
+  const secret = process.env.APP_ENCRYPTION_KEY?.trim();
 
   if (!secret) {
-    throw new Error(
-      "Missing APP_ENCRYPTION_KEY or NEXTAUTH_SECRET for encryption.",
-    );
+    throw new Error("APP_ENCRYPTION_KEY is not configured.");
   }
 
   return crypto.createHash("sha256").update(secret).digest();

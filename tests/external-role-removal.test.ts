@@ -191,6 +191,7 @@ test("welcome queue is verification-driven and worker-revalidated", () => {
     "email-worker",
     "route.ts",
   );
+  const workerLogic = read("src", "lib", "welcome-email-worker.ts");
   const mailer = read("src", "helpers", "mailer.ts");
   const template = read("src", "helpers", "emailTemplates.ts");
   const signupRoute = read("src", "app", "api", "auth", "signup", "route.ts");
@@ -201,8 +202,9 @@ test("welcome queue is verification-driven and worker-revalidated", () => {
   assert.match(welcome, /uq_email_queue_user_template/);
   assert.match(welcome, /verificationEligible: true/);
   assert.match(signupRoute, /welcomeEligible: requestedRole == null/);
-  assert.match(worker, /isWelcomeEmailEligible/);
-  assert.match(worker, /job\.verificationEligible/);
+  assert.match(worker, /processWelcomeEmailQueue/);
+  assert.match(workerLogic, /isWelcomeEmailEligible/);
+  assert.match(workerLogic, /job\.verificationEligible/);
   assert.match(worker, /status: "SKIPPED"/);
   assert.doesNotMatch(worker, /cutoffMinutes|45 minutes ago/);
   assert.match(mailer, /getAppBaseUrl\(\).*\/login/);

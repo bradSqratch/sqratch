@@ -311,7 +311,7 @@ sqratch/
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| POST | `/api/internal/email-worker` | `x-cron-secret` | Revalidate and process pending welcome emails from `EmailQueue`; ineligible jobs become `SKIPPED` |
+| POST | `/api/internal/email-worker` | `x-cron-secret` | Revalidate and process bounded `WELCOME` jobs; retry failures with backoff, recover stale claims, and mark ineligible jobs `SKIPPED` |
 | POST | `/api/internal/reconcile-redemptions` | `x-cron-secret` | Reconcile stuck `POINTS_DEBITED` redemptions (limit 20, 5 min minimum age, 5 max attempts) |
 
 ### Progress APIs (session or auth)
@@ -432,7 +432,8 @@ User submits signup form
   → Merges anonymous CampaignUnlocks via collectAnonMergeKeys (sqr_session first)
 → POST /api/internal/email-worker (CRON_SECRET)
   → Revalidates verified USER role and absence of Creator/Brand applications
-  → Sends the welcome email with a /login CTA, or marks the job SKIPPED
+  → Sends the welcome email with a /login CTA, marks ineligible jobs SKIPPED,
+    or retries delivery failures after 5m, 15m, 1h, and 6h (five attempts max)
 → User signs in via next-auth credentials provider (email lowercased)
   → JWT contains: id, email, role, name, isActive, sessionVersion
   → JWT maxAge: 7 days
@@ -598,6 +599,9 @@ Managed by `src/lib/reward-redemption-state.ts`. All transitions validated by `a
 ### 9. Stuck-Redemption Reconciliation
 
 ```
+Supabase Cron is manually managed outside this repository:
+CRON: POST /api/internal/email-worker (x-cron-secret, every 5 min)
+  → Recovers SENDING claims older than 15 min; bounded retry/backoff for WELCOME
 CRON: POST /api/internal/reconcile-redemptions (x-cron-secret, every 10 min)
   → reconcileStuckRedemptions({ limit: 20, minAgeMs: 5*60*1000, maxAttempts: 5 })
   → Selects POINTS_DEBITED rows older than 5 min, not locked, not manual-review
@@ -921,5 +925,5 @@ Read these files first:
 1. Deployment is Vercel (based on env structure).
 2. Supabase project handles both PostgreSQL and file storage.
 3. The Shopify app has two configurations: public (for Shopify app review) and custom (for testing).
-4. `APP_ENCRYPTION_KEY` is the primary encryption key; `NEXTAUTH_SECRET` is the fallback.
+4. `APP_ENCRYPTION_KEY` is the sole server-only Shopify credential encryption key. `NEXTAUTH_SECRET` independently signs authentication sessions; it is not an encryption fallback.
 5. Migrations 20260615113320 through 20260615150000 have been applied to production in order; `prisma migrate status` reports the schema is up to date.

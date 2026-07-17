@@ -4,6 +4,9 @@ import { PrismaAdapter } from "@next-auth/prisma-adapter";
 import prisma from "@/lib/prisma"; // Your Prisma client setup
 import bcrypt from "bcryptjs";
 import { hasPendingApproval } from "@/lib/approval-gating";
+import { logCredentialLoginEvent } from "@/lib/auth/auth-security";
+
+class ExpectedCredentialLoginFailure extends Error {}
 
 export const authOptions: NextAuthOptions = {
   adapter: PrismaAdapter(prisma),
@@ -26,28 +29,35 @@ export const authOptions: NextAuthOptions = {
       async authorize(
         credentials?: Record<"email" | "password", string> | undefined,
       ) {
-        try {
-          const email = String(credentials?.email || "")
-            .trim()
-            .toLowerCase();
-          const password = String(credentials?.password || "");
+        const email = String(credentials?.email || "")
+          .trim()
+          .toLowerCase();
+        const password = String(credentials?.password || "");
 
+        try {
           // Find user in database
           const user = await prisma.user.findUnique({
             where: { email },
           });
 
           if (!user || !user.password) {
-            throw new Error("Invalid email or password");
+            logCredentialLoginEvent("invalid_credentials", email);
+            throw new ExpectedCredentialLoginFailure(
+              "Invalid email or password",
+            );
           }
 
           // For permanent users, check if the email is verified
           if (!user.isEmailVerified) {
-            throw new Error("Please verify your email address first.");
+            logCredentialLoginEvent("email_unverified", email);
+            throw new ExpectedCredentialLoginFailure(
+              "Please verify your email address first.",
+            );
           }
 
           if (user.role !== "ADMIN" && (await hasPendingApproval(user.id))) {
-            throw new Error(
+            logCredentialLoginEvent("approval_pending", email);
+            throw new ExpectedCredentialLoginFailure(
               "Wait for your approval from the admin. You will be notified via email once approved.",
             );
           }
@@ -59,6 +69,7 @@ export const authOptions: NextAuthOptions = {
           );
 
           if (isPasswordCorrect) {
+            logCredentialLoginEvent("success", email);
             return {
               id: user.id,
               email: user.email,
@@ -69,14 +80,18 @@ export const authOptions: NextAuthOptions = {
               sessionVersion: user.sessionVersion,
             };
           } else {
-            throw new Error("Invalid email or password");
+            logCredentialLoginEvent("invalid_credentials", email);
+            throw new ExpectedCredentialLoginFailure(
+              "Invalid email or password",
+            );
           }
         } catch (error: unknown) {
-          const message =
-            error instanceof Error
-              ? error.message
-              : "Unable to complete sign in.";
-          throw new Error(message);
+          if (error instanceof ExpectedCredentialLoginFailure) {
+            throw new Error(error.message);
+          }
+
+          logCredentialLoginEvent("system_error", email);
+          throw new Error("Unable to complete sign in.");
         }
       },
     }),

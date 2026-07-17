@@ -64,49 +64,128 @@ export function GET(request: NextRequest) {
       body {
         min-height: 100vh;
         margin: 0;
-        background: #050714;
+        background:
+          radial-gradient(1100px 600px at 50% 0%, rgba(99, 102, 241, 0.25), transparent 68%),
+          radial-gradient(760px 460px at 8% 24%, rgba(236, 72, 153, 0.1), transparent 62%),
+          radial-gradient(780px 520px at 92% 28%, rgba(34, 211, 238, 0.08), transparent 62%),
+          #020015;
         color: #ffffff;
       }
 
+      .topbar {
+        border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        background: rgba(2, 0, 21, 0.82);
+        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.03);
+        backdrop-filter: blur(18px);
+      }
+
+      .topbar-inner {
+        display: flex;
+        width: min(100% - 2.5rem, 72rem);
+        min-height: 4.25rem;
+        align-items: center;
+        margin: 0 auto;
+      }
+
+      .wordmark {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.6rem;
+        color: #d8d1f5;
+        font-size: 0.9rem;
+        font-weight: 800;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+
+      .wordmark::before {
+        width: 0.7rem;
+        height: 0.7rem;
+        border-radius: 999px;
+        background: linear-gradient(135deg, #e9ddff, #9b7cf7);
+        box-shadow: 0 0 18px rgba(174, 139, 255, 0.7);
+        content: "";
+      }
+
       main {
-        min-height: 100vh;
-        padding: 2rem 1.25rem;
+        min-height: calc(100vh - 4.25rem);
+        padding: 3.5rem 1.25rem 4rem;
       }
 
       .shell {
-        display: flex;
-        min-height: calc(100vh - 4rem);
-        max-width: 48rem;
-        align-items: center;
+        width: min(100%, 58rem);
         margin: 0 auto;
+      }
+
+      .intro {
+        max-width: 48rem;
+        margin: 0 auto 2.25rem;
+        text-align: center;
+      }
+
+      .page-eyebrow,
+      .card {
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+
+      .page-eyebrow {
+        display: inline-flex;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.06);
+        padding: 0.45rem 0.8rem;
+        color: #d7cafa;
+        font-size: 0.7rem;
+        font-weight: 700;
+        letter-spacing: 0.2em;
+      }
+
+      .page-title {
+        max-width: 43rem;
+        margin: 1rem auto 0;
+        background: linear-gradient(145deg, #ffffff 22%, rgba(255, 255, 255, 0.56) 112%);
+        background-clip: text;
+        color: transparent;
+        font-size: clamp(2.25rem, 6vw, 3.75rem);
+        letter-spacing: -0.045em;
+        line-height: 1.02;
+        text-wrap: balance;
+      }
+
+      .page-copy {
+        max-width: 40rem;
+        margin: 1rem auto 0;
+        color: rgba(255, 255, 255, 0.64);
+        font-size: 0.975rem;
+        line-height: 1.7;
       }
 
       .card {
         width: 100%;
         overflow: hidden;
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 2rem;
-        background: rgba(17, 23, 34, 0.95);
-        box-shadow: 0 25px 80px rgba(0, 0, 0, 0.4);
+        border-radius: 1.75rem;
+        background: rgba(13, 16, 35, 0.86);
+        box-shadow: 0 30px 90px rgba(0, 0, 0, 0.5);
+        backdrop-filter: blur(20px);
       }
 
-      .header {
+      .card-header {
         border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-        background: linear-gradient(90deg, #111827, #0b1020, #172338);
-        padding: 1.5rem 1.75rem;
+        background: linear-gradient(105deg, rgba(41, 35, 77, 0.7), rgba(14, 18, 40, 0.4), rgba(31, 46, 73, 0.55));
+        padding: 1.6rem 1.5rem;
       }
 
       .eyebrow {
         margin: 0;
-        color: #b7a6e8;
-        font-size: 0.75rem;
+        color: #cbbcf5;
+        font-size: 0.7rem;
         font-weight: 700;
-        letter-spacing: 0.35em;
+        letter-spacing: 0.22em;
+        text-transform: uppercase;
       }
 
-      h1 {
+      .card-title {
         margin: 0.75rem 0 0;
-        font-size: clamp(1.875rem, 5vw, 2.25rem);
+        font-size: clamp(1.7rem, 4vw, 2.2rem);
         letter-spacing: -0.03em;
       }
 
@@ -120,8 +199,8 @@ export function GET(request: NextRequest) {
 
       .content {
         display: grid;
-        gap: 1.5rem;
-        padding: 1.75rem;
+        gap: 1.35rem;
+        padding: 1.5rem;
       }
 
       .stats {
@@ -137,8 +216,8 @@ export function GET(request: NextRequest) {
 
       .stat {
         border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 1rem;
-        background: rgba(0, 0, 0, 0.2);
+        border-radius: 1.1rem;
+        background: rgba(0, 0, 0, 0.18);
         padding: 1rem;
       }
 
@@ -152,28 +231,31 @@ export function GET(request: NextRequest) {
 
       .value {
         margin: 0.5rem 0 0;
-        color: rgba(255, 255, 255, 0.85);
+        color: rgba(255, 255, 255, 0.88);
         font-size: 0.875rem;
+        line-height: 1.5;
       }
 
       .notice {
-        border: 1px solid rgba(183, 166, 232, 0.2);
-        border-radius: 1rem;
-        background: rgba(183, 166, 232, 0.1);
+        border: 1px solid rgba(183, 166, 232, 0.24);
+        border-radius: 1.1rem;
+        background: linear-gradient(135deg, rgba(157, 126, 245, 0.16), rgba(107, 82, 184, 0.07));
         padding: 1.25rem;
-        color: rgba(255, 255, 255, 0.75);
+        color: rgba(255, 255, 255, 0.8);
         font-size: 0.875rem;
-        line-height: 1.6;
+        line-height: 1.65;
       }
 
       .error {
         display: none;
-        border: 1px solid rgba(248, 113, 113, 0.2);
-        border-radius: 1rem;
-        background: rgba(239, 68, 68, 0.1);
-        padding: 0.75rem 1rem;
-        color: #fecaca;
+        overflow-wrap: anywhere;
+        border: 1px solid rgba(251, 113, 133, 0.38);
+        border-radius: 1.1rem;
+        background: rgba(190, 24, 93, 0.16);
+        padding: 0.9rem 1rem;
+        color: #ffd1dc;
         font-size: 0.875rem;
+        line-height: 1.55;
       }
 
       .actions {
@@ -197,21 +279,64 @@ export function GET(request: NextRequest) {
         font-weight: 600;
         text-decoration: none;
         cursor: pointer;
+        transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+      }
+
+      .button:hover:not(:disabled) {
+        box-shadow: 0 10px 28px rgba(255, 255, 255, 0.18);
+        transform: translateY(-1px);
+      }
+
+      .button:focus-visible {
+        outline: 3px solid rgba(196, 181, 253, 0.9);
+        outline-offset: 3px;
       }
 
       .button:disabled {
         cursor: not-allowed;
         opacity: 0.55;
       }
+
+      @media (min-width: 768px) {
+        main {
+          padding: 4.75rem 2rem 5rem;
+        }
+
+        .topbar-inner {
+          width: min(100% - 4rem, 72rem);
+        }
+
+        .card-header,
+        .content {
+          padding-left: 2.25rem;
+          padding-right: 2.25rem;
+        }
+
+        .content {
+          gap: 1.5rem;
+          padding-bottom: 2.25rem;
+          padding-top: 2rem;
+        }
+      }
     </style>
   </head>
   <body>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <span class="wordmark" aria-label="SQRATCH">SQRATCH</span>
+      </div>
+    </header>
     <main>
       <section class="shell">
+        <div class="intro">
+          <p class="page-eyebrow">Shopify integration</p>
+          <h1 class="page-title">Connect Shopify to SQRATCH</h1>
+          <p class="page-copy">Link your Shopify store to a SQRATCH Brand account to display products across experiences and create reward discount codes.</p>
+        </div>
         <div class="card">
-          <div class="header">
+          <div class="card-header">
             <p class="eyebrow">SQRATCH</p>
-            <h1>Shopify app setup</h1>
+            <h2 class="card-title">Shopify app setup</h2>
             <p class="lede">This embedded app is a lightweight setup shell. The full product experience stays in the SQRATCH Brand dashboard.</p>
           </div>
 
@@ -227,8 +352,8 @@ export function GET(request: NextRequest) {
               </div>
             </div>
 
-            <div class="notice">Link this Shopify store to a SQRATCH Brand account so Brand Admins can display Shopify products inside SQRATCH experiences. SQRATCH requests product access to display Shopify products inside SQRATCH experiences and discount access to create reward codes when brands enable loyalty rewards.</div>
-            <p class="error" id="error-message"></p>
+            <div class="notice">SQRATCH requests product access to display Shopify products inside SQRATCH experiences and discount access to create reward codes when brands enable loyalty rewards.</div>
+            <p class="error" id="error-message" role="alert" aria-live="polite"></p>
             <div class="actions">${actionMarkup}</div>
           </div>
         </div>

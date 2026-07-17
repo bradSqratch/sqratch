@@ -35,9 +35,11 @@ Also inspect `information_schema.columns` and `pg_type` for equivalent manually 
 
 ## Deployment
 
-The local migrations `20260716120000_harden_auth_sessions_and_verification`, `20260716130000_remove_external_role`, and `20260716131000_verified_user_welcome_queue` have not been applied to any remote database. Review the legacy challenge invalidation effect and configure `EMAIL_VERIFICATION_CODE_PEPPER` before applying them through the normal release process.
+The local migrations `20260716120000_harden_auth_sessions_and_verification`, `20260716130000_remove_external_role`, `20260716131000_verified_user_welcome_queue`, and `20260717140000_welcome_email_worker_retries` have not been applied to any remote database. Review the legacy challenge invalidation effect and configure `EMAIL_VERIFICATION_CODE_PEPPER` before applying them through the normal release process.
 
 Before `20260716130000_remove_external_role`, confirm no users retain the retired role. The migration repeats this check and aborts if one appears. It replaces the PostgreSQL `Role` enum without changing users. The welcome-queue migration removes only `trg_enqueue_welcome_email` and `enqueue_welcome_email()`, adds the verification challenge eligibility marker and `SKIPPED` queue status, and intentionally leaves the separate Make.com user-insert trigger unchanged.
+
+`20260717140000_welcome_email_worker_retries` is additive only: nullable retry-scheduling and claim timestamps plus worker-selection indexes. Existing `PENDING` jobs remain immediately eligible, while `SENT`, `SKIPPED`, `FAILED`, and `SENDING` rows are not rewritten by the migration.
 
 The production-only `Make com ` trigger was reported as an `AFTER INSERT` trigger on `User` that calls an external Make.com webhook. Its function body is not version-controlled in this repository, so it cannot be inspected without querying the remote database. It is separate from `trg_enqueue_welcome_email` and is deliberately not modified by these migrations.
 

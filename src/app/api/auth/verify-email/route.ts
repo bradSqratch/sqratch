@@ -6,6 +6,7 @@ import { redeemQrCodeForUser } from "@/lib/qr-redemption";
 import { collectAnonMergeKeys } from "@/lib/anon-merge-keys";
 import { verifyAndConsumeEmailVerificationCode } from "@/lib/auth/email-verification";
 import { isValidSessionId } from "@/lib/session-id";
+import { withAuthNoStore } from "@/lib/auth/auth-response";
 
 async function mergeAnonymousCampaignUnlocks(
   userId: string,
@@ -104,7 +105,7 @@ async function mergeAnonymousCampaignUnlocks(
   }
 }
 
-export async function POST(request: NextRequest) {
+async function handlePost(request: NextRequest) {
   try {
     const body = await request.json();
     const {
@@ -244,4 +245,8 @@ export async function POST(request: NextRequest) {
       { status: 500 },
     );
   }
+}
+
+export async function POST(request: NextRequest) {
+  return withAuthNoStore(await handlePost(request));
 }

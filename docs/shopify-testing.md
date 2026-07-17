@@ -11,8 +11,8 @@ This app uses Shopify only to read and display products in SQRATCH. Store owners
 - `SHOPIFY_SCOPES`: Must be exactly `read_products,read_discounts,write_discounts`.
 - `SHOPIFY_APP_URL`: Production app origin, for example `https://www.sqratch.com`.
 - `NEXTAUTH_URL`: Production app origin, for example `https://www.sqratch.com`.
-- `NEXTAUTH_SECRET`: Required by auth and used as an encryption fallback.
-- `APP_ENCRYPTION_KEY`: Preferred stable key for encrypting Shopify access tokens. Do not rotate without a token migration plan.
+- `NEXTAUTH_SECRET`: Required to sign application authentication sessions. It does not encrypt Shopify credentials.
+- `APP_ENCRYPTION_KEY`: The sole stable, server-only key for encrypting Shopify access and refresh tokens. Generate and manage it independently from `NEXTAUTH_SECRET`. Do not rotate it without a token migration plan or store-reconnection plan.
 - `DATABASE_URL`: Production database URL.
 - `DIRECT_URL`: Required only if your Prisma migration workflow needs a direct database connection.
 

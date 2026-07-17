@@ -4,8 +4,9 @@ import bcrypt from "bcryptjs";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
 import { PASSWORD_POLICY_MESSAGE, validatePassword } from "@/lib/password-policy";
+import { withAuthNoStore } from "@/lib/auth/auth-response";
 
-export async function POST(request: NextRequest) {
+async function handlePost(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
     const userId = session?.user?.id;
@@ -93,4 +94,8 @@ export async function POST(request: NextRequest) {
       { status: 500 },
     );
   }
+}
+
+export async function POST(request: NextRequest) {
+  return withAuthNoStore(await handlePost(request));
 }

@@ -6,16 +6,8 @@
  *
  * Authentication: x-cron-secret header must match process.env.CRON_SECRET.
  *
- * PROPOSED Vercel cron (add to vercel.json when ready to deploy):
- *   {
- *     "crons": [
- *       {
- *         "path": "/api/internal/reconcile-redemptions",
- *         "schedule": "*\/10 * * * *"
- *       }
- *     ]
- *   }
- * This would invoke the endpoint every 10 minutes.
+ * Supabase Cron is managed manually outside this repository and invokes this
+ * endpoint every 10 minutes. Do not add a Vercel cron configuration here.
  *
  * SECURITY: The secret value is never logged — only its presence/absence is
  * checked. This mirrors the email-worker auth pattern.

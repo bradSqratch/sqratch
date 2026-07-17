@@ -19,15 +19,34 @@
  * No real DB, no real network is used anywhere in this file.
  */
 
-import { test, describe } from "node:test";
+import { after, test, describe } from "node:test";
 import assert from "node:assert/strict";
 
-// Set env vars BEFORE any imports that might need them
+const originalNextAuthSecret = process.env.NEXTAUTH_SECRET;
+const originalAppEncryptionKey = process.env.APP_ENCRYPTION_KEY;
+
+// These tests exercise encrypted Shopify token handling without relying on
+// NextAuth's session-signing secret.
 process.env.NEXTAUTH_SECRET = "test-secret-for-token-manager-tests-32ch";
+process.env.APP_ENCRYPTION_KEY = "test-encryption-key-for-token-manager-tests";
 // Note: DATABASE_URL is NOT required here because shopify-token-manager.ts
 // uses a lazy import for prisma (only resolved when a DB call is made).
 // Tests only exercise the pure exported helpers and the injectable
 // tokenEndpoint — no DB calls are triggered in this file.
+
+after(() => {
+  if (originalNextAuthSecret === undefined) {
+    delete process.env.NEXTAUTH_SECRET;
+  } else {
+    process.env.NEXTAUTH_SECRET = originalNextAuthSecret;
+  }
+
+  if (originalAppEncryptionKey === undefined) {
+    delete process.env.APP_ENCRYPTION_KEY;
+  } else {
+    process.env.APP_ENCRYPTION_KEY = originalAppEncryptionKey;
+  }
+});
 
 import {
   isAccessTokenFresh,
