@@ -35,10 +35,9 @@ export function GET(request: NextRequest) {
   const shouldCheckEmbeddedStatus =
     distribution === "public" && Boolean(shopifyApiKey);
 
-  const actionMarkup =
-    shouldCheckEmbeddedStatus
-      ? `<button class="button" id="continue-button" type="button">Continue to SQRATCH linking</button><button class="button disconnect-button is-hidden" id="disconnect-button" type="button">Disconnect from SQRATCH</button>`
-      : showOAuthFallback && rawShop
+  const actionMarkup = shouldCheckEmbeddedStatus
+    ? `<button class="button" id="continue-button" type="button">Continue to SQRATCH linking</button><button class="button disconnect-button is-hidden" id="disconnect-button" type="button">Disconnect from SQRATCH</button>`
+    : showOAuthFallback && rawShop
       ? `<a class="button" target="_top" rel="noopener" href="/api/shopify/oauth/start?shop=${encodeURIComponent(rawShop)}">Continue to SQRATCH linking</a>`
       : showOAuthFallback
         ? `<button class="button" type="button" disabled>Continue to SQRATCH linking</button>`
@@ -189,7 +188,7 @@ export function GET(request: NextRequest) {
 
       .card-title {
         margin: 0.75rem 0 0;
-        font-size: clamp(1.7rem, 4vw, 1.2rem);
+        font-size: clamp(1.2rem, 4vw, 1.7rem);
         letter-spacing: -0.03em;
       }
 
@@ -260,6 +259,27 @@ export function GET(request: NextRequest) {
         color: #ffd1dc;
         font-size: 0.875rem;
         line-height: 1.55;
+      }
+
+      .status-message {
+        margin: 0;
+        border-radius: 1.1rem;
+        padding: 0.9rem 1rem;
+        font-size: 0.875rem;
+        font-weight: 600;
+        line-height: 1.55;
+      }
+
+      .status-message-danger {
+        border: 1px solid rgba(251, 113, 133, 0.38);
+        background: rgba(190, 24, 93, 0.14);
+        color: #ffd1dc;
+      }
+
+      .status-message-info {
+        border: 1px solid rgba(183, 166, 232, 0.24);
+        background: rgba(157, 126, 245, 0.1);
+        color: rgba(255, 255, 255, 0.78);
       }
 
       .actions {
@@ -390,7 +410,7 @@ export function GET(request: NextRequest) {
             <div class="notice" id="connection-notice">SQRATCH requests product access to display Shopify products inside SQRATCH experiences and discount access to create reward codes when brands enable loyalty rewards.</div>
             <p class="error" id="error-message" role="alert" aria-live="polite"></p>
             <p class="loader${shouldCheckEmbeddedStatus ? "" : " is-hidden"}" id="status-loader" role="status" aria-live="polite" aria-busy="true"><span class="loader-spinner" aria-hidden="true"></span><span id="status-loader-label">Checking Shopify connection…</span></p>
-            <p class="is-hidden" id="status-message" aria-live="polite"></p>
+            <p class="status-message status-message-info is-hidden" id="status-message" role="status" aria-live="polite"></p>
             <div class="actions${shouldCheckEmbeddedStatus ? " is-hidden" : ""}" id="connection-actions">${actionMarkup}</div>
           </div>
         </div>
@@ -418,11 +438,14 @@ export function GET(request: NextRequest) {
         errorElement.style.display = message ? "block" : "none";
       }
 
-      function setStatusMessage(message) {
+      function setStatusMessage(message, type = "info") {
         const statusMessage = document.getElementById("status-message");
         if (!statusMessage) return;
+
         statusMessage.textContent = message;
         statusMessage.classList.toggle("is-hidden", !message);
+        statusMessage.classList.toggle("status-message-danger", type === "danger");
+        statusMessage.classList.toggle("status-message-info", type === "info");
       }
 
       function setLoading(isLoading, label) {
@@ -488,7 +511,7 @@ export function GET(request: NextRequest) {
           }
         } catch {
           setUnlinkedState();
-          setStatusMessage("We could not confirm the current connection. You can continue setup.");
+          setStatusMessage("We could not confirm the current connection. You can continue setup.", "info");
         } finally {
           setLoading(false);
         }
@@ -497,6 +520,7 @@ export function GET(request: NextRequest) {
       async function handleContinue() {
         const button = document.getElementById("continue-button");
         setError("");
+        setStatusMessage("");
         if (button) {
           button.disabled = true;
           button.textContent = "Setting up…";
@@ -575,7 +599,7 @@ export function GET(request: NextRequest) {
           if (!response.ok) throw new Error("disconnect failed");
 
           setUnlinkedState();
-          setStatusMessage("Shopify has been disconnected from SQRATCH.");
+          setStatusMessage("Shopify has been disconnected from SQRATCH.", "danger");
         } catch {
           setError("Could not disconnect Shopify. Please try again.");
         } finally {
