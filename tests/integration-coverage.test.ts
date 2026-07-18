@@ -27,6 +27,7 @@ interface MockedPrismaClient {
   user: Record<string, (...args: unknown[]) => unknown>;
   campaignUnlock: Record<string, (...args: unknown[]) => unknown>;
   brandRewardOffer: Record<string, (...args: unknown[]) => unknown>;
+  userPointAccount: Record<string, (...args: unknown[]) => unknown>;
   lessonProgress: Record<string, (...args: unknown[]) => unknown>;
   userSession: Record<string, (...args: unknown[]) => unknown>;
   analyticsEvent: Record<string, (...args: unknown[]) => unknown>;
@@ -1085,6 +1086,15 @@ describe("Route Scenario 4: Reward Redemption", () => {
       points: 50,
     }));
 
+    t.mock.method(prisma.userPointAccount, "findUnique", async () => ({
+      userId: "user-123",
+      spendablePoints: 50,
+      lifetimeEarnedPoints: 50,
+      lifetimeSpentPoints: 0,
+      lifetimeRefundedPoints: 0,
+      version: 0,
+    }));
+
     t.mock.method(prisma.campaign, "findUnique", async () => ({
       id: "campaign-123",
       brandId: "brand-123",
@@ -1101,6 +1111,49 @@ describe("Route Scenario 4: Reward Redemption", () => {
     assert.equal(res.status, 409);
     const json = await res.json();
     assert.equal(json.error, "Not enough SQRATCH points for this reward.");
+  });
+
+  test("cross-brand rewards remain blocked even when the campaign is unlocked", async (t) => {
+    setupMocks({ user: { id: "user-123", role: "USER" } });
+
+    t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async () => null);
+    t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
+      id: "offer-other-brand",
+      brandId: "brand-other",
+      pointsCost: 10,
+      isActive: true,
+      claimStartsAt: null,
+      claimEndsAt: null,
+      maxTotalRedemptions: null,
+      maxRedemptionsPerUser: null,
+      brand: {
+        id: "brand-other",
+        name: "Other Brand",
+        shopifyShopDomain: "other.myshopify.com",
+        shopifyAdminAccessTokenEncrypted: encryptSecret("token-other"),
+        shopifyConnectionStatus: "CONNECTED",
+      },
+      products: [],
+    }));
+    t.mock.method(prisma.campaign, "findUnique", async () => ({
+      id: "campaign-123",
+      brandId: "brand-123",
+      unlocks: [{ id: "unlock-123" }],
+    }));
+
+    const response = await redeemPOST(
+      makeJsonRequest("http://localhost/api/rewards/shopify/redeem", {
+        offerId: "offer-other-brand",
+        idempotencyKey: "idem-key-cross-brand",
+        campaignId: "campaign-123",
+      }),
+    );
+
+    assert.equal(response.status, 403);
+    assert.equal(
+      (await response.json()).error,
+      "Unlock this experience before claiming rewards.",
+    );
   });
 
   test("double click / concurrent calls returns existing redemption (idempotency)", async (t) => {

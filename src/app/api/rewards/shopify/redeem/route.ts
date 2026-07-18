@@ -8,6 +8,7 @@ import prisma from "@/lib/prisma";
 import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
 import {
   debitShopifyRewardPoints,
+  getUserSpendablePointBalance,
   refundShopifyRewardPoints,
 } from "@/lib/points";
 import { getRewardClaimContext } from "@/lib/reward-access";
@@ -218,7 +219,6 @@ export async function redeemImpl(request: NextRequest, deps: AuthResolvers) {
       },
       select: {
         id: true,
-        points: true,
       },
     });
 
@@ -263,7 +263,11 @@ export async function redeemImpl(request: NextRequest, deps: AuthResolvers) {
       );
     }
 
-    if (user.points < offer.pointsCost) {
+    const userPointsBalance = await getUserSpendablePointBalance({
+      userId: user.id,
+    });
+
+    if (userPointsBalance < offer.pointsCost) {
       return NextResponse.json(
         { error: "Not enough SQRATCH points for this reward." },
         { status: 409 },

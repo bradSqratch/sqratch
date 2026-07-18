@@ -4,6 +4,7 @@ import { test, describe } from "node:test";
 import { Prisma } from "@prisma/client";
 import {
   computeLedgerDeltas,
+  getUserSpendablePointBalance,
   applyPointLedgerEvent,
   awardQrScanPoint,
   debitShopifyRewardPoints,
@@ -324,6 +325,20 @@ describe("QR scan award", () => {
 });
 
 describe("Shopify redemption debit", () => {
+  test("reads the point-account spendable balance instead of the legacy User.points mirror", async () => {
+    const f = makeFakeDb({
+      users: { u1: { points: 999 } },
+      accounts: [seededAccount("u1", 12)],
+    });
+
+    const balance = await getUserSpendablePointBalance({
+      userId: "u1",
+      db: f.db,
+    });
+
+    assert.equal(balance, 12);
+  });
+
   test("decreases spendable + lifetime spent, lifetime earned unchanged", async () => {
     const f = makeFakeDb({
       users: { u1: { points: 100 } },

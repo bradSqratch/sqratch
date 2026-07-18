@@ -114,10 +114,6 @@ export function ExperienceShopClient({
     });
   }
 
-  const shopBrandId =
-    shopData?.campaign?.brand?.id ||
-    shopData?.products.find((product) => product.brand?.id)?.brand?.id ||
-    null;
   const productCount = shopData?.products.length ?? 0;
   const totalPages = Math.max(1, Math.ceil(productCount / pageSize));
   const safeCurrentPage = Math.min(currentPage, totalPages);
@@ -163,7 +159,7 @@ export function ExperienceShopClient({
         <PageCard>
           <p className="text-sm text-red-300">{shopError}</p>
         </PageCard>
-      ) : !shopData || shopData.products.length === 0 ? (
+      ) : !shopData ? (
         <PageCard>
           <div className="space-y-3">
             <h2 className="text-2xl font-semibold text-[#988dbf]">Shop</h2>
@@ -191,123 +187,133 @@ export function ExperienceShopClient({
             </div>
           </PageCard>
 
-          <ShopifyShopRewardCard
-            brandId={shopBrandId}
-            experienceSlug={experienceSlug}
-          />
+          <ShopifyShopRewardCard experienceSlug={experienceSlug} />
 
-          {showPaginationControls && (
-            <div className="flex flex-col gap-3 rounded-3xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/65 sm:flex-row sm:items-center sm:justify-between">
-              <p>
-                Showing {pageStartIndex + 1}&ndash;{pageEndIndex} of{" "}
-                {productCount} products
-              </p>
-              <div className="flex flex-wrap items-center gap-3">
-                <label className="flex items-center gap-2 text-white/60">
-                  <span>Page size</span>
-                  <select
-                    value={pageSize}
-                    onChange={(event) =>
-                      setPageSize(
-                        Number(event.target.value) as typeof pageSize,
-                      )
-                    }
-                    className="rounded-full border border-white/10 bg-black/30 px-3 py-2 text-white outline-none transition focus:border-[#988dbf]"
-                  >
-                    {PAGE_SIZE_OPTIONS.map((option) => (
-                      <option key={option} value={option} className="bg-[#120f1f]">
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() =>
-                      setCurrentPage((page) => Math.max(1, page - 1))
-                    }
-                    disabled={safeCurrentPage === 1}
-                    className="rounded-full border-white/15 bg-transparent text-white/75 hover:bg-white/10 hover:text-white"
-                  >
-                    Previous
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() =>
-                      setCurrentPage((page) => Math.min(totalPages, page + 1))
-                    }
-                    disabled={safeCurrentPage === totalPages}
-                    className="rounded-full border-white/15 bg-transparent text-white/75 hover:bg-white/10 hover:text-white"
-                  >
-                    Next
-                  </Button>
-                </div>
+          {productCount === 0 ? (
+            <PageCard>
+              <div className="space-y-3">
+                <h2 className="text-2xl font-semibold text-[#988dbf]">Shop</h2>
+                <p className="max-w-2xl text-sm leading-6 text-white/70">
+                  No products have been linked to this experience yet.
+                </p>
               </div>
-            </div>
-          )}
-
-          <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-            {visibleProducts.map((product) => (
-              <PageCard key={product.id} className="h-full">
-                <div className="flex h-full flex-col">
-                  <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/20">
-                    {product.imageUrl ? (
-                      <Image
-                        src={product.imageUrl}
-                        alt={product.title}
-                        width={400}
-                        height={300}
-                        unoptimized
-                        className="aspect-[4/3] w-full object-cover"
-                      />
-                    ) : (
-                      <div className="flex aspect-[4/3] items-center justify-center bg-[linear-gradient(135deg,rgba(96,165,250,0.18),rgba(34,197,94,0.10),rgba(2,0,21,0.45))] text-sm text-white/45">
-                        No image
-                      </div>
-                    )}
-                  </div>
-
-                  <div className="mt-5 flex flex-1 flex-col">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/60">
-                        {product.source === "LINKED"
-                          ? "Experience linked"
-                          : "Campaign storefront"}
-                      </span>
-                      {product.brand && (
-                        <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/60">
-                          {product.brand.name}
-                        </span>
-                      )}
-                    </div>
-
-                    <h3 className="mt-4 text-xl font-semibold text-[#988dbf]">
-                      {product.title}
-                    </h3>
-                    <p className="mt-2 text-sm text-white/55">
-                      {product.priceText || "Price available on Shopify"}
-                    </p>
-
-                    <div className="mt-6">
+            </PageCard>
+          ) : (
+            <>
+              {showPaginationControls && (
+                <div className="flex flex-col gap-3 rounded-3xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/65 sm:flex-row sm:items-center sm:justify-between">
+                  <p>
+                    Showing {pageStartIndex + 1}&ndash;{pageEndIndex} of{" "}
+                    {productCount} products
+                  </p>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="flex items-center gap-2 text-white/60">
+                      <span>Page size</span>
+                      <select
+                        value={pageSize}
+                        onChange={(event) =>
+                          setPageSize(
+                            Number(event.target.value) as typeof pageSize,
+                          )
+                        }
+                        className="rounded-full border border-white/10 bg-black/30 px-3 py-2 text-white outline-none transition focus:border-[#988dbf]"
+                      >
+                        {PAGE_SIZE_OPTIONS.map((option) => (
+                          <option key={option} value={option} className="bg-[#120f1f]">
+                            {option}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <div className="flex items-center gap-2">
                       <Button
                         type="button"
-                        onClick={() => handleOpenProduct(product)}
-                        disabled={clickingId === product.id}
-                        className="w-full rounded-full border border-[#c73484] bg-[#c73484] text-[#e5e6ea] hover:bg-[#b72f78] hover:text-[#e5e6ea]"
+                        variant="outline"
+                        onClick={() =>
+                          setCurrentPage((page) => Math.max(1, page - 1))
+                        }
+                        disabled={safeCurrentPage === 1}
+                        className="rounded-full border-white/15 bg-transparent text-white/75 hover:bg-white/10 hover:text-white"
                       >
-                        {clickingId === product.id
-                          ? "Opening..."
-                          : "View on Shopify"}
+                        Previous
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() =>
+                          setCurrentPage((page) => Math.min(totalPages, page + 1))
+                        }
+                        disabled={safeCurrentPage === totalPages}
+                        className="rounded-full border-white/15 bg-transparent text-white/75 hover:bg-white/10 hover:text-white"
+                      >
+                        Next
                       </Button>
                     </div>
                   </div>
                 </div>
-              </PageCard>
-            ))}
-          </div>
+              )}
+
+              <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+                {visibleProducts.map((product) => (
+                  <PageCard key={product.id} className="h-full">
+                    <div className="flex h-full flex-col">
+                      <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/20">
+                        {product.imageUrl ? (
+                          <Image
+                            src={product.imageUrl}
+                            alt={product.title}
+                            width={400}
+                            height={300}
+                            unoptimized
+                            className="aspect-[4/3] w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex aspect-[4/3] items-center justify-center bg-[linear-gradient(135deg,rgba(96,165,250,0.18),rgba(34,197,94,0.10),rgba(2,0,21,0.45))] text-sm text-white/45">
+                            No image
+                          </div>
+                        )}
+                      </div>
+
+                      <div className="mt-5 flex flex-1 flex-col">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/60">
+                            {product.source === "LINKED"
+                              ? "Experience linked"
+                              : "Campaign storefront"}
+                          </span>
+                          {product.brand && (
+                            <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/60">
+                              {product.brand.name}
+                            </span>
+                          )}
+                        </div>
+
+                        <h3 className="mt-4 text-xl font-semibold text-[#988dbf]">
+                          {product.title}
+                        </h3>
+                        <p className="mt-2 text-sm text-white/55">
+                          {product.priceText || "Price available on Shopify"}
+                        </p>
+
+                        <div className="mt-6">
+                          <Button
+                            type="button"
+                            onClick={() => handleOpenProduct(product)}
+                            disabled={clickingId === product.id}
+                            className="w-full rounded-full border border-[#c73484] bg-[#c73484] text-[#e5e6ea] hover:bg-[#b72f78] hover:text-[#e5e6ea]"
+                          >
+                            {clickingId === product.id
+                              ? "Opening..."
+                              : "View on Shopify"}
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                  </PageCard>
+                ))}
+              </div>
+            </>
+          )}
         </div>
       )}
     </ExperienceShell>

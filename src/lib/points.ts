@@ -222,6 +222,28 @@ async function ensureAccount(
   }
 }
 
+/**
+ * Read the spendable balance from the point-account aggregate. If an older
+ * account has not been provisioned yet, this uses the same self-healing path as
+ * ledger writes so reward display and redemption share one balance source.
+ */
+export async function getUserSpendablePointBalance(options: {
+  userId: string;
+  db?: PointDbClient;
+}): Promise<number> {
+  const client = options.db ?? prisma;
+
+  if (isBaseClient(client)) {
+    const account = await client.$transaction((tx) =>
+      ensureAccount(tx, options.userId),
+    );
+    return account.spendablePoints;
+  }
+
+  const account = await ensureAccount(client, options.userId);
+  return account.spendablePoints;
+}
+
 // ---------------------------------------------------------------------------
 // Central ledger event application.
 // ---------------------------------------------------------------------------

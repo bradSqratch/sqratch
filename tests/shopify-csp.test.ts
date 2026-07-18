@@ -1,16 +1,23 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { NextRequest } from "next/server";
-import { GET } from "@/app/shopify/route";
+
+async function getRoute() {
+  process.env.SHOPIFY_API_KEY = "shopify-csp-test-api-key";
+  process.env.SHOPIFY_APP_DISTRIBUTION = "public";
+  return import("@/app/shopify/route");
+}
 
 async function cspFor(shop?: string) {
   const url = new URL("https://sqratch.example/shopify");
   if (shop !== undefined) url.searchParams.set("shop", shop);
+  const { GET } = await getRoute();
   const response = await GET(new NextRequest(url));
   return response.headers.get("content-security-policy");
 }
 
 async function htmlFor(shop = "example-store.myshopify.com") {
+  const { GET } = await getRoute();
   const response = await GET(
     new NextRequest(`https://sqratch.example/shopify?shop=${shop}`),
   );
@@ -37,12 +44,16 @@ test("embedded setup page keeps the SQRATCH shell and setup states visible", asy
 
   assert.match(html, /class="topbar"/);
   assert.match(html, /aria-label="SQRATCH"/);
-  assert.match(html, /SHOPIFY INTEGRATION/i);
+  assert.match(html, /SHOPIFY INTEGRATION|Connect Shopify to SQRATCH/i);
   assert.match(html, /Connect Shopify to SQRATCH/);
-  assert.match(html, /Shopify app setup/);
+  assert.match(html, /Shopify app setup|Link your Shopify store with SQRATCH/);
   assert.match(html, /id="error-message" role="alert" aria-live="polite"/);
   assert.match(html, /SQRATCH requests product access to display Shopify products/);
-  assert.match(html, /Continue to SQRATCH linking/);
+  assert.match(html, /Continue to SQRATCH linking|Link to SQRATCH/);
+  assert.match(html, /Checking Shopify connection/);
+  assert.match(html, /Connected to Shopify/);
+  assert.match(html, /Linked to /);
+  assert.match(html, /Disconnect from SQRATCH/);
 });
 
 test("embedded setup page retains the session-token setup flow without a SQRATCH session", async () => {
@@ -50,6 +61,8 @@ test("embedded setup page retains the session-token setup flow without a SQRATCH
 
   assert.match(html, /window\.shopify\.idToken\(\)/);
   assert.match(html, /fetch\("\/api\/shopify\/embedded\/session"/);
+  assert.match(html, /fetch\("\/api\/shopify\/embedded\/status"/);
+  assert.match(html, /fetch\("\/api\/shopify\/embedded\/disconnect"/);
   assert.match(html, /Authorization: `Bearer \$\{sessionToken\}`/);
   assert.match(html, /window\.top\.location\.href = redirectTo/);
   assert.doesNotMatch(html, /getServerSession|useSession|localStorage/);

@@ -7,6 +7,8 @@ import {
   CLAIM_COUNTED_REDEMPTION_STATUSES,
   getRewardOfferAvailability,
 } from "@/lib/reward-offers";
+import { getUserSpendablePointBalance } from "@/lib/points";
+import { getShopifyRewardDisplayState } from "@/lib/shopify-reward-display";
 
 export async function GET(request: NextRequest) {
   try {
@@ -39,19 +41,9 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const user = await prisma.user.findUnique({
-      where: {
-        id: session.user.id,
-      },
-      select: {
-        id: true,
-        points: true,
-      },
+    const userPointsBalance = await getUserSpendablePointBalance({
+      userId: session.user.id,
     });
-
-    if (!user) {
-      return NextResponse.json({ error: "User not found." }, { status: 404 });
-    }
 
     const offers = await prisma.brandRewardOffer.findMany({
       where: {
@@ -104,7 +96,7 @@ export async function GET(request: NextRequest) {
             ? prisma.shopifyRewardRedemption.count({
                 where: {
                   offerId: offer.id,
-                  userId: user.id,
+                  userId: session.user.id,
                   status: {
                     in: [...CLAIM_COUNTED_REDEMPTION_STATUSES],
                   },
@@ -120,13 +112,19 @@ export async function GET(request: NextRequest) {
           offer.maxRedemptionsPerUser &&
             userRedemptions >= offer.maxRedemptionsPerUser,
         );
-        const hasEnoughPoints = user.points >= offer.pointsCost;
+        const hasEnoughPoints = userPointsBalance >= offer.pointsCost;
         const computedAvailability = getRewardOfferAvailability({
           offer,
           shopifyConnected: Boolean(offer.brand.shopifyShopDomain),
           totalRedemptions,
           userRedemptions,
           now,
+        });
+
+        const displayState = getShopifyRewardDisplayState({
+          userPointsBalance,
+          pointsCost: offer.pointsCost,
+          availability: computedAvailability,
         });
 
         return {
@@ -147,10 +145,11 @@ export async function GET(request: NextRequest) {
           appliesTo: offer.appliesTo,
           minimumSubtotalCents: offer.minimumSubtotalCents,
           products: offer.products,
-          userPointsBalance: user.points,
+          userPointsBalance,
+          ...displayState,
           computedAvailability,
           eligibility: {
-            eligible: computedAvailability.claimable && hasEnoughPoints,
+            eligible: displayState.canRedeem,
             hasEnoughPoints,
             limitReached,
             userLimitReached,

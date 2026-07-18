@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Check, Copy, Gift } from "lucide-react";
 import {
   fetchJson,
@@ -38,24 +38,17 @@ type ShopifyRewardOffer = {
   appliesTo: "ALL_PRODUCTS" | "SPECIFIC_PRODUCTS";
   products: RewardProduct[];
   userPointsBalance: number;
-  eligibility: {
-    eligible: boolean;
-    hasEnoughPoints: boolean;
-    limitReached: boolean;
-    userLimitReached: boolean;
-  };
-  computedAvailability: {
-    status:
-      | "CLAIMABLE"
-      | "INACTIVE"
-      | "NOT_STARTED"
-      | "CLAIM_WINDOW_ENDED"
-      | "LIMIT_REACHED"
-      | "USER_LIMIT_REACHED"
-      | "SHOPIFY_DISCONNECTED";
-    label: string;
-    claimable: boolean;
-  };
+  canView: true;
+  canRedeem: boolean;
+  disabledReason:
+    | "NOT_ENOUGH_POINTS"
+    | "LIMIT_REACHED"
+    | "USER_LIMIT_REACHED"
+    | "CLAIM_WINDOW_ENDED"
+    | "SHOPIFY_DISCONNECTED"
+    | null;
+  displayLabel: string;
+  pointsShortfall: number;
 };
 
 type ShopifyRewardRedemption = {
@@ -85,10 +78,8 @@ function getIdempotencyKey() {
 }
 
 export function ShopifyShopRewardCard({
-  brandId,
   experienceSlug,
 }: {
-  brandId: string | null;
   experienceSlug: string;
 }) {
   const [offers, setOffers] = useState<ShopifyRewardOffer[]>([]);
@@ -104,26 +95,9 @@ export function ShopifyShopRewardCard({
   // intentional redemption of the same offer gets a fresh key.
   const pendingKeyByOffer = useRef<Record<string, string>>({});
 
-  const brandOffers = useMemo(() => {
-    if (!brandId) {
-      return [];
-    }
-
-    return offers.filter(
-      (offer) =>
-        offer.brand.id === brandId &&
-        offer.computedAvailability.status === "CLAIMABLE",
-    );
-  }, [brandId, offers]);
-  const pointsBalance = brandOffers[0]?.userPointsBalance ?? 0;
+  const pointsBalance = offers[0]?.userPointsBalance ?? 0;
 
   useEffect(() => {
-    if (!brandId) {
-      setHidden(true);
-      setLoading(false);
-      return;
-    }
-
     async function loadRewards() {
       setLoading(true);
       setError(null);
@@ -150,7 +124,7 @@ export function ShopifyShopRewardCard({
     }
 
     void loadRewards();
-  }, [brandId, experienceSlug]);
+  }, [experienceSlug]);
 
   async function copyCode(code: string) {
     await navigator.clipboard.writeText(code);
@@ -213,7 +187,7 @@ export function ShopifyShopRewardCard({
     }
   }
 
-  if (hidden || loading || brandOffers.length === 0) {
+  if (hidden || loading || offers.length === 0) {
     return null;
   }
 
@@ -238,13 +212,19 @@ export function ShopifyShopRewardCard({
       </div>
 
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
-        {brandOffers.map((offer) => {
+        {offers.map((offer) => {
           const issuedCode = issuedCodeByOffer[offer.id];
+          const isMuted = !offer.canRedeem && !issuedCode;
+          const disabledDescriptionId = `reward-${offer.id}-disabled-reason`;
 
           return (
             <div
               key={offer.id}
-              className="rounded-2xl border border-white/10 bg-black/25 p-4"
+              className={`rounded-2xl border p-4 ${
+                isMuted
+                  ? "border-white/5 bg-black/15 opacity-70"
+                  : "border-white/10 bg-black/25"
+              }`}
             >
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
@@ -258,10 +238,34 @@ export function ShopifyShopRewardCard({
                       : `${formatRewardMoney(offer.discountAmountCents, offer.currencyCode)} off`}
                   </p>
                 </div>
-                <span className="rounded-full border border-emerald-300/25 bg-emerald-300/10 px-3 py-1 text-xs text-emerald-100">
-                  Claimable
+                <span
+                  className={`rounded-full border px-3 py-1 text-xs ${
+                    offer.canRedeem
+                      ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-100"
+                      : "border-white/15 bg-white/5 text-white/65"
+                  }`}
+                >
+                  {offer.canRedeem ? "Claimable" : offer.displayLabel}
                 </span>
               </div>
+
+              {offer.disabledReason === "NOT_ENOUGH_POINTS" ? (
+                <p
+                  id={disabledDescriptionId}
+                  className="mt-3 text-sm leading-6 text-white/70"
+                >
+                  You have {offer.userPointsBalance} points and this reward
+                  requires {offer.pointsCost} points. You need {offer.pointsShortfall}{" "}
+                  more points to redeem this reward.
+                </p>
+              ) : isMuted ? (
+                <p
+                  id={disabledDescriptionId}
+                  className="mt-3 text-sm leading-6 text-white/65"
+                >
+                  This reward is currently unavailable: {offer.displayLabel}.
+                </p>
+              ) : null}
 
               <div className="mt-4 grid gap-2 text-sm text-white/65 sm:grid-cols-2">
                 <p>
@@ -333,15 +337,16 @@ export function ShopifyShopRewardCard({
                   type="button"
                   onClick={() => void redeemOffer(offer)}
                   disabled={
-                    !offer.eligibility.eligible || redeemingOfferId === offer.id
+                    !offer.canRedeem || redeemingOfferId === offer.id
+                  }
+                  aria-describedby={
+                    !offer.canRedeem ? disabledDescriptionId : undefined
                   }
                   className="rounded-full border border-white bg-white text-black hover:bg-white/90"
                 >
                   {redeemingOfferId === offer.id
                     ? "Redeeming..."
-                    : offer.computedAvailability.claimable
-                      ? "Redeem"
-                      : offer.computedAvailability.label}
+                    : offer.displayLabel}
                 </Button>
               </div>
             </div>

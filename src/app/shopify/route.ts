@@ -32,9 +32,13 @@ export function GET(request: NextRequest) {
       : "custom";
 
   const showOAuthFallback = distribution === "custom" || !shopifyApiKey;
+  const shouldCheckEmbeddedStatus =
+    distribution === "public" && Boolean(shopifyApiKey);
 
   const actionMarkup =
-    showOAuthFallback && rawShop
+    shouldCheckEmbeddedStatus
+      ? `<button class="button" id="continue-button" type="button">Continue to SQRATCH linking</button><button class="button disconnect-button is-hidden" id="disconnect-button" type="button">Disconnect from SQRATCH</button>`
+      : showOAuthFallback && rawShop
       ? `<a class="button" target="_top" rel="noopener" href="/api/shopify/oauth/start?shop=${encodeURIComponent(rawShop)}">Continue to SQRATCH linking</a>`
       : showOAuthFallback
         ? `<button class="button" type="button" disabled>Continue to SQRATCH linking</button>`
@@ -185,7 +189,7 @@ export function GET(request: NextRequest) {
 
       .card-title {
         margin: 0.75rem 0 0;
-        font-size: clamp(1.7rem, 4vw, 2.2rem);
+        font-size: clamp(1.7rem, 4vw, 1.2rem);
         letter-spacing: -0.03em;
       }
 
@@ -297,6 +301,37 @@ export function GET(request: NextRequest) {
         opacity: 0.55;
       }
 
+      .disconnect-button {
+        border-color: rgba(251, 113, 133, 0.58);
+        background: rgba(190, 24, 93, 0.12);
+        color: #ffd1dc;
+      }
+
+      .loader {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.65rem;
+        color: rgba(255, 255, 255, 0.68);
+        font-size: 0.875rem;
+      }
+
+      .loader-spinner {
+        width: 1rem;
+        height: 1rem;
+        border: 2px solid rgba(216, 202, 250, 0.3);
+        border-top-color: #d8cafa;
+        border-radius: 999px;
+        animation: spin 700ms linear infinite;
+      }
+
+      .is-hidden {
+        display: none !important;
+      }
+
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+
       @media (min-width: 768px) {
         main {
           padding: 4.75rem 2rem 5rem;
@@ -329,14 +364,14 @@ export function GET(request: NextRequest) {
     <main>
       <section class="shell">
         <div class="intro">
-          <p class="page-eyebrow">Shopify integration</p>
-          <h1 class="page-title">Connect Shopify to SQRATCH</h1>
+          <p class="page-eyebrow">Connect Shopify to SQRATCH</p>
+          <h1 class="page-title">SQRATCH Shopify App</h1>
           <p class="page-copy">Link your Shopify store to a SQRATCH Brand account to display products across experiences and create reward discount codes.</p>
         </div>
         <div class="card">
           <div class="card-header">
-            <p class="eyebrow">SQRATCH</p>
-            <h2 class="card-title">Shopify app setup</h2>
+            <p class="eyebrow">Hello</p>
+            <h3 class="card-title">Link your Shopify store with SQRATCH</h3>
             <p class="lede">This embedded app is a lightweight setup shell. The full product experience stays in the SQRATCH Brand dashboard.</p>
           </div>
 
@@ -344,17 +379,19 @@ export function GET(request: NextRequest) {
             <div class="stats">
               <div class="stat">
                 <p class="label">Shopify store</p>
-                <p class="value">${rawShop ? "Shopify store detected" : "Open SQRATCH from your Shopify Admin"}</p>
+                <p class="value" id="shopify-store-status">${rawShop ? "Shopify store detected" : "Open SQRATCH from your Shopify Admin"}</p>
               </div>
               <div class="stat">
                 <p class="label">SQRATCH link</p>
-                <p class="value">Complete setup to link your store</p>
+                <p class="value" id="sqratch-link-status">Complete setup to link your store</p>
               </div>
             </div>
 
-            <div class="notice">SQRATCH requests product access to display Shopify products inside SQRATCH experiences and discount access to create reward codes when brands enable loyalty rewards.</div>
+            <div class="notice" id="connection-notice">SQRATCH requests product access to display Shopify products inside SQRATCH experiences and discount access to create reward codes when brands enable loyalty rewards.</div>
             <p class="error" id="error-message" role="alert" aria-live="polite"></p>
-            <div class="actions">${actionMarkup}</div>
+            <p class="loader${shouldCheckEmbeddedStatus ? "" : " is-hidden"}" id="status-loader" role="status" aria-live="polite" aria-busy="true"><span class="loader-spinner" aria-hidden="true"></span><span id="status-loader-label">Checking Shopify connection…</span></p>
+            <p class="is-hidden" id="status-message" aria-live="polite"></p>
+            <div class="actions${shouldCheckEmbeddedStatus ? " is-hidden" : ""}" id="connection-actions">${actionMarkup}</div>
           </div>
         </div>
       </section>
@@ -363,6 +400,8 @@ export function GET(request: NextRequest) {
     <script>
       const distribution = ${escapeJs(distribution)};
       const rawShop = ${escapeJs(rawShop)};
+      const shouldCheckEmbeddedStatus = ${shouldCheckEmbeddedStatus};
+      const unlinkedNotice = "SQRATCH requests product access to display Shopify products inside SQRATCH experiences and discount access to create reward codes when brands enable loyalty rewards.";
 
       function isEmbedded() {
         try {
@@ -377,6 +416,82 @@ export function GET(request: NextRequest) {
         if (!errorElement) return;
         errorElement.textContent = message;
         errorElement.style.display = message ? "block" : "none";
+      }
+
+      function setStatusMessage(message) {
+        const statusMessage = document.getElementById("status-message");
+        if (!statusMessage) return;
+        statusMessage.textContent = message;
+        statusMessage.classList.toggle("is-hidden", !message);
+      }
+
+      function setLoading(isLoading, label) {
+        const loader = document.getElementById("status-loader");
+        const loaderLabel = document.getElementById("status-loader-label");
+        const actions = document.getElementById("connection-actions");
+        if (loaderLabel && label) loaderLabel.textContent = label;
+        if (loader) {
+          loader.classList.toggle("is-hidden", !isLoading);
+          loader.setAttribute("aria-busy", String(isLoading));
+        }
+        if (actions) actions.classList.toggle("is-hidden", isLoading);
+      }
+
+      function setUnlinkedState() {
+        document.getElementById("shopify-store-status").textContent =
+          rawShop ? "Shopify store detected" : "Open SQRATCH from your Shopify Admin";
+        document.getElementById("sqratch-link-status").textContent =
+          "Complete setup to link your store";
+        document.getElementById("connection-notice").textContent = unlinkedNotice;
+        document.getElementById("continue-button")?.classList.remove("is-hidden");
+        document.getElementById("disconnect-button")?.classList.add("is-hidden");
+      }
+
+      function setLinkedState(brandName) {
+        document.getElementById("shopify-store-status").textContent = "Connected to Shopify";
+        document.getElementById("sqratch-link-status").textContent = "Linked to " + brandName;
+        document.getElementById("connection-notice").textContent =
+          "This Shopify store is connected to the " + brandName + " SQRATCH Brand. Products can be displayed in SQRATCH experiences, and eligible reward offers can generate Shopify discount codes.";
+        document.getElementById("continue-button")?.classList.add("is-hidden");
+        document.getElementById("disconnect-button")?.classList.remove("is-hidden");
+      }
+
+      async function getEmbeddedSessionToken() {
+        if (!window.shopify) {
+          throw new Error("App Bridge is not loaded yet. Please reopen SQRATCH from your Shopify Admin.");
+        }
+        return window.shopify.idToken();
+      }
+
+      async function checkEmbeddedStatus() {
+        if (!shouldCheckEmbeddedStatus) return;
+
+        setLoading(true, "Checking Shopify connection…");
+        setStatusMessage("");
+        try {
+          const sessionToken = await getEmbeddedSessionToken();
+          const response = await fetch("/api/shopify/embedded/status", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: "Bearer " + sessionToken,
+            },
+            body: JSON.stringify({}),
+          });
+          if (!response.ok) throw new Error("status check failed");
+
+          const json = await response.json();
+          if (json?.data?.linked && json.data.brandName) {
+            setLinkedState(json.data.brandName);
+          } else {
+            setUnlinkedState();
+          }
+        } catch {
+          setUnlinkedState();
+          setStatusMessage("We could not confirm the current connection. You can continue setup.");
+        } finally {
+          setLoading(false);
+        }
       }
 
       async function handleContinue() {
@@ -394,11 +509,7 @@ export function GET(request: NextRequest) {
           embedded: isEmbedded(),
           });
           if (distribution === "public" && isEmbedded()) {
-            if (!window.shopify) {
-              throw new Error("App Bridge is not loaded yet. Please reopen SQRATCH from your Shopify Admin.");
-            }
-
-            const sessionToken = await window.shopify.idToken();
+            const sessionToken = await getEmbeddedSessionToken();
             const response = await fetch("/api/shopify/embedded/session", {
               method: "POST",
               headers: {
@@ -440,7 +551,42 @@ export function GET(request: NextRequest) {
         }
       }
 
+      async function handleDisconnect() {
+        if (!window.confirm("Disconnect this Shopify store from SQRATCH? You can reconnect it later.")) {
+          return;
+        }
+
+        const button = document.getElementById("disconnect-button");
+        setError("");
+        setStatusMessage("");
+        setLoading(true, "Disconnecting from SQRATCH…");
+        if (button) button.disabled = true;
+
+        try {
+          const sessionToken = await getEmbeddedSessionToken();
+          const response = await fetch("/api/shopify/embedded/disconnect", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: "Bearer " + sessionToken,
+            },
+            body: JSON.stringify({}),
+          });
+          if (!response.ok) throw new Error("disconnect failed");
+
+          setUnlinkedState();
+          setStatusMessage("Shopify has been disconnected from SQRATCH.");
+        } catch {
+          setError("Could not disconnect Shopify. Please try again.");
+        } finally {
+          if (button) button.disabled = false;
+          setLoading(false);
+        }
+      }
+
       document.getElementById("continue-button")?.addEventListener("click", handleContinue);
+      document.getElementById("disconnect-button")?.addEventListener("click", handleDisconnect);
+      void checkEmbeddedStatus();
     </script>
   </body>
 </html>`;

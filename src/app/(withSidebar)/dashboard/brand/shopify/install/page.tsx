@@ -7,6 +7,7 @@ import { fetchJson, getErrorMessage } from "@/components/experience/client-utils
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { LoadingState } from "@/components/ui/loading-state";
 import { getDefaultShopifyInstallBrandId } from "@/lib/shopify-install-selection";
 
 type InstallData = {
@@ -119,7 +120,7 @@ export default function ShopifyInstallPage() {
     >
       <PageCard>
         {loading ? (
-          <p className="text-sm text-white/65">Loading Shopify install...</p>
+          <LoadingState label="Loading Shopify install..." />
         ) : (
           <div className="space-y-5">
             <div>
