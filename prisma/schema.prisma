@@ -636,7 +636,7 @@ model PointTransaction {
 
   @@unique([userId, qrCodeId])
   @@unique([shopifyRewardRedemptionId, reason], name: "uq_point_tx_redemption_reason")
-  @@unique([userId, idempotencyKey], name: "uq_point_tx_user_idempotency_key")
+  @@unique([userId, idempotencyKey], name: "uq_point_tx_user_idempotency_key", map: "uq_point_tx_user_idempotency_key")
   @@index([userId])
   @@index([qrCodeId])
   @@index([shopifyRewardRedemptionId])
