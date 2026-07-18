@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
+import type { CustomSession } from "@/lib/auth-session";
 import prisma from "@/lib/prisma";
 
 export const ACTIVE_BRAND_COOKIE = "sqratch_active_brand_id";
@@ -130,8 +131,9 @@ export async function validateBrandSelection(userId: string, brandId: string) {
 export async function resolveActiveBrandContext(options?: {
   userId?: string;
   minimumRole?: BrandAccessRole;
+  session?: CustomSession | null;
 }): Promise<ActiveBrandContext | null> {
-  const session = await getServerSession(authOptions);
+  const session = options?.session ?? (await getServerSession(authOptions));
   const userId = options?.userId || session?.user?.id;
   if (!userId) return null;
 

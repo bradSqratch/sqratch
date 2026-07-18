@@ -344,7 +344,7 @@ export function GET(request: NextRequest) {
             <div class="stats">
               <div class="stat">
                 <p class="label">Shopify store</p>
-                <p class="value">${rawShop ? "Store detected — open via Shopify Admin" : "Open SQRATCH from your Shopify Admin"}</p>
+                <p class="value">${rawShop ? "Shopify store detected" : "Open SQRATCH from your Shopify Admin"}</p>
               </div>
               <div class="stat">
                 <p class="label">SQRATCH link</p>

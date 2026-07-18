@@ -599,6 +599,39 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
     const json = await res.json();
     assert.equal(json.data.shop, "test-install.myshopify.com");
     assert.equal(json.data.brands.length, 1);
+    assert.equal(json.data.activeBrandId, "brand-123");
+  });
+
+  test("installation linking rejects a brand outside the eligible membership list", async (t) => {
+    const req = new NextRequest("http://localhost/api/shopify/installations/install-session-id", {
+      method: "POST",
+      body: JSON.stringify({ brandId: "brand-not-authorized" }),
+    });
+
+    setupMocks({ user: { id: "user-123", role: "BRAND_ADMIN" } });
+
+    t.mock.method(prisma.tokenStore, "findUnique", async () => ({
+      service: "shopify_pending_install:install-session-id",
+      token: JSON.stringify({ shop: "test-install.myshopify.com", encryptedToken: encryptSecret("mock-token") }),
+      expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+    }));
+
+    t.mock.method(prisma.brandMember, "findMany", async (args: unknown) => {
+      const where = (args as { where?: { brandId?: string } }).where;
+      return where?.brandId === "brand-not-authorized"
+        ? []
+        : [{ id: "member-123", brand: { id: "brand-123", name: "Authorized Brand" } }];
+    });
+
+    globalThis.fetch = async () => ({
+      ok: true,
+      json: async () => ({ data: { shop: { currencyCode: "USD" } } }),
+    } as Response);
+
+    const res = await installationsPOST(req, { params: Promise.resolve({ installId: "install-session-id" }) });
+    assert.equal(res.status, 403);
+    const json = await res.json();
+    assert.equal(json.error, "You are not authorized for this brand.");
   });
 
   test("linking a brand (POST) performs oauth relink and currency fetch", async (t) => {

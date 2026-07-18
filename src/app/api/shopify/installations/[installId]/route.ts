@@ -11,7 +11,10 @@ import {
   type PendingInstallPayload,
 } from "@/lib/pending-install";
 import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
-import { ACTIVE_BRAND_COOKIE } from "@/lib/brand-context";
+import {
+  ACTIVE_BRAND_COOKIE,
+  resolveActiveBrandContext,
+} from "@/lib/brand-context";
 
 
 // Re-export types for backward compatibility if needed elsewhere
@@ -107,6 +110,12 @@ export async function installationsGetImpl(
     const canCreateBrand =
       session.user.role === "BRAND_ADMIN" || session.user.role === "ADMIN";
 
+    const activeBrandContext = await resolveActiveBrandContext({
+      userId,
+      minimumRole: "MANAGER",
+      session,
+    });
+
     if (memberships.length === 0 && !canCreateBrand) {
       return NextResponse.json(
         { error: "Brand admin access required." },
@@ -118,6 +127,7 @@ export async function installationsGetImpl(
       data: {
         shop: payload.shop,
         canCreateBrand,
+        activeBrandId: activeBrandContext?.membership?.brand.id ?? null,
         brands: memberships.map((membership) => membership.brand),
       },
     });

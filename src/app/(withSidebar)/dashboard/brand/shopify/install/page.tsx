@@ -7,10 +7,12 @@ import { fetchJson, getErrorMessage } from "@/components/experience/client-utils
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { getDefaultShopifyInstallBrandId } from "@/lib/shopify-install-selection";
 
 type InstallData = {
   shop: string;
   canCreateBrand: boolean;
+  activeBrandId: string | null;
   brands: Array<{
     id: string;
     name: string;
@@ -56,6 +58,9 @@ export default function ShopifyInstallPage() {
           `/api/shopify/installations/${installId}`,
         );
         setData(result);
+        setSelectedBrandId(
+          getDefaultShopifyInstallBrandId(result.brands, result.activeBrandId),
+        );
       } catch (loadError) {
         setError(getErrorMessage(loadError, "Failed to load Shopify install."));
       } finally {
@@ -127,7 +132,17 @@ export default function ShopifyInstallPage() {
                 <label className="text-sm text-white/70">Brand</label>
                 <select
                   value={selectedBrandId}
-                  onChange={(event) => setSelectedBrandId(event.target.value)}
+                  onChange={(event) => {
+                    const nextBrandId = event.target.value;
+                    setSelectedBrandId(nextBrandId);
+
+                    if (nextBrandId) {
+                      setBrandName("");
+                      setBrandSlug("");
+                      setWebsiteUrl("");
+                      setSlugTouched(false);
+                    }
+                  }}
                   className="flex h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
                 >
                   {data.brands.map((brand) => (

@@ -8,10 +8,20 @@ import { withAuthNoStore } from "@/lib/auth/auth-response";
 
 const handler = NextAuth(authOptions);
 
-async function authHandler(request: Request) {
+type NextAuthRouteContext = {
+  params: {
+    nextauth: string[];
+  };
+};
+
+async function authHandler(
+  request: Request,
+  routeContext: NextAuthRouteContext,
+) {
   const context = createAuthRequestContext(request);
+
   return runWithAuthRequestContext(context, async () =>
-    withAuthNoStore(await handler(request)),
+    withAuthNoStore(await handler(request, routeContext)),
   );
 }
 
