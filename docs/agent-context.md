@@ -183,7 +183,7 @@ See `docs/env-vars.md`, `docs/prisma-migrations.md`, `docs/points-ledger.md`, an
 ## Common Gotchas
 
 1. **Webhook routes bypass middleware JWT** — intentional (`src/middleware.ts:7`). They are HMAC-verified instead.
-2. **`UserPointAccount` is the balance store, `PointTransaction` is the ledger** — always write both, atomically, via `applyPointLedgerEvent()`. `User.points` is deprecated and no longer used by application code (removed from the Prisma schema); the physical column is dropped only once migration `20260719061157_remove_legacy_user_points` is applied to a given environment.
+2. **`UserPointAccount` is the authoritative current-balance aggregate, `PointTransaction` is the authoritative transaction history/audit ledger** — always write both, atomically, via `applyPointLedgerEvent()`. `User.points` no longer exists: it was removed from the Prisma schema, from all application code, and (as of migration `20260719061157_remove_legacy_user_points`, applied to production on 2026-07-19) from the physical database. See `docs/points-ledger.md`.
 3. **`TokenStore` is a multi-purpose key-value store** — Shopify OAuth state and pending install tokens (both LEGACY and EXPIRING shapes) both live here with different `service` key prefixes.
 4. **`CampaignUnlock` supports both authenticated and anonymous users** — `userId` is nullable; `anonKey` is used for anonymous. Both must be handled in any unlock-checking logic.
 5. **next-auth v4 with App Router** — uses `getServerSession(authOptions)` (server components/routes), not `useSession` (client only). Mixing these up is a common source of auth bugs.

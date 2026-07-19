@@ -1,10 +1,41 @@
 -- ============================================================================
+-- HISTORICAL NOTICE — READ THIS FIRST
+-- ============================================================================
+--
+-- Production execution and verification of this reconciliation procedure
+-- COMPLETED on 2026-07-19. Migration 20260719061157_remove_legacy_user_points
+-- was applied to production the same day; `npx prisma migrate status` and an
+-- empty `npx prisma migrate diff` confirmed the schema afterward, and
+-- "User"."points" no longer exists in production. See docs/points-ledger.md
+-- for the full completed-migration record.
+--
+-- This file is retained in the repository as a completed audit and
+-- operational history record, not as outstanding work. Every query below
+-- references the now-removed "User"."points" column and therefore CANNOT be
+-- run unchanged against any environment where that column has already been
+-- dropped — doing so will fail with an "undefined column" error. It remains
+-- useful, unmodified, as:
+--   (a) a historical record of exactly what was checked before the
+--       production migration ran, and
+--   (b) a ready-to-use runbook for any OTHER environment that has not yet
+--       had migration 20260719061157_remove_legacy_user_points applied and
+--       still has the legacy column (for example, an older environment
+--       restored from a pre-migration backup, or a long-lived branch/preview
+--       database that predates the migration).
+--
+-- The original two-gate (pre-Stage-A / pre-Stage-B) procedure below is
+-- intentionally preserved exactly as it was written and used — do not edit
+-- it to read as historical prose; its value is as an unmodified historical
+-- and legacy-environment record.
+--
+-- ============================================================================
 -- PRODUCTION RECONCILIATION: removal of the legacy "User"."points" column
 -- ============================================================================
 --
 -- READ-ONLY. Every statement below is a SELECT (some using a read-only CTE).
 -- Nothing in this file writes, updates, deletes, or locks anything. It is
--- safe to run against production (Supabase).
+-- safe to run against production (Supabase) THAT HAS NOT YET HAD THE COLUMN
+-- REMOVED — see the historical notice above.
 --
 -- Context:
 --   - "UserPointAccount" (spendablePoints / lifetimeEarnedPoints /

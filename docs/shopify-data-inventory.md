@@ -13,14 +13,20 @@ Public-app installations also store encrypted expiring-token lifecycle fields an
 
 | Model.field | Shopify-linked? | Contains PII? | Notes |
 |---|---|---|---|
-| `Brand.shopifyShopDomain` | shop | No (domain, not personal) | `@unique`; used as FK into all Shopify-related tables. Clearing it requires handling the unique constraint. |
-| `Brand.shopifyAdminAccessTokenEncrypted` | token | Yes (credential) | AES-encrypted offline access token. Must be nulled on shop redact. Already nulled by `app/uninstalled` handler. |
-| `Brand.shopifyInstalledAt` | shop | No | Installation timestamp. |
-| `Brand.shopifyDisconnectedAt` | shop | No | Disconnect timestamp. |
-| `Brand.shopifyUninstalledAt` | shop | No | Uninstall timestamp. |
-| `Brand.shopifyConnectionStatus` | shop | No | Enum: DISCONNECTED / CONNECTED / UNINSTALLED. |
-| `Brand.shopifyLastProductSyncAt` | shop | No | Timestamp of last product sync. |
-| `Brand.shopifyCurrencyCode` | shop | No | Three-letter ISO code fetched from shop. |
+| `Brand.shopifyShopDomain` | shop | No (domain, not personal) | `@unique`; used as FK into all Shopify-related tables. Nulled on `shop/redact` (releases the unique slot); preserved on `app/uninstalled` for relink. |
+| `Brand.shopifyAdminAccessTokenEncrypted` | token | Yes (credential) | AES-encrypted offline access token. Nulled by both `app/uninstalled` and `shop/redact`. |
+| `Brand.shopifyRefreshTokenEncrypted` | token | Yes (credential) | AES-encrypted refresh token (expiring-token/public-app mode only). Nulled by both `app/uninstalled` and `shop/redact`. |
+| `Brand.shopifyAccessTokenExpiresAt` / `.shopifyRefreshTokenExpiresAt` | token | No | Expiry timestamps for expiring-token mode. Nulled by both `app/uninstalled` and `shop/redact`. |
+| `Brand.shopifyGrantedScopes` | token | No | Comma-separated granted scopes. Nulled by both `app/uninstalled` and `shop/redact`. |
+| `Brand.shopifyClientId` | none | No | The app's own OAuth client id for this installation — not shop- or customer-identifying. Not cleared by either handler (harmless once credentials are nulled). |
+| `Brand.shopifyTokenRefreshLockedUntil` / `.shopifyTokenRefreshLockId` | none | No | CAS lease fields for concurrent token-refresh prevention. Not personal data. |
+| `Brand.shopifyAuthMode` | none | No | Enum: `LEGACY_OFFLINE` / `EXPIRING_OFFLINE`. Not personal data. |
+| `Brand.shopifyInstalledAt` | shop | No | Installation timestamp. Not cleared by either handler; retained as anonymised audit trail. |
+| `Brand.shopifyDisconnectedAt` | shop | No | Disconnect timestamp. Cleared to `null` by `app/uninstalled` (a distinct lifecycle event from disconnect). Not touched by `shop/redact`. |
+| `Brand.shopifyUninstalledAt` | shop | No | Uninstall timestamp. Set to the current time by `app/uninstalled`. Not touched by `shop/redact`. |
+| `Brand.shopifyConnectionStatus` | shop | No | Enum: `DISCONNECTED` / `CONNECTED` / `UNINSTALLED` / `REQUIRES_RECONNECT`. Set to `UNINSTALLED` by both `app/uninstalled` and `shop/redact`. |
+| `Brand.shopifyLastProductSyncAt` | shop | No | Timestamp of last product sync. Not cleared by either handler. |
+| `Brand.shopifyCurrencyCode` | shop | No | Three-letter ISO code fetched from shop. Not cleared by either handler. |
 | `BrandRewardOffer.codePrefix` | shop (indirect) | No | Brand-configured prefix for discount codes. |
 | `BrandRewardOffer.sourceShopDomain` | shop | No (domain, not personal) | Which Shopify store's product catalog the offer's selected products (if any) were chosen from. Server-derived only, never client-supplied. Nulled on `shop/redact` wherever it matches the redacted domain, on any Brand (a prior relink can leave it referencing a domain that Brand no longer owns). |
 | `ExperienceProductLink.sourceShopDomain` | shop | No (domain, not personal) | Same purpose as above, for a direct experience-shop product link. Nulled on `shop/redact`. |
@@ -93,16 +99,12 @@ There is **no join** between SQRATCH `User` records and Shopify customer records
 
 None. SQRATCH holds no data keyed by Shopify customer ID, email (as a Shopify customer), or phone. SQRATCH cannot correlate an incoming `customer.id` or `customer.email` to any row in the database because the linkage was never recorded.
 
-**Recommendation:**
-
-The handler should:
-1. Verify the HMAC (already done by `verifyShopifyWebhookRequest`).
-2. Log the request with `shopDomain` and `customer.id` for audit purposes (no PII needs to be stored for this log — a hash of `customer.id` plus the shop domain is sufficient).
-3. Return HTTP 200 immediately. No data export is possible or required.
+**Current implementation** (`src/app/api/shopify/webhooks/customers/data_request/route.ts`):
+1. Verifies the HMAC via `verifyShopifyWebhookRequest`; non-matching requests are rejected before any further processing.
+2. Writes a sanitized structured audit log entry (`topic`, `shopDomain` only — no `customer.id`, email, or phone is logged).
+3. Returns HTTP 200 immediately with no data payload. No data export is attempted, because none is possible.
 
 A no-op-with-200 is lawful because SQRATCH genuinely holds no data attributable to Shopify customer identity. Shopify's GDPR policy requires apps to respond within 30 days; responding 200 immediately with no data payload satisfies this.
-
-**Current implementation:** The handler already returns `200` but does not log the request. A structured audit log entry should be added.
 
 ---
 
@@ -118,16 +120,9 @@ None. For the same reason as above, SQRATCH holds no rows keyed by Shopify custo
 
 SQRATCH's own `User` records, `PointTransaction` records, and `ShopifyRewardRedemption` records are identified by SQRATCH-internal user IDs. Even if a SQRATCH user's email happened to match the Shopify customer's email, these are independent identities and SQRATCH has no reliable way to confirm the match (nor any obligation to delete SQRATCH records based on a Shopify customer data signal alone — that would require a separate SQRATCH account deletion request from the user directly).
 
-**Recommendation:**
-
-Same pattern as `customers/data_request`:
-1. Verify HMAC.
-2. Log `shopDomain` + `customer.id` for audit (no PII stored in log).
-3. Return HTTP 200. No redaction is needed or appropriate.
+**Current implementation** (`src/app/api/shopify/webhooks/customers/redact/route.ts`): same pattern as `customers/data_request` — verifies HMAC, writes a sanitized audit log entry (`shopDomain` only), and returns HTTP 200 with no redaction performed, because none is needed or appropriate.
 
 A no-op-with-200 is lawful: the redaction obligation only covers data that SQRATCH holds *as a Shopify customer record*. None exists.
-
-**Current implementation:** Handler already returns 200 but does not log. Add audit log.
 
 ---
 
@@ -151,60 +146,34 @@ A no-op-with-200 is lawful: the redaction obligation only covers data that SQRAT
 | SQRATCH redemption records | `ShopifyRewardRedemption` core fields (`userId`, `brandId`, `offerId`, `code`, `pointsCost`, `status`, timestamps) | **PRESERVE** — these record SQRATCH points activity. The `code` field is a SQRATCH-generated string; it is not a Shopify customer identifier. |
 | Ephemeral OAuth state tokens | `TokenStore` rows with `shopify_oauth_state:` or `shopify_pending_install:` keys | These are short-lived and cleaned up during the OAuth flow. Confirm none remain for this shop; delete any orphans. |
 
-**The `Brand.shopifyShopDomain` unique constraint issue:**
+**The `Brand.shopifyShopDomain` unique constraint:**
 
-`shopifyShopDomain` has `@unique`. Simply nulling it allows the same shop to re-install later and get a fresh link. This is the **recommended approach**:
+`shopifyShopDomain` has `@unique`. The handler nulls it (rather than replacing it with a redacted placeholder) specifically so the same shop can re-install and get a fresh link later — a placeholder like `"redacted:<hash>"` would permanently block re-installation, so it is not used.
 
-```
-Brand.shopifyShopDomain = null
-```
+**Current `shop/redact` handler behavior** (`src/app/api/shopify/webhooks/shop/redact/route.ts`), all inside one database transaction:
 
-Setting it to `null` releases the unique slot. An alternative — replacing it with a placeholder like `"redacted:<hash>"` — would block re-installation and is not recommended.
+1. Finds the `Brand` by `shopifyShopDomain` matching the verified shop. If none exists, the rest is skipped and the handler returns 200 (already clean).
+2. On the matched `Brand`: nulls `shopifyShopDomain`, `shopifyAdminAccessTokenEncrypted`, `shopifyRefreshTokenEncrypted`, `shopifyAccessTokenExpiresAt`, `shopifyRefreshTokenExpiresAt`, and `shopifyGrantedScopes`; sets `shopifyConnectionStatus = "UNINSTALLED"`. (`shopifyInstalledAt`, `shopifyLastProductSyncAt`, `shopifyCurrencyCode`, and `shopifyClientId` are left as-is — see Section 1 and "Remaining open questions" below.)
+3. On every `ShopifyRewardRedemption` row where `shopifyShopDomain` matches: nulls `shopifyDiscountNodeId`, `shopifyDiscountStatus`, and `shopifyUserErrors`. `shopifyShopDomain` on these rows is **not** nulled — it is a non-nullable `String` column in the schema (a denormalized snapshot, not a live FK) and is not personal data, so it is left as an audit trail of which shop a code was issued against. All SQRATCH core fields (`userId`, `brandId`, `offerId`, `code`, `pointsCost`, `status`, timestamps) are preserved unconditionally.
+4. Sets `isActive = false` on every `BrandRewardOffer` belonging to the brand that held the redacted domain — the brand is losing its Shopify connection, so its offers must never stay (or become) claimable.
+5. Nulls `sourceShopDomain` wherever it equals the redacted domain, across **all** brands' `BrandRewardOffer`, `ExperienceProductLink`, and `LessonProductLink` rows — not only the brand currently holding the domain, since an earlier relink can leave a different brand's rows referencing this domain as a historical `sourceShopDomain`. Rows are never deleted; a nulled `sourceShopDomain` requires review/reselection before that offer/link is considered current again.
+6. Scrubs the redacted domain out of `ShopifyConnectionEvent` history: any row whose `shopDomain` matches has `shopDomain`, `currencyCode`, and `shopifyClientId` nulled; any row whose `previousShopDomain` matches has `previousShopDomain` and `previousCurrencyCode` nulled independently, so an unrelated *current* domain on the same row (e.g. a `RELINKED` event to a different, non-redacted store) is preserved. The event row itself (`eventType`, `createdAt`) is retained as anonymised history — no row is deleted and no historical event is invented. `ShopifyConnectionEvent` never stored access/refresh tokens, OAuth state, session tokens, or encryption secrets in the first place, so there is nothing further to redact there.
+7. Identifies and deletes orphaned OAuth-state / pending-install `TokenStore` rows whose stored payload references this shop (a bounded scan of `shopify_oauth_state:*` / `shopify_pending_install:*` keys, parsing only the plaintext `shop` field — no token value is decrypted).
+8. Writes a sanitized audit log entry (`shopDomain`, whether a brand was found, whether redaction ran, and the count of orphaned tokens deleted) before the domain itself becomes unrecoverable.
+9. Returns HTTP 200.
 
-**Recommended `shop/redact` handler actions (in a single transaction where possible):**
-
-1. Find `Brand` by `shopifyShopDomain` matching `verification.shop`.
-2. If no matching brand exists, return 200 (already clean).
-3. On the matched `Brand`, set:
-   - `shopifyShopDomain = null`
-   - `shopifyAdminAccessTokenEncrypted = null` (confirm/ensure already null)
-   - `shopifyConnectionStatus = "DISCONNECTED"` (or leave as `UNINSTALLED`)
-   - Optionally null `shopifyInstalledAt`, `shopifyDisconnectedAt`, `shopifyUninstalledAt`, `shopifyLastProductSyncAt`, `shopifyCurrencyCode` (human decision — see open questions).
-4. On all `ShopifyRewardRedemption` rows where `shopifyShopDomain = verification.shop`, set:
-   - `shopifyShopDomain = null` (or a fixed redacted sentinel — see open questions)
-   - `shopifyDiscountNodeId = null`
-   - `shopifyDiscountStatus = null`
-   - `shopifyUserErrors = null`
-   - Preserve all other columns.
-5. Delete any orphaned `TokenStore` rows for this shop's OAuth state.
-6. Return HTTP 200.
-
-**Note:** The current `shop/redact` handler nulls the access token and sets status to `UNINSTALLED` — which is correct for the `app/uninstalled` event — but it does NOT null `shopifyShopDomain` or clear the Shopify metadata columns on `ShopifyRewardRedemption`. The `shop/redact` handler needs to be more thorough than the `app/uninstalled` handler.
-
-**Store-compatibility fields added for the reward/product-link relink-safety feature:**
-
-The `shop/redact` handler additionally, in the same transaction:
-
-1. Sets `isActive = false` on every `BrandRewardOffer` belonging to the Brand currently holding the redacted domain (the Brand is losing its Shopify connection; its offers must never stay claimable).
-2. Nulls `sourceShopDomain` wherever it equals the redacted domain, across **all** Brands' `BrandRewardOffer`, `ExperienceProductLink`, and `LessonProductLink` rows — not only the Brand currently holding the domain, since an earlier relink can leave another Brand's rows referencing this domain as a historical `sourceShopDomain`. Rows themselves are never deleted; a nulled `sourceShopDomain` simply makes that offer/link require review or reselection before it can be considered current again.
-3. Scrubs the redacted domain out of `ShopifyConnectionEvent` history: any row whose `shopDomain` matches has `shopDomain`, `currencyCode`, and `shopifyClientId` nulled; any row whose `previousShopDomain` matches has `previousShopDomain` and `previousCurrencyCode` nulled independently (so an unrelated *current* domain on that same row, e.g. a RELINKED event to a different, non-redacted store, is preserved). The event row itself (`eventType`, `createdAt`) is retained as anonymised history — no fake historical events are invented, and no row is deleted.
-
-`ShopifyConnectionEvent` never stored access/refresh tokens, OAuth state, App Bridge session tokens, encryption secrets, or request headers in the first place, so there is nothing further to redact there beyond the domain/currency/client-id fields above.
+This is materially more thorough than `app/uninstalled`, which only clears credentials and sets `UNINSTALLED` while deliberately preserving `shopifyShopDomain` (so a merchant who reinstalls without waiting for the 48-hour `shop/redact` webhook gets a seamless relink to the same brand).
 
 ---
 
-## 6. Open Questions for Human Decision
+## 6. Remaining Open Questions for Human Decision
 
-1. **Timestamps on Brand after shop/redact:** Should `shopifyInstalledAt`, `shopifyUninstalledAt`, `shopifyDisconnectedAt` be nulled on shop/redact, or retained as an anonymised audit trail? Retaining them (without the domain) has no personal data impact but documents the relationship history. Nulling them makes the brand record completely clean of Shopify linkage.
+The items below are genuinely undecided policy questions, not implementation gaps — the current behavior for each is stated so it is clear what "leaving it open" currently means in practice.
 
-2. **`ShopifyRewardRedemption.shopifyShopDomain` after shop/redact:** Should the denormalised shop domain on old redemption rows be nulled (losing auditability of which shop a code was issued against) or replaced with a non-reversible hash (e.g. `SHA-256(shopDomain)`) that preserves referential integrity in logs without retaining the plaintext domain? The domain is not personal data under GDPR but Shopify's DPA may require its removal.
+1. **`Brand.shopifyInstalledAt` / `.shopifyLastProductSyncAt` / `.shopifyCurrencyCode` / `.shopifyClientId` after shop/redact:** currently **retained** (not nulled) as an anonymised-once-the-domain-is-gone audit trail. None of these is personal data on its own. Should they be cleared anyway for a "fully clean" brand record, or is retaining them the intended behavior? No change has been made pending this decision.
+2. **`ShopifyRewardRedemption.shopifyShopDomain` after shop/redact:** currently **retained in plaintext** on historical redemption rows (not nulled or hashed), because the column is non-nullable and the domain is not personal data. Should it instead be replaced with a non-reversible hash to further reduce linkability in logs/exports? This would require a schema change (making the column nullable or adding a hashed variant) — flagged as a possible legal/policy ambiguity, not resolved here.
+3. **`BrandRewardOffer` and `BrandRewardOfferProduct` after shop/redact:** currently **preserved** (offers are deactivated via `isActive = false`, not deleted; product snapshots are untouched). Should they instead be deleted once a brand's Shopify access is permanently gone? Deletion would require a cascade decision on related `ShopifyRewardRedemption` rows (currently blocked by `onDelete: Restrict` on `offerId`) — not attempted.
+4. **`QRCode.email` field:** an optional email on QR codes created by brand admins, unrelated to Shopify customer data. Not addressed by any Shopify compliance webhook; would need its own review under SQRATCH's own user-data-deletion flow if one is required.
+5. **Re-installation after shop/redact:** nulling `Brand.shopifyShopDomain` allows the same shop to re-install and link to the same Brand record later. This is the current, intentional behavior (see the unique-constraint note above), not an open question about mechanism — but whether this is the desired product UX (vs. forcing a fresh Brand on re-install) has not been explicitly confirmed as a product decision.
 
-3. **`BrandRewardOffer` and `BrandRewardOfferProduct` after shop/redact:** Product GIDs and snapshot data are not personal data. Should they be deleted anyway (the brand no longer has Shopify access, so the offer can't be redeemed), or left in place for historical records? Deletion would require a cascade decision on related `ShopifyRewardRedemption` rows (blocked by `onDelete: Restrict` on `offerId`).
-
-4. **`QRCode.email` field:** This stores an optional email on QR codes created by brand admins. It is not linked to Shopify customer data but should be reviewed for the SQRATCH-side user deletion flow (separate from Shopify GDPR compliance).
-
-5. **Re-installation after shop/redact:** Nulling `Brand.shopifyShopDomain` allows the same shop to re-install and link to the same Brand record. Is this the desired UX, or should re-installation create a fresh Brand?
-
-6. **Audit log for compliance webhooks:** All three handlers currently return 200 with no logging. A durable audit log (even just a `console.log` with structured JSON to a log aggregator) should be added so the business can demonstrate compliance if audited by Shopify.
-
-7. **`TokenStore` orphan cleanup:** If an OAuth flow is abandoned after the state token is stored but before installation completes, a `shopify_oauth_state:<nonce>` or `shopify_pending_install:<id>` record containing the shop domain may linger until its `expiresAt`. The `shop/redact` handler should query and delete any such records for the redacted shop. Currently this is not done.
+Resolved since the original version of this document: a sanitized audit log now exists on all four webhook handlers, and `shop/redact` now deletes orphaned `TokenStore` OAuth-state/pending-install rows for the redacted shop. Neither is an open question any longer.

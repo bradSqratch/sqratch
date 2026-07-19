@@ -96,17 +96,18 @@ test("the pre-migration SQL contains only SELECT/CTE statements — no UPDATE, D
   }
 });
 
-test("deployment documentation requires reconciliation before Stage A, not merely before Stage B", () => {
+test("deployment documentation records that reconciliation was required before Stage A, not merely before Stage B", () => {
   const doc = readSource("docs/points-ledger.md");
 
   assert.match(doc, /Pre-Stage-A/);
   assert.match(doc, /\*\*Stage A\*\*/);
   assert.match(doc, /\*\*Stage B\*\*/);
-  // The core safety claim: Stage A itself (not just Stage B) is gated on
-  // reconciliation, because self-healing changes at Stage A.
+  // The core safety claim, preserved as historical record now that the
+  // migration is complete: Stage A itself (not just Stage B) was gated on
+  // reconciliation, because self-healing changed at Stage A.
   assert.match(
     doc,
-    /Reconciliation is required \*\*before Stage A\*\*, not merely before Stage B/,
+    /Reconciliation was required \*\*before Stage A\*\*, not merely before Stage B/,
   );
   assert.match(doc, /query 4 — \*\*blocking\*\*/);
 });

@@ -2,13 +2,12 @@
 
 The public app uses App Bridge session tokens, token exchange, and expiring offline-token rotation. The custom test app remains `LEGACY_OFFLINE`. Use the matching TOML and credentials for each flow; never mix public and custom client IDs.
 
-This app uses Shopify only to read and display products in SQRATCH. Store ownership is tied to `Brand`, not the individual user.
+This app reads Shopify products for display, and creates single-use Shopify discount codes when a user redeems SQRATCH points (`write_discounts`) — it never writes or mutates products. Redemption status is polled and reconciled against Shopify after issuance. Store ownership is tied to `Brand`, not the individual user. For the detailed redemption/refund transaction and reconciliation logic, see `docs/points-ledger.md` and `docs/codebase-map.md` (Section F: "Shopify Reward Redemption", "Reward State Machine", "Stuck-Redemption Reconciliation").
 
 ## Vercel Environment Variables
 
 - `SHOPIFY_API_KEY`: Shopify app client ID/API key.
 - `SHOPIFY_API_SECRET`: Shopify app client secret. Used for OAuth and webhook HMAC verification.
-- `SHOPIFY_SCOPES`: Must be exactly `read_products,read_discounts,write_discounts`.
 - `SHOPIFY_APP_URL`: Production app origin, for example `https://www.sqratch.com`.
 - `NEXTAUTH_URL`: Production app origin, for example `https://www.sqratch.com`.
 - `NEXTAUTH_SECRET`: Required to sign application authentication sessions. It does not encrypt Shopify credentials.
@@ -108,6 +107,32 @@ Current limitation: the embedded shell loads the minimum App Bridge script/meta 
 - Confirm `shopifyAdminAccessTokenEncrypted` is cleared.
 - Send invalid webhook HMAC and confirm the request is rejected.
 - Send valid privacy compliance webhooks and confirm they return `200`.
+
+## Reward Redemption, Status Refresh, and Reconciliation Checklist
+
+See `docs/points-ledger.md` for the full ledger/account model and `docs/codebase-map.md` (Section F.7–F.9) for the exact transaction sequence; this section covers what to exercise manually.
+
+- Confirm a redemption with sufficient points creates a `ShopifyRewardRedemption` (`PENDING` → `POINTS_DEBITED`) and a matching negative `PointTransaction` inside the same serializable transaction.
+- Confirm redeeming with insufficient points is rejected before any Shopify call is made.
+- Confirm a repeated request with the same `idempotencyKey` returns the cached result rather than creating a second redemption.
+- Confirm a request with the same `idempotencyKey` but a different offer/user is rejected (409).
+- Confirm successful discount code creation transitions the redemption to `ISSUED` and returns the code.
+- Confirm a Shopify-side failure during discount creation triggers the refund path: points restored, a positive `PointTransaction` created, and the redemption transitions to `REFUNDED` — never left silently `POINTS_DEBITED`.
+- Confirm a generated-code collision retries (bounded, 3 attempts) rather than failing the whole redemption.
+- Confirm `POST /api/rewards/shopify/redemptions/[id]/refresh-status` re-checks Shopify discount usage and can transition `ISSUED` → `USED`/`EXPIRED`, but only through `assertTransition()`.
+- Confirm stuck `POINTS_DEBITED` rows older than the reconciliation minimum age are picked up by `/api/internal/reconcile-redemptions`, resolved to `ISSUED` or refunded to `REFUNDED` exactly once, and that rows exceeding the max-attempts bound are flagged `needsManualReview` rather than retried forever.
+- Automated coverage for this flow lives in `tests/shopify-rewards.test.ts` and `tests/reward-reconciliation.test.ts` (mocked persistence/Shopify calls — see `docs/codebase-map.md` Section J for what these tests do and do not exercise).
+
+## Compliance Webhook Checklist
+
+All four webhooks live under `/api/shopify/webhooks/`, are HMAC-verified via `verifyShopifyWebhookRequest`, and must return `200` even when no action is needed. See `docs/shopify-data-inventory.md` for the field-by-field data-handling rationale.
+
+- Send each of `customers/data_request`, `customers/redact`, `shop/redact`, and `app/uninstalled` with an invalid HMAC and confirm the request is rejected (non-200) before any processing.
+- Confirm `customers/data_request` and `customers/redact` return `200` and write a sanitized audit log entry (topic + shop domain only, no customer PII) without touching any database row — SQRATCH stores no Shopify-customer-keyed data.
+- Confirm `shop/redact` for a shop with no matching `Brand` returns `200` without error.
+- Confirm `shop/redact` for a shop with a matching `Brand`: nulls the brand's Shopify credentials and `shopifyShopDomain`; anonymizes `ShopifyRewardRedemption` Shopify-specific metadata (discount node id, discount status, user errors) while preserving the redemption's SQRATCH core fields (`userId`, `brandId`, `offerId`, `code`, `pointsCost`, `status`, timestamps); sets the brand's `BrandRewardOffer` rows `isActive: false`; nulls `sourceShopDomain` on any `BrandRewardOffer`/`ExperienceProductLink`/`LessonProductLink` row that referenced the redacted domain, across all brands; scrubs the domain/currency/client-id out of `ShopifyConnectionEvent` history while preserving the event type and timestamp; deletes orphaned OAuth-state/pending-install `TokenStore` rows for that shop.
+- Confirm `app/uninstalled` clears credential/token fields and sets `UNINSTALLED`, but intentionally preserves `shopifyShopDomain` (unlike `shop/redact`) so the same shop can reinstall and relink seamlessly.
+- Automated coverage: `tests/integration-coverage.test.ts` (shop/redact temp-token cleanup) and `tests/shopify-connection-transitions.test.ts`.
 
 ## App Store Submission Checklist
 

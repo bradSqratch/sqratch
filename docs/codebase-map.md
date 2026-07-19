@@ -1,6 +1,6 @@
 # SQRATCH Codebase Map
 
-> Updated: 2026-06-16 · Next.js 15 · Prisma 7 · next-auth 4
+> Updated: 2026-07-19 · Next.js 15 · Prisma 7 · next-auth 4
 
 ---
 
@@ -18,8 +18,8 @@
 | **Shopify** | Public embedded session-token/token-exchange flow (expiring offline tokens) plus legacy custom-app compatibility (`LEGACY_OFFLINE`); Admin GraphQL API v2026-04 |
 | **Encryption** | AES-256-GCM via `APP_ENCRYPTION_KEY`; used to store Shopify access + refresh tokens at rest |
 | **Rate Limiting** | In-memory fixed-window limiter (`src/lib/rate-limit.ts`); per-instance on Vercel serverless |
-| **Analytics** | Internal `AnalyticsEvent` table + Google Analytics (`NEXT_PUBLIC_GA_MEASUREMENT_ID`) |
-| **CI** | GitHub Actions (`verify` job): prisma validate, typecheck, lint, test, build |
+| **Analytics** | Internal `AnalyticsEvent` table + Google Analytics (`NEXT_PUBLIC_GA_ID`) |
+| **CI** | GitHub Actions (`verify` job): prisma generate/validate, typecheck, lint, test, build, `npm audit --omit=dev` |
 | **Deployment** | Vercel (env structure, `NEXTAUTH_URL`, `VERCEL` reference) |
 
 ---
@@ -88,6 +88,7 @@ sqratch/
 │   │   ├── shopify-discounts.ts ← Shopify Admin GraphQL discount CRUD
 │   │   ├── shopify-products.ts  ← Shopify Admin GraphQL product fetch
 │   │   ├── shopify-webhooks.ts  ← Webhook HMAC verification helper
+│   │   ├── shopify-connection-transitions.ts ← Records ShopifyConnectionEvent history (connect/relink/disconnect/uninstall)
 │   │   ├── crypto.ts          ← AES-256-GCM encrypt/decrypt (Shopify tokens)
 │   │   ├── rate-limit.ts      ← In-memory rate limiter (fixed-window, per-instance)
 │   │   ├── brand-auth.ts      ← Brand admin session gating
@@ -105,7 +106,6 @@ sqratch/
 │   └── middleware.ts          ← Route protection middleware (next-auth JWT check)
 ├── tests/                     ← Node.js built-in test runner (node:test + assert/strict)
 ├── docs/                      ← THIS directory (AI agent context docs)
-├── .shopify/                  ← Shopify CLI metadata (deploy bundle, project.json)
 ├── .github/workflows/ci.yml  ← CI pipeline
 ├── prisma.config.ts           ← Prisma config (points to schema.prisma)
 ├── shopify.app.toml           ← Public app Shopify CLI config (TOML-managed webhooks)
@@ -143,7 +143,7 @@ sqratch/
 | `/x/[experienceSlug]/shop` | `...shop/page.tsx` | Experience shop tab (Shopify products + rewards) |
 | `/x/[experienceSlug]/posts` | `...posts/page.tsx` | Experience posts/community |
 | `/x/[experienceSlug]/qa` | `...qa/page.tsx` | Experience Q&A |
-| `/shopify` | `shopify/page.tsx` | Shopify app install landing (embedded); no shop query leak |
+| `/shopify` | `shopify/route.ts` | Shopify app install landing (embedded); server-rendered HTML route handler, not a page component; no shop query leak |
 | `/approval-pending` | `approval-pending/page.tsx` | Brand/creator approval pending screen |
 | `/dev/email-preview` | `dev/email-preview/route.ts` | Dev email preview — returns 404 when `NODE_ENV === "production"` |
 
@@ -293,10 +293,10 @@ sqratch/
 
 | Method | Path | Trigger | DB Effect |
 |---|---|---|---|
-| POST | `/api/shopify/webhooks/app/uninstalled` | Shop uninstalls app | Sets `Brand.shopifyConnectionStatus=UNINSTALLED`, nulls token |
-| POST | `/api/shopify/webhooks/customers/data_request` | GDPR data request | Logged/acknowledged (no Shopify customer data stored) |
-| POST | `/api/shopify/webhooks/customers/redact` | GDPR customer redact | Logged/acknowledged |
-| POST | `/api/shopify/webhooks/shop/redact` | GDPR shop redact | Logged/acknowledged |
+| POST | `/api/shopify/webhooks/app/uninstalled` | Shop uninstalls app | Clears credential/token fields, sets `Brand.shopifyConnectionStatus=UNINSTALLED`; `shopifyShopDomain` is intentionally preserved for relink; records a `ShopifyConnectionEvent` |
+| POST | `/api/shopify/webhooks/customers/data_request` | GDPR data request | Sanitized audit log only — no data returned (SQRATCH stores no Shopify-customer-keyed data) |
+| POST | `/api/shopify/webhooks/customers/redact` | GDPR customer redact | Sanitized audit log only — no rows deleted (SQRATCH stores no Shopify-customer-keyed data) |
+| POST | `/api/shopify/webhooks/shop/redact` | GDPR shop redact | Nulls `Brand` Shopify credentials/domain, anonymizes `ShopifyRewardRedemption` Shopify metadata, deactivates the brand's `BrandRewardOffer` rows, scrubs the domain from `ShopifyConnectionEvent` history, deletes orphaned OAuth `TokenStore` rows; SQRATCH business/ledger records are preserved — see `docs/shopify-data-inventory.md` |
 
 ### Reward APIs (auth required)
 
@@ -388,7 +388,7 @@ Brand-scoped requests resolve through `src/lib/brand-context.ts` and the HttpOnl
 
 ### Points
 
-`UserPointAccount` (`spendablePoints`, `lifetimeEarnedPoints`, `lifetimeSpentPoints`, `lifetimeRefundedPoints`) is the **authoritative balance store**, one row per user. `PointTransaction` is the source of truth for point history — an immutable ledger. `applyPointLedgerEvent()` in `src/lib/points.ts` is the only function that writes both, atomically, inside a transaction; there is no other balance field anywhere in application code (the legacy `User.points` mirror is deprecated, removed from the Prisma schema, and its physical column is dropped by migration `20260719061157_remove_legacy_user_points` — see docs/points-ledger.md for the required deployment order). The unique constraint `(userId, qrCodeId)` on `PointTransaction` is the primary QR double-award guard. The unique constraint `(shopifyRewardRedemptionId, reason)` is the refund exactly-once guard.
+`PointTransaction` is the **authoritative transaction history and audit ledger** (immutable, one row per event). `UserPointAccount` (`spendablePoints`, `lifetimeEarnedPoints`, `lifetimeSpentPoints`, `lifetimeRefundedPoints`) is the **authoritative current-balance aggregate**, one row per user, kept mathematically consistent with the ledger. `applyPointLedgerEvent()` in `src/lib/points.ts` is the only function that writes both, atomically, inside a transaction. There is no other balance field anywhere: the legacy `User.points` mirror column was removed from application code, the Prisma schema, and (migration `20260719061157_remove_legacy_user_points`, applied to production 2026-07-19) the physical database. See `docs/points-ledger.md` for full invariants and the completed migration record. The unique constraint `(userId, qrCodeId)` on `PointTransaction` is the primary QR double-award guard. The unique constraint `(shopifyRewardRedemptionId, reason)` is the refund exactly-once guard.
 
 ### Internal / Support Models
 
@@ -716,26 +716,9 @@ On Vercel serverless, each function instance has its own `Map` that resets on co
 
 Node.js built-in test runner (`node:test` + `assert/strict`). All tests in `tests/*.test.ts`, executed via `tsx --test tests/*.test.ts`.
 
-### Current Test Files (273 tests, all passing)
+### Current Test Files
 
-| File | Tests | Kind | Coverage Area |
-|---|---|---|---|
-| `account-session-integrity.test.ts` | 11 | unit | Email normalization, deletion blocking, JWT recheck, role propagation |
-| `anon-merge-keys.test.ts` | 9 | unit | Anonymous merge key collection priority/dedup |
-| `integration-coverage.test.ts` | 36 | route integration (mocked persistence/services) | Route auth/ownership + dependency safety, shop/redact temp-token cleanup |
-| `lesson-video-playback.test.ts` | 10 | unit | Lesson video signed URL playback |
-| `lesson-video-upload.test.ts` | 8 | unit | Lesson video upload lifecycle |
-| `pending-install.test.ts` | 19 | unit | Pending install payload build/parse/serialize (LEGACY + EXPIRING) |
-| `qr-routes-hardening.test.ts` | 12 | route integration (mocked persistence/services) | QR route boundary checks |
-| `rate-limit.test.ts` | 8 | unit | Rate limiter pass/reject/reset, IP parsing |
-| `redemption-idempotency.test.ts` | 4 | unit | Idempotency match: user/offer/experience mismatch |
-| `reward-reconciliation.test.ts` | 23 | unit | Reconciliation decisions, CAS locking, refund exactly-once |
-| `reward-redemption-state.test.ts` | 22 | unit | State machine transitions, terminal, refresh-eligible |
-| `reward-ux.test.ts` | 15 | unit | formatDate, displayStatus, button label logic |
-| `shopify-rewards.test.ts` | 34 | unit | Shopify reward redeem flow with mocked deps |
-| `shopify-scope-drift.test.ts` | 1 | unit | Scope consistency across modules |
-| `shopify-session-token.test.ts` | 26 | unit | Session token verification: signature, claims, time, destination |
-| `shopify-token-manager.test.ts` | 35 | unit | Token refresh, CAS lock, scope check, expiry |
+The number of test files and individual tests changes as the codebase grows — `npm test` (and `npm run verify`, which runs it as part of the full pipeline) is the current source of truth for how many exist and whether they pass; do not rely on any count recorded in this document. Coverage areas include: account/session integrity, anonymous-merge and QR-scan flows, points ledger and account reconstruction (including a real-Postgres-gated concurrency test — see below), reward redemption/reconciliation/state-machine, Shopify token management and session-token verification, Shopify store-compatibility and connection-transition history, lesson video upload/playback, email/welcome-worker delivery, and route-level integration coverage (`integration-coverage.test.ts`, `qr-routes-hardening.test.ts`).
 
 ### CI Pipeline (`.github/workflows/ci.yml`)
 
@@ -747,14 +730,16 @@ Runs on push to `main` and all PRs:
 5. `npm run lint`
 6. `npm test`
 7. `npm run build`
+8. `npm audit --omit=dev`
 
-No database required in CI — tests use mocked Prisma and injected dependencies.
+No database is required for the standard CI run — nearly all tests use mocked Prisma and injected dependencies.
 
 ### Test Architecture
 
 - **Pure unit tests:** Most tests import pure functions and test them with injected mock dependencies (no real DB, no HTTP).
 - **Route integration tests (mocked persistence/services):** `integration-coverage.test.ts` and `qr-routes-hardening.test.ts` import a route's `…Impl` function and call it directly, injecting a typed `AuthResolvers` object for auth and mutating the shared Prisma singleton's methods for persistence. Shopify network calls are mocked via injected `deps` or `globalThis.fetch` stubs. These are NOT real end-to-end tests — no Next.js server, no HTTP layer, no database, and no live Shopify API are exercised.
-- **No real end-to-end tests:** There is currently no test that drives the running Next.js server, a real database, or the live Shopify API. The flows that require those (embedded launch, token exchange/refresh, real discount creation/redemption, SMTP delivery, webhook delivery) must be verified manually — see the manual-test list in any pre-merge review.
+- **One real-database-gated test:** `point-account-concurrency.test.ts` exercises actual PostgreSQL uniqueness/transaction behavior (concurrent account-creation races) that a mocked client cannot faithfully reproduce. It is skipped by default (and in standard CI) and only runs when pointed at a real, disposable database — see the file header for the exact opt-in procedure. This is currently the only test in the suite that touches a real database.
+- **No end-to-end (full server + live Shopify) tests:** There is no test that drives the running Next.js server or the live Shopify API. The flows that require those (embedded launch, token exchange/refresh, real discount creation/redemption, SMTP delivery, webhook delivery) must be verified manually — see the manual-test list in any pre-merge review.
 - **Shopify network mocking:** Token manager, session token verifier, and reconciliation tests use injected `deps` objects instead of real Shopify API calls.
 - **Auth injection:** No global hooks. Each route's `…Impl(req[, ctx], deps: AuthResolvers)` takes the resolvers explicitly; production `GET`/`POST` wrappers bind `realAuthResolvers`; tests pass mock resolvers.
 
@@ -762,33 +747,15 @@ No database required in CI — tests use mocked Prisma and injected dependencies
 
 ## K. Database Migrations
 
-### Applied Migration Order
+### Local Migration Folders
 
-All migrations below — including the four hardening migrations
-(`20260615113320_campaign_unlock_anon_unique`, `20260615120000_shopify_expiring_tokens`,
-`20260615140000_redemption_reconciliation`, `20260615150000_evidence_based_indexes`) —
-have been applied. `npx prisma migrate status` reports **"Database schema is up to date!"**
-and the schema↔database diff is empty.
+`prisma/migrations/` currently contains the following folders, oldest first (verify with `ls prisma/migrations`, since this list will grow):
 
-| Migration | Purpose | Type |
-|---|---|---|
-| `202604_lms_migration` | Initial LMS schema | Baseline |
-| `20260505120000_move_why_video_to_experience` | Video field migration | Additive |
-| `20260530120000_add_shopify_connection_status` | Shopify connection status enum | Additive |
-| `20260601120000_add_shopify_reward_offers` | Reward offers + redemptions | Additive |
-| `20260614120000_add_lesson_video_storage_reference` | Lesson video storage reference | Additive |
-| `20260615075700_add_percentage_rewards` | Percentage discount type | Additive |
-| `20260615113320_campaign_unlock_anon_unique` | Partial unique index for anon unlock dedup (Postgres-only, intentional Prisma/DB divergence) | Index |
-| `20260615120000_shopify_expiring_tokens` | Brand expiring-token fields, `ShopifyAuthMode` enum, `REQUIRES_RECONNECT` status | Additive + Enum |
-| `20260615140000_redemption_reconciliation` | Reconciliation fields on `ShopifyRewardRedemption`, composite unique on `PointTransaction(shopifyRewardRedemptionId, reason)` | Additive + Index |
-| `20260615150000_evidence_based_indexes` | Composite indexes for offer cap queries, verification token lookup, TokenStore expiry | Index |
-| `20260716120000_harden_auth_sessions_and_verification` | `User.sessionVersion`, HMAC-backed verification challenges, failed-attempt/consumed state, and lookup indexes; legacy plaintext challenges are invalidated | Additive + Data cleanup + Index |
+`20250909_clean_baseline`, `20260324050853_rename_shopify_admin_token`, `20260327160420_add_campaign_why_video_fields`, `20260329153000_optimize_public_experience_queries`, `202604_lms_migration`, `20260505120000_move_why_video_to_experience`, `20260530120000_add_shopify_connection_status`, `20260601120000_add_shopify_reward_offers`, `20260614120000_add_lesson_video_storage_reference`, `20260615075700_add_percentage_rewards`, `20260615113320_campaign_unlock_anon_unique`, `20260615120000_shopify_expiring_tokens`, `20260615140000_redemption_reconciliation`, `20260615150000_evidence_based_indexes`, `20260703120000_add_user_point_account_lifetime_rewards`, `20260716120000_harden_auth_sessions_and_verification`, `20260716130000_remove_external_role`, `20260716131000_verified_user_welcome_queue`, `20260717140000_welcome_email_worker_retries`, `20260718120000_shopify_store_reward_compatibility`, `20260719061157_remove_legacy_user_points`.
 
-The auth-hardening migration above is a local pending migration and must be reviewed and deployed separately; it has not been applied to a remote or production database.
+**A local migration folder existing in this list is not, by itself, evidence that it has been applied to production.** The only migration in this list independently confirmed applied to production (verified `migrate status` up to date, empty `migrate diff`, and matching row/column counts before and after) is `20260719061157_remove_legacy_user_points`, on 2026-07-19 — see `docs/points-ledger.md`. For the status of any other migration, its deployment history, and the historical local/production divergence this repository has previously had, see **`docs/prisma-migrations.md`** — treat that file, not this table, as authoritative for migration deployment status. Never infer that every earlier migration was applied merely because a later one was.
 
-### Historical Divergence (resolved)
-
-An earlier checkout had a divergent migration history relative to production. This has been **resolved**: the checkout now carries the full ordered migration set, production has the same migrations applied, and `prisma migrate status` reports the schema is up to date. Migration divergence is **no longer an active deployment blocker**. The runbook in `docs/prisma-migrations.md` is retained as reference for future deploys.
+### Key Index Summary
 
 ### Key Index Summary
 
@@ -915,15 +882,10 @@ Read these files first:
 
 ---
 
-## Files Created / Changed by This Document
-
-- `docs/codebase-map.md` (this file) — **updated**
-- `docs/agent-context.md` — **updated** (companion quick-reference)
-
 ## Assumptions
 
 1. Deployment is Vercel (based on env structure).
 2. Supabase project handles both PostgreSQL and file storage.
 3. The Shopify app has two configurations: public (for Shopify app review) and custom (for testing).
 4. `APP_ENCRYPTION_KEY` is the sole server-only Shopify credential encryption key. `NEXTAUTH_SECRET` independently signs authentication sessions; it is not an encryption fallback.
-5. Migrations 20260615113320 through 20260615150000 have been applied to production in order; `prisma migrate status` reports the schema is up to date.
+5. Migration deployment status should always be re-verified with `prisma migrate status` / `prisma migrate diff` rather than assumed from this document — see `docs/prisma-migrations.md`.
