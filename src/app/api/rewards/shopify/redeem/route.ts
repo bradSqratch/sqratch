@@ -476,10 +476,10 @@ export async function redeemImpl(request: NextRequest, deps: AuthResolvers) {
           });
 
           // Central ledger debit: decrements spendable points (conditional, so
-          // the balance can never go negative), records lifetime spent, keeps
-          // legacy User.points in sync, and writes the negative PointTransaction
-          // — all inside this Serializable transaction. Lifetime earned is NOT
-          // reduced. Idempotency is enforced by the ledger's unique constraints.
+          // the balance can never go negative), records lifetime spent, and
+          // writes the negative PointTransaction — all inside this Serializable
+          // transaction. Lifetime earned is NOT reduced. Idempotency is
+          // enforced by the ledger's unique constraints.
           const debit = await debitShopifyRewardPoints({
             userId: user.id,
             pointsCost: currentOffer.pointsCost,
@@ -623,8 +623,7 @@ export async function redeemImpl(request: NextRequest, deps: AuthResolvers) {
             where: { id: redemption.id },
           });
         }
-        // Restore spendable points + lifetime refunded (never lifetime earned),
-        // keeping the account and legacy User.points in sync.
+        // Restore spendable points + lifetime refunded (never lifetime earned).
         await refundShopifyRewardPoints({
           userId: user.id,
           points: discountConfig.pointsCost,
@@ -683,8 +682,7 @@ export async function redeemImpl(request: NextRequest, deps: AuthResolvers) {
           });
         }
 
-        // Restore spendable points + lifetime refunded (never lifetime earned),
-        // keeping the account and legacy User.points in sync.
+        // Restore spendable points + lifetime refunded (never lifetime earned).
         await refundShopifyRewardPoints({
           userId: user.id,
           points: discountConfig.pointsCost,

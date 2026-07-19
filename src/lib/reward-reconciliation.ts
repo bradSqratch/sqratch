@@ -438,9 +438,9 @@ function buildProductionDeps(): ReconciliationDeps {
           }
 
           // Central refund helper: restores spendable points, raises lifetime
-          // refunded (never lifetime earned), keeps legacy User.points in sync,
-          // and writes the positive SHOPIFY_REWARD_REFUND ledger row — all inside
-          // this TX. Exactly-once is preserved by the ledger's unique constraints:
+          // refunded (never lifetime earned), and writes the positive
+          // SHOPIFY_REWARD_REFUND ledger row — all inside this TX. Exactly-once
+          // is preserved by the ledger's unique constraints:
           //   * A refund row already carrying an idempotencyKey → helper returns
           //     applied:false (no double increment); flip status idempotently here.
           //   * A historical refund row without an idempotencyKey → helper's create

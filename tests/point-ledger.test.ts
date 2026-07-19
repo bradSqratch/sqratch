@@ -16,6 +16,12 @@ import {
 // ---------------------------------------------------------------------------
 // Minimal in-memory fake of the Prisma methods the ledger uses. Passed as `db`
 // so applyPointLedgerEvent runs directly against it (no real database).
+//
+// Deliberately has NO `user.update` method and the `user` fake only tracks
+// existence (an id), never a points balance — UserPointAccount is the only
+// balance store the ledger may write to. If a regression reintroduces a
+// write to User.points, this mock throws "db.user.update is not a function"
+// rather than silently succeeding.
 // ---------------------------------------------------------------------------
 
 type AccountRow = {
@@ -62,7 +68,8 @@ function applyOps<T extends Record<string, unknown>>(
 }
 
 interface FakeSeed {
-  users?: Record<string, { points: number }>;
+  /** Users known to exist (existence only — no legacy balance). */
+  userIds?: string[];
   accounts?: AccountRow[];
   transactions?: Partial<TxRow>[];
   lessons?: Record<string, { completionPointsReward: number }>;
@@ -71,7 +78,7 @@ interface FakeSeed {
 }
 
 function makeFakeDb(seed: FakeSeed = {}) {
-  const users: Record<string, { points: number }> = { ...(seed.users ?? {}) };
+  const existingUserIds = new Set(seed.userIds ?? []);
   const accounts = new Map<string, AccountRow>();
   for (const acc of seed.accounts ?? []) accounts.set(acc.userId, { ...acc });
   const txs: TxRow[] = (seed.transactions ?? []).map((t, i) => ({
@@ -79,6 +86,7 @@ function makeFakeDb(seed: FakeSeed = {}) {
     userId: "",
     points: 0,
     reason: "QR_SCAN",
+    type: "EARN",
     idempotencyKey: null,
     qrCodeId: null,
     shopifyRewardRedemptionId: null,
@@ -91,11 +99,8 @@ function makeFakeDb(seed: FakeSeed = {}) {
   const db = {
     user: {
       findUnique: async ({ where }: { where: { id: string } }) =>
-        users[where.id] ? { points: users[where.id].points } : null,
-      update: async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
-        users[where.id] = applyOps(users[where.id], data);
-        return users[where.id];
-      },
+        existingUserIds.has(where.id) ? { id: where.id } : null,
+      // No `update` method: the ledger must never write to the User table.
     },
     userPointAccount: {
       findUnique: async ({ where }: { where: { userId: string } }) => {
@@ -106,6 +111,22 @@ function makeFakeDb(seed: FakeSeed = {}) {
         if (accounts.has(data.userId)) throw makeP2002(["userId"]);
         const row: AccountRow = { ...data };
         accounts.set(data.userId, row);
+        return { ...row };
+      },
+      upsert: async ({
+        where,
+        create,
+      }: {
+        where: { userId: string };
+        update: Record<string, unknown>;
+        create: AccountRow;
+      }) => {
+        // Mirrors real atomic upsert semantics: an existing row always wins
+        // unchanged (the real call site always passes `update: {}`).
+        const existing = accounts.get(where.userId);
+        if (existing) return { ...existing };
+        const row: AccountRow = { ...create };
+        accounts.set(where.userId, row);
         return { ...row };
       },
       update: async ({ where, data }: { where: { userId: string }; data: Record<string, unknown> }) => {
@@ -174,15 +195,23 @@ function makeFakeDb(seed: FakeSeed = {}) {
         txs.push(row);
         return row;
       },
-      groupBy: async ({ where }: { where: { userId: string } }) => {
-        const map = new Map<string, number>();
+      groupBy: async ({ where, by }: { where: { userId: string }; by?: string[] }) => {
+        const groupByType = Boolean(by?.includes("type"));
+        const map = new Map<string, { reason: unknown; type: unknown; sum: number }>();
         for (const t of txs.filter((r) => r.userId === where.userId)) {
-          map.set(t.reason, (map.get(t.reason) ?? 0) + t.points);
+          const key = groupByType ? `${String(t.reason)}::${String(t.type)}` : String(t.reason);
+          const existing = map.get(key);
+          map.set(key, {
+            reason: t.reason,
+            type: t.type,
+            sum: (existing?.sum ?? 0) + t.points,
+          });
         }
-        return Array.from(map.entries()).map(([reason, sum]) => ({
-          reason,
-          _sum: { points: sum },
-        }));
+        return Array.from(map.values()).map(({ reason, type, sum }) =>
+          groupByType
+            ? { reason, type, _sum: { points: sum } }
+            : { reason, _sum: { points: sum } },
+        );
       },
     },
     lesson: {
@@ -216,7 +245,6 @@ function makeFakeDb(seed: FakeSeed = {}) {
     db: db as unknown as Prisma.TransactionClient,
     accounts,
     txs,
-    users,
   };
 }
 
@@ -270,6 +298,22 @@ describe("computeLedgerDeltas", () => {
     assert.equal(computeLedgerDeltas("EARN", 1.5).ok, false);
     assert.equal(computeLedgerDeltas("ADJUSTMENT", 0).ok, false);
   });
+
+  test("invariant: dSpendable always equals ledgerPoints for every type", () => {
+    // This is the exact invariant `ensureAccount` relies on to self-heal a
+    // missing account's spendable balance purely from SUM(PointTransaction.points) —
+    // never from any other source.
+    for (const [type, points] of [
+      ["EARN", 5],
+      ["REFUND", 8],
+      ["SPEND", 30],
+      ["ADJUSTMENT", -12],
+    ] as const) {
+      const r = computeLedgerDeltas(type, points);
+      assert.ok(r.ok);
+      assert.equal(r.ok && r.deltas.dSpendable, r.ok && r.deltas.ledgerPoints);
+    }
+  });
 });
 
 function seededAccount(userId: string, spendable: number): AccountRow {
@@ -284,9 +328,9 @@ function seededAccount(userId: string, spendable: number): AccountRow {
 }
 
 describe("QR scan award", () => {
-  test("awards 1 spendable + 1 lifetime earned and keeps User.points synced", async () => {
+  test("awards 1 spendable + 1 lifetime earned, updating only the point account", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 3 } },
+      userIds: ["u1"],
       accounts: [seededAccount("u1", 3)],
     });
     const applied = await awardQrScanPoint({ userId: "u1", qrCodeId: "qr-1", db: f.db });
@@ -294,14 +338,13 @@ describe("QR scan award", () => {
     const acc = f.accounts.get("u1")!;
     assert.equal(acc.spendablePoints, 4);
     assert.equal(acc.lifetimeEarnedPoints, 4);
-    assert.equal(f.users.u1.points, 4); // legacy mirror
     assert.equal(f.txs.length, 1);
     assert.equal(f.txs[0].points, 1);
   });
 
   test("duplicate QR does not double-award", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 0 } },
+      userIds: ["u1"],
       accounts: [seededAccount("u1", 0)],
     });
     const first = await awardQrScanPoint({ userId: "u1", qrCodeId: "qr-1", db: f.db });
@@ -312,22 +355,33 @@ describe("QR scan award", () => {
     assert.equal(f.txs.length, 1);
   });
 
-  test("self-heals a missing account from legacy points + ledger", async () => {
+  test("missing account is created safely, self-healed purely from ledger history (no legacy balance involved)", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 10 } },
+      userIds: ["u1"],
       transactions: [{ userId: "u1", points: 10, reason: "QR_SCAN", qrCodeId: "old" }],
     });
     await awardQrScanPoint({ userId: "u1", qrCodeId: "new", db: f.db });
     const acc = f.accounts.get("u1")!;
-    assert.equal(acc.spendablePoints, 11); // 10 legacy + 1
-    assert.equal(acc.lifetimeEarnedPoints, 11); // 10 derived + 1
+    assert.equal(acc.spendablePoints, 11); // 10 from prior ledger row + 1 new
+    assert.equal(acc.lifetimeEarnedPoints, 11); // derived from the same ledger rows
+  });
+
+  test("a genuinely new user (no prior ledger history) gets a zeroed account, never a fabricated balance", async () => {
+    const f = makeFakeDb({ userIds: ["u1"] });
+    const balance = await getUserSpendablePointBalance({ userId: "u1", db: f.db });
+    assert.equal(balance, 0);
+    const acc = f.accounts.get("u1")!;
+    assert.equal(acc.spendablePoints, 0);
+    assert.equal(acc.lifetimeEarnedPoints, 0);
+    assert.equal(acc.lifetimeSpentPoints, 0);
+    assert.equal(acc.lifetimeRefundedPoints, 0);
   });
 });
 
 describe("Shopify redemption debit", () => {
-  test("reads the point-account spendable balance instead of the legacy User.points mirror", async () => {
+  test("reads the spendable balance from the existing point account, never re-derived", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 999 } },
+      userIds: ["u1"],
       accounts: [seededAccount("u1", 12)],
     });
 
@@ -341,7 +395,7 @@ describe("Shopify redemption debit", () => {
 
   test("decreases spendable + lifetime spent, lifetime earned unchanged", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 100 } },
+      userIds: ["u1"],
       accounts: [seededAccount("u1", 100)],
     });
     const res = await debitShopifyRewardPoints({
@@ -355,13 +409,12 @@ describe("Shopify redemption debit", () => {
     assert.equal(acc.spendablePoints, 60);
     assert.equal(acc.lifetimeSpentPoints, 40);
     assert.equal(acc.lifetimeEarnedPoints, 100); // unchanged
-    assert.equal(f.users.u1.points, 60);
     assert.equal(f.txs[0].points, -40); // negative ledger row
   });
 
   test("insufficient balance does not create a transaction", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 10 } },
+      userIds: ["u1"],
       accounts: [seededAccount("u1", 10)],
     });
     const res = await debitShopifyRewardPoints({
@@ -378,7 +431,7 @@ describe("Shopify redemption debit", () => {
 
   test("records a deterministic campaignId in metadata without changing point math", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 100 } },
+      userIds: ["u1"],
       accounts: [seededAccount("u1", 100)],
     });
     const res = await debitShopifyRewardPoints({
@@ -396,7 +449,7 @@ describe("Shopify redemption debit", () => {
 
   test("omits metadata when no deterministic campaign was resolved", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 100 } },
+      userIds: ["u1"],
       accounts: [seededAccount("u1", 100)],
     });
     await debitShopifyRewardPoints({
@@ -413,7 +466,7 @@ describe("Shopify redemption debit", () => {
 describe("Shopify refund", () => {
   test("restores spendable + lifetime refunded, lifetime earned unchanged", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 60 } },
+      userIds: ["u1"],
       accounts: [
         {
           userId: "u1",
@@ -440,7 +493,7 @@ describe("Shopify refund", () => {
 
   test("duplicate refund does not double-increment", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 60 } },
+      userIds: ["u1"],
       accounts: [seededAccount("u1", 60)],
     });
     const first = await refundShopifyRewardPoints({
@@ -463,7 +516,7 @@ describe("Shopify refund", () => {
 
   test("records a deterministic campaignId in metadata without changing refund math", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 60 } },
+      userIds: ["u1"],
       accounts: [seededAccount("u1", 60)],
     });
     const res = await refundShopifyRewardPoints({
@@ -483,7 +536,7 @@ describe("Shopify refund", () => {
 describe("Lesson completion", () => {
   test("awards once when reward > 0", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 0 } },
+      userIds: ["u1"],
       accounts: [seededAccount("u1", 0)],
       lessons: { l1: { completionPointsReward: 25 } },
     });
@@ -495,7 +548,7 @@ describe("Lesson completion", () => {
 
   test("repeat completion does not double-award", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 0 } },
+      userIds: ["u1"],
       accounts: [seededAccount("u1", 0)],
       lessons: { l1: { completionPointsReward: 25 } },
     });
@@ -508,7 +561,7 @@ describe("Lesson completion", () => {
 
   test("reward of 0 creates no transaction", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 0 } },
+      userIds: ["u1"],
       accounts: [seededAccount("u1", 0)],
       lessons: { l1: { completionPointsReward: 0 } },
     });
@@ -520,7 +573,7 @@ describe("Lesson completion", () => {
 
 describe("Course completion", () => {
   const base = () => ({
-    users: { u1: { points: 0 } },
+    userIds: ["u1"],
     accounts: [seededAccount("u1", 0)],
     courses: { c1: { completionPointsReward: 100, lessonIds: ["l1", "l2"] } },
   });
@@ -541,7 +594,7 @@ describe("Course completion", () => {
 
   test("course with zero active lessons does not award", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 0 } },
+      userIds: ["u1"],
       accounts: [seededAccount("u1", 0)],
       courses: { c1: { completionPointsReward: 100, lessonIds: [] } },
       completedLessons: { u1: [] },
@@ -565,7 +618,7 @@ describe("Progress-merge idempotency guarantee", () => {
   // merge must never be granted a second time.
   test("re-awarding an already-granted lesson is a no-op", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 25 } },
+      userIds: ["u1"],
       accounts: [seededAccount("u1", 25)],
       lessons: { l1: { completionPointsReward: 25 } },
       transactions: [
@@ -587,7 +640,7 @@ describe("Progress-merge idempotency guarantee", () => {
 describe("applyPointLedgerEvent invalid input", () => {
   test("negative EARN is rejected without mutation", async () => {
     const f = makeFakeDb({
-      users: { u1: { points: 5 } },
+      userIds: ["u1"],
       accounts: [seededAccount("u1", 5)],
     });
     const res = await applyPointLedgerEvent({
@@ -601,5 +654,178 @@ describe("applyPointLedgerEvent invalid input", () => {
     assert.equal(res.applied === false && res.reason, "INVALID");
     assert.equal(f.txs.length, 0);
     assert.equal(f.accounts.get("u1")!.spendablePoints, 5);
+  });
+});
+
+describe("Account creation never touches the User table", () => {
+  test("ensureAccount only reads the user's existence (id), never a balance field", async () => {
+    // The fake db's `user.findUnique` only ever returns `{ id }` — if
+    // `ensureAccount` tried to read a balance field from it, this test's
+    // seed intentionally provides no such field, so any accidental read
+    // would surface as `undefined` flowing into the new account instead of
+    // 0, which the assertions below would catch.
+    const f = makeFakeDb({ userIds: ["u1"] });
+    await getUserSpendablePointBalance({ userId: "u1", db: f.db });
+    const acc = f.accounts.get("u1")!;
+    assert.equal(acc.spendablePoints, 0);
+    assert.notEqual(acc.spendablePoints, undefined);
+  });
+
+  test("an existing account is returned as-is and is never overwritten by any other source", async () => {
+    const f = makeFakeDb({
+      userIds: ["u1"],
+      accounts: [seededAccount("u1", 42)],
+      // Ledger history disagrees with the account (would sum to 999 if ever
+      // re-derived) — proves the existing account row wins outright and is
+      // never recomputed from the ledger while it already exists.
+      transactions: [{ userId: "u1", points: 999, reason: "BONUS" }],
+    });
+    const balance = await getUserSpendablePointBalance({ userId: "u1", db: f.db });
+    assert.equal(balance, 42);
+  });
+});
+
+describe("Missing-account lifetime reconstruction — classified by (reason, type), not reason alone", () => {
+  test("includes lesson completion earnings (reason=BONUS, sourceType=LESSON_COMPLETION, type=EARN)", async () => {
+    const f = makeFakeDb({
+      userIds: ["u1"],
+      transactions: [
+        {
+          userId: "u1",
+          points: 10,
+          reason: "BONUS",
+          type: "EARN",
+          sourceType: "LESSON_COMPLETION",
+          sourceId: "lesson-1",
+        },
+      ],
+    });
+    const balance = await getUserSpendablePointBalance({ userId: "u1", db: f.db });
+    const acc = f.accounts.get("u1")!;
+    assert.equal(balance, 10);
+    assert.equal(acc.spendablePoints, 10);
+    assert.equal(acc.lifetimeEarnedPoints, 10);
+  });
+
+  test("includes course completion earnings (reason=BONUS, sourceType=COURSE_COMPLETION, type=EARN)", async () => {
+    const f = makeFakeDb({
+      userIds: ["u1"],
+      transactions: [
+        {
+          userId: "u1",
+          points: 50,
+          reason: "BONUS",
+          type: "EARN",
+          sourceType: "COURSE_COMPLETION",
+          sourceId: "course-1",
+        },
+      ],
+    });
+    const balance = await getUserSpendablePointBalance({ userId: "u1", db: f.db });
+    const acc = f.accounts.get("u1")!;
+    assert.equal(balance, 50);
+    assert.equal(acc.spendablePoints, 50);
+    assert.equal(acc.lifetimeEarnedPoints, 50);
+  });
+
+  test("lesson and course completions combine correctly alongside QR scans", async () => {
+    const f = makeFakeDb({
+      userIds: ["u1"],
+      transactions: [
+        { userId: "u1", points: 1, reason: "QR_SCAN", type: "EARN", qrCodeId: "qr-1" },
+        { userId: "u1", points: 10, reason: "BONUS", type: "EARN", sourceType: "LESSON_COMPLETION" },
+        { userId: "u1", points: 50, reason: "BONUS", type: "EARN", sourceType: "COURSE_COMPLETION" },
+      ],
+    });
+    const acc0 = await getUserSpendablePointBalance({ userId: "u1", db: f.db });
+    const acc = f.accounts.get("u1")!;
+    assert.equal(acc0, 61);
+    assert.equal(acc.spendablePoints, 61);
+    assert.equal(acc.lifetimeEarnedPoints, 61);
+  });
+
+  test("spendable equals the signed sum of every ledger row, including SPEND and REFUND rows", async () => {
+    const f = makeFakeDb({
+      userIds: ["u1"],
+      transactions: [
+        { userId: "u1", points: 100, reason: "BONUS", type: "EARN" },
+        {
+          userId: "u1",
+          points: -40,
+          reason: "SHOPIFY_REWARD_REDEMPTION",
+          type: "SPEND",
+          shopifyRewardRedemptionId: "r1",
+        },
+        {
+          userId: "u1",
+          points: 40,
+          reason: "SHOPIFY_REWARD_REFUND",
+          type: "REFUND",
+          shopifyRewardRedemptionId: "r1",
+        },
+      ],
+    });
+    const balance = await getUserSpendablePointBalance({ userId: "u1", db: f.db });
+    const acc = f.accounts.get("u1")!;
+    assert.equal(balance, 100); // 100 - 40 + 40
+    assert.equal(acc.spendablePoints, 100);
+    assert.equal(acc.lifetimeEarnedPoints, 100);
+    assert.equal(acc.lifetimeSpentPoints, 40);
+    assert.equal(acc.lifetimeRefundedPoints, 40);
+  });
+
+  test("ADJUSTMENT rows affect spendable but are never counted as lifetime earned, even with reason=BONUS", async () => {
+    const f = makeFakeDb({
+      userIds: ["u1"],
+      transactions: [
+        { userId: "u1", points: 10, reason: "BONUS", type: "EARN" },
+        // A manual adjustment that happens to carry reason=BONUS. Must not
+        // be conflated with a genuine EARN just because the reason matches.
+        { userId: "u1", points: 5, reason: "BONUS", type: "ADJUSTMENT" },
+      ],
+    });
+    const balance = await getUserSpendablePointBalance({ userId: "u1", db: f.db });
+    const acc = f.accounts.get("u1")!;
+    assert.equal(balance, 15); // 10 + 5 — adjustment still affects spendable
+    assert.equal(acc.spendablePoints, 15);
+    assert.equal(acc.lifetimeEarnedPoints, 10); // the ADJUSTMENT's +5 excluded
+  });
+
+  test("a negative ADJUSTMENT lowers spendable without touching any lifetime bucket", async () => {
+    const f = makeFakeDb({
+      userIds: ["u1"],
+      transactions: [
+        { userId: "u1", points: 20, reason: "BONUS", type: "EARN" },
+        { userId: "u1", points: -8, reason: "BONUS", type: "ADJUSTMENT" },
+      ],
+    });
+    const balance = await getUserSpendablePointBalance({ userId: "u1", db: f.db });
+    const acc = f.accounts.get("u1")!;
+    assert.equal(balance, 12); // 20 - 8
+    assert.equal(acc.lifetimeEarnedPoints, 20);
+    assert.equal(acc.lifetimeSpentPoints, 0);
+    assert.equal(acc.lifetimeRefundedPoints, 0);
+  });
+});
+
+describe("Concurrent account creation (atomic upsert)", () => {
+  test("upsert never overwrites a pre-existing account with freshly-derived ledger values", async () => {
+    const f = makeFakeDb({
+      userIds: ["u1"],
+      accounts: [seededAccount("u1", 7)],
+      transactions: [{ userId: "u1", points: 999, reason: "BONUS", type: "EARN" }],
+    });
+    const balance = await getUserSpendablePointBalance({ userId: "u1", db: f.db });
+    assert.equal(balance, 7);
+    assert.equal(f.accounts.get("u1")!.spendablePoints, 7);
+  });
+
+  test("does not throw when the account row is created between the existence check and the upsert", async () => {
+    const f = makeFakeDb({ userIds: ["u1"] });
+    // Simulate a concurrent request winning the race right before this
+    // call's upsert runs.
+    f.accounts.set("u1", seededAccount("u1", 3));
+    const balance = await getUserSpendablePointBalance({ userId: "u1", db: f.db });
+    assert.equal(balance, 3);
   });
 });

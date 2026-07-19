@@ -164,6 +164,14 @@ before(async () => {
       lifetimeRefundedPoints: 0,
       version: 0,
     }),
+    upsert: async () => ({
+      userId: "user",
+      spendablePoints: 0,
+      lifetimeEarnedPoints: 0,
+      lifetimeSpentPoints: 0,
+      lifetimeRefundedPoints: 0,
+      version: 0,
+    }),
     update: async () => ({}),
     updateMany: async () => ({ count: 1 }),
   };
@@ -1316,7 +1324,6 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
     t.mock.method(prisma.user, "findUnique", async () => ({
       id: "user-123",
-      points: 50,
     }));
 
     t.mock.method(prisma.userPointAccount, "findUnique", async () => ({
@@ -1381,7 +1388,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       products: [],
     }));
 
-    t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-123", points: 200 }));
+    t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-123" }));
     t.mock.method(prisma.userPointAccount, "findUnique", async () => ({
       userId: "user-123",
       spendablePoints: 200,
@@ -1457,7 +1464,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       brandId: "brand-123",
       unlocks: [{ id: "unlock-123" }],
     }));
-    t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-123", points: 200 }));
+    t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-123" }));
     t.mock.method(prisma.shopifyRewardRedemption, "create", async () => ({
       id: "redemption-percentage-ok",
       userId: "user-123",
@@ -1471,7 +1478,6 @@ describe("Route Scenario 4: Reward Redemption", () => {
       discountPercentageBasisPoints: 1000,
       currencyCode: "USD",
     }));
-    t.mock.method(prisma.user, "updateMany", async () => ({ count: 1 }));
     t.mock.method(prisma.pointTransaction, "create", async () => ({}));
     t.mock.method(prisma.shopifyRewardRedemption, "update", async (args: unknown) => {
       const typedArgs = args as { data: { status?: string } };
@@ -1562,7 +1568,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       products: [{ shopifyProductGid: "gid://shopify/Product/1" }],
     }));
 
-    t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-123", points: 200 }));
+    t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-123" }));
     t.mock.method(prisma.userPointAccount, "findUnique", async () => ({
       userId: "user-123",
       spendablePoints: 200,
@@ -1722,7 +1728,6 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
     t.mock.method(prisma.user, "findUnique", async () => ({
       id: "user-123",
-      points: 200,
     }));
 
     t.mock.method(prisma.shopifyRewardRedemption, "create", async () => ({
@@ -1739,7 +1744,6 @@ describe("Route Scenario 4: Reward Redemption", () => {
       currencyCode: "USD",
     }));
 
-    t.mock.method(prisma.user, "updateMany", async () => ({ count: 1 }));
     t.mock.method(prisma.pointTransaction, "create", async () => ({}));
 
     let redemptionUpdatedToIssued = false;
@@ -1861,7 +1865,6 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
     t.mock.method(prisma.user, "findUnique", async () => ({
       id: "user-123",
-      points: 200,
     }));
 
     t.mock.method(prisma.shopifyRewardRedemption, "create", async () => ({
@@ -1878,15 +1881,21 @@ describe("Route Scenario 4: Reward Redemption", () => {
       currencyCode: "USD",
     }));
 
-    t.mock.method(prisma.user, "updateMany", async () => ({ count: 1 }));
     t.mock.method(prisma.pointTransaction, "create", async () => ({}));
 
     let pointsRefunded = false;
     let statusRefunded = false;
 
-    t.mock.method(prisma.user, "update", async () => {
+    t.mock.method(prisma.userPointAccount, "update", async () => {
       pointsRefunded = true;
-      return { id: "user-123" };
+      return {
+        userId: "user-123",
+        spendablePoints: 250,
+        lifetimeEarnedPoints: 0,
+        lifetimeSpentPoints: 50,
+        lifetimeRefundedPoints: 50,
+        version: 1,
+      };
     });
 
     t.mock.method(prisma.shopifyRewardRedemption, "update", async (args: unknown) => {
@@ -2039,9 +2048,16 @@ describe("Route Scenario 5: QR Redemption and Unlock", () => {
     });
 
     let pointsAwarded = false;
-    t.mock.method(prisma.user, "update", async () => {
+    t.mock.method(prisma.userPointAccount, "update", async () => {
       pointsAwarded = true;
-      return { id: "user-123" };
+      return {
+        userId: "user-123",
+        spendablePoints: 1,
+        lifetimeEarnedPoints: 1,
+        lifetimeSpentPoints: 0,
+        lifetimeRefundedPoints: 0,
+        version: 1,
+      };
     });
 
     t.mock.method(prisma.pointTransaction, "create", async () => ({}));

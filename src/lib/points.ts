@@ -137,49 +137,91 @@ export interface UserPointAccountShape {
 }
 
 /**
- * Derive lifetime aggregates for a user directly from the immutable ledger.
- * Mirrors the rules used by manual-production-backfill.sql exactly:
- *   earned   = positive QR_SCAN / BONUS / REFERRAL rows
- *   spent    = ABS of negative SHOPIFY_REWARD_REDEMPTION rows
- *   refunded = positive SHOPIFY_REWARD_REFUND rows
+ * Derive the full account aggregate for a user directly from the immutable
+ * ledger. Spendable is the exhaustive sum of every `PointTransaction.points`
+ * row: by construction (see `computeLedgerDeltas`), `dSpendable` always equals
+ * `ledgerPoints` for every ledger type (EARN/SPEND/REFUND/ADJUSTMENT), so the
+ * signed sum of all rows for a user is always exactly their spendable balance.
+ *
+ * Lifetime totals are classified by (reason, type) together, never by reason
+ * alone — `type` is what carries the actual ledger semantics:
+ *   earned   = EARN-type QR_SCAN / BONUS / REFERRAL rows. Lesson and course
+ *              completion rewards are recorded with reason=BONUS (see
+ *              `awardLessonCompletionPoints` / `awardCourseCompletionPoints`),
+ *              so they are included here — this matches the totals
+ *              `getUserPointsOverview` computes via its own (sourceType-based)
+ *              bucketing for the same underlying rows.
+ *   spent    = SPEND-type SHOPIFY_REWARD_REDEMPTION rows (ABS).
+ *   refunded = REFUND-type SHOPIFY_REWARD_REFUND rows.
+ *   ADJUSTMENT rows are never classified into any lifetime bucket here — an
+ *   adjustment's intended lifetime effect (if any) isn't durably stored on
+ *   the row in a reconstructable way, so it must never be guessed. It still
+ *   contributes to `spendable`, since every row does.
  */
-async function deriveLifetimeFromLedger(
+async function deriveAccountFromLedger(
   tx: Prisma.TransactionClient,
   userId: string,
-): Promise<{ earned: number; spent: number; refunded: number }> {
+): Promise<{ spendable: number; earned: number; spent: number; refunded: number }> {
   const grouped = await tx.pointTransaction.groupBy({
-    by: ["reason"],
+    by: ["reason", "type"],
     where: { userId },
     _sum: { points: true },
   });
 
+  let spendable = 0;
   let earned = 0;
   let spent = 0;
   let refunded = 0;
   for (const row of grouped) {
     const sum = row._sum.points ?? 0;
-    switch (row.reason) {
-      case "QR_SCAN":
-      case "BONUS":
-      case "REFERRAL":
-        if (sum > 0) earned += sum;
-        break;
-      case "SHOPIFY_REWARD_REDEMPTION":
-        if (sum < 0) spent += Math.abs(sum);
-        break;
-      case "SHOPIFY_REWARD_REFUND":
-        if (sum > 0) refunded += sum;
-        break;
+    spendable += sum;
+
+    if (row.type === "EARN") {
+      if (
+        (row.reason === "QR_SCAN" || row.reason === "BONUS" || row.reason === "REFERRAL") &&
+        sum > 0
+      ) {
+        earned += sum;
+      }
+    } else if (row.type === "SPEND") {
+      if (row.reason === "SHOPIFY_REWARD_REDEMPTION" && sum < 0) {
+        spent += Math.abs(sum);
+      }
+    } else if (row.type === "REFUND") {
+      if (row.reason === "SHOPIFY_REWARD_REFUND" && sum > 0) {
+        refunded += sum;
+      }
     }
+    // ADJUSTMENT: already folded into `spendable` above; intentionally never
+    // classified into earned/spent/refunded during reconstruction.
   }
-  return { earned, spent, refunded };
+  return { spendable, earned, spent, refunded };
 }
 
 /**
- * Fetch the user's point account, creating it if missing. When created, lifetime
- * totals are self-healed from the existing ledger and spendable is seeded from
- * the legacy `User.points` balance so existing balances are never lost even if
- * the manual backfill has not run yet.
+ * Fetch the user's point account, creating it if missing. A newly created
+ * account is fully self-healed from the immutable ledger (both spendable and
+ * lifetime totals) — never from any other source — so a user with no prior
+ * ledger history correctly gets a zeroed account.
+ *
+ * Creation is a single atomic `upsert` keyed on the primary key (`userId`)
+ * rather than a create-then-catch-P2002-then-reread. A failed unique-
+ * constraint violation can leave a Postgres transaction in an aborted state
+ * where a subsequent read in the SAME transaction is unreliable (Postgres
+ * rejects further statements until rollback to a savepoint) — `upsert`
+ * avoids ever hitting that error path.
+ *
+ * The `update` clause is a genuine no-op (`version: { increment: 0 }`), NOT
+ * an empty object. This was verified empirically against a real Postgres
+ * database: an empty `update: {}` reliably throws P2002 under concurrent
+ * upserts for the same missing row (5/12 concurrent calls failed in
+ * testing) — Prisma appears to require a non-empty SET clause to reliably
+ * return the pre-existing row on conflict. `version: { increment: 0 }`
+ * forces a real (but value-neutral) UPDATE, which returns the existing row
+ * correctly on every conflict. Either way, the existing row's balance
+ * fields are always left completely unchanged — this reconstruction's
+ * freshly derived values are simply discarded when a concurrent caller
+ * already won the race.
  */
 async function ensureAccount(
   tx: Prisma.TransactionClient,
@@ -190,36 +232,26 @@ async function ensureAccount(
 
   const user = await tx.user.findUnique({
     where: { id: userId },
-    select: { points: true },
+    select: { id: true },
   });
   if (!user) {
     throw new Error(`Cannot create point account: user ${userId} not found`);
   }
 
-  const { earned, spent, refunded } = await deriveLifetimeFromLedger(tx, userId);
+  const { spendable, earned, spent, refunded } = await deriveAccountFromLedger(tx, userId);
 
-  try {
-    return await tx.userPointAccount.create({
-      data: {
-        userId,
-        spendablePoints: user.points,
-        lifetimeEarnedPoints: earned,
-        lifetimeSpentPoints: spent,
-        lifetimeRefundedPoints: refunded,
-        version: 0,
-      },
-    });
-  } catch (error) {
-    // Concurrent creation — re-read the row that won the race.
-    if (
-      error instanceof Prisma.PrismaClientKnownRequestError &&
-      error.code === "P2002"
-    ) {
-      const raced = await tx.userPointAccount.findUnique({ where: { userId } });
-      if (raced) return raced;
-    }
-    throw error;
-  }
+  return tx.userPointAccount.upsert({
+    where: { userId },
+    update: { version: { increment: 0 } },
+    create: {
+      userId,
+      spendablePoints: spendable,
+      lifetimeEarnedPoints: earned,
+      lifetimeSpentPoints: spent,
+      lifetimeRefundedPoints: refunded,
+      version: 0,
+    },
+  });
 }
 
 /**
@@ -398,12 +430,6 @@ async function runLedgerEvent(
     throw error;
   }
 
-  // 4. Keep the legacy spendable balance mirror in sync.
-  await tx.user.update({
-    where: { id: input.userId },
-    data: { points: newSpendable },
-  });
-
   return {
     applied: true,
     transaction: created,
@@ -420,8 +446,8 @@ async function runLedgerEvent(
 
 /**
  * Central, atomic, idempotent point mutation. This is the ONLY place that writes
- * both a PointTransaction row and the UserPointAccount aggregate, keeping the
- * legacy `User.points` balance in sync.
+ * both a PointTransaction row and the UserPointAccount aggregate. UserPointAccount
+ * is the sole authoritative balance store — never introduce another mirror.
  *
  * - If `db` is a transaction client, the mutation joins that transaction.
  * - Otherwise a transaction is opened internally.
@@ -827,7 +853,7 @@ export async function getUserPointsOverview(userId: string, take = 25) {
     await Promise.all([
       prisma.user.findUnique({
         where: { id: userId },
-        select: { id: true, name: true, points: true },
+        select: { id: true, name: true },
       }),
       prisma.userPointAccount.findUnique({ where: { userId } }),
       prisma.pointTransaction.groupBy({
@@ -1072,16 +1098,24 @@ export async function getUserPointsOverview(userId: string, take = 25) {
     }
   };
 
+  // Exhaustive sum of every PointTransaction row for this user — used only
+  // as the missing-account fallback below. By construction (see
+  // `computeLedgerDeltas`), the signed sum of all ledger rows for a user
+  // always equals their spendable balance.
+  let ledgerSpendableTotal = 0;
   for (const row of sourceTotals) {
     if (row.sourceType === null) continue; // handled via reason fallback below
+    ledgerSpendableTotal += row._sum.points ?? 0;
     addToBucket(row.sourceType, null, row._sum.points ?? 0);
   }
   for (const row of reasonTotalsForNullSource) {
+    ledgerSpendableTotal += row._sum.points ?? 0;
     addToBucket(null, row.reason, row._sum.points ?? 0);
   }
 
-  // Prefer the aggregate account; fall back to legacy points / derived buckets.
-  const spendablePoints = account?.spendablePoints ?? user.points;
+  // Prefer the aggregate account (the authoritative source); fall back to the
+  // ledger-derived total only when the account row itself is missing.
+  const spendablePoints = account?.spendablePoints ?? ledgerSpendableTotal;
   const lifetimeEarnedPoints =
     account?.lifetimeEarnedPoints ??
     bucket.qrPoints + bucket.bonusPoints + bucket.referralPoints +
