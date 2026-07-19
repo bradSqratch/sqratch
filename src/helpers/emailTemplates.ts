@@ -33,7 +33,7 @@ export function buildWelcomeEmailHtml(params: WelcomeTemplateParams) {
                         <td align="center" style="padding:26px 28px 10px 28px;">
                         <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
                             <div style="font-size:22px; font-weight:800; letter-spacing:-0.5px; color:#ffffff;">
-                            SQRATCH<span style="font-weight:700; opacity:0.65;">™</span>
+                            SQRATCH<span style="font-weight:700; opacity:0.65;">®</span>
                             </div>
                             <div style="margin-top:6px; font-size:12px; letter-spacing:0.9px; text-transform:uppercase; color:#7a8299;">
                             POWERED BY PEOPLE WHO SHOW UP
@@ -159,7 +159,7 @@ export function buildInviteEmailHtml(params: InviteTemplateParams) {
             <td align="center" style="padding:26px 28px 10px;">
               <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
                 <div style="font-size:22px; font-weight:800; letter-spacing:-0.5px; color:#ffffff;">
-                  SQRATCH<span style="opacity:0.6;">™</span>
+                  SQRATCH<span style="opacity:0.6;">®</span>
                 </div>
                 <div style="margin-top:6px; font-size:12px; letter-spacing:0.9px;
                             text-transform:uppercase; color:#7a8299;">
@@ -286,7 +286,7 @@ export function buildApprovalEmailHtml(params: ApprovalTemplateParams) {
             <td align="center" style="padding:26px 28px 10px;">
               <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;">
                 <div style="font-size:22px; font-weight:800; letter-spacing:-0.5px; color:#ffffff;">
-                  SQRATCH<span style="opacity:0.6;">™</span>
+                  SQRATCH<span style="opacity:0.6;">®</span>
                 </div>
                 <div style="margin-top:6px; font-size:12px; letter-spacing:0.9px;
                             text-transform:uppercase; color:#7a8299;">
