@@ -218,6 +218,15 @@ export async function redeemImpl(request: NextRequest, deps: AuthResolvers) {
       );
     }
 
+    // Recorded on the ledger (via metadata) only when the claim request
+    // resolved to exactly one unlocked campaign — never guessed from a list
+    // of several (a user can have multiple unlocks, and an experience can be
+    // attached to multiple campaigns).
+    const deterministicCampaignId =
+      rewardContext.campaignIds.length === 1
+        ? rewardContext.campaignIds[0]
+        : null;
+
     if (
       offer.brand.shopifyConnectionStatus !== "CONNECTED" ||
       !offer.brand.shopifyShopDomain ||
@@ -475,6 +484,7 @@ export async function redeemImpl(request: NextRequest, deps: AuthResolvers) {
             userId: user.id,
             pointsCost: currentOffer.pointsCost,
             shopifyRewardRedemptionId: createdRedemption.id,
+            campaignId: deterministicCampaignId,
             db: tx,
           });
 
@@ -619,6 +629,7 @@ export async function redeemImpl(request: NextRequest, deps: AuthResolvers) {
           userId: user.id,
           points: discountConfig.pointsCost,
           shopifyRewardRedemptionId: redemption.id,
+          campaignId: deterministicCampaignId,
           db: tx,
         });
         return tx.shopifyRewardRedemption.update({
@@ -678,6 +689,7 @@ export async function redeemImpl(request: NextRequest, deps: AuthResolvers) {
           userId: user.id,
           points: discountConfig.pointsCost,
           shopifyRewardRedemptionId: redemption.id,
+          campaignId: deterministicCampaignId,
           db: tx,
         });
 

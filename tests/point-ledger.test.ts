@@ -375,6 +375,39 @@ describe("Shopify redemption debit", () => {
     assert.equal(f.accounts.get("u1")!.spendablePoints, 10);
     assert.equal(f.txs.length, 0);
   });
+
+  test("records a deterministic campaignId in metadata without changing point math", async () => {
+    const f = makeFakeDb({
+      users: { u1: { points: 100 } },
+      accounts: [seededAccount("u1", 100)],
+    });
+    const res = await debitShopifyRewardPoints({
+      userId: "u1",
+      pointsCost: 40,
+      shopifyRewardRedemptionId: "r1",
+      campaignId: "camp-1",
+      db: f.db,
+    });
+    assert.equal(res.applied, true);
+    assert.deepEqual(f.txs[0].metadata, { campaignId: "camp-1" });
+    assert.equal(f.accounts.get("u1")!.spendablePoints, 60);
+    assert.equal(f.txs[0].points, -40);
+  });
+
+  test("omits metadata when no deterministic campaign was resolved", async () => {
+    const f = makeFakeDb({
+      users: { u1: { points: 100 } },
+      accounts: [seededAccount("u1", 100)],
+    });
+    await debitShopifyRewardPoints({
+      userId: "u1",
+      pointsCost: 40,
+      shopifyRewardRedemptionId: "r1",
+      campaignId: null,
+      db: f.db,
+    });
+    assert.equal(f.txs[0].metadata, undefined);
+  });
 });
 
 describe("Shopify refund", () => {
@@ -426,6 +459,24 @@ describe("Shopify refund", () => {
     assert.equal(second.applied, false);
     assert.equal(f.accounts.get("u1")!.spendablePoints, 100); // +40 once only
     assert.equal(f.txs.length, 1);
+  });
+
+  test("records a deterministic campaignId in metadata without changing refund math", async () => {
+    const f = makeFakeDb({
+      users: { u1: { points: 60 } },
+      accounts: [seededAccount("u1", 60)],
+    });
+    const res = await refundShopifyRewardPoints({
+      userId: "u1",
+      points: 40,
+      shopifyRewardRedemptionId: "r1",
+      campaignId: "camp-1",
+      db: f.db,
+    });
+    assert.equal(res.applied, true);
+    assert.deepEqual(f.txs[0].metadata, { campaignId: "camp-1" });
+    assert.equal(f.accounts.get("u1")!.spendablePoints, 100);
+    assert.equal(f.accounts.get("u1")!.lifetimeEarnedPoints, 60); // still NOT raised
   });
 });
 

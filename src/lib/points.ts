@@ -489,6 +489,14 @@ export async function debitShopifyRewardPoints(options: {
   userId: string;
   pointsCost: number;
   shopifyRewardRedemptionId: string;
+  /**
+   * Only pass a campaignId that was deterministically resolved (e.g. exactly
+   * one unlocked campaign matched the claim request) — never a guess. Stored
+   * in the existing `metadata` JSON column so activity history can later
+   * show which campaign the redemption was claimed through, without adding
+   * a new schema column.
+   */
+  campaignId?: string | null;
   db?: PointDbClient;
 }): Promise<ApplyPointLedgerEventResult> {
   return applyPointLedgerEvent({
@@ -500,6 +508,7 @@ export async function debitShopifyRewardPoints(options: {
     sourceId: options.shopifyRewardRedemptionId,
     idempotencyKey: `shopify-reward-redemption:${options.shopifyRewardRedemptionId}`,
     shopifyRewardRedemptionId: options.shopifyRewardRedemptionId,
+    metadata: options.campaignId ? { campaignId: options.campaignId } : undefined,
     db: options.db,
   });
 }
@@ -512,6 +521,8 @@ export async function refundShopifyRewardPoints(options: {
   userId: string;
   points: number;
   shopifyRewardRedemptionId: string;
+  /** Same deterministic-only contract as debitShopifyRewardPoints. */
+  campaignId?: string | null;
   db?: PointDbClient;
 }): Promise<ApplyPointLedgerEventResult> {
   return applyPointLedgerEvent({
@@ -523,6 +534,7 @@ export async function refundShopifyRewardPoints(options: {
     sourceId: options.shopifyRewardRedemptionId,
     idempotencyKey: `shopify-reward-refund:${options.shopifyRewardRedemptionId}`,
     shopifyRewardRedemptionId: options.shopifyRewardRedemptionId,
+    metadata: options.campaignId ? { campaignId: options.campaignId } : undefined,
     db: options.db,
   });
 }
@@ -611,6 +623,202 @@ export async function awardCourseCompletionPoints(options: {
 }
 
 // ---------------------------------------------------------------------------
+// Points Activity read-model enrichment — pure functions, independently
+// testable without a database. `getUserPointsOverview` below does nothing
+// but batch-fetch rows and hand them to `buildPointsActivityView`.
+// ---------------------------------------------------------------------------
+
+export type CampaignSummary = {
+  id: string;
+  name: string;
+  slug: string;
+  brand: { id: string; name: string; slug: string } | null;
+};
+
+export type LessonSummary = {
+  id: string;
+  title: string;
+  course: { id: string; title: string };
+  experience: { id: string; title: string };
+};
+
+export type CourseSummary = {
+  id: string;
+  title: string;
+  experience: { id: string; title: string };
+};
+
+export type RedemptionRewardSummary = {
+  status: string;
+  discountType: "FIXED_AMOUNT" | "PERCENTAGE";
+  discountAmountCents: number | null;
+  discountPercentageBasisPoints: number | null;
+  currencyCode: string;
+  offer: { id: string; title: string } | null;
+  brand: { id: string; name: string; slug: string } | null;
+};
+
+export type RawPointTransactionRow = {
+  id: string;
+  points: number;
+  reason: PointReason;
+  type: PointTransactionType;
+  sourceType: PointSourceType | null;
+  sourceId: string | null;
+  shopifyRewardRedemptionId: string | null;
+  createdAt: Date;
+  metadata: Prisma.JsonValue | null;
+  qrCode: {
+    id: string;
+    qrCodeData: string;
+    campaign: CampaignSummary | null;
+  } | null;
+};
+
+export type PointsActivityItem = {
+  id: string;
+  points: number;
+  reason: PointReason;
+  type: PointTransactionType;
+  sourceType: PointSourceType | null;
+  createdAt: Date;
+  qrCodeData: string | null;
+  campaign: CampaignSummary | null;
+  lesson: LessonSummary | null;
+  course: CourseSummary | null;
+  reward: RedemptionRewardSummary | null;
+};
+
+/**
+ * Extracts a durable campaignId from a PointTransaction's `metadata` JSON
+ * column, tolerating null/malformed/legacy shapes (historical rows predate
+ * this field entirely). Never throws.
+ */
+export function parsePointTransactionMetadata(
+  raw: Prisma.JsonValue | null | undefined,
+): { campaignId: string | null } {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return { campaignId: null };
+  }
+  const obj = raw as Record<string, unknown>;
+  const campaignId =
+    typeof obj.campaignId === "string" && obj.campaignId.trim()
+      ? obj.campaignId
+      : null;
+  return { campaignId };
+}
+
+/**
+ * Resolves, per experienceId, the single campaign that experience is
+ * attached to — but ONLY when there is exactly one. An experience attached
+ * to zero or multiple campaigns has no deterministic campaign and must never
+ * have one guessed (e.g. "the first one"); callers get `null` for those.
+ */
+export function resolveDeterministicCampaignByExperience(
+  links: Array<{ experienceId: string; campaign: CampaignSummary }>,
+): Map<string, CampaignSummary | null> {
+  const byExperience = new Map<string, CampaignSummary[]>();
+
+  for (const link of links) {
+    const list = byExperience.get(link.experienceId) ?? [];
+    list.push(link.campaign);
+    byExperience.set(link.experienceId, list);
+  }
+
+  const result = new Map<string, CampaignSummary | null>();
+  for (const [experienceId, campaigns] of byExperience) {
+    const uniqueIds = new Set(campaigns.map((c) => c.id));
+    result.set(experienceId, uniqueIds.size === 1 ? campaigns[0] : null);
+  }
+
+  return result;
+}
+
+/**
+ * Turns raw ledger rows into display-ready activity items, resolving lesson/
+ * course/experience/campaign/reward context from pre-batched lookup maps.
+ * Pure — no I/O, no database — so it's fully unit-testable and guaranteed
+ * not to introduce N+1 queries (all context must already be in the maps).
+ *
+ * Data-integrity rules enforced here:
+ *  - A field is populated ONLY when the caller's lookup maps already prove
+ *    it deterministic (e.g. `campaignByExperienceId` only holds an entry
+ *    when `resolveDeterministicCampaignByExperience` found exactly one).
+ *  - QR identifiers are shown ONLY for QR_SCAN transactions, which carry a
+ *    real `qrCodeId` foreign key — never inferred for lesson/course
+ *    completions, since no reliable per-completion QR association exists
+ *    (a logged-in user's LessonProgress row does not retain the session/QR
+ *    that produced it).
+ *  - Reward context is resolved by the redemption's own stable
+ *    `shopifyRewardRedemptionId` FK (predates `sourceType`), so it also
+ *    covers historical rows. Reward campaign context is resolved only from
+ *    `metadata.campaignId`, which is only ever written when the redemption
+ *    request resolved to exactly one unlocked campaign — never guessed.
+ *  - Historical rows missing metadata/sourceType simply omit what can't be
+ *    resolved; nothing is fabricated and no row is rewritten.
+ */
+export function buildPointsActivityView(
+  transactions: RawPointTransactionRow[],
+  context: {
+    lessonById: Map<string, LessonSummary>;
+    courseById: Map<string, CourseSummary>;
+    redemptionById: Map<string, RedemptionRewardSummary>;
+    campaignByExperienceId: Map<string, CampaignSummary | null>;
+    campaignById: Map<string, CampaignSummary>;
+  },
+): PointsActivityItem[] {
+  return transactions.map((item) => {
+    let campaign: CampaignSummary | null = null;
+    let lesson: LessonSummary | null = null;
+    let course: CourseSummary | null = null;
+    let reward: RedemptionRewardSummary | null = null;
+
+    // QR identifiers/campaigns are surfaced ONLY for genuine QR_SCAN rows —
+    // explicitly gated on sourceType (not merely "the qrCode relation
+    // happens to be present") so a lesson/course/reward row can never pick
+    // up a QR/campaign it isn't actually tied to.
+    if (item.sourceType === "QR_SCAN") {
+      campaign = item.qrCode?.campaign ?? null;
+    } else if (item.sourceType === "LESSON_COMPLETION" && item.sourceId) {
+      const found = context.lessonById.get(item.sourceId);
+      if (found) {
+        lesson = found;
+        campaign = context.campaignByExperienceId.get(found.experience.id) ?? null;
+      }
+    } else if (item.sourceType === "COURSE_COMPLETION" && item.sourceId) {
+      const found = context.courseById.get(item.sourceId);
+      if (found) {
+        course = found;
+        campaign = context.campaignByExperienceId.get(found.experience.id) ?? null;
+      }
+    }
+
+    // Keyed off the FK (not sourceType) so historical rows predating
+    // sourceType still resolve reward context.
+    if (item.shopifyRewardRedemptionId) {
+      reward = context.redemptionById.get(item.shopifyRewardRedemptionId) ?? null;
+      const { campaignId } = parsePointTransactionMetadata(item.metadata);
+      campaign = campaignId ? context.campaignById.get(campaignId) ?? null : null;
+    }
+
+    return {
+      id: item.id,
+      points: item.points,
+      reason: item.reason,
+      type: item.type,
+      sourceType: item.sourceType,
+      createdAt: item.createdAt,
+      qrCodeData:
+        item.sourceType === "QR_SCAN" ? item.qrCode?.qrCodeData ?? null : null,
+      campaign,
+      lesson,
+      course,
+      reward,
+    };
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Read model for the dashboard.
 // ---------------------------------------------------------------------------
 
@@ -644,6 +852,9 @@ export async function getUserPointsOverview(userId: string, take = 25) {
           reason: true,
           type: true,
           sourceType: true,
+          sourceId: true,
+          shopifyRewardRedemptionId: true,
+          metadata: true,
           createdAt: true,
           qrCode: {
             select: {
@@ -666,6 +877,163 @@ export async function getUserPointsOverview(userId: string, take = 25) {
   if (!user) {
     return null;
   }
+
+  // ---- Batch-resolve lesson / course / experience / campaign / reward
+  // context for the fetched page of transactions. Every lookup below is a
+  // single batched query keyed by the distinct ids collected from
+  // `transactions` — never one query per row.
+  const lessonIds = Array.from(
+    new Set(
+      transactions
+        .filter((t) => t.sourceType === "LESSON_COMPLETION" && t.sourceId)
+        .map((t) => t.sourceId as string),
+    ),
+  );
+  const courseIdsFromCompletion = Array.from(
+    new Set(
+      transactions
+        .filter((t) => t.sourceType === "COURSE_COMPLETION" && t.sourceId)
+        .map((t) => t.sourceId as string),
+    ),
+  );
+  const redemptionIds = Array.from(
+    new Set(
+      transactions
+        .filter((t) => t.shopifyRewardRedemptionId)
+        .map((t) => t.shopifyRewardRedemptionId as string),
+    ),
+  );
+  const metadataCampaignIds = Array.from(
+    new Set(
+      transactions
+        .map((t) => parsePointTransactionMetadata(t.metadata).campaignId)
+        .filter((id): id is string => Boolean(id)),
+    ),
+  );
+
+  const [lessons, coursesFromCompletion, redemptions] = await Promise.all([
+    lessonIds.length
+      ? prisma.lesson.findMany({
+          where: { id: { in: lessonIds } },
+          select: {
+            id: true,
+            title: true,
+            course: {
+              select: {
+                id: true,
+                title: true,
+                experience: { select: { id: true, title: true } },
+              },
+            },
+          },
+        })
+      : Promise.resolve([]),
+    courseIdsFromCompletion.length
+      ? prisma.course.findMany({
+          where: { id: { in: courseIdsFromCompletion } },
+          select: {
+            id: true,
+            title: true,
+            experience: { select: { id: true, title: true } },
+          },
+        })
+      : Promise.resolve([]),
+    redemptionIds.length
+      ? prisma.shopifyRewardRedemption.findMany({
+          where: { id: { in: redemptionIds } },
+          select: {
+            id: true,
+            status: true,
+            discountType: true,
+            discountAmountCents: true,
+            discountPercentageBasisPoints: true,
+            currencyCode: true,
+            offer: { select: { id: true, title: true } },
+            brand: { select: { id: true, name: true, slug: true } },
+          },
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const lessonById = new Map<string, LessonSummary>(
+    lessons.map((l) => [
+      l.id,
+      { id: l.id, title: l.title, course: l.course, experience: l.course.experience },
+    ]),
+  );
+  const courseById = new Map<string, CourseSummary>(
+    coursesFromCompletion.map((c) => [
+      c.id,
+      { id: c.id, title: c.title, experience: c.experience },
+    ]),
+  );
+  const redemptionById = new Map<string, RedemptionRewardSummary>(
+    redemptions.map((r) => [
+      r.id,
+      {
+        status: r.status,
+        discountType: r.discountType,
+        discountAmountCents: r.discountAmountCents,
+        discountPercentageBasisPoints: r.discountPercentageBasisPoints,
+        currencyCode: r.currencyCode,
+        offer: r.offer,
+        brand: r.brand,
+      },
+    ]),
+  );
+
+  // Campaigns referenced deterministically by redemption metadata.
+  const metadataCampaigns = metadataCampaignIds.length
+    ? await prisma.campaign.findMany({
+        where: { id: { in: metadataCampaignIds } },
+        select: {
+          id: true,
+          name: true,
+          slug: true,
+          brand: { select: { id: true, name: true, slug: true } },
+        },
+      })
+    : [];
+  const campaignById = new Map<string, CampaignSummary>(
+    metadataCampaigns.map((c) => [c.id, c]),
+  );
+
+  // Campaigns for lesson/course completions, resolved via the experience's
+  // CURRENT CampaignExperience links — deterministic only when an
+  // experience has exactly one. Never "the first of several".
+  const experienceIds = Array.from(
+    new Set([
+      ...lessons.map((l) => l.course.experience.id),
+      ...coursesFromCompletion.map((c) => c.experience.id),
+    ]),
+  );
+  const campaignExperienceLinks = experienceIds.length
+    ? await prisma.campaignExperience.findMany({
+        where: { experienceId: { in: experienceIds } },
+        select: {
+          experienceId: true,
+          campaign: {
+            select: {
+              id: true,
+              name: true,
+              slug: true,
+              brand: { select: { id: true, name: true, slug: true } },
+            },
+          },
+        },
+      })
+    : [];
+  const campaignByExperienceId = resolveDeterministicCampaignByExperience(
+    campaignExperienceLinks,
+  );
+
+  const enrichedTransactions = buildPointsActivityView(transactions, {
+    lessonById,
+    courseById,
+    redemptionById,
+    campaignByExperienceId,
+    campaignById,
+  });
 
   const bucket = {
     qrPoints: 0,
@@ -739,22 +1107,6 @@ export async function getUserPointsOverview(userId: string, take = 25) {
       shopifyRewardSpentPoints: bucket.shopifyRewardSpentPoints,
       shopifyRewardRefundedPoints: bucket.shopifyRewardRefundedPoints,
     },
-    transactions: transactions.map((item) => ({
-      id: item.id,
-      points: item.points,
-      reason: item.reason,
-      type: item.type,
-      sourceType: item.sourceType,
-      createdAt: item.createdAt,
-      qrCodeData: item.qrCode?.qrCodeData || null,
-      campaign: item.qrCode?.campaign
-        ? {
-            id: item.qrCode.campaign.id,
-            name: item.qrCode.campaign.name,
-            slug: item.qrCode.campaign.slug,
-            brand: item.qrCode.campaign.brand,
-          }
-        : null,
-    })),
+    transactions: enrichedTransactions,
   };
 }

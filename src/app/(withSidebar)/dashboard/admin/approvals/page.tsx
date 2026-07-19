@@ -239,7 +239,7 @@ export default function AdminApprovalsPage() {
                         <ApprovalNote reason={request.reason} />
                       </div>
 
-                      <div className="flex flex-wrap gap-3">
+                      <div className="flex flex-col gap-3 sm:flex-row">
                         <Button
                           type="button"
                           disabled={
@@ -248,7 +248,7 @@ export default function AdminApprovalsPage() {
                           onClick={() =>
                             void handleCreatorAction(request.id, "approve")
                           }
-                          className="rounded-full border border-white bg-white text-black"
+                          className="w-full justify-center rounded-full border border-white bg-white text-black sm:w-36"
                         >
                           {processingKey === `creator:${request.id}:approve`
                             ? "Approving..."
@@ -263,7 +263,7 @@ export default function AdminApprovalsPage() {
                           onClick={() =>
                             void handleCreatorAction(request.id, "reject")
                           }
-                          className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                          className="w-full justify-center rounded-full border-white/20 bg-transparent text-white hover:bg-white/10 sm:w-36"
                         >
                           {processingKey === `creator:${request.id}:reject`
                             ? "Rejecting..."
@@ -314,7 +314,7 @@ export default function AdminApprovalsPage() {
                         <ApprovalNote reason={request.reason} />
                       </div>
 
-                      <div className="flex flex-wrap gap-3">
+                      <div className="flex flex-col gap-3 sm:flex-row">
                         <Button
                           type="button"
                           disabled={
@@ -323,7 +323,7 @@ export default function AdminApprovalsPage() {
                           onClick={() =>
                             void handleBrandAction(request.id, "approve")
                           }
-                          className="rounded-full border border-white bg-white text-black"
+                          className="w-full justify-center rounded-full border border-white bg-white text-black sm:w-36"
                         >
                           {processingKey === `brand:${request.id}:approve`
                             ? "Approving..."
@@ -338,7 +338,7 @@ export default function AdminApprovalsPage() {
                           onClick={() =>
                             void handleBrandAction(request.id, "reject")
                           }
-                          className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                          className="w-full justify-center rounded-full border-white/20 bg-transparent text-white hover:bg-white/10 sm:w-36"
                         >
                           {processingKey === `brand:${request.id}:reject`
                             ? "Rejecting..."
