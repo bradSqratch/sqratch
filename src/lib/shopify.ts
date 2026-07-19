@@ -22,6 +22,33 @@ export function isValidShopDomain(value: string) {
   );
 }
 
+/**
+ * Normalizes a Shopify shop domain for storage/comparison: lowercased,
+ * trimmed, and validated as a real *.myshopify.com domain. Returns null for
+ * anything empty or invalid (including arbitrary storefront/custom domains)
+ * rather than passing through unrecognized input.
+ */
+export function normalizeShopDomain(
+  value: string | null | undefined,
+): string | null {
+  if (!value) {
+    return null;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return isValidShopDomain(normalized) ? normalized : null;
+}
+
+/** True when both domains are present, valid, and identical once normalized. */
+export function isSameShopDomain(
+  a: string | null | undefined,
+  b: string | null | undefined,
+) {
+  const normalizedA = normalizeShopDomain(a);
+  const normalizedB = normalizeShopDomain(b);
+  return Boolean(normalizedA) && normalizedA === normalizedB;
+}
+
 export function buildShopifyFrameAncestorsCsp(rawShop: string | null | undefined) {
   const shop = rawShop?.trim().toLowerCase() || "";
   const frameAncestors = isValidShopDomain(shop)

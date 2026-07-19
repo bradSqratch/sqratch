@@ -22,10 +22,18 @@ Public-app installations also store encrypted expiring-token lifecycle fields an
 | `Brand.shopifyLastProductSyncAt` | shop | No | Timestamp of last product sync. |
 | `Brand.shopifyCurrencyCode` | shop | No | Three-letter ISO code fetched from shop. |
 | `BrandRewardOffer.codePrefix` | shop (indirect) | No | Brand-configured prefix for discount codes. |
+| `BrandRewardOffer.sourceShopDomain` | shop | No (domain, not personal) | Which Shopify store's product catalog the offer's selected products (if any) were chosen from. Server-derived only, never client-supplied. Nulled on `shop/redact` wherever it matches the redacted domain, on any Brand (a prior relink can leave it referencing a domain that Brand no longer owns). |
+| `ExperienceProductLink.sourceShopDomain` | shop | No (domain, not personal) | Same purpose as above, for a direct experience-shop product link. Nulled on `shop/redact`. |
+| `LessonProductLink.sourceShopDomain` | shop | No (domain, not personal) | Same purpose as above, for a lesson product link. Server-derived on create/update from the resolved brand's current domain. Nulled on `shop/redact`. |
 | `BrandRewardOfferProduct.shopifyProductGid` | product | No | Shopify global product ID snapshot for discount scoping. Not personal data. |
 | `BrandRewardOfferProduct.title` | product | No | Product title snapshot. |
 | `BrandRewardOfferProduct.imageUrl` | product | No | Product image URL snapshot. |
 | `BrandRewardOfferProduct.productUrl` | product | No | Product URL snapshot. |
+| `ShopifyConnectionEvent.shopDomain` | shop | No (domain, not personal) | Domain associated with a connection-history event (connect/reconnect/relink/disconnect/uninstall/requires-reconnect). Never stores tokens, OAuth state, or session data. Nulled on `shop/redact` on any row where it matches the redacted domain. |
+| `ShopifyConnectionEvent.previousShopDomain` | shop | No (domain, not personal) | Prior domain, populated only for RECONNECTED/RELINKED events. Nulled independently of `shopDomain` on `shop/redact` (a row's unrelated *current* domain is preserved if only its `previousShopDomain` matches the redacted shop). |
+| `ShopifyConnectionEvent.currencyCode` / `.previousCurrencyCode` | shop | No | Store currency snapshots at the time of the event. Nulled alongside the corresponding domain field on `shop/redact`. |
+| `ShopifyConnectionEvent.shopifyClientId` | none | No | The app's own OAuth client id used for the connection — not shop- or customer-identifying. Nulled alongside `shopDomain` on `shop/redact`. |
+| `ShopifyConnectionEvent.eventType` / `.createdAt` | none | No | Retained even after redaction as anonymised connection-history audit trail (no domain, currency, or client id attached). |
 | `ShopifyRewardRedemption.shopifyShopDomain` | shop | No | Domain of the shop the code was issued against. Denormalised copy (not a FK). |
 | `ShopifyRewardRedemption.shopifyDiscountNodeId` | shop | No | Shopify GID for the discount node; used to poll usage status. |
 | `ShopifyRewardRedemption.shopifyDiscountStatus` | shop | No | Discount status string from Shopify (`ACTIVE`, etc.). |
@@ -172,6 +180,16 @@ Setting it to `null` releases the unique slot. An alternative — replacing it w
 6. Return HTTP 200.
 
 **Note:** The current `shop/redact` handler nulls the access token and sets status to `UNINSTALLED` — which is correct for the `app/uninstalled` event — but it does NOT null `shopifyShopDomain` or clear the Shopify metadata columns on `ShopifyRewardRedemption`. The `shop/redact` handler needs to be more thorough than the `app/uninstalled` handler.
+
+**Store-compatibility fields added for the reward/product-link relink-safety feature:**
+
+The `shop/redact` handler additionally, in the same transaction:
+
+1. Sets `isActive = false` on every `BrandRewardOffer` belonging to the Brand currently holding the redacted domain (the Brand is losing its Shopify connection; its offers must never stay claimable).
+2. Nulls `sourceShopDomain` wherever it equals the redacted domain, across **all** Brands' `BrandRewardOffer`, `ExperienceProductLink`, and `LessonProductLink` rows — not only the Brand currently holding the domain, since an earlier relink can leave another Brand's rows referencing this domain as a historical `sourceShopDomain`. Rows themselves are never deleted; a nulled `sourceShopDomain` simply makes that offer/link require review or reselection before it can be considered current again.
+3. Scrubs the redacted domain out of `ShopifyConnectionEvent` history: any row whose `shopDomain` matches has `shopDomain`, `currencyCode`, and `shopifyClientId` nulled; any row whose `previousShopDomain` matches has `previousShopDomain` and `previousCurrencyCode` nulled independently (so an unrelated *current* domain on that same row, e.g. a RELINKED event to a different, non-redacted store, is preserved). The event row itself (`eventType`, `createdAt`) is retained as anonymised history — no fake historical events are invented, and no row is deleted.
+
+`ShopifyConnectionEvent` never stored access/refresh tokens, OAuth state, App Bridge session tokens, encryption secrets, or request headers in the first place, so there is nothing further to redact there beyond the domain/currency/client-id fields above.
 
 ---
 

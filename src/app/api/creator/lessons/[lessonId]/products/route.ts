@@ -4,7 +4,9 @@ import {
   getLessonProductManagementContext,
   loadLessonProductLinks,
   parseLessonProductInput,
+  resolveSourceShopDomainForBrand,
 } from "@/lib/lesson-product-links";
+import { isProductLinkCurrent } from "@/lib/product-link-compatibility";
 
 export async function GET(
   _request: NextRequest,
@@ -24,6 +26,12 @@ export async function GET(
     }
 
     const items = await loadLessonProductLinks(lessonId);
+    const domainByBrandId = new Map(
+      access.data.candidateBrands.map((brand) => [
+        brand.id,
+        brand.shopifyShopDomain,
+      ]),
+    );
 
     return NextResponse.json({
       data: {
@@ -35,7 +43,13 @@ export async function GET(
             }
           : null,
         candidateBrandCount: access.data.candidateBrands.length,
-        items,
+        // Stale/incompatible links are never hidden here — they're
+        // annotated so the creator can see they need relinking rather than
+        // silently treating them as current.
+        items: items.map((item) => ({
+          ...item,
+          needsRelinking: !isProductLinkCurrent(item, domainByBrandId),
+        })),
       },
     });
   } catch (error) {
@@ -91,6 +105,7 @@ export async function POST(
         priceText: true,
         currency: true,
         brandId: true,
+        sourceShopDomain: true,
         createdAt: true,
       },
     });
@@ -98,6 +113,13 @@ export async function POST(
     if (existing) {
       return NextResponse.json({ data: existing });
     }
+
+    // Server-derived from the resolved brand's current connection state —
+    // never trusts a client-provided source domain.
+    const sourceShopDomain = resolveSourceShopDomainForBrand(
+      access.data.candidateBrands,
+      parsed.value.brandId,
+    );
 
     const created = await prisma.lessonProductLink.create({
       data: {
@@ -108,6 +130,7 @@ export async function POST(
         priceText: parsed.value.priceText,
         currency: parsed.value.currency,
         brandId: parsed.value.brandId,
+        sourceShopDomain,
       },
       select: {
         id: true,
@@ -118,6 +141,7 @@ export async function POST(
         priceText: true,
         currency: true,
         brandId: true,
+        sourceShopDomain: true,
         createdAt: true,
       },
     });

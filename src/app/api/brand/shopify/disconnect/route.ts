@@ -4,6 +4,7 @@ import {
   getBrandManagementContext,
 } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
+import { recordShopifyConnectionLoss } from "@/lib/shopify-connection-transitions";
 
 export async function POST() {
   try {
@@ -17,31 +18,56 @@ export async function POST() {
       );
     }
 
-    const brand = await prisma.brand.update({
-      where: { id: context.membership.brand.id },
-      data: {
-        shopifyShopDomain: null,
-        shopifyAdminAccessTokenEncrypted: null,
-        shopifyRefreshTokenEncrypted: null,
-        shopifyAccessTokenExpiresAt: null,
-        shopifyRefreshTokenExpiresAt: null,
-        shopifyGrantedScopes: null,
-        shopifyClientId: null,
-        shopifyTokenRefreshLockedUntil: null,
-        shopifyTokenRefreshLockId: null,
-        shopifyDisconnectedAt: new Date(),
-        shopifyUninstalledAt: null,
-        shopifyConnectionStatus: "DISCONNECTED",
-      },
-      select: {
-        id: true,
-        shopifyShopDomain: true,
-        shopifyInstalledAt: true,
-        shopifyDisconnectedAt: true,
-        shopifyUninstalledAt: true,
-        shopifyConnectionStatus: true,
-        shopifyLastProductSyncAt: true,
-      },
+    const brandId = context.membership.brand.id;
+
+    const brand = await prisma.$transaction(async (tx) => {
+      const before = await tx.brand.findUnique({
+        where: { id: brandId },
+        select: {
+          shopifyShopDomain: true,
+          shopifyCurrencyCode: true,
+          shopifyClientId: true,
+        },
+      });
+
+      const updated = await tx.brand.update({
+        where: { id: brandId },
+        data: {
+          shopifyShopDomain: null,
+          shopifyAdminAccessTokenEncrypted: null,
+          shopifyRefreshTokenEncrypted: null,
+          shopifyAccessTokenExpiresAt: null,
+          shopifyRefreshTokenExpiresAt: null,
+          shopifyGrantedScopes: null,
+          shopifyClientId: null,
+          shopifyTokenRefreshLockedUntil: null,
+          shopifyTokenRefreshLockId: null,
+          shopifyDisconnectedAt: new Date(),
+          shopifyUninstalledAt: null,
+          shopifyConnectionStatus: "DISCONNECTED",
+        },
+        select: {
+          id: true,
+          shopifyShopDomain: true,
+          shopifyInstalledAt: true,
+          shopifyDisconnectedAt: true,
+          shopifyUninstalledAt: true,
+          shopifyConnectionStatus: true,
+          shopifyLastProductSyncAt: true,
+        },
+      });
+
+      await recordShopifyConnectionLoss(tx, {
+        brandId,
+        eventType: "DISCONNECTED",
+        snapshot: {
+          shopDomain: before?.shopifyShopDomain ?? null,
+          currencyCode: before?.shopifyCurrencyCode ?? null,
+          shopifyClientId: before?.shopifyClientId ?? null,
+        },
+      });
+
+      return updated;
     });
 
     return NextResponse.json({ data: brand });

@@ -6,6 +6,7 @@ import {
 import prisma from "@/lib/prisma";
 import { attachSessionCookie, ensureViewerSession } from "@/lib/session";
 import { fetchNormalizedShopifyProducts } from "@/lib/shopify-products";
+import { isProductLinkCurrent } from "@/lib/product-link-compatibility";
 
 type PublicShopProduct = {
   id: string;
@@ -117,6 +118,7 @@ export async function GET(
         priceText: true,
         currency: true,
         brandId: true,
+        sourceShopDomain: true,
       },
     });
 
@@ -156,7 +158,18 @@ export async function GET(
       ? brandMap.get(primaryCampaign.campaign.brand.id) || null
       : null;
 
-    const linkedProducts: PublicShopProduct[] = productLinks.map((link) => {
+    // A stored direct link is current only when its sourceShopDomain matches
+    // its brand's current Shopify domain. Stale/unknown-source links are
+    // treated as absent here (never deleted) so they don't suppress the
+    // campaign-products fallback below.
+    const domainByBrandId = new Map(
+      brands.map((brand) => [brand.id, brand.shopifyShopDomain]),
+    );
+    const currentProductLinks = productLinks.filter((link) =>
+      isProductLinkCurrent(link, domainByBrandId),
+    );
+
+    const linkedProducts: PublicShopProduct[] = currentProductLinks.map((link) => {
       const linkedBrand =
         (link.brandId ? brandMap.get(link.brandId) : null) || primaryBrand;
 

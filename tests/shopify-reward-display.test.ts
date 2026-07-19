@@ -100,3 +100,17 @@ test("rewards API uses unlock context and the point-account balance", () => {
   assert.match(source, /getUserSpendablePointBalance/);
   assert.doesNotMatch(source, /userPointsBalance:\s*user\.points/);
 });
+
+test("public rewards API filters incompatible offers without ever calling Shopify", () => {
+  const source = readFileSync(
+    new URL("../src/app/api/rewards/shopify/route.ts", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /computeShopifyRewardCompatibility/);
+  assert.match(source, /compatibleOffers\s*=\s*offers\.filter/);
+  assert.match(source, /compatibility\.compatible/);
+  // No Shopify API/token call may be introduced in this public GET route.
+  assert.doesNotMatch(source, /fetchNormalizedShopifyProducts/);
+  assert.doesNotMatch(source, /getValidAccessToken/);
+});

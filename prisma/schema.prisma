@@ -116,6 +116,7 @@ model Brand {
   lessonProductLinks               LessonProductLink[]
   rewardOffers                     BrandRewardOffer[]
   shopifyRewardRedemptions         ShopifyRewardRedemption[]
+  shopifyConnectionEvents          ShopifyConnectionEvent[]
 }
 
 model BrandMember {
@@ -381,37 +382,43 @@ model QuestionAnswer {
 }
 
 model ExperienceProductLink {
-  id           String     @id @default(cuid())
-  experienceId String
-  productUrl   String
-  title        String?
-  imageUrl     String?
-  priceText    String?
-  currency     String?
-  brandId      String?
-  createdAt    DateTime   @default(now())
-  brand        Brand?     @relation(fields: [brandId], references: [id])
-  experience   Experience @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+  id               String     @id @default(cuid())
+  experienceId     String
+  productUrl       String
+  title            String?
+  imageUrl         String?
+  priceText        String?
+  currency         String?
+  brandId          String?
+  sourceShopDomain String?
+  createdAt        DateTime   @default(now())
+  brand            Brand?     @relation(fields: [brandId], references: [id])
+  experience       Experience @relation(fields: [experienceId], references: [id], onDelete: Cascade)
 
   @@index([experienceId])
   @@index([brandId])
+  @@index([experienceId, sourceShopDomain])
+  @@index([brandId, sourceShopDomain])
 }
 
 model LessonProductLink {
-  id         String   @id @default(cuid())
-  lessonId   String
-  productUrl String
-  title      String?
-  imageUrl   String?
-  priceText  String?
-  currency   String?
-  brandId    String?
-  createdAt  DateTime @default(now())
-  brand      Brand?   @relation(fields: [brandId], references: [id])
-  lesson     Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  id               String   @id @default(cuid())
+  lessonId         String
+  productUrl       String
+  title            String?
+  imageUrl         String?
+  priceText        String?
+  currency         String?
+  brandId          String?
+  sourceShopDomain String?
+  createdAt        DateTime @default(now())
+  brand            Brand?   @relation(fields: [brandId], references: [id])
+  lesson           Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
 
   @@index([lessonId])
   @@index([brandId])
+  @@index([lessonId, sourceShopDomain])
+  @@index([brandId, sourceShopDomain])
 }
 
 model BrandRewardOffer {
@@ -433,6 +440,7 @@ model BrandRewardOffer {
   codePrefix                    String?
   maxTotalRedemptions           Int?
   maxRedemptionsPerUser         Int?
+  sourceShopDomain              String?
   createdAt                     DateTime                  @default(now())
   updatedAt                     DateTime                  @updatedAt
   brand                         Brand                     @relation(fields: [brandId], references: [id], onDelete: Cascade)
@@ -441,6 +449,7 @@ model BrandRewardOffer {
 
   @@index([brandId])
   @@index([brandId, isActive, claimStartsAt, claimEndsAt])
+  @@index([brandId, sourceShopDomain])
 }
 
 model BrandRewardOfferProduct {
@@ -454,6 +463,24 @@ model BrandRewardOfferProduct {
 
   @@unique([offerId, shopifyProductGid])
   @@index([offerId])
+}
+
+model ShopifyConnectionEvent {
+  id                   String                     @id @default(cuid())
+  brandId              String
+  eventType            ShopifyConnectionEventType
+  shopDomain           String?
+  previousShopDomain   String?
+  currencyCode         String?
+  previousCurrencyCode String?
+  shopifyClientId      String?
+  createdAt            DateTime                   @default(now())
+
+  brand Brand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@index([brandId, createdAt])
+  @@index([shopDomain, createdAt])
+  @@index([previousShopDomain, createdAt])
 }
 
 model ShopifyRewardRedemption {
@@ -705,6 +732,15 @@ enum ExperienceVideoSource {
 enum ShopifyConnectionStatus {
   DISCONNECTED
   CONNECTED
+  UNINSTALLED
+  REQUIRES_RECONNECT
+}
+
+enum ShopifyConnectionEventType {
+  CONNECTED
+  RECONNECTED
+  RELINKED
+  DISCONNECTED
   UNINSTALLED
   REQUIRES_RECONNECT
 }

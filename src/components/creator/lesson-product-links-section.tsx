@@ -27,6 +27,9 @@ export type LessonProductLinkItem = {
   currency: string | null;
   brandId: string | null;
   createdAt: string;
+  /** True when this link's product no longer belongs to the currently
+   * connected Shopify store and needs to be re-linked. */
+  needsRelinking?: boolean;
 };
 
 type AvailableLessonProduct = {
@@ -248,9 +251,23 @@ export function LessonProductLinksSection({
                   )}
 
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-base font-medium">
-                      {product.title || "Linked product"}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <p className="truncate text-base font-medium">
+                        {product.title || "Linked product"}
+                      </p>
+                      {product.needsRelinking ? (
+                        <span className="rounded-full border border-amber-300/25 bg-amber-300/10 px-2 py-0.5 text-[11px] uppercase tracking-[0.14em] text-amber-100">
+                          Needs relinking
+                        </span>
+                      ) : null}
+                    </div>
+                    {product.needsRelinking ? (
+                      <p className="mt-1 text-xs text-amber-200/80">
+                        This product belongs to a previous or unknown Shopify
+                        store and is hidden from the public lesson page.
+                        Remove it and add a current product to fix.
+                      </p>
+                    ) : null}
                     <p className="mt-1 text-sm text-white/55">
                       {product.priceText || "Price available on Shopify"}
                     </p>

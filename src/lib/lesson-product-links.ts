@@ -2,13 +2,14 @@ import type { Role } from "@prisma/client";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
+import { normalizeShopDomain } from "@/lib/shopify";
 
 type LessonProductActor = {
   userId: string;
   role: Extract<Role, "ADMIN" | "CREATOR">;
 };
 
-type CandidateBrand = {
+export type CandidateBrand = {
   id: string;
   name: string;
   slug: string;
@@ -46,8 +47,26 @@ export type LessonProductLinkRecord = {
   priceText: string | null;
   currency: string | null;
   brandId: string | null;
+  sourceShopDomain: string | null;
   createdAt: Date;
 };
+
+/**
+ * Resolves the normalized Shopify domain to stamp as a product link's
+ * sourceShopDomain, from the brand's own current connection state — never
+ * from client-provided input.
+ */
+export function resolveSourceShopDomainForBrand(
+  candidateBrands: CandidateBrand[],
+  brandId: string | null,
+): string | null {
+  if (!brandId) {
+    return null;
+  }
+
+  const brand = candidateBrands.find((candidate) => candidate.id === brandId);
+  return normalizeShopDomain(brand?.shopifyShopDomain ?? null);
+}
 
 type ProductInputResult =
   | {
@@ -237,6 +256,7 @@ export async function loadLessonProductLinks(lessonId: string) {
       priceText: true,
       currency: true,
       brandId: true,
+      sourceShopDomain: true,
       createdAt: true,
     },
   });

@@ -4,11 +4,13 @@ import {
   getBrandManagementContext,
 } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
-import { getShopifyShopCurrency } from "@/lib/shopify";
+import { getShopifyShopCurrency, normalizeShopDomain } from "@/lib/shopify";
 import {
-  parseRewardOfferPayload,
+  resolveRewardOfferUpdate,
   serializeRewardOffer,
+  validateProductsBelongToConnectedStore,
 } from "@/lib/reward-offers";
+import { normalizeCurrency } from "@/lib/shopify-reward-compatibility";
 
 function canActivateShopifyOffer(brand: {
   shopifyConnectionStatus: string;
@@ -30,6 +32,11 @@ async function getOwnedOffer(offerId: string, brandId: string) {
     },
     select: {
       id: true,
+      discountType: true,
+      minimumSubtotalCents: true,
+      currencyCode: true,
+      appliesTo: true,
+      sourceShopDomain: true,
     },
   });
 }
@@ -80,24 +87,38 @@ export async function PUT(
       }
     }
 
+    const isConnected = canActivateShopifyOffer(brand);
+    const currentShopDomain = normalizeShopDomain(brand.shopifyShopDomain);
+    const currentStoreCurrency = normalizeCurrency(shopCurrency);
+
     const body = await request.json().catch(() => null);
-    const parsed = parseRewardOfferPayload(body, shopCurrency);
 
-    if (!parsed.ok) {
-      return NextResponse.json({ error: parsed.error }, { status: 400 });
-    }
+    const resolution = await resolveRewardOfferUpdate({
+      existing,
+      body,
+      isConnected,
+      currentShopDomain,
+      currentStoreCurrency,
+      validateProducts: (products) =>
+        validateProductsBelongToConnectedStore({
+          shopDomain: currentShopDomain!,
+          brandId: brand.id,
+          products,
+        }),
+    });
 
-    const data = parsed.data;
-
-    if (data.isActive && !canActivateShopifyOffer(brand)) {
+    if (!resolution.ok) {
       return NextResponse.json(
         {
-          error:
-            "Reconnect Shopify before creating or enabling reward offers.",
+          error: resolution.error,
+          code: resolution.code,
+          ...(resolution.details || {}),
         },
-        { status: 400 },
+        { status: resolution.status },
       );
     }
+
+    const { data, sourceShopDomain } = resolution;
 
     const offer = await prisma.$transaction(async (tx) => {
       await tx.brandRewardOfferProduct.deleteMany({
@@ -127,6 +148,7 @@ export async function PUT(
           codePrefix: data.codePrefix,
           maxTotalRedemptions: data.maxTotalRedemptions,
           maxRedemptionsPerUser: data.maxRedemptionsPerUser,
+          sourceShopDomain,
           products: {
             create: data.products,
           },

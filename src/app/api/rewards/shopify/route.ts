@@ -9,6 +9,7 @@ import {
 } from "@/lib/reward-offers";
 import { getUserSpendablePointBalance } from "@/lib/points";
 import { getShopifyRewardDisplayState } from "@/lib/shopify-reward-display";
+import { computeShopifyRewardCompatibility } from "@/lib/shopify-reward-compatibility";
 
 export async function GET(request: NextRequest) {
   try {
@@ -70,6 +71,7 @@ export async function GET(request: NextRequest) {
             name: true,
             logoUrl: true,
             shopifyShopDomain: true,
+            shopifyCurrencyCode: true,
           },
         },
         products: true,
@@ -79,8 +81,32 @@ export async function GET(request: NextRequest) {
       },
     });
 
+    // Filter incompatible offers (currency drift, stale/unknown product
+    // source) before running any per-offer redemption-count queries below —
+    // no Shopify API call is made here, only in-memory comparison against
+    // the Brand fields already loaded above.
+    const compatibleOffers = offers.filter((offer) => {
+      const compatibility = computeShopifyRewardCompatibility({
+        offer: {
+          discountType: offer.discountType,
+          minimumSubtotalCents: offer.minimumSubtotalCents,
+          currencyCode: offer.currencyCode,
+          appliesTo: offer.appliesTo,
+          sourceShopDomain: offer.sourceShopDomain,
+        },
+        // The WHERE clause above already restricts to CONNECTED brands with
+        // a domain and access token, so the connection itself is known-good
+        // here — only currency/product-source compatibility remains to check.
+        shopifyConnected: true,
+        currentShopDomain: offer.brand.shopifyShopDomain,
+        currentStoreCurrency: offer.brand.shopifyCurrencyCode,
+      });
+
+      return compatibility.compatible;
+    });
+
     const data = await Promise.all(
-      offers.map(async (offer) => {
+      compatibleOffers.map(async (offer) => {
         const [totalRedemptions, userRedemptions] = await Promise.all([
           offer.maxTotalRedemptions
             ? prisma.shopifyRewardRedemption.count({

@@ -50,6 +50,20 @@ type RewardProduct = {
   productUrl: string | null;
 };
 
+type ShopifyRewardCompatibilityReason =
+  | "SHOPIFY_DISCONNECTED"
+  | "CURRENCY_REVIEW_REQUIRED"
+  | "PRODUCT_RESELECTION_REQUIRED"
+  | "UNKNOWN_SOURCE_STORE";
+
+type ComputedCompatibility = {
+  compatible: boolean;
+  reasons: ShopifyRewardCompatibilityReason[];
+  currentShopDomain: string | null;
+  currentStoreCurrency: string | null;
+  sourceShopDomain: string | null;
+};
+
 type RewardOffer = {
   id: string;
   title: string;
@@ -68,6 +82,7 @@ type RewardOffer = {
   codePrefix: string | null;
   maxTotalRedemptions: number | null;
   maxRedemptionsPerUser: number | null;
+  sourceShopDomain: string | null;
   redemptionCount: number;
   computedAvailability: {
     status:
@@ -81,6 +96,7 @@ type RewardOffer = {
     label: string;
     claimable: boolean;
   };
+  computedCompatibility: ComputedCompatibility;
   stats: {
     totalIssued: number;
     usedCount: number;
@@ -108,6 +124,7 @@ type OfferFormState = {
   maxTotalRedemptions: string;
   maxRedemptionsPerUser: string;
   selectedProductGids: string[];
+  currencyReviewAcknowledged: boolean;
 };
 
 const defaultForm: OfferFormState = {
@@ -128,6 +145,7 @@ const defaultForm: OfferFormState = {
   maxTotalRedemptions: "",
   maxRedemptionsPerUser: "",
   selectedProductGids: [],
+  currencyReviewAcknowledged: false,
 };
 
 function centsToDollars(cents: number | null) {
@@ -171,6 +189,41 @@ function getAvailabilityBadgeClass(status: RewardOffer["computedAvailability"]["
   return "border-white/10 bg-white/5 text-white/60";
 }
 
+const compatibilityBadgeClasses = {
+  danger: "border-red-300/25 bg-red-300/10 text-red-200",
+  warn: "border-amber-300/25 bg-amber-300/10 text-amber-100",
+  ok: "border-emerald-300/30 bg-emerald-300/10 text-emerald-100",
+  muted: "border-white/10 bg-white/5 text-white/50",
+};
+
+function getCompatibilityBadges(
+  compatibility: ComputedCompatibility,
+  isActive: boolean,
+): Array<{ label: string; className: string }> {
+  const badges: Array<{ label: string; className: string }> = [];
+
+  if (compatibility.reasons.includes("SHOPIFY_DISCONNECTED")) {
+    badges.push({ label: "Shopify disconnected", className: compatibilityBadgeClasses.danger });
+  }
+  if (compatibility.reasons.includes("CURRENCY_REVIEW_REQUIRED")) {
+    badges.push({ label: "Needs currency review", className: compatibilityBadgeClasses.warn });
+  }
+  if (compatibility.reasons.includes("UNKNOWN_SOURCE_STORE")) {
+    badges.push({ label: "Unknown previous store", className: compatibilityBadgeClasses.warn });
+  }
+  if (compatibility.reasons.includes("PRODUCT_RESELECTION_REQUIRED")) {
+    badges.push({ label: "Product reselection required", className: compatibilityBadgeClasses.warn });
+  }
+  if (compatibility.compatible && !isActive) {
+    badges.push({ label: "Compatible but inactive", className: compatibilityBadgeClasses.muted });
+  }
+  if (compatibility.compatible && isActive) {
+    badges.push({ label: "Active and claimable", className: compatibilityBadgeClasses.ok });
+  }
+
+  return badges;
+}
+
 export default function BrandRewardsPage() {
   const [brand, setBrand] = useState<ShopifyStatus>(null);
   const [offers, setOffers] = useState<RewardOffer[]>([]);
@@ -203,6 +256,28 @@ export default function BrandRewardsPage() {
 
     return map;
   }, [offers]);
+
+  const editingOffer = useMemo(
+    () => offers.find((offer) => offer.id === editingOfferId) || null,
+    [offers, editingOfferId],
+  );
+  const editingReasons = editingOffer?.computedCompatibility.reasons || [];
+  const editingNeedsCurrencyReview = editingReasons.includes(
+    "CURRENCY_REVIEW_REQUIRED",
+  );
+  const editingNeedsProductReselection = editingReasons.includes(
+    "PRODUCT_RESELECTION_REQUIRED",
+  );
+  const editingHasUnknownSource = editingReasons.includes(
+    "UNKNOWN_SOURCE_STORE",
+  );
+  const currencyBlocksSave =
+    editingNeedsCurrencyReview && !form.currencyReviewAcknowledged;
+  const productsBlockSave =
+    editingNeedsProductReselection && form.selectedProductGids.length === 0;
+  const saveDisabledByCompatibility = currencyBlocksSave || productsBlockSave;
+  const activeDisabledByCompatibility =
+    editingNeedsCurrencyReview || editingNeedsProductReselection;
 
   async function loadPage() {
     setLoading(true);
@@ -287,8 +362,23 @@ export default function BrandRewardsPage() {
     });
   }
 
+  function acknowledgeCurrencyChange() {
+    if (!brand?.shopifyCurrencyCode) return;
+    const currentStoreCurrency = brand.shopifyCurrencyCode;
+
+    setForm((current) => ({
+      ...current,
+      currencyCode: currentStoreCurrency,
+      isActive: false,
+      currencyReviewAcknowledged: true,
+    }));
+  }
+
   function editOffer(offer: RewardOffer) {
     setEditingOfferId(offer.id);
+    const needsProductReselection = offer.computedCompatibility.reasons.includes(
+      "PRODUCT_RESELECTION_REQUIRED",
+    );
     setForm({
       title: offer.title,
       description: offer.description || "",
@@ -312,9 +402,13 @@ export default function BrandRewardsPage() {
       maxRedemptionsPerUser: offer.maxRedemptionsPerUser
         ? String(offer.maxRedemptionsPerUser)
         : "",
-      selectedProductGids: offer.products.map(
-        (product) => product.shopifyProductGid,
-      ),
+      // Stale/incompatible product selections are never carried forward as
+      // if they were still valid — the merchant must actively reselect from
+      // the current-store picker below.
+      selectedProductGids: needsProductReselection
+        ? []
+        : offer.products.map((product) => product.shopifyProductGid),
+      currencyReviewAcknowledged: false,
     });
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
@@ -331,6 +425,12 @@ export default function BrandRewardsPage() {
     setSaving(true);
     setError(null);
     setMessage(null);
+
+    if (saveDisabledByCompatibility) {
+      setError("Resolve the compatibility issue above before saving.");
+      setSaving(false);
+      return;
+    }
 
     if (form.discountType === "FIXED_AMOUNT") {
       if (form.currencyCode !== "CAD" && form.currencyCode !== "USD") {
@@ -412,6 +512,7 @@ export default function BrandRewardsPage() {
               ? Number(form.maxRedemptionsPerUser)
               : null,
             products: selectedProducts,
+            currencyReviewAcknowledged: form.currencyReviewAcknowledged,
           }),
         },
       );
@@ -556,12 +657,48 @@ export default function BrandRewardsPage() {
             <p className="text-xs text-white/45 mt-1">
               Fixed discounts use your Shopify store currency.
             </p>
-            {brand?.shopifyCurrencyCode && form.currencyCode !== brand.shopifyCurrencyCode && (
-              <p className="text-xs text-amber-300 mt-1">
-                ⚠️ Store currency is now {brand.shopifyCurrencyCode}. Saving this reward will update its currency from {form.currencyCode} to {brand.shopifyCurrencyCode}.
-              </p>
-            )}
           </label>
+
+          {editingNeedsCurrencyReview && brand?.shopifyCurrencyCode ? (
+            <div className="lg:col-span-2 rounded-2xl border border-amber-300/25 bg-amber-300/10 p-4 text-sm text-amber-100">
+              <p className="font-semibold">Needs currency review</p>
+              <p className="mt-1">
+                This reward was configured for {editingOffer?.currencyCode}, but
+                the connected Shopify store uses {brand.shopifyCurrencyCode}.
+              </p>
+              {!form.currencyReviewAcknowledged ? (
+                <Button
+                  type="button"
+                  onClick={acknowledgeCurrencyChange}
+                  className="mt-3 rounded-full border border-amber-300/40 bg-amber-300/20 text-amber-50 hover:bg-amber-300/30"
+                >
+                  Use {brand.shopifyCurrencyCode} for this offer
+                </Button>
+              ) : (
+                <p className="mt-3 text-emerald-200">
+                  Currency set to {form.currencyCode}. Save this offer, then
+                  activate it in a separate step.
+                </p>
+              )}
+              <details className="mt-3 text-xs text-amber-200/80">
+                <summary className="cursor-pointer select-none">
+                  Why is this needed?
+                </summary>
+                <p className="mt-1">
+                  The amount has not been converted using an exchange rate.
+                  Review the {brand.shopifyCurrencyCode} amount before
+                  activating this offer.
+                </p>
+              </details>
+              {editingOffer && form.title.includes(editingOffer.currencyCode) ? (
+                <p className="mt-3 text-amber-200">
+                  The reward title still mentions {editingOffer.currencyCode}.
+                  Review the title before saving.
+                </p>
+              ) : null}
+            </div>
+          ) : null}
+
           {form.discountType === "FIXED_AMOUNT" ? (
             <label className="space-y-2 text-sm text-white/70">
               <span>Discount amount</span>
@@ -728,15 +865,53 @@ export default function BrandRewardsPage() {
             <Checkbox
               checked={form.isActive}
               onCheckedChange={(checked) => updateForm("isActive", checked === true)}
-              disabled={!isConnected && !form.isActive}
+              disabled={(!isConnected && !form.isActive) || activeDisabledByCompatibility}
               className="border-white/30 data-[state=checked]:border-emerald-300 data-[state=checked]:bg-emerald-400"
             />
-            Active offer
+            <span>
+              Active offer
+              {activeDisabledByCompatibility ? (
+                <span className="mt-1 block text-xs text-white/45">
+                  Save the compatibility fix above first, then come back and
+                  activate this offer in a separate step.
+                </span>
+              ) : null}
+            </span>
           </label>
         </div>
 
         {form.appliesTo === "SPECIFIC_PRODUCTS" ? (
           <div className="mt-6 rounded-3xl border border-white/10 bg-black/20 p-4">
+            {editingNeedsProductReselection ? (
+              <div className="mb-4 rounded-2xl border border-amber-300/25 bg-amber-300/10 p-4 text-sm text-amber-100">
+                <p className="font-semibold">Product reselection required</p>
+                <p className="mt-1">
+                  {editingHasUnknownSource
+                    ? "The selected products belong to an unknown Shopify store."
+                    : "The selected products belong to a different Shopify store."}{" "}
+                  Select at least one product from the currently connected
+                  store below.
+                </p>
+                {editingOffer && editingOffer.products.length > 0 ? (
+                  <div className="mt-3">
+                    <p className="text-xs uppercase tracking-wide text-amber-200/70">
+                      Previous selections (unavailable)
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {editingOffer.products.map((product) => (
+                        <span
+                          key={product.shopifyProductGid}
+                          className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/40 line-through"
+                        >
+                          {product.title || product.shopifyProductGid}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
                 <h3 className="font-semibold">Selected Shopify products</h3>
@@ -807,7 +982,9 @@ export default function BrandRewardsPage() {
             type="button"
             onClick={() => void saveOffer()}
             disabled={
-              saving || (!isConnected && (!editingOfferId || form.isActive))
+              saving ||
+              (!isConnected && (!editingOfferId || form.isActive)) ||
+              saveDisabledByCompatibility
             }
             className="rounded-full border border-white bg-white text-black hover:bg-white/90"
           >
@@ -856,6 +1033,17 @@ export default function BrandRewardsPage() {
                           Active
                         </span>
                       ) : null}
+                      {getCompatibilityBadges(
+                        offer.computedCompatibility,
+                        offer.isActive,
+                      ).map((badge) => (
+                        <span
+                          key={badge.label}
+                          className={`rounded-full border px-3 py-1 text-xs ${badge.className}`}
+                        >
+                          {badge.label}
+                        </span>
+                      ))}
                     </div>
                     <p className="mt-2 text-sm text-white/55">
                       {offer.pointsCost} points for{" "}
@@ -863,9 +1051,12 @@ export default function BrandRewardsPage() {
                         ? `${formatRewardPercentage(offer.discountPercentageBasisPoints)} off`
                         : `${formatRewardMoney(offer.discountAmountCents, offer.currencyCode)} off`}
                     </p>
-                    {brand?.shopifyCurrencyCode && offer.currencyCode !== brand.shopifyCurrencyCode && (
+                    {offer.computedCompatibility.reasons.includes("CURRENCY_REVIEW_REQUIRED") && (
                       <p className="mt-2 text-sm font-semibold text-red-400">
-                        ⚠️ Currency mismatch: Store is {brand.shopifyCurrencyCode}, offer is {offer.currencyCode}. Redemptions are blocked. Edit and save this offer to update it to {brand.shopifyCurrencyCode}.
+                        Currency mismatch: store is{" "}
+                        {offer.computedCompatibility.currentStoreCurrency}, offer
+                        is {offer.currencyCode}. Redemptions are blocked. Edit
+                        this offer to review the currency.
                       </p>
                     )}
                     <p className="mt-2 text-sm text-white/45">

@@ -1,4 +1,5 @@
 import prisma from "@/lib/prisma";
+import { recordShopifyConnectionLoss } from "@/lib/shopify-connection-transitions";
 
 export type EmbeddedConnectedBrand = {
   id: string;
@@ -68,13 +69,42 @@ export async function disconnectEmbeddedConnectedBrand(input: {
   shopDomain: string;
   clientId: string;
 }) {
-  return prisma.brand.updateMany({
-    where: {
-      id: input.brandId,
-      shopifyShopDomain: input.shopDomain,
-      shopifyConnectionStatus: "CONNECTED",
-      shopifyClientId: input.clientId,
-    },
-    data: buildLocalShopifyDisconnectData(),
+  return prisma.$transaction(async (tx) => {
+    const before = await tx.brand.findFirst({
+      where: {
+        id: input.brandId,
+        shopifyShopDomain: input.shopDomain,
+        shopifyConnectionStatus: "CONNECTED",
+        shopifyClientId: input.clientId,
+      },
+      select: { shopifyCurrencyCode: true },
+    });
+
+    const result = await tx.brand.updateMany({
+      where: {
+        id: input.brandId,
+        shopifyShopDomain: input.shopDomain,
+        shopifyConnectionStatus: "CONNECTED",
+        shopifyClientId: input.clientId,
+      },
+      data: buildLocalShopifyDisconnectData(),
+    });
+
+    // Only the request that actually flipped the row (count === 1) records
+    // history — a retried/duplicate call that finds it already disconnected
+    // is a no-op, keeping this idempotent.
+    if (result.count === 1) {
+      await recordShopifyConnectionLoss(tx, {
+        brandId: input.brandId,
+        eventType: "DISCONNECTED",
+        snapshot: {
+          shopDomain: input.shopDomain,
+          currencyCode: before?.shopifyCurrencyCode ?? null,
+          shopifyClientId: input.clientId,
+        },
+      });
+    }
+
+    return result;
   });
 }

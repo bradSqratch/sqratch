@@ -4,13 +4,15 @@ import {
   getBrandManagementContext,
 } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
-import { getShopifyShopCurrency } from "@/lib/shopify";
+import { getShopifyShopCurrency, normalizeShopDomain } from "@/lib/shopify";
 import {
   CLAIM_COUNTED_REDEMPTION_STATUSES,
   getRewardOfferAvailability,
   parseRewardOfferPayload,
   serializeRewardOffer,
+  validateProductsBelongToConnectedStore,
 } from "@/lib/reward-offers";
+import { computeShopifyRewardCompatibility } from "@/lib/shopify-reward-compatibility";
 
 function canActivateShopifyOffer(brand: {
   shopifyConnectionStatus: string;
@@ -108,18 +110,33 @@ export async function GET() {
       statsByOffer.set(count.offerId, stats);
     }
 
+    const isConnected = canActivateShopifyOffer(brand);
+
     return NextResponse.json({
       data: offers.map((offer) => {
         const computedAvailability = getRewardOfferAvailability({
           offer,
-          shopifyConnected: canActivateShopifyOffer(brand),
+          shopifyConnected: isConnected,
           totalRedemptions: countedRedemptionsByOffer.get(offer.id) || 0,
+        });
+        const computedCompatibility = computeShopifyRewardCompatibility({
+          offer: {
+            discountType: offer.discountType,
+            minimumSubtotalCents: offer.minimumSubtotalCents,
+            currencyCode: offer.currencyCode,
+            appliesTo: offer.appliesTo,
+            sourceShopDomain: offer.sourceShopDomain,
+          },
+          shopifyConnected: isConnected,
+          currentShopDomain: brand.shopifyShopDomain,
+          currentStoreCurrency: brand.shopifyCurrencyCode,
         });
 
         return {
           ...serializeRewardOffer(offer),
           redemptionCount: offer._count.redemptions,
           computedAvailability,
+          computedCompatibility,
           stats: statsByOffer.get(offer.id) || {
             totalIssued: 0,
             usedCount: 0,
@@ -179,15 +196,56 @@ export async function POST(request: NextRequest) {
     }
 
     const data = parsed.data;
+    const isConnected = canActivateShopifyOffer(brand);
+    // Never trust a client-provided shop domain — always derive from the
+    // brand's own current connection state.
+    const sourceShopDomain = normalizeShopDomain(brand.shopifyShopDomain);
 
-    if (data.isActive && !canActivateShopifyOffer(brand)) {
-      return NextResponse.json(
-        {
-          error:
-            "Reconnect Shopify before creating or enabling reward offers.",
+    if (
+      data.appliesTo === "SPECIFIC_PRODUCTS" &&
+      isConnected &&
+      data.products.length > 0
+    ) {
+      const validation = await validateProductsBelongToConnectedStore({
+        shopDomain: brand.shopifyShopDomain!,
+        brandId: brand.id,
+        products: data.products,
+      });
+
+      if (!validation.ok) {
+        return NextResponse.json(
+          { error: validation.error, code: "PRODUCT_VALIDATION_FAILED" },
+          { status: 400 },
+        );
+      }
+    }
+
+    if (data.isActive) {
+      const compatibility = computeShopifyRewardCompatibility({
+        offer: {
+          discountType: data.discountType,
+          minimumSubtotalCents: data.minimumSubtotalCents,
+          currencyCode: data.currencyCode,
+          appliesTo: data.appliesTo,
+          sourceShopDomain,
         },
-        { status: 400 },
-      );
+        shopifyConnected: isConnected,
+        currentShopDomain: brand.shopifyShopDomain,
+        currentStoreCurrency: shopCurrency,
+      });
+
+      if (!compatibility.compatible) {
+        return NextResponse.json(
+          {
+            error: compatibility.reasons.includes("SHOPIFY_DISCONNECTED")
+              ? "Reconnect Shopify before creating or enabling reward offers."
+              : "This offer is not compatible with the connected Shopify store.",
+            code: "INCOMPATIBLE_OFFER",
+            reasons: compatibility.reasons,
+          },
+          { status: 409 },
+        );
+      }
     }
 
     const offer = await prisma.brandRewardOffer.create({
@@ -209,6 +267,7 @@ export async function POST(request: NextRequest) {
         codePrefix: data.codePrefix,
         maxTotalRedemptions: data.maxTotalRedemptions,
         maxRedemptionsPerUser: data.maxRedemptionsPerUser,
+        sourceShopDomain,
         products: {
           create: data.products,
         },

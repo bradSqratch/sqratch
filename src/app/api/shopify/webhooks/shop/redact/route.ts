@@ -97,8 +97,51 @@ export async function POST(request: NextRequest) {
             shopifyUserErrors: Prisma.JsonNull,
           },
         }),
+        // Redaction is a connection loss for this Brand too — its reward
+        // offers must never stay (or become) claimable against a store that
+        // no longer exists for it.
+        prisma.brandRewardOffer.updateMany({
+          where: { brandId: brand.id },
+          data: { isActive: false },
+        }),
       );
     }
+
+    // Null sourceShopDomain wherever it references the redacted shop, on
+    // every Brand this domain ever touched — not just the Brand currently
+    // holding it, since a prior relink can leave the domain referenced as
+    // sourceShopDomain on another Brand's rows. Rows are never deleted, only
+    // the domain reference is cleared (requires product reselection / a
+    // currency review already anyway, since sourceShopDomain no longer
+    // resolves to anything).
+    operations.push(
+      prisma.brandRewardOffer.updateMany({
+        where: { sourceShopDomain: shopDomain },
+        data: { sourceShopDomain: null },
+      }),
+      prisma.experienceProductLink.updateMany({
+        where: { sourceShopDomain: shopDomain },
+        data: { sourceShopDomain: null },
+      }),
+      prisma.lessonProductLink.updateMany({
+        where: { sourceShopDomain: shopDomain },
+        data: { sourceShopDomain: null },
+      }),
+      // Scrub the redacted domain out of connection history. Rows are kept
+      // (event type + timestamp remain useful audit history) but never
+      // retain the redacted shop domain, currency, or client id. Matched
+      // separately by field so a RELINKED event whose *current* domain is
+      // unrelated to this redaction doesn't lose that unrelated data merely
+      // because its previousShopDomain happened to be the redacted shop.
+      prisma.shopifyConnectionEvent.updateMany({
+        where: { shopDomain },
+        data: { shopDomain: null, currencyCode: null, shopifyClientId: null },
+      }),
+      prisma.shopifyConnectionEvent.updateMany({
+        where: { previousShopDomain: shopDomain },
+        data: { previousShopDomain: null, previousCurrencyCode: null },
+      }),
+    );
 
     // Delete only the temp tokens whose payload shop matches this shop. An empty
     // `in` list deletes nothing, so this is safe when no orphans were found and

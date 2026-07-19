@@ -15,6 +15,7 @@
 
 import { encryptSecret, decryptSecret } from "@/lib/crypto";
 import { randomUUID } from "node:crypto";
+import { recordShopifyConnectionLoss } from "@/lib/shopify-connection-transitions";
 
 // ---------------------------------------------------------------------------
 // Lazy DB access — import only when a DB operation is needed
@@ -200,6 +201,7 @@ type BrandShopifyFields = {
   shopifyClientId: string | null;
   shopifyTokenRefreshLockedUntil: Date | null;
   shopifyTokenRefreshLockId: string | null;
+  shopifyCurrencyCode: string | null;
 };
 
 /**
@@ -224,6 +226,7 @@ async function reloadBrand(
       shopifyClientId: true,
       shopifyTokenRefreshLockedUntil: true,
       shopifyTokenRefreshLockId: true,
+      shopifyCurrencyCode: true,
     },
   });
 }
@@ -299,26 +302,54 @@ async function waitForLockHolder(
 
 /**
  * Persists a failed-reconnect state: marks the brand REQUIRES_RECONNECT
- * and clears all token fields atomically.
+ * and clears all token fields atomically. Reward offer deactivation and the
+ * connection-history event are written in the same transaction, after the
+ * refresh-lock compare-and-swap guard (`shopifyTokenRefreshLockId: lockId`)
+ * succeeds — a stale/superseded lock holder writes nothing.
  */
 async function markRequiresReconnect(
   brandId: string,
   lockId: string,
 ): Promise<boolean> {
   const db = await getDb();
-  const result = await db.brand.updateMany({
-    where: { id: brandId, shopifyTokenRefreshLockId: lockId },
-    data: {
-      shopifyConnectionStatus: "REQUIRES_RECONNECT",
-      shopifyAdminAccessTokenEncrypted: null,
-      shopifyRefreshTokenEncrypted: null,
-      shopifyAccessTokenExpiresAt: null,
-      shopifyRefreshTokenExpiresAt: null,
-      shopifyTokenRefreshLockedUntil: null,
-      shopifyTokenRefreshLockId: null,
-    },
+
+  return db.$transaction(async (tx) => {
+    const before = await tx.brand.findUnique({
+      where: { id: brandId },
+      select: {
+        shopifyShopDomain: true,
+        shopifyCurrencyCode: true,
+        shopifyClientId: true,
+      },
+    });
+
+    const result = await tx.brand.updateMany({
+      where: { id: brandId, shopifyTokenRefreshLockId: lockId },
+      data: {
+        shopifyConnectionStatus: "REQUIRES_RECONNECT",
+        shopifyAdminAccessTokenEncrypted: null,
+        shopifyRefreshTokenEncrypted: null,
+        shopifyAccessTokenExpiresAt: null,
+        shopifyRefreshTokenExpiresAt: null,
+        shopifyTokenRefreshLockedUntil: null,
+        shopifyTokenRefreshLockId: null,
+      },
+    });
+
+    if (result.count === 1) {
+      await recordShopifyConnectionLoss(tx, {
+        brandId,
+        eventType: "REQUIRES_RECONNECT",
+        snapshot: {
+          shopDomain: before?.shopifyShopDomain ?? null,
+          currencyCode: before?.shopifyCurrencyCode ?? null,
+          shopifyClientId: before?.shopifyClientId ?? null,
+        },
+      });
+    }
+
+    return result.count === 1;
   });
-  return result.count === 1;
 }
 
 /**
@@ -488,9 +519,20 @@ export async function getValidAccessToken(
   // Scope check — if missing required scopes, treat as NEEDS_RECONNECT
   if (!hasSufficientScopes(brand.shopifyGrantedScopes)) {
     const db = await getDb();
-    await db.brand.update({
-      where: { id: brand.id },
-      data: { shopifyConnectionStatus: "REQUIRES_RECONNECT" },
+    await db.$transaction(async (tx) => {
+      await tx.brand.update({
+        where: { id: brand.id },
+        data: { shopifyConnectionStatus: "REQUIRES_RECONNECT" },
+      });
+      await recordShopifyConnectionLoss(tx, {
+        brandId: brand.id,
+        eventType: "REQUIRES_RECONNECT",
+        snapshot: {
+          shopDomain: brand.shopifyShopDomain,
+          currencyCode: brand.shopifyCurrencyCode,
+          shopifyClientId: brand.shopifyClientId,
+        },
+      });
     });
     return { ok: false, reason: "NEEDS_RECONNECT" };
   }

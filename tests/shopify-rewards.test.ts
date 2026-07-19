@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createShopifyRewardDiscountCode } from "../src/lib/shopify-discounts";
-import { parseRewardOfferPayload, serializeRewardOffer, validateCurrencyMatch } from "../src/lib/reward-offers";
+import { parseRewardOfferPayload, serializeRewardOffer } from "../src/lib/reward-offers";
+import { computeShopifyRewardCompatibility } from "../src/lib/shopify-reward-compatibility";
 import { formatRewardMoney, formatRewardPercentage } from "../src/components/experience/client-utils";
 
 type CapturedFetch = { url: string | URL; options: RequestInit };
@@ -441,6 +442,7 @@ test("21. Existing fixed offers serialize correctly", () => {
     codePrefix: null,
     maxTotalRedemptions: null,
     maxRedemptionsPerUser: null,
+    sourceShopDomain: null,
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -564,10 +566,37 @@ test("27. Historical redemption snapshots are not modified", () => {
   assert.equal(discountPercentageBasisPoints, null);
 });
 
-test("28. Currency mismatch blocks unsafe redemption", () => {
-  assert.throws(() => {
-    validateCurrencyMatch("CAD", "USD");
-  }, /CURRENCY_MISMATCH/);
+test("28. Currency mismatch blocks unsafe redemption for currency-dependent offers only", () => {
+  const fixedMismatch = computeShopifyRewardCompatibility({
+    offer: {
+      discountType: "FIXED_AMOUNT",
+      minimumSubtotalCents: null,
+      currencyCode: "CAD",
+      appliesTo: "ALL_PRODUCTS",
+      sourceShopDomain: null,
+    },
+    shopifyConnected: true,
+    currentShopDomain: "shop.myshopify.com",
+    currentStoreCurrency: "USD",
+  });
+  assert.equal(fixedMismatch.compatible, false);
+  assert.ok(fixedMismatch.reasons.includes("CURRENCY_REVIEW_REQUIRED"));
+
+  // A percentage reward with no minimum subtotal is not currency-dependent —
+  // a stored currency mismatch must NOT block it.
+  const percentageMismatch = computeShopifyRewardCompatibility({
+    offer: {
+      discountType: "PERCENTAGE",
+      minimumSubtotalCents: null,
+      currencyCode: "CAD",
+      appliesTo: "ALL_PRODUCTS",
+      sourceShopDomain: null,
+    },
+    shopifyConnected: true,
+    currentShopDomain: "shop.myshopify.com",
+    currentStoreCurrency: "USD",
+  });
+  assert.equal(percentageMismatch.compatible, true);
 });
 
 // Test group 4: UI/helper behavior

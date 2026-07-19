@@ -27,6 +27,9 @@ interface MockedPrismaClient {
   user: Record<string, (...args: unknown[]) => unknown>;
   campaignUnlock: Record<string, (...args: unknown[]) => unknown>;
   brandRewardOffer: Record<string, (...args: unknown[]) => unknown>;
+  shopifyConnectionEvent: Record<string, (...args: unknown[]) => unknown>;
+  experienceProductLink: Record<string, (...args: unknown[]) => unknown>;
+  lessonProductLink: Record<string, (...args: unknown[]) => unknown>;
   userPointAccount: Record<string, (...args: unknown[]) => unknown>;
   lessonProgress: Record<string, (...args: unknown[]) => unknown>;
   userSession: Record<string, (...args: unknown[]) => unknown>;
@@ -48,6 +51,11 @@ let refreshStatusImpl: (req: NextRequest, context: { params: Promise<{ redemptio
 let scanImpl: (req: NextRequest, deps: AuthResolvers) => Promise<Response>;
 let mergeImpl: (req: NextRequest, deps: AuthResolvers) => Promise<Response>;
 let exportBatchImpl: (req: NextRequest, context: { params: Promise<{ id: string }> }, deps: AuthResolvers) => Promise<Response>;
+let disconnectEmbeddedConnectedBrand: (input: {
+  brandId: string;
+  shopDomain: string;
+  clientId: string;
+}) => Promise<{ count: number }>;
 let authOptions: Record<string, unknown> & { callbacks?: Record<string, (...args: unknown[]) => unknown> };
 
 // Per-test injected resolvers, populated by setupMocks/clearMocks.
@@ -164,6 +172,26 @@ before(async () => {
   pointTx.groupBy = async () => [];
   pointTx.create = async () => ({ id: "pt-default" });
   (prismaModule.user as Record<string, unknown>).update = async () => ({});
+  // Safe defaults for the Shopify store-compatibility connection-transition
+  // helper (src/lib/shopify-connection-transitions.ts), which every
+  // connection state change now calls: deactivating reward offers and
+  // recording a history event. Individual tests override these with
+  // t.mock.method when they need to assert on the specific call.
+  (prismaModule.brandRewardOffer as Record<string, unknown>).updateMany =
+    async () => ({ count: 0 });
+  prismaModule.shopifyConnectionEvent = {
+    create: async () => ({ id: "sce-default" }),
+    findFirst: async () => null,
+    updateMany: async () => ({ count: 0 }),
+  };
+  // Safe defaults for the shop/redact source-domain scrubbing added in
+  // src/app/api/shopify/webhooks/shop/redact/route.ts.
+  prismaModule.experienceProductLink = {
+    updateMany: async () => ({ count: 0 }),
+  };
+  prismaModule.lessonProductLink = {
+    updateMany: async () => ({ count: 0 }),
+  };
   prismaModule.lesson = {
     findUnique: async () => null,
     findMany: async () => [],
@@ -186,6 +214,9 @@ before(async () => {
   scanImpl = (await import("../src/app/api/public/scan/route")).scanImpl;
   mergeImpl = (await import("../src/app/api/progress/merge/route")).mergeImpl;
   exportBatchImpl = (await import("../src/app/api/brand/qr-batches/[id]/export/route")).exportBatchImpl;
+  disconnectEmbeddedConnectedBrand = (
+    await import("../src/lib/shopify-embedded-connection")
+  ).disconnectEmbeddedConnectedBrand;
   authOptions = (await import("../src/app/api/auth/[...nextauth]/options")).authOptions as never;
 });
 
@@ -247,19 +278,33 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     const hmac = buildWebhookHmac(payload);
     const req = makeWebhookRequest("http://localhost/api/shopify/webhooks/app/uninstalled", payload, hmac, "uninstall-shop.myshopify.com");
 
-    let updateManyCalled = false;
+    t.mock.method(prisma.brand, "findUnique", async () => ({
+      id: "brand-uninstall",
+      shopifyCurrencyCode: "USD",
+      shopifyClientId: "client-x",
+    }));
+
+    let updateCalled = false;
     let capturedData: unknown = null;
 
-    t.mock.method(prisma.brand, "updateMany", async (args: unknown) => {
+    t.mock.method(prisma.brand, "update", async (args: unknown) => {
       const typedArgs = args as { data?: Record<string, unknown> };
-      updateManyCalled = true;
+      updateCalled = true;
       capturedData = typedArgs.data;
-      return { count: 1 };
+      return { id: "brand-uninstall" };
+    });
+
+    let connectionEventRecorded = false;
+    t.mock.method(prisma.shopifyConnectionEvent, "create", async (args: unknown) => {
+      const typedArgs = args as { data: { eventType: string } };
+      connectionEventRecorded = typedArgs.data.eventType === "UNINSTALLED";
+      return {};
     });
 
     const res = await appUninstalledPOST(req);
     assert.equal(res.status, 200);
-    assert.ok(updateManyCalled);
+    assert.ok(updateCalled);
+    assert.ok(connectionEventRecorded);
     const data = capturedData as { shopifyConnectionStatus: string; shopifyAdminAccessTokenEncrypted: string | null; shopifyRefreshTokenEncrypted: string | null };
     assert.ok(data);
     assert.equal(data.shopifyConnectionStatus, "UNINSTALLED");
@@ -273,10 +318,16 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     const req1 = makeWebhookRequest("http://localhost/api/shopify/webhooks/app/uninstalled", payload, hmac, "uninstall-shop.myshopify.com");
     const req2 = makeWebhookRequest("http://localhost/api/shopify/webhooks/app/uninstalled", payload, hmac, "uninstall-shop.myshopify.com");
 
+    t.mock.method(prisma.brand, "findUnique", async () => ({
+      id: "brand-uninstall",
+      shopifyCurrencyCode: "USD",
+      shopifyClientId: "client-x",
+    }));
+
     let callCount = 0;
-    t.mock.method(prisma.brand, "updateMany", async () => {
+    t.mock.method(prisma.brand, "update", async () => {
       callCount++;
-      return { count: 1 };
+      return { id: "brand-uninstall" };
     });
 
     const res1 = await appUninstalledPOST(req1);
@@ -293,12 +344,18 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     const hmac = buildWebhookHmac(payload);
     const req = makeWebhookRequest("http://localhost/api/shopify/webhooks/app/uninstalled", payload, hmac, "uninstall-shop.myshopify.com");
 
+    t.mock.method(prisma.brand, "findUnique", async () => ({
+      id: "brand-uninstall",
+      shopifyCurrencyCode: "USD",
+      shopifyClientId: "client-x",
+    }));
+
     let brandUpdateCalled = false;
     let otherModelsTouched = false;
 
-    t.mock.method(prisma.brand, "updateMany", async () => {
+    t.mock.method(prisma.brand, "update", async () => {
       brandUpdateCalled = true;
-      return { count: 1 };
+      return { id: "brand-uninstall" };
     });
 
     // We verify no delete calls or mutations on other business models like PointTransaction
@@ -346,6 +403,65 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
       return { count: 1 };
     });
 
+    let offersDeactivated = false;
+    let offerSourceDomainScrubbed = false;
+    t.mock.method(prisma.brandRewardOffer, "updateMany", async (args: unknown) => {
+      const typedArgs = args as {
+        where: { brandId?: string; sourceShopDomain?: string };
+        data: { isActive?: boolean; sourceShopDomain?: null };
+      };
+      if (typedArgs.where.brandId === "brand-123") {
+        assert.equal(typedArgs.data.isActive, false);
+        offersDeactivated = true;
+      } else if (typedArgs.where.sourceShopDomain === "redact-shop.myshopify.com") {
+        assert.equal(typedArgs.data.sourceShopDomain, null);
+        offerSourceDomainScrubbed = true;
+      }
+      return { count: 1 };
+    });
+
+    let experienceLinksScrubbed = false;
+    t.mock.method(prisma.experienceProductLink, "updateMany", async (args: unknown) => {
+      const typedArgs = args as { where: { sourceShopDomain: string }; data: { sourceShopDomain: null } };
+      assert.equal(typedArgs.where.sourceShopDomain, "redact-shop.myshopify.com");
+      assert.equal(typedArgs.data.sourceShopDomain, null);
+      experienceLinksScrubbed = true;
+      return { count: 1 };
+    });
+
+    let lessonLinksScrubbed = false;
+    t.mock.method(prisma.lessonProductLink, "updateMany", async (args: unknown) => {
+      const typedArgs = args as { where: { sourceShopDomain: string }; data: { sourceShopDomain: null } };
+      assert.equal(typedArgs.where.sourceShopDomain, "redact-shop.myshopify.com");
+      assert.equal(typedArgs.data.sourceShopDomain, null);
+      lessonLinksScrubbed = true;
+      return { count: 1 };
+    });
+
+    let connectionEventScrubCalls = 0;
+    t.mock.method(prisma.shopifyConnectionEvent, "updateMany", async (args: unknown) => {
+      connectionEventScrubCalls += 1;
+      const typedArgs = args as {
+        where: { shopDomain?: string; previousShopDomain?: string };
+        data: Record<string, null>;
+      };
+      if (typedArgs.where.shopDomain === "redact-shop.myshopify.com") {
+        assert.deepEqual(Object.keys(typedArgs.data).sort(), [
+          "currencyCode",
+          "shopDomain",
+          "shopifyClientId",
+        ]);
+      } else if (typedArgs.where.previousShopDomain === "redact-shop.myshopify.com") {
+        assert.deepEqual(Object.keys(typedArgs.data).sort(), [
+          "previousCurrencyCode",
+          "previousShopDomain",
+        ]);
+      } else {
+        assert.fail("unexpected shopifyConnectionEvent.updateMany where clause");
+      }
+      return { count: 1 };
+    });
+
     // Service keys are random nonces; the shop lives only inside the token JSON.
     t.mock.method(prisma.tokenStore, "findMany", async () => [
       // Matches this shop → should be deleted.
@@ -377,6 +493,11 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     assert.ok(brandUpdated);
     assert.ok(redemptionAnonymized);
     assert.ok(tokensDeleted);
+    assert.ok(offersDeactivated, "the redacted Brand's reward offers are deactivated");
+    assert.ok(offerSourceDomainScrubbed, "BrandRewardOffer.sourceShopDomain is scrubbed");
+    assert.ok(experienceLinksScrubbed, "ExperienceProductLink.sourceShopDomain is scrubbed");
+    assert.ok(lessonLinksScrubbed, "LessonProductLink.sourceShopDomain is scrubbed");
+    assert.equal(connectionEventScrubCalls, 2, "both shopDomain and previousShopDomain are scrubbed independently");
     // Only the matching shop's temp token is deleted; the other shop is preserved.
     assert.deepEqual(deletedServices, ["shopify_oauth_state:nonce-1"]);
   });
@@ -453,6 +574,74 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
     clearMocks();
+  });
+
+  test("embedded disconnect deactivates offers and records one DISCONNECTED event", async (t) => {
+    t.mock.method(prisma.brand, "findFirst", async () => ({
+      shopifyCurrencyCode: "CAD",
+    }));
+    t.mock.method(prisma.brand, "updateMany", async () => ({ count: 1 }));
+
+    let deactivateCalled = false;
+    t.mock.method(prisma.brandRewardOffer, "updateMany", async (args: unknown) => {
+      deactivateCalled = true;
+      const typedArgs = args as { where: { brandId: string }; data: { isActive: boolean } };
+      assert.equal(typedArgs.where.brandId, "brand-embedded");
+      assert.equal(typedArgs.data.isActive, false);
+      return { count: 1 };
+    });
+
+    let eventRecorded = false;
+    t.mock.method(prisma.shopifyConnectionEvent, "create", async (args: unknown) => {
+      eventRecorded = true;
+      const typedArgs = args as {
+        data: { brandId: string; eventType: string; shopDomain: string; currencyCode: string };
+      };
+      assert.equal(typedArgs.data.brandId, "brand-embedded");
+      assert.equal(typedArgs.data.eventType, "DISCONNECTED");
+      assert.equal(typedArgs.data.shopDomain, "embedded-shop.myshopify.com");
+      assert.equal(typedArgs.data.currencyCode, "CAD");
+      return {};
+    });
+
+    const result = await disconnectEmbeddedConnectedBrand({
+      brandId: "brand-embedded",
+      shopDomain: "embedded-shop.myshopify.com",
+      clientId: "client-embedded",
+    });
+
+    assert.equal(result.count, 1);
+    assert.ok(deactivateCalled);
+    assert.ok(eventRecorded);
+  });
+
+  test("embedded disconnect is idempotent: a second call on an already-disconnected brand writes nothing", async (t) => {
+    // CAS conditions no longer match (already disconnected) — updateMany
+    // matches zero rows.
+    t.mock.method(prisma.brand, "findFirst", async () => null);
+    t.mock.method(prisma.brand, "updateMany", async () => ({ count: 0 }));
+
+    let deactivateCalled = false;
+    t.mock.method(prisma.brandRewardOffer, "updateMany", async () => {
+      deactivateCalled = true;
+      return { count: 0 };
+    });
+
+    let eventRecorded = false;
+    t.mock.method(prisma.shopifyConnectionEvent, "create", async () => {
+      eventRecorded = true;
+      return {};
+    });
+
+    const result = await disconnectEmbeddedConnectedBrand({
+      brandId: "brand-embedded",
+      shopDomain: "embedded-shop.myshopify.com",
+      clientId: "client-embedded",
+    });
+
+    assert.equal(result.count, 0);
+    assert.ok(!deactivateCalled, "no offer deactivation on a no-op disconnect");
+    assert.ok(!eventRecorded, "no duplicate history event on a no-op disconnect");
   });
 
   test("valid signature and token exchange callback redirects to install selection page", async (t) => {
@@ -657,6 +846,7 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
     ]);
 
     t.mock.method(prisma.brand, "findFirst", async () => null); // no conflicting shop link
+    t.mock.method(prisma.brand, "findUnique", async () => null); // brand-123 has no prior Shopify connection
 
     t.mock.method(prisma.brand, "update", async (args: unknown) => {
       const typedArgs = args as { where: { id: string }; data: { shopifyShopDomain: string; shopifyCurrencyCode: string } };
@@ -745,6 +935,18 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
       id: "brand-456",
       shopifyConnectionStatus: "UNINSTALLED",
     }));
+
+    t.mock.method(prisma.brand, "findUnique", async (args: unknown) => {
+      const typedArgs = args as { where: { id: string } };
+      if (typedArgs.where.id === "brand-456") {
+        return {
+          shopifyShopDomain: "test-install.myshopify.com",
+          shopifyCurrencyCode: "CAD",
+          shopifyClientId: "old-client",
+        };
+      }
+      return null; // brand-123 (destination) has no prior Shopify connection
+    });
 
     let conflictingBrandCleared = false;
     let mainBrandUpdated = false;
@@ -1029,6 +1231,31 @@ describe("Route Scenario 3: Shopify Token Refresh", () => {
       return { count: 0 };
     });
 
+    let offersDeactivatedAfterGuard = false;
+    t.mock.method(prisma.brandRewardOffer, "updateMany", async (args: unknown) => {
+      // Must only happen once the guarded compare-and-swap transition above
+      // has already succeeded.
+      assert.ok(markRequiresReconnectCalled);
+      const typedArgs = args as { where: { brandId: string }; data: { isActive: boolean } };
+      assert.equal(typedArgs.where.brandId, brandId);
+      assert.equal(typedArgs.data.isActive, false);
+      offersDeactivatedAfterGuard = true;
+      return { count: 1 };
+    });
+
+    let eventRecordedAfterGuard = false;
+    t.mock.method(prisma.shopifyConnectionEvent, "create", async (args: unknown) => {
+      assert.ok(markRequiresReconnectCalled);
+      const typedArgs = args as {
+        data: { brandId: string; eventType: string; shopDomain: string };
+      };
+      assert.equal(typedArgs.data.brandId, brandId);
+      assert.equal(typedArgs.data.eventType, "REQUIRES_RECONNECT");
+      assert.equal(typedArgs.data.shopDomain, "test-shop.myshopify.com");
+      eventRecordedAfterGuard = true;
+      return {};
+    });
+
     const mockTokenEndpoint = async () => {
       const err = new Error("Shopify token endpoint responded with 400");
       (err as { status?: number }).status = 400;
@@ -1041,6 +1268,8 @@ describe("Route Scenario 3: Shopify Token Refresh", () => {
       assert.equal((res as { reason?: string }).reason, "NEEDS_RECONNECT");
     }
     assert.ok(markRequiresReconnectCalled);
+    assert.ok(offersDeactivatedAfterGuard);
+    assert.ok(eventRecordedAfterGuard);
   });
 });
 
@@ -1071,12 +1300,16 @@ describe("Route Scenario 4: Reward Redemption", () => {
       discountAmountCents: null,
       discountPercentageBasisPoints: 1000,
       currencyCode: "USD",
+      minimumSubtotalCents: null,
+      appliesTo: "ALL_PRODUCTS",
+      sourceShopDomain: null,
       brand: {
         id: "brand-123",
         name: "Brand Test",
         shopifyShopDomain: "test-shop.myshopify.com",
         shopifyAdminAccessTokenEncrypted: encryptSecret("token-123"),
         shopifyConnectionStatus: "CONNECTED",
+        shopifyCurrencyCode: "USD",
       },
       products: [],
     }));
@@ -1113,6 +1346,257 @@ describe("Route Scenario 4: Reward Redemption", () => {
     assert.equal(json.error, "Not enough SQRATCH points for this reward.");
   });
 
+  test("redemption blocks a fixed-amount reward whose currency no longer matches the connected store", async (t) => {
+    setupMocks({ user: { id: "user-123", role: "USER" } });
+
+    t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async () => null);
+
+    let pointsDebited = false;
+    t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
+      id: "offer-currency-mismatch",
+      brandId: "brand-123",
+      pointsCost: 50,
+      isActive: true,
+      claimStartsAt: null,
+      claimEndsAt: null,
+      maxTotalRedemptions: null,
+      maxRedemptionsPerUser: null,
+      codePrefix: "TEST",
+      discountType: "FIXED_AMOUNT",
+      discountAmountCents: 1000,
+      discountPercentageBasisPoints: null,
+      currencyCode: "USD",
+      minimumSubtotalCents: null,
+      appliesTo: "ALL_PRODUCTS",
+      sourceShopDomain: null,
+      brand: {
+        id: "brand-123",
+        name: "Brand Test",
+        shopifyShopDomain: "test-shop.myshopify.com",
+        shopifyAdminAccessTokenEncrypted: encryptSecret("token-123"),
+        shopifyConnectionStatus: "CONNECTED",
+        // Store currency has drifted to CAD since this USD offer was created.
+        shopifyCurrencyCode: "CAD",
+      },
+      products: [],
+    }));
+
+    t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-123", points: 200 }));
+    t.mock.method(prisma.userPointAccount, "findUnique", async () => ({
+      userId: "user-123",
+      spendablePoints: 200,
+      lifetimeEarnedPoints: 200,
+      lifetimeSpentPoints: 0,
+      lifetimeRefundedPoints: 0,
+      version: 0,
+    }));
+    t.mock.method(prisma.campaign, "findUnique", async () => ({
+      id: "campaign-123",
+      brandId: "brand-123",
+      unlocks: [{ id: "unlock-123" }],
+    }));
+    t.mock.method(prisma.pointTransaction, "create", async () => {
+      pointsDebited = true;
+      return {};
+    });
+
+    const req = makeJsonRequest("http://localhost/api/rewards/shopify/redeem", {
+      offerId: "offer-currency-mismatch",
+      idempotencyKey: "idem-key-currency-mismatch",
+      campaignId: "campaign-123",
+    });
+
+    const res = await redeemPOST(req);
+    assert.equal(res.status, 409);
+    const json = await res.json();
+    assert.equal(
+      json.error,
+      "Reward currency does not match the Shopify store currency. Please contact the brand.",
+    );
+    assert.ok(!pointsDebited, "no point debit occurs when compatibility fails");
+  });
+
+  test("redemption allows a percentage reward with no minimum subtotal despite a stored currency difference", async (t) => {
+    setupMocks({ user: { id: "user-123", role: "USER" } });
+
+    t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async () => null);
+
+    t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
+      id: "offer-percentage-ok",
+      brandId: "brand-123",
+      pointsCost: 50,
+      isActive: true,
+      claimStartsAt: null,
+      claimEndsAt: null,
+      maxTotalRedemptions: null,
+      maxRedemptionsPerUser: null,
+      codePrefix: "TEST",
+      codeValidDays: 7,
+      discountType: "PERCENTAGE",
+      discountAmountCents: null,
+      discountPercentageBasisPoints: 1000,
+      currencyCode: "USD",
+      minimumSubtotalCents: null,
+      appliesTo: "ALL_PRODUCTS",
+      sourceShopDomain: null,
+      brand: {
+        id: "brand-123",
+        name: "Brand Test",
+        shopifyShopDomain: "test-shop.myshopify.com",
+        shopifyAdminAccessTokenEncrypted: encryptSecret("token-123"),
+        shopifyConnectionStatus: "CONNECTED",
+        // Store currency differs from the offer's stored currency, but this
+        // offer isn't currency-dependent — must not be blocked.
+        shopifyCurrencyCode: "CAD",
+      },
+      products: [],
+    }));
+
+    t.mock.method(prisma.campaign, "findUnique", async () => ({
+      id: "campaign-123",
+      brandId: "brand-123",
+      unlocks: [{ id: "unlock-123" }],
+    }));
+    t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-123", points: 200 }));
+    t.mock.method(prisma.shopifyRewardRedemption, "create", async () => ({
+      id: "redemption-percentage-ok",
+      userId: "user-123",
+      brandId: "brand-123",
+      offerId: "offer-percentage-ok",
+      code: "TEST-CODE-OK",
+      status: "PENDING",
+      pointsCost: 50,
+      discountType: "PERCENTAGE",
+      discountAmountCents: null,
+      discountPercentageBasisPoints: 1000,
+      currencyCode: "USD",
+    }));
+    t.mock.method(prisma.user, "updateMany", async () => ({ count: 1 }));
+    t.mock.method(prisma.pointTransaction, "create", async () => ({}));
+    t.mock.method(prisma.shopifyRewardRedemption, "update", async (args: unknown) => {
+      const typedArgs = args as { data: { status?: string } };
+      return {
+        id: "redemption-percentage-ok",
+        code: "TEST-CODE-OK",
+        status: typedArgs.data.status || "ISSUED",
+        pointsCost: 50,
+        discountType: "PERCENTAGE",
+        discountAmountCents: null,
+        discountPercentageBasisPoints: 1000,
+        currencyCode: "USD",
+        issuedAt: new Date(),
+        expiresAt: new Date(),
+        usedAt: null,
+      };
+    });
+    t.mock.method(prisma.brand, "findUnique", async () => ({
+      id: "brand-123",
+      shopifyShopDomain: "test-shop.myshopify.com",
+      shopifyAdminAccessTokenEncrypted: encryptSecret("token-123"),
+      shopifyConnectionStatus: "CONNECTED",
+      shopifyAuthMode: "LEGACY_OFFLINE",
+      shopifyAccessTokenExpiresAt: null,
+      shopifyRefreshTokenEncrypted: null,
+      shopifyRefreshTokenExpiresAt: null,
+      shopifyGrantedScopes: null,
+      shopifyClientId: null,
+      shopifyTokenRefreshLockedUntil: null,
+      shopifyTokenRefreshLockId: null,
+    }));
+
+    globalThis.fetch = async () =>
+      ({
+        ok: true,
+        json: async () => ({
+          data: {
+            discountCodeBasicCreate: {
+              codeDiscountNode: { id: "gid://shopify/DiscountCodeNode/1" },
+              userErrors: [],
+            },
+          },
+        }),
+      }) as Response;
+
+    const req = makeJsonRequest("http://localhost/api/rewards/shopify/redeem", {
+      offerId: "offer-percentage-ok",
+      idempotencyKey: "idem-key-percentage-ok",
+      campaignId: "campaign-123",
+    });
+
+    const res = await redeemPOST(req);
+    assert.equal(res.status, 200);
+  });
+
+  test("redemption blocks a specific-products reward whose sourceShopDomain no longer matches the connected store", async (t) => {
+    setupMocks({ user: { id: "user-123", role: "USER" } });
+
+    t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async () => null);
+
+    let pointsDebited = false;
+    t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
+      id: "offer-stale-products",
+      brandId: "brand-123",
+      pointsCost: 50,
+      isActive: true,
+      claimStartsAt: null,
+      claimEndsAt: null,
+      maxTotalRedemptions: null,
+      maxRedemptionsPerUser: null,
+      codePrefix: "TEST",
+      discountType: "PERCENTAGE",
+      discountAmountCents: null,
+      discountPercentageBasisPoints: 1000,
+      currencyCode: "CAD",
+      minimumSubtotalCents: null,
+      appliesTo: "SPECIFIC_PRODUCTS",
+      // Belongs to a previous store, not the currently connected one.
+      sourceShopDomain: "old-shop.myshopify.com",
+      brand: {
+        id: "brand-123",
+        name: "Brand Test",
+        shopifyShopDomain: "test-shop.myshopify.com",
+        shopifyAdminAccessTokenEncrypted: encryptSecret("token-123"),
+        shopifyConnectionStatus: "CONNECTED",
+        shopifyCurrencyCode: "CAD",
+      },
+      products: [{ shopifyProductGid: "gid://shopify/Product/1" }],
+    }));
+
+    t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-123", points: 200 }));
+    t.mock.method(prisma.userPointAccount, "findUnique", async () => ({
+      userId: "user-123",
+      spendablePoints: 200,
+      lifetimeEarnedPoints: 200,
+      lifetimeSpentPoints: 0,
+      lifetimeRefundedPoints: 0,
+      version: 0,
+    }));
+    t.mock.method(prisma.campaign, "findUnique", async () => ({
+      id: "campaign-123",
+      brandId: "brand-123",
+      unlocks: [{ id: "unlock-123" }],
+    }));
+    t.mock.method(prisma.pointTransaction, "create", async () => {
+      pointsDebited = true;
+      return {};
+    });
+
+    const req = makeJsonRequest("http://localhost/api/rewards/shopify/redeem", {
+      offerId: "offer-stale-products",
+      idempotencyKey: "idem-key-stale-products",
+      campaignId: "campaign-123",
+    });
+
+    const res = await redeemPOST(req);
+    assert.equal(res.status, 409);
+    const json = await res.json();
+    assert.equal(
+      json.error,
+      "This reward's products are not available for the connected Shopify store.",
+    );
+    assert.ok(!pointsDebited, "no point debit occurs when compatibility fails");
+  });
+
   test("cross-brand rewards remain blocked even when the campaign is unlocked", async (t) => {
     setupMocks({ user: { id: "user-123", role: "USER" } });
 
@@ -1126,12 +1610,20 @@ describe("Route Scenario 4: Reward Redemption", () => {
       claimEndsAt: null,
       maxTotalRedemptions: null,
       maxRedemptionsPerUser: null,
+      discountType: "PERCENTAGE",
+      discountAmountCents: null,
+      discountPercentageBasisPoints: 1000,
+      currencyCode: "USD",
+      minimumSubtotalCents: null,
+      appliesTo: "ALL_PRODUCTS",
+      sourceShopDomain: null,
       brand: {
         id: "brand-other",
         name: "Other Brand",
         shopifyShopDomain: "other.myshopify.com",
         shopifyAdminAccessTokenEncrypted: encryptSecret("token-other"),
         shopifyConnectionStatus: "CONNECTED",
+        shopifyCurrencyCode: "USD",
       },
       products: [],
     }));
@@ -1208,6 +1700,9 @@ describe("Route Scenario 4: Reward Redemption", () => {
       discountAmountCents: null,
       discountPercentageBasisPoints: 1000,
       currencyCode: "USD",
+      minimumSubtotalCents: null,
+      appliesTo: "ALL_PRODUCTS",
+      sourceShopDomain: null,
       brand: {
         id: "brand-123",
         name: "Brand Test",
@@ -1344,6 +1839,9 @@ describe("Route Scenario 4: Reward Redemption", () => {
       discountAmountCents: null,
       discountPercentageBasisPoints: 1000,
       currencyCode: "USD",
+      minimumSubtotalCents: null,
+      appliesTo: "ALL_PRODUCTS",
+      sourceShopDomain: null,
       brand: {
         id: "brand-123",
         name: "Brand Test",

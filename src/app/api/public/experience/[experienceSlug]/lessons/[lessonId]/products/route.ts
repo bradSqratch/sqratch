@@ -5,6 +5,7 @@ import {
 } from "@/lib/experience-access";
 import prisma from "@/lib/prisma";
 import { attachSessionCookie, ensureViewerSession } from "@/lib/session";
+import { isProductLinkCurrent } from "@/lib/product-link-compatibility";
 
 export async function GET(
   request: NextRequest,
@@ -48,6 +49,7 @@ export async function GET(
             priceText: true,
             currency: true,
             brandId: true,
+            sourceShopDomain: true,
           },
         },
       },
@@ -60,9 +62,32 @@ export async function GET(
     const canAccess =
       lesson.course.access === "PUBLIC" || access.canAccessPrivate;
 
+    // A stored link is current only when its sourceShopDomain matches the
+    // linked brand's current Shopify domain. Stale/unknown-source links are
+    // hidden from this public list (never deleted).
+    const brandIds = Array.from(
+      new Set(
+        lesson.productLinks
+          .map((link) => link.brandId)
+          .filter((brandId): brandId is string => Boolean(brandId)),
+      ),
+    );
+    const brands = brandIds.length
+      ? await prisma.brand.findMany({
+          where: { id: { in: brandIds } },
+          select: { id: true, shopifyShopDomain: true },
+        })
+      : [];
+    const domainByBrandId = new Map(
+      brands.map((brand) => [brand.id, brand.shopifyShopDomain]),
+    );
+    const currentProductLinks = lesson.productLinks.filter((link) =>
+      isProductLinkCurrent(link, domainByBrandId),
+    );
+
     return NextResponse.json({
       data: {
-        items: canAccess ? lesson.productLinks : [],
+        items: canAccess ? currentProductLinks : [],
       },
     });
   } catch (error) {

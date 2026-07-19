@@ -13,6 +13,7 @@ import {
   type LessonVideoStorageReference,
 } from "@/lib/lesson-video-reference";
 import { parseRewardPoints } from "@/lib/reward-points-input";
+import { isProductLinkCurrent } from "@/lib/product-link-compatibility";
 
 function normalizeVideoSource(value: unknown) {
   const normalized = String(value || "YOUTUBE")
@@ -158,10 +159,30 @@ export async function GET(request: NextRequest) {
             priceText: true,
             currency: true,
             brandId: true,
+            sourceShopDomain: true,
             createdAt: true,
           },
         },
       },
+    });
+
+    // Stale/incompatible product links are never hidden from creator
+    // management — they're annotated so the creator can see they need
+    // relinking rather than silently treating them as current.
+    const campaignBrandLinks = await prisma.campaignExperience.findMany({
+      where: { experienceId: course.experience.id },
+      select: {
+        campaign: {
+          select: { brand: { select: { id: true, shopifyShopDomain: true } } },
+        },
+      },
+    });
+    const domainByBrandId = new Map<string, string | null>();
+    campaignBrandLinks.forEach((item) => {
+      const brand = item.campaign.brand;
+      if (brand) {
+        domainByBrandId.set(brand.id, brand.shopifyShopDomain);
+      }
     });
 
     const lessonData = await Promise.all(
@@ -186,7 +207,10 @@ export async function GET(request: NextRequest) {
               : null,
           videoStorageBucket: reference?.bucket || null,
           videoStoragePath: reference?.path || null,
-          productLinks: lesson.productLinks,
+          productLinks: lesson.productLinks.map((link) => ({
+            ...link,
+            needsRelinking: !isProductLinkCurrent(link, domainByBrandId),
+          })),
         };
       }),
     );

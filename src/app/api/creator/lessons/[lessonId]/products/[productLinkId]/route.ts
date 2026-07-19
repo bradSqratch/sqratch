@@ -3,6 +3,7 @@ import prisma from "@/lib/prisma";
 import {
   getLessonProductManagementContext,
   parseLessonProductInput,
+  resolveSourceShopDomainForBrand,
 } from "@/lib/lesson-product-links";
 
 export async function PATCH(
@@ -72,6 +73,14 @@ export async function PATCH(
       );
     }
 
+    // Re-derived from the resolved brand's current connection state on every
+    // update — never trusts a client-provided source domain. This is how a
+    // stale link becomes current again: editing it re-stamps the domain.
+    const sourceShopDomain = resolveSourceShopDomainForBrand(
+      access.data.candidateBrands,
+      parsed.value.brandId,
+    );
+
     const updated = await prisma.lessonProductLink.update({
       where: {
         id: productLinkId,
@@ -83,6 +92,7 @@ export async function PATCH(
         priceText: parsed.value.priceText,
         currency: parsed.value.currency,
         brandId: parsed.value.brandId,
+        sourceShopDomain,
       },
       select: {
         id: true,
@@ -93,6 +103,7 @@ export async function PATCH(
         priceText: true,
         currency: true,
         brandId: true,
+        sourceShopDomain: true,
         createdAt: true,
       },
     });

@@ -4,6 +4,7 @@ import prisma from "@/lib/prisma";
 import {
   buildShopifyPendingInstallService,
   getShopifyShopCurrency,
+  normalizeShopDomain,
 } from "@/lib/shopify";
 import { slugifyValue } from "@/lib/brand-auth";
 import {
@@ -15,6 +16,12 @@ import {
   ACTIVE_BRAND_COOKIE,
   resolveActiveBrandContext,
 } from "@/lib/brand-context";
+import {
+  recordShopifyConnectionInstall,
+  recordShopifyConnectionLoss,
+  resolveInstallConnectionEventType,
+  resolveLastKnownShopDomain,
+} from "@/lib/shopify-connection-transitions";
 
 
 // Re-export types for backward compatibility if needed elsewhere
@@ -324,6 +331,16 @@ export async function installationsPostImpl(
         if (owner.shopifyConnectionStatus !== "UNINSTALLED") {
           throw new Error("SHOP_ALREADY_LINKED");
         }
+
+        const ownerBefore = await tx.brand.findUnique({
+          where: { id: owner.id },
+          select: {
+            shopifyShopDomain: true,
+            shopifyCurrencyCode: true,
+            shopifyClientId: true,
+          },
+        });
+
         await tx.brand.update({
           where: { id: owner.id },
           data: {
@@ -341,7 +358,43 @@ export async function installationsPostImpl(
             shopifyConnectionStatus: "DISCONNECTED",
           },
         });
+
+        // The owner brand is losing its Shopify connection to make room for
+        // this relink — deactivate its offers and record the loss just like
+        // any other disconnect, even though it was already UNINSTALLED.
+        await recordShopifyConnectionLoss(tx, {
+          brandId: owner.id,
+          eventType: "DISCONNECTED",
+          snapshot: {
+            shopDomain: ownerBefore?.shopifyShopDomain ?? currentPayload.shop,
+            currencyCode: ownerBefore?.shopifyCurrencyCode ?? null,
+            shopifyClientId: ownerBefore?.shopifyClientId ?? null,
+          },
+        });
       }
+
+      const destinationBefore = await tx.brand.findUnique({
+        where: { id: destinationBrandId },
+        select: { shopifyShopDomain: true, shopifyCurrencyCode: true },
+      });
+
+      let previousShopDomain = normalizeShopDomain(
+        destinationBefore?.shopifyShopDomain ?? null,
+      );
+      if (!previousShopDomain) {
+        previousShopDomain = await resolveLastKnownShopDomain(
+          tx,
+          destinationBrandId,
+        );
+      }
+
+      const newShopDomain = normalizeShopDomain(payload.shop) ?? payload.shop;
+      const connectionEventType = resolveInstallConnectionEventType(
+        previousShopDomain,
+        newShopDomain,
+      );
+      const finalShopifyClientId =
+        payload.shape === "EXPIRING" ? payload.clientId : null;
 
       const updated = await tx.brand.update({
         where: { id: destinationBrandId },
@@ -350,6 +403,18 @@ export async function installationsPostImpl(
           ...tokenBrandData,
         },
         select: { id: true, name: true, slug: true },
+      });
+
+      // Reward offers stay inactive through every install/reconnect/relink —
+      // a Brand Admin must always explicitly review and reactivate them.
+      await recordShopifyConnectionInstall(tx, {
+        brandId: destinationBrandId,
+        eventType: connectionEventType,
+        shopDomain: newShopDomain,
+        previousShopDomain,
+        currencyCode: shopifyCurrencyCode,
+        previousCurrencyCode: destinationBefore?.shopifyCurrencyCode ?? null,
+        shopifyClientId: finalShopifyClientId,
       });
 
       try {

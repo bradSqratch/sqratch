@@ -4,6 +4,13 @@ import type {
   BrandRewardOfferProduct,
   RewardAppliesTo,
 } from "@prisma/client";
+import { fetchNormalizedShopifyProducts } from "@/lib/shopify-products";
+import { normalizeShopDomain } from "@/lib/shopify";
+import {
+  computeShopifyRewardCompatibility,
+  isCurrencyDependentOffer,
+  normalizeCurrency,
+} from "@/lib/shopify-reward-compatibility";
 
 export { CLAIM_COUNTED_REDEMPTION_STATUSES } from "./reward-redemption-state";
 
@@ -21,7 +28,9 @@ type OfferPayload = {
   description: string | null;
   isActive: boolean;
   pointsCost: number;
-  discountAmountCents: number;
+  discountType: "FIXED_AMOUNT" | "PERCENTAGE";
+  discountAmountCents: number | null;
+  discountPercentageBasisPoints: number | null;
   currencyCode: string;
   claimStartsAt: Date | null;
   claimEndsAt: Date | null;
@@ -361,15 +370,252 @@ export function serializeRewardOffer(
     codePrefix: offer.codePrefix,
     maxTotalRedemptions: offer.maxTotalRedemptions,
     maxRedemptionsPerUser: offer.maxRedemptionsPerUser,
+    sourceShopDomain: offer.sourceShopDomain,
     createdAt: offer.createdAt,
     updatedAt: offer.updatedAt,
     products: offer.products || [],
   };
 }
 
-export function validateCurrencyMatch(offerCurrency: string | null, storeCurrency: string | null) {
-  if (offerCurrency && storeCurrency && offerCurrency !== storeCurrency) {
-    throw new Error("CURRENCY_MISMATCH");
+/**
+ * Authoritatively confirms every submitted product GID actually belongs to
+ * the currently connected Shopify store, by cross-checking against a live
+ * product fetch. Used when saving a SPECIFIC_PRODUCTS offer so a client
+ * can't claim stale/spoofed product GIDs from a different store.
+ */
+export async function validateProductsBelongToConnectedStore(input: {
+  shopDomain: string;
+  brandId: string;
+  products: Array<{ shopifyProductGid: string }>;
+}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const result = await fetchNormalizedShopifyProducts({
+    shopDomain: input.shopDomain,
+    brandId: input.brandId,
+    limit: 250,
+  });
+
+  if (!result.ok) {
+    return {
+      ok: false,
+      error: `Could not verify selected products against the connected Shopify store: ${result.error}`,
+    };
   }
+
+  const validGids = new Set(result.items.map((item) => item.shopifyProductGid));
+  const invalid = input.products.filter(
+    (product) => !validGids.has(product.shopifyProductGid),
+  );
+
+  if (invalid.length > 0) {
+    return {
+      ok: false,
+      error: "One or more selected products are not available in the connected Shopify store.",
+    };
+  }
+
+  return { ok: true };
+}
+
+export type RewardOfferUpdateResolution =
+  | {
+      ok: true;
+      data: OfferPayload;
+      sourceShopDomain: string | null;
+    }
+  | {
+      ok: false;
+      status: number;
+      error: string;
+      code: string;
+      details?: Record<string, unknown>;
+    };
+
+/**
+ * Resolves a Brand Admin PUT request against an existing reward offer into
+ * either a stable error (currency review required, product reselection
+ * required, incompatible activation, etc.) or the final field set to
+ * persist. Pure aside from the injected `validateProducts` I/O callback —
+ * independently testable without a database or Shopify API.
+ *
+ * Currency/product-source gates are evaluated against the EXISTING stored
+ * offer, not the proposed request body: a currency-dependent offer whose
+ * currency has drifted from the current store — or a SPECIFIC_PRODUCTS offer
+ * whose source store no longer matches — must be explicitly reviewed before
+ * any further save, never silently rewritten.
+ */
+export async function resolveRewardOfferUpdate(input: {
+  existing: {
+    discountType: "FIXED_AMOUNT" | "PERCENTAGE";
+    minimumSubtotalCents: number | null;
+    currencyCode: string;
+    appliesTo: RewardAppliesTo;
+    sourceShopDomain: string | null;
+  };
+  body: unknown;
+  isConnected: boolean;
+  currentShopDomain: string | null;
+  currentStoreCurrency: string | null;
+  validateProducts?: (
+    products: OfferPayload["products"],
+  ) => Promise<{ ok: true } | { ok: false; error: string }>;
+}): Promise<RewardOfferUpdateResolution> {
+  const bodyRecord = (input.body || {}) as Record<string, unknown>;
+  const currencyReviewAcknowledged =
+    bodyRecord.currencyReviewAcknowledged === true;
+
+  const existingCurrencyDependent = isCurrencyDependentOffer(input.existing);
+  const existingCurrencyMismatch = Boolean(
+    existingCurrencyDependent &&
+      input.currentStoreCurrency &&
+      normalizeCurrency(input.existing.currencyCode) !==
+        input.currentStoreCurrency,
+  );
+
+  let resolvedCurrencyCode: string | null = input.existing.currencyCode;
+
+  if (existingCurrencyMismatch) {
+    if (!currencyReviewAcknowledged) {
+      return {
+        ok: false,
+        status: 409,
+        error: `This reward was configured for ${input.existing.currencyCode}, but the connected Shopify store uses ${input.currentStoreCurrency}. Review the currency before saving.`,
+        code: "CURRENCY_REVIEW_REQUIRED",
+        details: {
+          offerCurrency: input.existing.currencyCode,
+          currentStoreCurrency: input.currentStoreCurrency,
+        },
+      };
+    }
+
+    // Server-trusted currency, never the client-submitted value. The
+    // monetary amount is never converted — only the currency label moves.
+    resolvedCurrencyCode = input.currentStoreCurrency;
+  }
+
+  // --- Product reselection gate (checked on the raw proposed appliesTo,
+  // BEFORE full structural parsing) ---------------------------------------
+  // parseRewardOfferPayload's own "at least one product required" check
+  // would otherwise shadow this with a generic INVALID_PAYLOAD error instead
+  // of the specific, actionable PRODUCT_RESELECTION_REQUIRED code.
+  const existingSourceDomain = normalizeShopDomain(
+    input.existing.sourceShopDomain,
+  );
+  const priorSourceMatchesCurrent =
+    input.existing.appliesTo === "SPECIFIC_PRODUCTS" &&
+    Boolean(existingSourceDomain) &&
+    Boolean(input.currentShopDomain) &&
+    existingSourceDomain === input.currentShopDomain;
+
+  const rawAppliesTo = String(bodyRecord.appliesTo || "ALL_PRODUCTS");
+  const rawIsActive = Boolean(bodyRecord.isActive);
+  const rawProductsLength = Array.isArray(bodyRecord.products)
+    ? bodyRecord.products.length
+    : 0;
+
+  if (rawAppliesTo === "SPECIFIC_PRODUCTS" && !priorSourceMatchesCurrent) {
+    // Either newly becoming SPECIFIC_PRODUCTS, or the existing source is
+    // missing/stale (belongs to a different or unknown store) — a genuine
+    // reselection from the current store is required.
+    if (!input.isConnected || !input.currentShopDomain) {
+      return {
+        ok: false,
+        status: 409,
+        error: "Reconnect Shopify to select products from the current store.",
+        code: "PRODUCT_RESELECTION_REQUIRED",
+      };
+    }
+
+    if (rawProductsLength === 0) {
+      return {
+        ok: false,
+        status: 409,
+        error:
+          "Select at least one product from the currently connected Shopify store.",
+        code: "PRODUCT_RESELECTION_REQUIRED",
+      };
+    }
+
+    if (rawIsActive) {
+      return {
+        ok: false,
+        status: 400,
+        error:
+          "Save the reselected products first, then activate the offer in a separate request.",
+        code: "PRODUCT_RESELECTION_REQUIRES_INACTIVE",
+      };
+    }
+  }
+
+  const parsed = parseRewardOfferPayload(input.body, resolvedCurrencyCode);
+
+  if (!parsed.ok) {
+    return { ok: false, status: 400, error: parsed.error, code: "INVALID_PAYLOAD" };
+  }
+
+  const data = parsed.data;
+
+  if (existingCurrencyMismatch && data.isActive) {
+    return {
+      ok: false,
+      status: 400,
+      error:
+        "Save the corrected currency first, then activate the offer in a separate request.",
+      code: "CURRENCY_ACK_REQUIRES_INACTIVE",
+    };
+  }
+
+  let sourceShopDomain: string | null;
+
+  if (data.appliesTo === "SPECIFIC_PRODUCTS") {
+    sourceShopDomain = input.isConnected
+      ? input.currentShopDomain
+      : existingSourceDomain;
+
+    if (input.isConnected && data.products.length > 0 && input.validateProducts) {
+      const validation = await input.validateProducts(data.products);
+
+      if (!validation.ok) {
+        return {
+          ok: false,
+          status: 400,
+          error: validation.error,
+          code: "PRODUCT_VALIDATION_FAILED",
+        };
+      }
+    }
+  } else {
+    sourceShopDomain = input.isConnected
+      ? input.currentShopDomain
+      : normalizeShopDomain(input.existing.sourceShopDomain);
+  }
+
+  if (data.isActive) {
+    const compatibility = computeShopifyRewardCompatibility({
+      offer: {
+        discountType: data.discountType,
+        minimumSubtotalCents: data.minimumSubtotalCents,
+        currencyCode: resolvedCurrencyCode ?? data.currencyCode,
+        appliesTo: data.appliesTo,
+        sourceShopDomain,
+      },
+      shopifyConnected: input.isConnected,
+      currentShopDomain: input.currentShopDomain,
+      currentStoreCurrency: input.currentStoreCurrency,
+    });
+
+    if (!compatibility.compatible) {
+      return {
+        ok: false,
+        status: 409,
+        error: compatibility.reasons.includes("SHOPIFY_DISCONNECTED")
+          ? "Reconnect Shopify before creating or enabling reward offers."
+          : "This offer is not compatible with the connected Shopify store.",
+        code: "INCOMPATIBLE_OFFER",
+        details: { reasons: compatibility.reasons },
+      };
+    }
+  }
+
+  return { ok: true, data, sourceShopDomain };
 }
 

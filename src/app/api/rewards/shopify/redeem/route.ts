@@ -18,9 +18,20 @@ import {
   CLAIM_COUNTED_REDEMPTION_STATUSES,
   generateRewardCode,
   getRewardOfferAvailability,
-  validateCurrencyMatch,
 } from "@/lib/reward-offers";
+import {
+  computeShopifyRewardCompatibility,
+  type ShopifyRewardCompatibilityReason,
+} from "@/lib/shopify-reward-compatibility";
 import { idempotencyMatch } from "@/lib/redemption-idempotency";
+
+function mapIncompatibilityToErrorCode(
+  reasons: ShopifyRewardCompatibilityReason[],
+): "CURRENCY_MISMATCH" | "PRODUCT_SOURCE_MISMATCH" {
+  return reasons.includes("CURRENCY_REVIEW_REQUIRED")
+    ? "CURRENCY_MISMATCH"
+    : "PRODUCT_SOURCE_MISMATCH";
+}
 
 function cleanIdempotencyKey(value: unknown) {
   const key = String(value || "").trim();
@@ -65,6 +76,10 @@ const redemptionErrorResponses: Record<
   },
   CURRENCY_MISMATCH: {
     error: "Reward currency does not match the Shopify store currency. Please contact the brand.",
+    status: 409,
+  },
+  PRODUCT_SOURCE_MISMATCH: {
+    error: "This reward's products are not available for the connected Shopify store.",
     status: 409,
   },
 };
@@ -168,6 +183,7 @@ export async function redeemImpl(request: NextRequest, deps: AuthResolvers) {
             shopifyShopDomain: true,
             shopifyAdminAccessTokenEncrypted: true,
             shopifyConnectionStatus: true,
+            shopifyCurrencyCode: true,
           },
         },
         products: true,
@@ -211,6 +227,30 @@ export async function redeemImpl(request: NextRequest, deps: AuthResolvers) {
         { error: "Shopify is not connected for this brand." },
         { status: 400 },
       );
+    }
+
+    // Compute compatibility before beginning the reservation — repeated
+    // again with freshly loaded data inside the Serializable transaction
+    // below as defense in depth against a change that races this check.
+    const initialCompatibility = computeShopifyRewardCompatibility({
+      offer: {
+        discountType: offer.discountType,
+        minimumSubtotalCents: offer.minimumSubtotalCents,
+        currencyCode: offer.currencyCode,
+        appliesTo: offer.appliesTo,
+        sourceShopDomain: offer.sourceShopDomain,
+      },
+      shopifyConnected: true,
+      currentShopDomain: offer.brand.shopifyShopDomain,
+      currentStoreCurrency: offer.brand.shopifyCurrencyCode,
+    });
+
+    if (!initialCompatibility.compatible) {
+      const mapped =
+        redemptionErrorResponses[
+          mapIncompatibilityToErrorCode(initialCompatibility.reasons)
+        ];
+      return NextResponse.json({ error: mapped.error }, { status: mapped.status });
     }
 
     const user = await prisma.user.findUnique({
@@ -347,10 +387,31 @@ export async function redeemImpl(request: NextRequest, deps: AuthResolvers) {
             throw new Error("SHOPIFY_DISCONNECTED");
           }
 
-          if (!currentOffer.brand.shopifyCurrencyCode) {
-            throw new Error("CURRENCY_MISMATCH");
+          // Re-checked here with data freshly loaded inside the Serializable
+          // transaction — defense in depth against a currency/product-source
+          // change that raced the pre-transaction check above. Currency
+          // validation only applies to currency-dependent offers (FIXED_AMOUNT,
+          // or a set minimumSubtotalCents); a percentage reward with no
+          // minimum subtotal is never blocked merely for a stored currency
+          // difference.
+          const currentCompatibility = computeShopifyRewardCompatibility({
+            offer: {
+              discountType: currentOffer.discountType,
+              minimumSubtotalCents: currentOffer.minimumSubtotalCents,
+              currencyCode: currentOffer.currencyCode,
+              appliesTo: currentOffer.appliesTo,
+              sourceShopDomain: currentOffer.sourceShopDomain,
+            },
+            shopifyConnected,
+            currentShopDomain: currentOffer.brand.shopifyShopDomain,
+            currentStoreCurrency: currentOffer.brand.shopifyCurrencyCode,
+          });
+
+          if (!currentCompatibility.compatible) {
+            throw new Error(
+              mapIncompatibilityToErrorCode(currentCompatibility.reasons),
+            );
           }
-          validateCurrencyMatch(currentOffer.currencyCode, currentOffer.brand.shopifyCurrencyCode);
 
           const [currentTotalRedemptions, currentUserRedemptions] =
             await Promise.all([
