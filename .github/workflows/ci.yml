@@ -35,6 +35,8 @@ jobs:
         with:
           node-version: 20
           cache: npm
+      - name: Use project npm version
+        run: npm install --global npm@11.6.2
       - run: npm ci
       - run: npx prisma generate
       - run: npx prisma validate
