@@ -21,7 +21,7 @@ A Next.js 15 + Prisma 7 + Supabase app. Brands print physical QR stickers; users
 | Question | How to answer |
 |---|---|
 | What does this API route do? | Check which auth helper it calls at the top (see Auth Contracts below) |
-| Does this touch money/points? | Check for `PointTransaction`, `ShopifyRewardRedemption`, `User.points` |
+| Does this touch money/points? | Check for `PointTransaction`, `ShopifyRewardRedemption`, `UserPointAccount` |
 | Does this talk to Shopify? | Check for `shopify-discounts.ts`, `shopify-products.ts`, `shopify-token-manager.ts`, or `shopify.ts` imports |
 | Is this GDPR-relevant? | Shopify webhook routes under `/api/shopify/webhooks/` |
 | Is this on the critical user path? | Routes under `/api/public/` and `/api/rewards/` |
@@ -82,7 +82,7 @@ Middleware (`src/middleware.ts`) only protects `/dashboard/**`, `/admin/**` page
 6. `src/app/api/rewards/shopify/redeem/route.ts` — serializable TX + refund path
 
 **Hard rules:**
-- `User.points` must always be modified with a matching `PointTransaction` row in the same transaction
+- `UserPointAccount` must always be modified with a matching `PointTransaction` row in the same transaction — always go through `applyPointLedgerEvent()`, never a direct update
 - Never remove `isolationLevel: Serializable` from the redeem transaction
 - Never remove the `debit.count !== 1` race-condition guard
 - `PointTransaction` rows are an immutable audit ledger — never delete them
@@ -183,7 +183,7 @@ See `docs/env-vars.md`, `docs/prisma-migrations.md`, `docs/points-ledger.md`, an
 ## Common Gotchas
 
 1. **Webhook routes bypass middleware JWT** — intentional (`src/middleware.ts:7`). They are HMAC-verified instead.
-2. **`User.points` is a denormalized cache** — the ledger is `PointTransaction`. Always write both.
+2. **`UserPointAccount` is the balance store, `PointTransaction` is the ledger** — always write both, atomically, via `applyPointLedgerEvent()`. `User.points` is deprecated and no longer used by application code (removed from the Prisma schema); the physical column is dropped only once migration `20260719061157_remove_legacy_user_points` is applied to a given environment.
 3. **`TokenStore` is a multi-purpose key-value store** — Shopify OAuth state and pending install tokens (both LEGACY and EXPIRING shapes) both live here with different `service` key prefixes.
 4. **`CampaignUnlock` supports both authenticated and anonymous users** — `userId` is nullable; `anonKey` is used for anonymous. Both must be handled in any unlock-checking logic.
 5. **next-auth v4 with App Router** — uses `getServerSession(authOptions)` (server components/routes), not `useSession` (client only). Mixing these up is a common source of auth bugs.

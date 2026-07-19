@@ -340,7 +340,7 @@ sqratch/
 
 | Model | Purpose | Key Relationships | Lifecycle Notes |
 |---|---|---|---|
-| `User` | End user, brand admin, creator, or SQRATCH admin | Has many `BrandMember`, `CreatorProfile`, `CampaignUnlock`, `PointTransaction`, `ShopifyRewardRedemption`, `UserSession` | `role` enum controls access everywhere; `points` is a denormalized counter backed by `PointTransaction`; `isActive` and `sessionVersion` are checked in the JWT callback |
+| `User` | End user, brand admin, creator, or SQRATCH admin | Has many `BrandMember`, `CreatorProfile`, `CampaignUnlock`, `PointTransaction`, `ShopifyRewardRedemption`, `UserSession` | `role` enum controls access everywhere; balances live on `UserPointAccount` (see Points below), not on `User`; `isActive` and `sessionVersion` are checked in the JWT callback |
 | `UserSession` | Anonymous + authenticated browsing session | Belongs to `User?`, `Campaign?`, `QRCode?` | Created on QR scan; promoted to userId on login via `/api/progress/merge` |
 | `EmailVerificationToken` | HMAC-backed email verification challenge | Belongs to `User` | Six-digit code is never stored; expires after 10 minutes, exhausts after five failed attempts, and is atomically consumed |
 
@@ -388,7 +388,7 @@ Brand-scoped requests resolve through `src/lib/brand-context.ts` and the HttpOnl
 
 ### Points
 
-`User.points` is a **denormalized counter**. The source of truth for point history is `PointTransaction`. Always update both atomically inside a transaction. The unique constraint `(userId, qrCodeId)` on `PointTransaction` is the primary QR double-award guard. The unique constraint `(shopifyRewardRedemptionId, reason)` is the refund exactly-once guard.
+`UserPointAccount` (`spendablePoints`, `lifetimeEarnedPoints`, `lifetimeSpentPoints`, `lifetimeRefundedPoints`) is the **authoritative balance store**, one row per user. `PointTransaction` is the source of truth for point history — an immutable ledger. `applyPointLedgerEvent()` in `src/lib/points.ts` is the only function that writes both, atomically, inside a transaction; there is no other balance field anywhere in application code (the legacy `User.points` mirror is deprecated, removed from the Prisma schema, and its physical column is dropped by migration `20260719061157_remove_legacy_user_points` — see docs/points-ledger.md for the required deployment order). The unique constraint `(userId, qrCodeId)` on `PointTransaction` is the primary QR double-award guard. The unique constraint `(shopifyRewardRedemptionId, reason)` is the refund exactly-once guard.
 
 ### Internal / Support Models
 
@@ -454,7 +454,7 @@ User scans → browser opens /q/[qrCodeData]
       → Creates CampaignUnlock (campaignId, userId, qrCodeId)
       → TRANSACTION:
         → redeemQrCodeForUser (status: NEW → USED, atomic updateMany)
-        → awardQrScanPoint → PointTransaction(+1, QR_SCAN) + User.points++
+        → awardQrScanPoint → PointTransaction(+1, QR_SCAN) + UserPointAccount.spendablePoints++
     → If anonymous:
       → Creates CampaignUnlock (campaignId, anonKey=sessionId)
         → P2002 caught for concurrent duplicate (partial unique index dedup)
@@ -469,11 +469,11 @@ QR Scan (authenticated):
   → awardQrScanPoint() in src/lib/points.ts
   → Creates PointTransaction(+1, QR_SCAN, qrCodeId)
   → Unique constraint (userId, qrCodeId) prevents double-award
-  → User.points += 1
+  → UserPointAccount.spendablePoints += 1
 
 Points are always modified atomically:
   → PointTransaction row created first
-  → User.points updated in same DB transaction
+  → UserPointAccount aggregate updated in same DB transaction
 ```
 
 ### 4. Shopify OAuth Install / Linking (Legacy Path)
@@ -554,14 +554,14 @@ User at /x/[slug]/shop or /dashboard/points clicks "Redeem"
     4. getRewardClaimContext() → verify user has unlocked the campaign/experience
     5. Check brand.shopifyConnectionStatus === CONNECTED
     6. Availability check (getRewardOfferAvailability) using CLAIM_COUNTED_REDEMPTION_STATUSES
-    7. Check user.points >= offer.pointsCost
+    7. Check getUserSpendablePointBalance() >= offer.pointsCost
     
     8. SERIALIZABLE TRANSACTION:
        → Re-check offer + Shopify connection (inside TX)
        → Re-check limits (inside TX)
        → Re-check concurrent idempotency (idempotencyMatch for P2002 on key)
        → Create ShopifyRewardRedemption (status=PENDING)
-       → User.updateMany({ points: { gte: pointsCost } }) → debit
+       → UserPointAccount.updateMany({ spendablePoints: { gte: pointsCost } }) → debit
          → If count !== 1: throw INSUFFICIENT_POINTS (race condition guard)
        → Create PointTransaction(-pointsCost, SHOPIFY_REWARD_REDEMPTION)
        → Update redemption status → POINTS_DEBITED
@@ -569,7 +569,7 @@ User at /x/[slug]/shop or /dashboard/points clicks "Redeem"
     9. Call createShopifyRewardDiscountCode() → Shopify GraphQL mutation
        → Bounded 3-attempt retry on generated code collision (P2002 on code only)
        → If fails: REFUND TRANSACTION:
-          → User.points += pointsCost
+          → UserPointAccount.spendablePoints += pointsCost
           → Create PointTransaction(+pointsCost, SHOPIFY_REWARD_REFUND)
           → Update redemption status → REFUNDED
           → Return error + refunded redemption
@@ -855,7 +855,7 @@ An earlier checkout had a divergent migration history relative to production. Th
 ### General Rules
 
 - **Before editing any API route**, check which auth context function it calls (`getAdminContext`, `getBrandAdminContext`, `getBrandManagementContext`, `getServerSession`, `resolveSession`, `resolveBrandAdminContext`) — that's your auth contract.
-- **Before touching `User.points`**, read `src/lib/points.ts` and understand the `PointTransaction` unique constraints. Direct `User.update` on points without a `PointTransaction` will corrupt the ledger.
+- **Before touching point balances**, read `src/lib/points.ts` and understand the `PointTransaction` unique constraints. `User.points` is deprecated, unused by application code, and removed from the Prisma schema; its physical column is dropped only once migration `20260719061157_remove_legacy_user_points` is applied (an environment may still physically retain the unused column before then). `UserPointAccount` is the sole balance store in application logic. Any direct `UserPointAccount.update` outside `applyPointLedgerEvent`, without a matching `PointTransaction`, will corrupt the ledger.
 - **Never change these without checking everything that uses them:**
   - `User.role` enum values → used in middleware, all auth helpers, JWT callback
   - `ShopifyRewardRedemptionStatus` state machine → redemption UI, refund logic, reconciliation, status refresh

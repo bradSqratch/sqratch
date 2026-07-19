@@ -1,0 +1,65 @@
+-- Remove the legacy "User"."points" column.
+--
+-- Why this column is obsolete:
+--   "User"."points" was a denormalized mirror of the spendable point balance,
+--   kept in sync by application code on every ledger write. That write has
+--   been removed; no active code path reads or writes this column anymore.
+--
+-- Authoritative model:
+--   "UserPointAccount" (spendablePoints / lifetimeEarnedPoints /
+--   lifetimeSpentPoints / lifetimeRefundedPoints) is the sole authoritative
+--   balance store. "PointTransaction" is the sole authoritative, immutable
+--   activity ledger. Both are untouched by this migration.
+--
+-- Reconciliation — required at TWO gates, not just before this migration:
+--   prisma/pre-migration-checks-remove-user-points.sql contains 13 read-only
+--   verification queries (user/account counts, missing-account detection with
+--   full legacy-vs-ledger context, a BLOCKING missing-account/legacy-drift
+--   anomaly check, legacy/authoritative drift, negative balances, invalid
+--   lifetime totals, duplicate accounts, ledger-vs-account reconciliation,
+--   orphaned legacy values, recent activity, and redemption/refund
+--   consistency).
+--
+--   GATE 1 (before deploying the ledger-only missing-account self-healing
+--   application code, i.e. before Stage A): the application code that pairs
+--   with this migration changes how a MISSING UserPointAccount is
+--   initialized — from seeding spendable off "User"."points" to deriving it
+--   entirely from PointTransaction history. A user with no UserPointAccount
+--   whose legacy "points" disagrees with their ledger sum would see their
+--   balance change the moment that code ships, independent of whether this
+--   migration has been applied yet. All 13 checks — and especially the
+--   missing-account/legacy-drift anomaly check — must be run and every
+--   discrepancy resolved BEFORE that application code is deployed, not
+--   merely before this migration runs.
+--
+--   GATE 2 (before applying this migration, i.e. before Stage B): re-run the
+--   structural/account/ledger checks that remain meaningful once Stage A has
+--   been running (missing-account checks should no longer trigger by then).
+--
+--   This migration must not be applied to any environment where either gate
+--   surfaced an unresolved anomaly.
+--
+-- No code reads or writes this column:
+--   Verified by tests/legacy-user-points-removal.test.ts and
+--   tests/point-ledger.test.ts (the latter's fake Prisma client has no
+--   `user.update` method at all — any regression that reintroduced a write
+--   would fail loudly, not silently).
+--
+-- Historical data preserved:
+--   Every "PointTransaction" row is preserved exactly as-is — no rows are
+--   modified, rewritten, or deleted by this migration.
+--
+-- Balances preserved:
+--   No "UserPointAccount" row is modified by this migration. Spendable and
+--   lifetime totals are completely unaffected; this migration touches only
+--   the "User" table, and only by dropping a single denormalized column
+--   that nothing reads.
+--
+-- Scope:
+--   This migration performs exactly one schema change and nothing else: no
+--   data rewrites, no balance recalculation, no deletes, no transaction
+--   history changes, no account resets, no unrelated schema changes. The
+--   executable SQL below is, and must remain, exactly one statement.
+
+-- AlterTable
+ALTER TABLE "User" DROP COLUMN "points";

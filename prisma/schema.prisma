@@ -18,7 +18,6 @@ model User {
   sessionVersion           Int                       @default(0)
   role                     Role                      @default(USER)
   isActive                 Boolean                   @default(true)
-  points                   Int                       @default(0)
   imageUrl                 String?
   pointAccount             UserPointAccount?
   analyticsEvents          AnalyticsEvent[]
