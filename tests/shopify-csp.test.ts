@@ -43,7 +43,8 @@ test("embedded setup page keeps the SQRATCH shell and setup states visible", asy
   const html = await htmlFor();
 
   assert.match(html, /class="topbar"/);
-  assert.match(html, /aria-label="SQRATCH"/);
+  assert.match(html, /<img src="\/sqratchLogo\.svg" alt="SQRATCH" class="wordmark-logo" width="333" height="58">/);
+  assert.doesNotMatch(html, /<svg[\s>]/);
   assert.match(html, /SHOPIFY INTEGRATION|Connect Shopify to SQRATCH/i);
   assert.match(html, /Connect Shopify to SQRATCH/);
   assert.match(html, /Shopify app setup|Link your Shopify store with SQRATCH/);

@@ -93,21 +93,13 @@ export function GET(request: NextRequest) {
       .wordmark {
         display: inline-flex;
         align-items: center;
-        gap: 0.6rem;
-        color: #d8d1f5;
-        font-size: 0.9rem;
-        font-weight: 800;
-        letter-spacing: 0.18em;
-        text-transform: uppercase;
       }
 
-      .wordmark::before {
-        width: 0.7rem;
-        height: 0.7rem;
-        border-radius: 999px;
-        background: linear-gradient(135deg, #e9ddff, #9b7cf7);
-        box-shadow: 0 0 18px rgba(174, 139, 255, 0.7);
-        content: "";
+      .wordmark-logo {
+        display: block;
+        width: auto;
+        height: 1.75rem;
+        max-width: min(100%, 10.125rem);
       }
 
       main {
@@ -378,7 +370,7 @@ export function GET(request: NextRequest) {
   <body>
     <header class="topbar">
       <div class="topbar-inner">
-        <span class="wordmark" aria-label="SQRATCH">SQRATCH</span>
+        <span class="wordmark"><img src="/sqratchLogo.svg" alt="SQRATCH" class="wordmark-logo" width="333" height="58"></span>
       </div>
     </header>
     <main>
