@@ -26,7 +26,7 @@ import { ShopifyRewardsClient } from "@/components/rewards/shopify-rewards-clien
 import {
   formatRewardMoney,
   formatRewardPercentage,
-} from "@/components/experience/client-utils";
+} from "@/lib/reward-formatting";
 import { getUserPointsOverview } from "@/lib/points";
 
 function formatDate(value: Date) {

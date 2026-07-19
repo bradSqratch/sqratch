@@ -4,7 +4,7 @@ import test from "node:test";
 import { createShopifyRewardDiscountCode } from "../src/lib/shopify-discounts";
 import { parseRewardOfferPayload, serializeRewardOffer } from "../src/lib/reward-offers";
 import { computeShopifyRewardCompatibility } from "../src/lib/shopify-reward-compatibility";
-import { formatRewardMoney, formatRewardPercentage } from "../src/components/experience/client-utils";
+import { formatRewardMoney, formatRewardPercentage } from "../src/lib/reward-formatting";
 
 type CapturedFetch = { url: string | URL; options: RequestInit };
 let lastFetchOptions: CapturedFetch | null = null;

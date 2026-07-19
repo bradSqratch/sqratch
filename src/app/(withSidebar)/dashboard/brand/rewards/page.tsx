@@ -4,12 +4,11 @@ import Image from "next/image";
 import { useEffect, useMemo, useState } from "react";
 import { Gift, Package, Pencil, Power, RefreshCw } from "lucide-react";
 import { BrandPageShell } from "@/components/brand/page-shell";
+import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import {
-  fetchJson,
-  getErrorMessage,
   formatRewardMoney,
   formatRewardPercentage,
-} from "@/components/experience/client-utils";
+} from "@/lib/reward-formatting";
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";

@@ -91,17 +91,3 @@ export async function deleteUploadedAsset(
     return false;
   }
 }
-
-export function formatRewardMoney(cents: number | null, currencyCode: string) {
-  if (cents === null || cents === undefined) return "";
-  return new Intl.NumberFormat(undefined, {
-    style: "currency",
-    currency: currencyCode,
-  }).format(cents / 100);
-}
-
-export function formatRewardPercentage(basisPoints: number | null) {
-  if (basisPoints === null || basisPoints === undefined) return "";
-  const pct = basisPoints / 100;
-  return `${Number(pct.toFixed(2))}%`;
-}

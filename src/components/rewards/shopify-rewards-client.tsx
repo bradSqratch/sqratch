@@ -3,12 +3,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Copy, ExternalLink, Gift, RefreshCw } from "lucide-react";
 import { useRouter } from "next/navigation";
+import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import {
-  fetchJson,
-  getErrorMessage,
   formatRewardMoney,
   formatRewardPercentage,
-} from "@/components/experience/client-utils";
+} from "@/lib/reward-formatting";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 

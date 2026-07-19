@@ -2,12 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { Check, Copy, Gift } from "lucide-react";
+import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import {
-  fetchJson,
-  getErrorMessage,
   formatRewardMoney,
   formatRewardPercentage,
-} from "@/components/experience/client-utils";
+} from "@/lib/reward-formatting";
 import { Button } from "@/components/ui/button";
 
 type RewardProduct = {
