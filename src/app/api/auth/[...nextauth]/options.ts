@@ -38,6 +38,16 @@ export const authOptions: NextAuthOptions = {
           // Find user in database
           const user = await prisma.user.findUnique({
             where: { email },
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              password: true,
+              role: true,
+              isEmailVerified: true,
+              imageUrl: true,
+              sessionVersion: true,
+            },
           });
 
           if (!user || !user.password) {
@@ -65,7 +75,7 @@ export const authOptions: NextAuthOptions = {
           // Verify password
           const isPasswordCorrect = await bcrypt.compare(
             password,
-            user.password
+            user.password,
           );
 
           if (isPasswordCorrect) {
