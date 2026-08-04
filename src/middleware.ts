@@ -34,7 +34,8 @@ export async function middleware(request: NextRequest) {
   const isAdminRoute = url.pathname.startsWith("/admin");
   const isProtectedRoute =
     isAdminRoute ||
-    url.pathname.startsWith("/dashboard");
+    url.pathname.startsWith("/dashboard") ||
+    url.pathname.startsWith("/profile");
 
   // 1) If logged in, keep them out of auth pages
   if (token && isAuthPage) {
@@ -58,7 +59,12 @@ export async function middleware(request: NextRequest) {
     }
   }
 
-  return NextResponse.next();
+  // Expose the requested pathname to server layouts (e.g. the Brand dashboard
+  // layout needs to distinguish the Shopify install route to render its
+  // access-denied messaging precisely) without each layout re-deriving it.
+  const response = NextResponse.next();
+  response.headers.set("x-pathname", url.pathname);
+  return response;
 }
 
 export const config = {
@@ -70,5 +76,6 @@ export const config = {
     "/api/shopify/webhooks/:path*",
     "/admin/:path*",
     "/dashboard/:path*",
+    "/profile",
   ],
 };

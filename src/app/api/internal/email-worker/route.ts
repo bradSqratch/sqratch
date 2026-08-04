@@ -5,11 +5,13 @@ import {
   processWelcomeEmailQueue,
   type WelcomeEmailWorkerStore,
 } from "@/lib/welcome-email-worker";
+import { timingSafeEqualString } from "@/lib/security/timing-safe-equal";
 
 function requireCronSecret(req: Request) {
-  const got = req.headers.get("x-cron-secret");
-  const expected = process.env.CRON_SECRET;
-  return !!got && !!expected && got === expected;
+  return timingSafeEqualString(
+    req.headers.get("x-cron-secret"),
+    process.env.CRON_SECRET,
+  );
 }
 
 const store: WelcomeEmailWorkerStore = {

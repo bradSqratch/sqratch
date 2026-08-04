@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { v2 as cloudinary } from "cloudinary";
 import prisma from "@/lib/prisma";
 import { resolveSession, resolveBrandAdminContext } from "@/lib/auth-session";
+import { getBrandContextFailure } from "@/lib/brand-auth";
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -36,10 +37,14 @@ export async function DELETE(
     }
 
     const brand = await resolveBrandAdminContext();
-    const brandId = brand?.membership?.brand?.id || null;
-    if (!brandId) {
-      return NextResponse.json({ error: "Select an active brand.", code: "ACTIVE_BRAND_REQUIRED" }, { status: 409 });
+    if (!brand?.membership?.brand) {
+      const failure = getBrandContextFailure(brand);
+      return NextResponse.json(
+        { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+        { status: failure.status },
+      );
     }
+    const brandId = brand.membership.brand.id;
 
     const { id } = await params;
 

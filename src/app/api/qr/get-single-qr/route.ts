@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
+import { getBrandContextFailure } from "@/lib/brand-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -18,18 +19,15 @@ export async function getSingleQrImpl(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  if (session.user.role !== "BRAND_ADMIN" && session.user.role !== "ADMIN") {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-  }
-
   const brand = await deps.resolveBrandAdminContext();
-  const brandId = brand?.membership?.brand?.id || null;
-  if (!brandId) {
+  if (!brand?.membership?.brand) {
+    const failure = getBrandContextFailure(brand);
     return NextResponse.json(
-      { error: "Select an active brand.", code: "ACTIVE_BRAND_REQUIRED" },
-      { status: 409 },
+      { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+      { status: failure.status },
     );
   }
+  const brandId = brand.membership.brand.id;
 
   const { searchParams } = new URL(request.url);
   const qrCodeId = searchParams.get("qrId");

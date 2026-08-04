@@ -139,6 +139,52 @@ describe("QR Hardening Route-Level Tests", () => {
     }
   });
 
+  // Test Case 2b: BRAND_ADMIN with zero eligible Brand memberships is a true
+  // denial (403), not a "select a brand" conflict (409) — resolveBrandAdminContext
+  // returns null for this case exactly like the wrong-role case above.
+  test("BRAND_ADMIN with no eligible Brand membership is rejected with 403, not 409", async () => {
+    setupMocks({ user: { id: "brand-admin-orphan", role: "BRAND_ADMIN" } }, null);
+    try {
+      const req = new NextRequest("http://localhost/api/qr/get-all-qrcodes");
+      const res = await getAllQRs(req);
+      assert.equal(res.status, 403);
+      const json = await res.json();
+      assert.equal(json.code, undefined);
+
+      const singleReq = new NextRequest("http://localhost/api/qr/get-single-qr?qrId=123");
+      const singleRes = await getSingleQR(singleReq);
+      assert.equal(singleRes.status, 403);
+    } finally {
+      clearMocks();
+    }
+  });
+
+  // Test Case 2c: an eligible BRAND_ADMIN with more than one Brand who hasn't
+  // picked an active Brand yet gets the actionable 409 ACTIVE_BRAND_REQUIRED
+  // conflict, distinct from the 403 "no access at all" denial above.
+  test("eligible multi-Brand user with no active Brand selected gets 409 ACTIVE_BRAND_REQUIRED", async () => {
+    setupMocks(
+      { user: { id: "brand-admin-multi", role: "BRAND_ADMIN" } },
+      {
+        membership: null,
+        selectionRequired: true,
+        brands: [
+          { id: "brand-1", name: "Brand One" },
+          { id: "brand-2", name: "Brand Two" },
+        ],
+      },
+    );
+    try {
+      const req = new NextRequest("http://localhost/api/qr/get-all-qrcodes");
+      const res = await getAllQRs(req);
+      assert.equal(res.status, 409);
+      const json = await res.json();
+      assert.equal(json.code, "ACTIVE_BRAND_REQUIRED");
+    } finally {
+      clearMocks();
+    }
+  });
+
   // Test Case 3: Cross-brand access is restricted for BRAND_ADMIN
   test("cross-brand access is rejected with 403 for BRAND_ADMIN", async (t) => {
     // Brand Admin for brand-1

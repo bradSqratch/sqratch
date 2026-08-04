@@ -1,5 +1,6 @@
 import crypto from "crypto";
 import { decryptSecret } from "@/lib/crypto";
+import { timingSafeEqualString } from "@/lib/security/timing-safe-equal";
 
 // NOTE: registerShopifyWebhooks has been removed. All webhook subscriptions
 // (app/uninstalled + the 3 GDPR compliance topics) are declared via
@@ -95,10 +96,7 @@ export function verifyShopifyWebhookHmac(options: {
 
 /** Timing-safe string equality — returns false when lengths differ. */
 export function safeHmacEqual(a: string, b: string): boolean {
-  const bufA = Buffer.from(a, "utf8");
-  const bufB = Buffer.from(b, "utf8");
-  if (bufA.length !== bufB.length) return false;
-  return crypto.timingSafeEqual(bufA, bufB);
+  return timingSafeEqualString(a, b);
 }
 
 export function createOauthState() {

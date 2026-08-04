@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveSession, resolveBrandAdminContext } from "@/lib/auth-session";
+import { getBrandContextFailure } from "@/lib/brand-auth";
 
 import prisma from "@/lib/prisma";
 import QRCode from "qrcode";
@@ -26,14 +27,14 @@ export async function GET(request: NextRequest) {
     }
 
     const brand = await resolveBrandAdminContext();
-    const brandId = brand?.membership?.brand?.id || null;
-
-    if (!brandId) {
+    if (!brand?.membership?.brand) {
+      const failure = getBrandContextFailure(brand);
       return NextResponse.json(
-        { error: "Select an active brand.", code: "ACTIVE_BRAND_REQUIRED" },
-        { status: 409 },
+        { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+        { status: failure.status },
       );
     }
+    const brandId = brand.membership.brand.id;
 
     const PAGE_SIZE = 100;
     const MAX_PAGE_SIZE = 200;
@@ -210,15 +211,15 @@ export async function POST(request: NextRequest) {
     }
 
     const brand = await resolveBrandAdminContext();
-    const brandId = brand?.membership?.brand?.id || null;
-    const userId = session.user.id;
-
-    if (!brandId) {
+    if (!brand?.membership?.brand) {
+      const failure = getBrandContextFailure(brand);
       return NextResponse.json(
-        { error: "Select an active brand.", code: "ACTIVE_BRAND_REQUIRED" },
-        { status: 409 },
+        { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+        { status: failure.status },
       );
     }
+    const brandId = brand.membership.brand.id;
+    const userId = session.user.id;
 
     const campaign = await prisma.campaign.findFirst({
       where: {

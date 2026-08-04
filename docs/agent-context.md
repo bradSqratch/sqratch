@@ -34,8 +34,8 @@ A Next.js 15 + Prisma 7 + Supabase app. Brands print physical QR stickers; users
 | Helper | File | Meaning when it returns null |
 |---|---|---|
 | `getAdminContext()` | `src/lib/admin-auth.ts` | Not logged in OR not `ADMIN` role → return 401 |
-| `getBrandAdminContext()` | `src/lib/brand-auth.ts` | Not `BRAND_ADMIN` role → return 401/403 |
-| `getBrandManagementContext()` | `src/lib/brand-auth.ts` | No session at all → return 401 |
+| `getBrandAdminContext()` | `src/lib/brand-auth.ts` | Not `BRAND_ADMIN`/`ADMIN` role, or no eligible Brand membership → return 401/403 |
+| `getBrandManagementContext()` | `src/lib/brand-auth.ts` | Same policy as `getBrandAdminContext()` — see below. They are two names for one implementation; do not assume `getBrandManagementContext()` skips the role check. |
 | `resolveSession()` | `src/lib/auth-session.ts` | Unauthenticated → null session (centralised; test-hookable) |
 | `resolveBrandAdminContext()` | `src/lib/auth-session.ts` | Not brand admin → null (centralised; test-hookable) |
 | `getServerSession(authOptions)` | next-auth | Unauthenticated → null session |
@@ -44,7 +44,31 @@ A Next.js 15 + Prisma 7 + Supabase app. Brands print physical QR stickers; users
 
 **JWT lifecycle:** maxAge 7 days. Every 5 minutes the JWT callback re-reads `role`, `isActive`, `isEmailVerified` from DB. Deactivated users get forced sign-out (`null` return). All emails normalised to lowercase.
 
-Middleware (`src/middleware.ts`) only protects `/dashboard/**`, `/admin/**` page routes — **it does not protect API routes**. API routes are individually responsible for auth checks.
+Middleware (`src/middleware.ts`) protects `/dashboard/**`, `/admin/**`, and `/profile` page routes — **it does not protect API routes**. API routes are individually responsible for auth checks. `/dashboard/admin/**` and `/dashboard/creator/**` additionally have their own server-side layout guards (`layout.tsx`) rendering a shared `AccessDeniedPanel` for the wrong role, since middleware only pattern-matches on path prefix, not on which dashboard family a `/dashboard/**` route belongs to.
+
+### Brand-management authorization policy
+
+One policy, enforced identically wherever Brand or Shopify management is
+gated (`getBrandAdminContext()` / `getBrandManagementContext()` in
+`src/lib/brand-auth.ts`, the `/dashboard/brand/**` layout, and
+`/api/shopify/installations/[installId]`):
+
+1. Global `User.role` must be `BRAND_ADMIN` or `ADMIN`. `USER` and `CREATOR`
+   are always denied, even if a stray `BrandMember` row exists for that user.
+2. A `BRAND_ADMIN` must additionally hold a `BrandMember` row with role
+   `ADMIN` or `MANAGER` on an active Brand — a `VIEWER`-only membership does
+   not qualify for management actions.
+3. A global `ADMIN` may act on any active Brand but must explicitly select
+   one (via the `sqratch_active_brand_id` cookie, itself always re-validated
+   server-side against real membership/active-Brand state) — no Brand is
+   ever silently defaulted on the administrator's behalf.
+4. When an eligible user has more than one qualifying Brand and hasn't
+   picked one, routes return `409 { code: "ACTIVE_BRAND_REQUIRED" }` — a
+   distinct, actionable state, not a 403 denial. Use `getBrandContextFailure()`
+   to produce this consistently instead of a hand-rolled `if (!brandId)` check.
+5. Brand creation is never performed by the Shopify installation flow — it
+   only links to an existing eligible Brand. Brand creation/approval remains
+   part of the normal SQRATCH admin approval workflow.
 
 ---
 

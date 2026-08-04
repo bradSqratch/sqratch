@@ -50,11 +50,12 @@ Current limitation: the embedded shell loads the minimum App Bridge script/meta 
 - Click `Connect Shopify`.
 - Confirm OAuth asks only for product read access.
 - Complete OAuth and confirm redirect to `/dashboard/brand/shopify/install?install=...` if brand selection is needed.
-- Select or create the Brand.
+- Select an existing eligible Brand (installation never creates a Brand — confirm no "Create new Brand" option is shown).
 - Confirm redirect to `/dashboard/brand/shopify?connected=1`.
 - Confirm Brand status is `CONNECTED`.
 - Confirm encrypted token is saved only on `Brand`.
-- Confirm creators who are not authorized Brand Admins or Brand Members cannot connect a store.
+- Confirm a `USER` or `CREATOR` account (including one with no Brand membership at all) sees the "Brand Admin access required" panel instead of the install page, with "Switch SQRATCH account" and "Return to dashboard" actions — not a silent redirect to `/dashboard`.
+- Confirm `POST /api/shopify/installations/[installId]` with a `createBrand` payload is rejected with `400`.
 
 ## Shopify-Started Install Checklist
 
@@ -65,11 +66,12 @@ Current limitation: the embedded shell loads the minimum App Bridge script/meta 
 - If not logged into SQRATCH, confirm redirect to `/login?next=/dashboard/brand/shopify/install?...`.
 - Log in or sign up.
 - Confirm the pending install resumes and shows the Shopify shop domain.
-- Select an existing authorized Brand or create a Brand when the SQRATCH role allows it.
+- Select an existing authorized Brand (installation only links to an existing eligible Brand — it never creates one).
 - Confirm the store is linked to `Brand` and not to only the user account.
 - Confirm the pending install token is deleted after linking.
 - Confirm OAuth HMAC mismatch is rejected.
 - Confirm expired or mismatched OAuth state is rejected.
+- Log in with a `USER` or `CREATOR` account instead: confirm the pending install is **not** deleted or invalidated, and that "Switch SQRATCH account" signs out of SQRATCH only (not Shopify), returning to the exact same install URL after logging in with an eligible account.
 
 ## Product Linking Checklist
 

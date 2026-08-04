@@ -15,15 +15,18 @@
 
 import { NextResponse } from "next/server";
 import { reconcileStuckRedemptions } from "@/lib/reward-reconciliation";
+import { timingSafeEqualString } from "@/lib/security/timing-safe-equal";
 
 /**
- * Compares the incoming cron secret to the expected env value without logging
- * either. Returns true only when both are non-empty strings that match exactly.
+ * Compares the incoming cron secret to the expected env value in constant
+ * time, without logging either. Returns true only when both are non-empty
+ * strings that match exactly.
  */
 function requireCronSecret(req: Request): boolean {
-  const got = req.headers.get("x-cron-secret");
-  const expected = process.env.CRON_SECRET;
-  return !!got && !!expected && got === expected;
+  return timingSafeEqualString(
+    req.headers.get("x-cron-secret"),
+    process.env.CRON_SECRET,
+  );
 }
 
 export async function POST(req: Request) {

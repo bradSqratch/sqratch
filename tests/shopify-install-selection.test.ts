@@ -25,12 +25,14 @@ test("create-new mode is selected only when no eligible brands exist", () => {
   assert.equal(getDefaultShopifyInstallBrandId([], "brand-envinate"), "");
 });
 
-test("the install UI keeps create-new mode available as a deliberate choice", () => {
+test("first eligible brand is selected by default when no active brand is set", () => {
   assert.equal(
     getDefaultShopifyInstallBrandId(brands, null),
     "brand-envinate",
   );
+});
 
+test("the install UI only links to an existing eligible brand — brand creation was removed", () => {
   const pageSource = readFileSync(
     join(
       process.cwd(),
@@ -38,8 +40,8 @@ test("the install UI keeps create-new mode available as a deliberate choice", ()
     ),
     "utf8",
   );
-  assert.match(pageSource, /setSelectedBrandId\(nextBrandId\)/);
-  assert.match(pageSource, /<option value="">Create new brand<\/option>/);
-  assert.match(pageSource, /const creatingBrand = !selectedBrandId/);
-  assert.match(pageSource, /creatingBrand && canCreate/);
+  assert.match(pageSource, /setSelectedBrandId\(event\.target\.value\)/);
+  assert.doesNotMatch(pageSource, /Create new brand/);
+  assert.doesNotMatch(pageSource, /createBrand/);
+  assert.doesNotMatch(pageSource, /canCreateBrand/);
 });

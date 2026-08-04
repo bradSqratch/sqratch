@@ -776,21 +776,25 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
 
   test("installation session retrieval (GET) returns brand list and shopify information", async (t) => {
     const req = new NextRequest("http://localhost/api/shopify/installations/install-session-id");
-    setupMocks({ user: { id: "user-123", role: "BRAND_ADMIN" } });
+    setupMocks(
+      { user: { id: "user-123", role: "BRAND_ADMIN" } },
+      {
+        userId: "user-123",
+        membership: {
+          id: "member-123",
+          role: "ADMIN",
+          brand: { id: "brand-123", name: "Brand Test", slug: "brand-test" },
+        },
+        brands: [{ id: "brand-123", name: "Brand Test", slug: "brand-test", membershipRole: "ADMIN" }],
+        selectionRequired: false,
+      },
+    );
 
     t.mock.method(prisma.tokenStore, "findUnique", async () => ({
       service: "shopify_pending_install:install-session-id",
       token: JSON.stringify({ shop: "test-install.myshopify.com", encryptedToken: encryptSecret("mock-token") }),
       expiresAt: new Date(Date.now() + 10 * 60 * 1000),
     }));
-
-    t.mock.method(prisma.brandMember, "findMany", async () => [
-      {
-        id: "member-123",
-        role: "ADMIN",
-        brand: { id: "brand-123", name: "Brand Test", slug: "brand-test" },
-      },
-    ]);
 
     const res = await installationsGET(req, { params: Promise.resolve({ installId: "install-session-id" }) });
     assert.equal(res.status, 200);
@@ -806,7 +810,19 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
       body: JSON.stringify({ brandId: "brand-not-authorized" }),
     });
 
-    setupMocks({ user: { id: "user-123", role: "BRAND_ADMIN" } });
+    setupMocks(
+      { user: { id: "user-123", role: "BRAND_ADMIN" } },
+      {
+        userId: "user-123",
+        membership: {
+          id: "member-123",
+          role: "ADMIN",
+          brand: { id: "brand-123", name: "Authorized Brand", slug: "authorized-brand" },
+        },
+        brands: [{ id: "brand-123", name: "Authorized Brand", slug: "authorized-brand", membershipRole: "ADMIN" }],
+        selectionRequired: false,
+      },
+    );
 
     t.mock.method(prisma.tokenStore, "findUnique", async () => ({
       service: "shopify_pending_install:install-session-id",
@@ -838,7 +854,19 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
       body: JSON.stringify({ brandId: "brand-123" }),
     });
 
-    setupMocks({ user: { id: "user-123", role: "BRAND_ADMIN" } });
+    setupMocks(
+      { user: { id: "user-123", role: "BRAND_ADMIN" } },
+      {
+        userId: "user-123",
+        membership: {
+          id: "member-123",
+          role: "ADMIN",
+          brand: { id: "brand-123", name: "Brand Test", slug: "brand-test" },
+        },
+        brands: [{ id: "brand-123", name: "Brand Test", slug: "brand-test", membershipRole: "ADMIN" }],
+        selectionRequired: false,
+      },
+    );
 
     t.mock.method(prisma.tokenStore, "findUnique", async () => ({
       service: "shopify_pending_install:install-session-id",
@@ -890,7 +918,19 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
       body: JSON.stringify({ brandId: "brand-123" }),
     });
 
-    setupMocks({ user: { id: "user-123", role: "BRAND_ADMIN" } });
+    setupMocks(
+      { user: { id: "user-123", role: "BRAND_ADMIN" } },
+      {
+        userId: "user-123",
+        membership: {
+          id: "member-123",
+          role: "ADMIN",
+          brand: { id: "brand-123", name: "Brand Test", slug: "brand-test" },
+        },
+        brands: [{ id: "brand-123", name: "Brand Test", slug: "brand-test", membershipRole: "ADMIN" }],
+        selectionRequired: false,
+      },
+    );
 
     t.mock.method(prisma.tokenStore, "findUnique", async () => ({
       service: "shopify_pending_install:install-session-id",
@@ -923,7 +963,19 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
       body: JSON.stringify({ brandId: "brand-123" }),
     });
 
-    setupMocks({ user: { id: "user-123", role: "BRAND_ADMIN" } });
+    setupMocks(
+      { user: { id: "user-123", role: "BRAND_ADMIN" } },
+      {
+        userId: "user-123",
+        membership: {
+          id: "member-123",
+          role: "ADMIN",
+          brand: { id: "brand-123", name: "Brand Test", slug: "brand-test" },
+        },
+        brands: [{ id: "brand-123", name: "Brand Test", slug: "brand-test", membershipRole: "ADMIN" }],
+        selectionRequired: false,
+      },
+    );
 
     t.mock.method(prisma.tokenStore, "findUnique", async () => ({
       service: "shopify_pending_install:install-session-id",

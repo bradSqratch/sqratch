@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma"; // Your Prisma client setup
 import bcrypt from "bcryptjs";
 import { hasPendingApproval } from "@/lib/approval-gating";
 import { logCredentialLoginEvent } from "@/lib/auth/auth-security";
+import { evaluateCredentialLogin } from "@/lib/auth/credential-login";
 
 class ExpectedCredentialLoginFailure extends Error {}
 
@@ -35,66 +36,36 @@ export const authOptions: NextAuthOptions = {
         const password = String(credentials?.password || "");
 
         try {
-          // Find user in database
-          const user = await prisma.user.findUnique({
-            where: { email },
-            select: {
-              id: true,
-              name: true,
-              email: true,
-              password: true,
-              role: true,
-              isEmailVerified: true,
-              imageUrl: true,
-              sessionVersion: true,
+          const result = await evaluateCredentialLogin(
+            { email, password },
+            {
+              findUserByEmail: (normalizedEmail) =>
+                prisma.user.findUnique({
+                  where: { email: normalizedEmail },
+                  select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                    password: true,
+                    role: true,
+                    isEmailVerified: true,
+                    imageUrl: true,
+                    sessionVersion: true,
+                  },
+                }),
+              hasPendingApproval,
+              comparePassword: (candidate, hash) =>
+                bcrypt.compare(candidate, hash),
             },
-          });
-
-          if (!user || !user.password) {
-            logCredentialLoginEvent("invalid_credentials", email);
-            throw new ExpectedCredentialLoginFailure(
-              "Invalid email or password",
-            );
-          }
-
-          // For permanent users, check if the email is verified
-          if (!user.isEmailVerified) {
-            logCredentialLoginEvent("email_unverified", email);
-            throw new ExpectedCredentialLoginFailure(
-              "Please verify your email address first.",
-            );
-          }
-
-          if (user.role !== "ADMIN" && (await hasPendingApproval(user.id))) {
-            logCredentialLoginEvent("approval_pending", email);
-            throw new ExpectedCredentialLoginFailure(
-              "Wait for your approval from the admin. You will be notified via email once approved.",
-            );
-          }
-
-          // Verify password
-          const isPasswordCorrect = await bcrypt.compare(
-            password,
-            user.password,
           );
 
-          if (isPasswordCorrect) {
-            logCredentialLoginEvent("success", email);
-            return {
-              id: user.id,
-              email: user.email,
-              name: user.name,
-              role: user.role,
-              isEmailVerified: user.isEmailVerified,
-              imageUrl: user.imageUrl,
-              sessionVersion: user.sessionVersion,
-            };
-          } else {
-            logCredentialLoginEvent("invalid_credentials", email);
-            throw new ExpectedCredentialLoginFailure(
-              "Invalid email or password",
-            );
+          if (!result.ok) {
+            logCredentialLoginEvent(result.outcome, email);
+            throw new ExpectedCredentialLoginFailure(result.message);
           }
+
+          logCredentialLoginEvent("success", email);
+          return result.user;
         } catch (error: unknown) {
           if (error instanceof ExpectedCredentialLoginFailure) {
             throw new Error(error.message);

@@ -35,7 +35,23 @@ export type BrandAdminContext = {
   } | null;
 };
 
-export async function getBrandAdminContext(options?: {
+/**
+ * Single source of truth for Brand-management / Shopify-management eligibility.
+ *
+ * Policy (see docs/agent-context.md "Brand-management authorization policy"):
+ *  - global role must be BRAND_ADMIN or ADMIN — USER and CREATOR are always
+ *    denied, even if a stray BrandMember row exists for that user.
+ *  - BRAND_ADMIN must additionally hold an ADMIN or MANAGER BrandMember row on
+ *    an active Brand (VIEWER-only membership does not qualify).
+ *  - ADMIN may act on any active Brand but must explicitly select one — no
+ *    Brand is ever silently defaulted on the administrator's behalf when more
+ *    than one is available.
+ *
+ * Both `getBrandAdminContext` and `getBrandManagementContext` delegate to this
+ * one implementation so the page-layer gate and every API-layer gate apply
+ * identical eligibility criteria.
+ */
+async function resolveBrandManagementContext(options?: {
   allowWithoutBrand?: boolean;
 }): Promise<BrandAdminContext | null> {
   const session = await getServerSession(authOptions);
@@ -64,32 +80,16 @@ export async function getBrandAdminContext(options?: {
   };
 }
 
+export async function getBrandAdminContext(options?: {
+  allowWithoutBrand?: boolean;
+}): Promise<BrandAdminContext | null> {
+  return resolveBrandManagementContext(options);
+}
+
 export async function getBrandManagementContext(options?: {
   allowWithoutBrand?: boolean;
 }): Promise<BrandAdminContext | null> {
-  const session = await getServerSession(authOptions);
-  const userId = session?.user?.id || null;
-
-  if (!userId) {
-    return null;
-  }
-
-  const active = await resolveActiveBrandContext({
-    userId,
-    minimumRole: "MANAGER",
-  });
-  const membership = active?.membership || null;
-
-  if (!membership && !options?.allowWithoutBrand && !active?.selectionRequired) {
-    return null;
-  }
-
-  return {
-    userId,
-    membership,
-    brands: active?.brands || [],
-    selectionRequired: Boolean(active?.selectionRequired),
-  };
+  return resolveBrandManagementContext(options);
 }
 
 export function getBrandContextFailure(context: BrandAdminContext | null) {

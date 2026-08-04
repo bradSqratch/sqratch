@@ -161,9 +161,9 @@ sqratch/
 |---|---|---|
 | `/dashboard` | `(withSidebar)/dashboard/page.tsx` | User dashboard overview |
 | `/dashboard/points` | `.../points/page.tsx` | User points + transaction history + reward redemption |
-| `/profile` | `(withSidebar)/profile/page.tsx` | User profile edit |
+| `/profile` | `(withSidebar)/profile/page.tsx` | User profile edit — authenticated-only via `middleware.ts` matcher, no role restriction |
 
-### Brand Dashboard Routes (auth + `BRAND_ADMIN` role)
+### Brand Dashboard Routes (auth + Brand-management policy, enforced in `dashboard/brand/layout.tsx`)
 
 | Route | Purpose |
 |---|---|
@@ -179,7 +179,7 @@ sqratch/
 | `/dashboard/brand/profile` | Brand profile edit |
 | `/dashboard/brand/analytics` | Brand analytics |
 
-### Creator Dashboard Routes (auth + `CREATOR` role)
+### Creator Dashboard Routes (auth + `CREATOR` role, enforced in `dashboard/creator/layout.tsx` — no ADMIN override)
 
 | Route | Purpose |
 |---|---|
@@ -191,18 +191,18 @@ sqratch/
 | `/dashboard/creator/posts` | Creator posts |
 | `/dashboard/creator/analytics` | Creator analytics |
 
-### Admin Routes (auth + `ADMIN` role, enforced in middleware)
+### Admin Routes (auth + `ADMIN` role)
 
-| Route | Purpose |
-|---|---|
-| `/admin/qr-management` | QR code admin tools |
-| `/admin/user-management` | User admin |
-| `/admin/campaigns-management` | Campaign admin |
-| `/admin/print-qr` | QR printing tool |
-| `/dashboard/admin/approvals` | Brand/creator approval queue |
-| `/dashboard/admin/brands` | Brand list |
-| `/dashboard/admin/users` | User list |
-| `/dashboard/admin/campaigns` | Campaign list |
+| Route | Purpose | Enforcement |
+|---|---|---|
+| `/admin/qr-management` | QR code admin tools | `middleware.ts` (`isAdminRoute`) |
+| `/admin/user-management` | User admin | `middleware.ts` (`isAdminRoute`) |
+| `/admin/campaigns-management` | Campaign admin | `middleware.ts` (`isAdminRoute`) |
+| `/admin/print-qr` | QR printing tool | `middleware.ts` (`isAdminRoute`) |
+| `/dashboard/admin/approvals` | Brand/creator approval queue | `dashboard/admin/layout.tsx` (middleware only checks `/dashboard/**` is authenticated, not role — the path doesn't match `isAdminRoute`) |
+| `/dashboard/admin/brands` | Brand list | `dashboard/admin/layout.tsx` |
+| `/dashboard/admin/users` | User list | `dashboard/admin/layout.tsx` |
+| `/dashboard/admin/campaigns` | Campaign list | `dashboard/admin/layout.tsx` |
 
 ---
 
@@ -286,8 +286,8 @@ sqratch/
 | GET | `/api/shopify/oauth/start` | None | 20/60 min per IP | Begin OAuth; redirect to Shopify | Creates `TokenStore` (state, 10min TTL) |
 | GET | `/api/shopify/oauth/callback` | None | — | Receive Shopify callback; timing-safe HMAC verify, timestamp freshness, state consumed before token exchange | Exchanges code for token; creates pending install `TokenStore` (24hr TTL) |
 | POST | `/api/shopify/embedded/session` | Bearer session token | — | App Bridge token exchange (public distribution only) | Encrypts tokens, creates `TokenStore` pending install |
-| GET | `/api/shopify/installations/[installId]` | Session | — | Load pending install options | None |
-| POST | `/api/shopify/installations/[installId]` | Session + BRAND_ADMIN | — | Link install to brand | Updates `Brand` (all token fields), deletes pending `TokenStore` |
+| GET | `/api/shopify/installations/[installId]` | Session + Brand-management policy (see Auth Contracts) | — | Load eligible existing Brands for this pending install | None |
+| POST | `/api/shopify/installations/[installId]` | Session + Brand-management policy (see Auth Contracts) | — | Link install to an existing eligible Brand — never creates a Brand; a `createBrand` payload is rejected with 400 | Updates `Brand` (all token fields), deletes pending `TokenStore` |
 
 ### Shopify Webhook APIs (no auth — HMAC verified)
 
@@ -497,12 +497,21 @@ Shopify redirects back:
     → Redirects to /dashboard/brand/shopify/install?install=[id]
 
 User confirms install:
-  → POST /api/shopify/installations/[installId] { brandId or createBrand }
+  → POST /api/shopify/installations/[installId] { brandId }
     → Parses pending install payload (LEGACY or EXPIRING shape detection)
-    → Validates brand ownership
+    → Rejects a `createBrand` payload outright (400) — installation only
+      links to an existing eligible Brand, never creates one
+    → Validates brand ownership against the shared Brand-management policy
     → Updates Brand (shopifyShopDomain, encrypted tokens, status=CONNECTED, authMode)
     → Deletes pending install TokenStore
     → Redirects to /dashboard/brand/shopify?connected=1
+
+Wrong-role account (USER/CREATOR) reaches the install page:
+  → dashboard/brand/layout.tsx renders a shared AccessDeniedPanel instead of
+    the page (no silent redirect, pending install left untouched/reusable)
+  → "Switch SQRATCH account" signs out of SQRATCH only, preserving the exact
+    install URL as callbackUrl, so logging in as an eligible Brand Admin
+    returns to the same installation
 ```
 
 ### 5. Shopify Embedded Auth (Public App Token Exchange)
@@ -776,9 +785,11 @@ No database is required for the standard CI run — nearly all tests use mocked 
 ### Auth-Sensitive Files
 - `src/middleware.ts` — route protection; removing a route from `matcher` or `isProtectedRoute` exposes it publicly
 - `src/lib/auth-session.ts` — typed `AuthResolvers` DI seam; `realAuthResolvers` is the only production resolver. No global hooks, no `NODE_ENV` bypass — tests inject mocks by calling `…Impl` functions directly
-- `src/lib/brand-auth.ts` — `getBrandAdminContext()` / `getBrandManagementContext()` — called in every brand API
+- `src/lib/brand-auth.ts` — `getBrandAdminContext()` / `getBrandManagementContext()` — one shared implementation, called in every Brand/Shopify-management API and the `/dashboard/brand/**` layout (see "Brand-management authorization policy" in `docs/agent-context.md`)
 - `src/lib/admin-auth.ts` — `getAdminContext()` — called in every admin API
-- `src/lib/creator-auth.ts` — creator gating
+- `src/lib/creator-auth.ts` — creator gating; deliberately no ADMIN override
+- `src/lib/security/timing-safe-equal.ts` — generic constant-time secret comparison (`timingSafeEqualString`); used by both internal worker `x-cron-secret` checks and `src/lib/shopify.ts`'s `safeHmacEqual`
+- `src/lib/auth/credential-login.ts` — pure, injectable credential-login policy used by NextAuth's `authorize()`; always runs a bcrypt comparison (real hash or a fixed dummy hash) before revealing email-verification/approval state, so a wrong password can't be used to enumerate account state
 - `src/app/api/auth/[...nextauth]/options.ts` — JWT callback adds `role`, `isActive`, `roleCheckedAt` to token; deactivated/missing users set `token.accountInvalidated = true`, and the session callback then returns `user: undefined` (forced sign-out)
 
 ### Payment / Discount / Points-Sensitive Files

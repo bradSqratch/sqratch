@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { v2 as cloudinary } from "cloudinary";
 import { resolveSession, resolveBrandAdminContext } from "@/lib/auth-session";
+import { getBrandContextFailure } from "@/lib/brand-auth";
 
 // configure cloudinary same as other route
 cloudinary.config({
@@ -19,10 +20,14 @@ export async function POST(req: Request) {
   }
 
   const brand = await resolveBrandAdminContext();
-  const brandId = brand?.membership?.brand?.id || null;
-  if (!brandId) {
-    return NextResponse.json({ error: "Select an active brand.", code: "ACTIVE_BRAND_REQUIRED" }, { status: 409 });
+  if (!brand?.membership?.brand) {
+    const failure = getBrandContextFailure(brand);
+    return NextResponse.json(
+      { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+      { status: failure.status },
+    );
   }
+  const brandId = brand.membership.brand.id;
 
   let body: { ids?: string[] };
   try {

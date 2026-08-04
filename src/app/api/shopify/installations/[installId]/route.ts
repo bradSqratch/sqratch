@@ -6,16 +6,13 @@ import {
   getShopifyShopCurrency,
   normalizeShopDomain,
 } from "@/lib/shopify";
-import { slugifyValue } from "@/lib/brand-auth";
+import { getBrandContextFailure } from "@/lib/brand-auth";
 import {
   parsePendingInstall,
   type PendingInstallPayload,
 } from "@/lib/pending-install";
 import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
-import {
-  ACTIVE_BRAND_COOKIE,
-  resolveActiveBrandContext,
-} from "@/lib/brand-context";
+import { ACTIVE_BRAND_COOKIE } from "@/lib/brand-context";
 import {
   recordShopifyConnectionInstall,
   recordShopifyConnectionLoss,
@@ -26,48 +23,6 @@ import {
 
 // Re-export types for backward compatibility if needed elsewhere
 export type { PendingInstallPayload };
-
-async function getAuthorizedBrandMemberships(userId: string) {
-  return prisma.brandMember.findMany({
-    where: {
-      userId,
-      brand: { isActive: true },
-      role: {
-        in: ["ADMIN", "MANAGER"],
-      },
-    },
-    orderBy: {
-      createdAt: "asc",
-    },
-    select: {
-      id: true,
-      role: true,
-      brand: {
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-          shopifyShopDomain: true,
-          shopifyConnectionStatus: true,
-        },
-      },
-    },
-  });
-}
-
-async function getAllBrandsForGlobalAdmin() {
-  return prisma.brand.findMany({
-    where: { isActive: true },
-    orderBy: { createdAt: "asc" },
-    select: {
-      id: true,
-      name: true,
-      slug: true,
-      shopifyShopDomain: true,
-      shopifyConnectionStatus: true,
-    },
-  });
-}
 
 export async function GET(
   request: NextRequest,
@@ -83,9 +38,8 @@ export async function installationsGetImpl(
 ) {
   try {
     const session = await deps.resolveSession();
-    const userId = session?.user?.id;
 
-    if (!userId) {
+    if (!session?.user?.id) {
       return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
     }
 
@@ -106,36 +60,30 @@ export async function installationsGetImpl(
       );
     }
 
-    const memberships =
-      session.user.role === "ADMIN"
-        ? (await getAllBrandsForGlobalAdmin()).map((brand) => ({
-            id: brand.id,
-            role: "ADMIN" as const,
-            brand,
-          }))
-        : await getAuthorizedBrandMemberships(userId);
-    const canCreateBrand =
-      session.user.role === "BRAND_ADMIN" || session.user.role === "ADMIN";
+    // Brand/Shopify-management eligibility uses the same shared policy as
+    // every other Brand-management surface: global role BRAND_ADMIN/ADMIN,
+    // plus an ADMIN/MANAGER BrandMember row on an active Brand (or, for a
+    // global ADMIN, an explicitly selected active Brand). A stray BrandMember
+    // row never grants access to a USER or CREATOR account.
+    const brandContext = await deps.resolveBrandAdminContext();
 
-    const activeBrandContext = await resolveActiveBrandContext({
-      userId,
-      minimumRole: "MANAGER",
-      session,
-    });
-
-    if (memberships.length === 0 && !canCreateBrand) {
+    if (!brandContext || brandContext.brands.length === 0) {
+      const failure = getBrandContextFailure(brandContext);
       return NextResponse.json(
-        { error: "Brand admin access required." },
-        { status: 403 },
+        { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+        { status: failure.status },
       );
     }
 
     return NextResponse.json({
       data: {
         shop: payload.shop,
-        canCreateBrand,
-        activeBrandId: activeBrandContext?.membership?.brand.id ?? null,
-        brands: memberships.map((membership) => membership.brand),
+        activeBrandId: brandContext.membership?.brand.id ?? null,
+        brands: brandContext.brands.map((brand) => ({
+          id: brand.id,
+          name: brand.name,
+          slug: brand.slug,
+        })),
       },
     });
   } catch {
@@ -189,18 +137,34 @@ export async function installationsPostImpl(
 
     const body = await request.json().catch(() => null);
     const requestedBrandId = String(body?.brandId || "").trim();
-    const createBrand = body?.createBrand || null;
-    const canCreateBrand =
-      session.user.role === "BRAND_ADMIN" || session.user.role === "ADMIN";
 
-    const name = String(createBrand?.name || "").trim();
-    const slug = slugifyValue(String(createBrand?.slug || "").trim() || name);
-    const websiteUrl = String(createBrand?.websiteUrl || "").trim();
-
-    if (!requestedBrandId && (!canCreateBrand || !name || !slug)) {
+    // The installation flow only ever links to an existing, eligible active
+    // Brand — Brand creation remains part of the normal approval/admin
+    // workflow. A `createBrand` payload is a defunct client contract and is
+    // rejected outright rather than silently ignored.
+    if (body?.createBrand) {
       return NextResponse.json(
-        { error: canCreateBrand ? "Brand name and slug are required." : "Select an authorized brand." },
-        { status: canCreateBrand ? 400 : 403 },
+        {
+          error:
+            "Creating a Brand during Shopify installation is not supported. Select an existing eligible Brand.",
+        },
+        { status: 400 },
+      );
+    }
+
+    if (!requestedBrandId) {
+      return NextResponse.json(
+        { error: "Select an authorized brand." },
+        { status: 400 },
+      );
+    }
+
+    const brandContext = await deps.resolveBrandAdminContext();
+    if (!brandContext || brandContext.brands.length === 0) {
+      const failure = getBrandContextFailure(brandContext);
+      return NextResponse.json(
+        { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+        { status: failure.status },
       );
     }
 
@@ -283,43 +247,33 @@ export async function installationsPostImpl(
         throw new Error("PENDING_INSTALL_UNAVAILABLE");
       }
 
-      let destinationBrandId = requestedBrandId;
-      if (destinationBrandId) {
-        const hasDestinationAccess =
-          session.user.role === "ADMIN"
-            ? Boolean(
-                await tx.brand.findUnique({
-                  where: { id: destinationBrandId, isActive: true },
-                  select: { id: true },
-                }),
-              )
-            : (
-                await tx.brandMember.findMany({
-                  where: {
-                    userId,
-                    brandId: destinationBrandId,
-                    brand: { isActive: true },
-                    role: { in: ["ADMIN", "MANAGER"] },
-                  },
-                  select: { id: true },
-                })
-              ).length > 0;
-        if (!hasDestinationAccess) {
-          throw new Error("UNAUTHORIZED_BRAND");
-        }
-      } else {
-        const created = await tx.brand.create({
-          data: {
-            name,
-            slug,
-            websiteUrl: websiteUrl || null,
-          },
-          select: { id: true },
-        });
-        await tx.brandMember.create({
-          data: { brandId: created.id, userId, role: "ADMIN" },
-        });
-        destinationBrandId = created.id;
+      // Installation links only to an existing, eligible active Brand — Brand
+      // creation is never performed as part of this transaction. Access is
+      // re-verified here (not just earlier via resolveBrandAdminContext) so a
+      // membership change between the initial check and this transaction
+      // can't grant access to a Brand the caller no longer has rights to.
+      const destinationBrandId = requestedBrandId;
+      const hasDestinationAccess =
+        session.user.role === "ADMIN"
+          ? Boolean(
+              await tx.brand.findUnique({
+                where: { id: destinationBrandId, isActive: true },
+                select: { id: true },
+              }),
+            )
+          : (
+              await tx.brandMember.findMany({
+                where: {
+                  userId,
+                  brandId: destinationBrandId,
+                  brand: { isActive: true },
+                  role: { in: ["ADMIN", "MANAGER"] },
+                },
+                select: { id: true },
+              })
+            ).length > 0;
+      if (!hasDestinationAccess) {
+        throw new Error("UNAUTHORIZED_BRAND");
       }
 
       const owner = await tx.brand.findFirst({
