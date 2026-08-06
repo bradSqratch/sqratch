@@ -59,9 +59,27 @@ export type CommerceConnectionResult =
   | { ok: false; reason: "NOT_FOUND" | "NOT_CONNECTED" };
 
 /**
+ * A provider-neutral min/max price range. Mirrors
+ * `NormalizedShopifyProduct.priceRange`'s exact shape
+ * (`src/lib/shopify-products.ts`) — both bounds are `null` when a product has
+ * no priced variants, and `min === max` for a single-price product.
+ */
+export type CommerceProductPriceRange = {
+  min: number | null;
+  max: number | null;
+};
+
+/**
  * Neutral product shape covering everything the storefront/reward UI reads
  * today. `externalId` replaces provider-specific ids (e.g. Shopify's
- * `shopifyProductGid`) at the neutral boundary.
+ * `shopifyProductGid`) at the neutral boundary — it is ALSO the source for
+ * any provider-specific "id" a caller used to read separately: inspecting
+ * `src/lib/shopify-products.ts`'s `normalizeProduct` shows Shopify's own
+ * `NormalizedShopifyProduct.id` and `.shopifyProductGid` are always the exact
+ * same value (`String(product.id)`, assigned to both fields) — there is no
+ * second identifier to preserve, so no redundant neutral field is added here.
+ * `externalVariantIds` replaces provider-specific variant ids (e.g.
+ * Shopify's numeric variant ids, stringified).
  */
 export type CommerceProduct = {
   externalId: string;
@@ -72,12 +90,19 @@ export type CommerceProduct = {
   images: string[];
   priceText: string | null;
   currency: string;
+  priceRange: CommerceProductPriceRange;
+  externalVariantIds: string[];
 };
 
 /**
  * Result of a product sync. Products are always fetched live and never
  * persisted (there is no Product table) — "sync" means "fetch, normalize,
  * and report a timestamp", not "reconcile against stored rows".
+ *
+ * `hasNextPage` / `limit` mirror `fetchNormalizedShopifyProducts`'s own
+ * pagination signal (`src/lib/shopify-products.ts`) so a route's `meta`
+ * response field can be reproduced without reaching past this neutral type
+ * back into a provider-specific result shape.
  */
 export type ProductSyncResult = {
   connectionId: string;
@@ -85,6 +110,8 @@ export type ProductSyncResult = {
   products: CommerceProduct[];
   productCount: number;
   syncedAt: Date;
+  hasNextPage: boolean;
+  limit: number;
 };
 
 /**
@@ -103,6 +130,29 @@ export type CreateDiscountInput = {
   appliesTo: "ALL_PRODUCTS" | "SPECIFIC_PRODUCTS";
   externalProductIds?: string[];
   minimumSubtotalCents?: number | null;
+};
+
+/**
+ * Optional per-call options for `CommerceAdapter.createDiscount`. Kept
+ * separate from `CreateDiscountInput` (which is the discount's own business
+ * data) because this is caller-transport plumbing, not part of the discount
+ * itself.
+ *
+ * `preResolvedAccessToken`: when the caller has ALREADY resolved a valid
+ * provider access token for this connection's brand (e.g.
+ * `src/app/api/rewards/shopify/redeem/route.ts` resolves one via
+ * `getValidAccessToken` up front — on the money path — so it can react to a
+ * NEEDS_RECONNECT/NOT_CONNECTED failure with its own refund-and-respond
+ * branch before ever calling the adapter), passing it here tells the
+ * adapter to use it as-is instead of resolving its own. This is what avoids
+ * a SECOND, independent token resolution: for Shopify's expiring-offline
+ * mode a second resolution is not merely wasteful, it can race the DB
+ * compare-and-swap refresh lock or trigger a second refresh attempt against
+ * the same brand. When omitted, the adapter resolves its own token exactly
+ * as it always has.
+ */
+export type CreateDiscountOptions = {
+  preResolvedAccessToken?: string;
 };
 
 /**

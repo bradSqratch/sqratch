@@ -7,6 +7,10 @@ import prisma from "@/lib/prisma";
 import { attachSessionCookie, ensureViewerSession } from "@/lib/session";
 import { fetchNormalizedShopifyProducts } from "@/lib/shopify-products";
 import { isProductLinkCurrent } from "@/lib/product-link-compatibility";
+import {
+  externalAccountIdFromShopDomain,
+  isLegacyShopifyBrandConnectionUsable,
+} from "@/lib/commerce/connection-service";
 
 type PublicShopProduct = {
   id: string;
@@ -146,8 +150,11 @@ export async function GET(
             name: true,
             slug: true,
             shopifyShopDomain: true,
-            shopifyAdminAccessTokenEncrypted: true,
             shopifyConnectionStatus: true,
+            shopifyInstalledAt: true,
+            shopifyUninstalledAt: true,
+            shopifyLastProductSyncAt: true,
+            shopifyGrantedScopes: true,
             shopifyCurrencyCode: true,
           },
         })
@@ -163,7 +170,7 @@ export async function GET(
     // treated as absent here (never deleted) so they don't suppress the
     // campaign-products fallback below.
     const domainByBrandId = new Map(
-      brands.map((brand) => [brand.id, brand.shopifyShopDomain]),
+      brands.map((brand) => [brand.id, externalAccountIdFromShopDomain(brand.shopifyShopDomain)]),
     );
     const currentProductLinks = productLinks.filter((link) =>
       isProductLinkCurrent(link, domainByBrandId),
@@ -197,8 +204,7 @@ export async function GET(
     if (
       linkedProducts.length === 0 &&
       primaryBrand?.shopifyShopDomain &&
-      primaryBrand.shopifyAdminAccessTokenEncrypted &&
-      primaryBrand.shopifyConnectionStatus === "CONNECTED"
+      isLegacyShopifyBrandConnectionUsable(primaryBrand)
     ) {
       const products = await fetchNormalizedShopifyProducts({
         shopDomain: primaryBrand.shopifyShopDomain,

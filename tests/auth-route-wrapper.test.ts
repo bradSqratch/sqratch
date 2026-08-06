@@ -55,7 +55,7 @@ test("the wrapper cannot regress to a Request-only underlying call", async () =>
 });
 
 test("GET and POST route exports share the corrected wrapper", async () => {
-  process.env.DATABASE_URL ||= "postgresql://test:test@localhost:5432/test";
+  process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
   process.env.NEXTAUTH_SECRET ||= "auth-route-wrapper-test-secret";
 
   const route = await import("../src/app/api/auth/[...nextauth]/route");

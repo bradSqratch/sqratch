@@ -43,6 +43,7 @@ import type {
   CommerceProduct,
   CommerceWebhookEventType,
   CreateDiscountInput,
+  CreateDiscountOptions,
   NormalizedWebhookEvent,
   ProductSyncResult,
   ProviderDiscount,
@@ -205,6 +206,11 @@ function toCommerceConnectionSummary(
 
 function toCommerceProduct(product: NormalizedShopifyProduct): CommerceProduct {
   return {
+    // `product.id` and `product.shopifyProductGid` are always the same
+    // value (see `normalizeProduct` in shopify-products.ts, which assigns
+    // `String(product.id)` to both) — `externalId` is that single value,
+    // and callers needing either the neutral "id" or the Shopify-specific
+    // "shopifyProductGid" read it from here.
     externalId: product.shopifyProductGid,
     title: product.title,
     handle: product.handle,
@@ -213,6 +219,8 @@ function toCommerceProduct(product: NormalizedShopifyProduct): CommerceProduct {
     images: product.images,
     priceText: product.priceText,
     currency: product.currency,
+    priceRange: product.priceRange,
+    externalVariantIds: product.variantIds,
   };
 }
 
@@ -298,9 +306,14 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
       // `result.error` comes from `fetchNormalizedShopifyProducts`'s ok:false
       // branches, which are either a fixed "not connected"/"needs reconnect"
       // string or a Shopify GraphQL user-error message — never a token.
+      // `result.status` is carried through as `httpStatus` so a caller (the
+      // brand/shopify/products route) can reproduce the exact status code
+      // the direct-fetch path would have returned for the same failure.
       throw new CommerceProviderApiError(
         CommerceProvider.SHOPIFY,
         result.error || "Failed to sync Shopify products.",
+        undefined,
+        result.status,
       );
     }
 
@@ -315,12 +328,15 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
       products,
       productCount: products.length,
       syncedAt,
+      hasNextPage: result.hasNextPage,
+      limit: result.limit,
     };
   }
 
   async createDiscount(
     connectionId: string,
     input: CreateDiscountInput,
+    options?: CreateDiscountOptions,
   ): Promise<ProviderDiscount> {
     const row = await this.deps.loadConnection(connectionId);
 
@@ -328,8 +344,18 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
       throw new CommerceConnectionNotFoundError(connectionId);
     }
 
-    const tokenResult = await this.deps.getAccessToken(row.brandId);
-    const accessToken = this.resolveAccessToken(tokenResult);
+    // When the caller has already resolved a valid access token (see
+    // `CreateDiscountOptions.preResolvedAccessToken`'s doc comment in
+    // `../types.ts`), use it as-is instead of resolving a second one. This
+    // is what lets a money-path caller like
+    // `src/app/api/rewards/shopify/redeem/route.ts` keep its own
+    // `getValidAccessToken` call — and its own NEEDS_RECONNECT/NOT_CONNECTED
+    // refund handling — as the ONLY token resolution for a given request,
+    // rather than this adapter independently resolving (and potentially
+    // re-refreshing) a second one.
+    const accessToken = options?.preResolvedAccessToken
+      ? options.preResolvedAccessToken
+      : this.resolveAccessToken(await this.deps.getAccessToken(row.brandId));
 
     // Field mapping matches exactly what
     // `src/app/api/rewards/shopify/redeem/route.ts` passes to
@@ -353,10 +379,17 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
     });
 
     if (!result.ok) {
-      // `result.error` is a Shopify GraphQL/user-error message — never a token.
+      // `result.error` is a Shopify GraphQL/user-error message — never a
+      // token. `result.status` / `result.userErrors` are carried through as
+      // `httpStatus` / `details` so a caller (the redeem route) can
+      // reproduce the exact status code and persisted diagnostic detail the
+      // direct-call path would have produced for the same failure.
       throw new CommerceProviderApiError(
         CommerceProvider.SHOPIFY,
         result.error || "Failed to create Shopify discount code.",
+        undefined,
+        result.status,
+        result.userErrors,
       );
     }
 

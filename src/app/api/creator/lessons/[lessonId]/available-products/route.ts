@@ -3,6 +3,7 @@ import {
   getLessonProductManagementContext,
 } from "@/lib/lesson-product-links";
 import { fetchNormalizedShopifyProducts } from "@/lib/shopify-products";
+import { isLegacyShopifyBrandConnectionUsable } from "@/lib/commerce/connection-service";
 
 export async function GET(
   _request: Request,
@@ -23,11 +24,12 @@ export async function GET(
 
     const brand = access.data.primaryBrand;
 
-    if (
-      !brand?.shopifyShopDomain ||
-      !brand.shopifyAdminAccessTokenEncrypted ||
-      brand.shopifyConnectionStatus !== "CONNECTED"
-    ) {
+    // The `brand.shopifyShopDomain` check is kept alongside the service's
+    // connectivity predicate purely so TypeScript can narrow `shopDomain` to
+    // a non-null string below — `isLegacyShopifyBrandConnectionUsable`
+    // already implies it (see its doc comment), so this is a redundant, safe
+    // no-op at runtime, not an extra behavioral condition.
+    if (!brand?.shopifyShopDomain || !isLegacyShopifyBrandConnectionUsable(brand)) {
       return NextResponse.json({
         data: {
           brand: brand

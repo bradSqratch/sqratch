@@ -31,13 +31,31 @@
  * shop domain can only ever be "owned" by one `CommerceConnection` row at a
  * time, exactly like `Brand.shopifyShopDomain @unique` today.
  *
- * SINGLE-PRIMARY ENFORCEMENT: there is no DB partial-unique-index for
- * "at most one primary connection per (brand, provider)", so it is enforced
- * in application logic, inside the same transaction as the upsert: a
- * connection becomes primary iff the brand has no OTHER `CONNECTED`
- * connection for that provider (excluding this shop domain), and whenever
- * that resolves to `true`, every other connection for (brand, provider) has
- * `isPrimary` cleared in the same transaction.
+ * SINGLE-PRIMARY ENFORCEMENT: a connection becomes primary iff the brand
+ * has no OTHER `CONNECTED` connection for that provider (excluding this
+ * shop domain). As of migration `20260806130000_commerce_connection_single_primary`
+ * this is backstopped in Postgres by a partial unique index,
+ * `CommerceConnection_brandId_provider_primary_key`, on
+ * `(brandId, provider) WHERE "isPrimary" = true` -- DB-only, Prisma cannot
+ * express a partial unique index in schema.prisma (see that migration's
+ * header comment). `applyShopifyConnectionSync` clears `isPrimary` on every
+ * OTHER connection for (brand, provider) FIRST, then upserts this row with
+ * its computed `isPrimary` value SECOND, in the same transaction -- that
+ * ordering means a single-writer sync can never itself transiently violate
+ * the index (there is never a moment with two isPrimary:true rows written
+ * by the same transaction). The index exists to catch the remaining case
+ * this ordering cannot: two DIFFERENT transactions racing to become primary
+ * for the same (brandId, provider) with different externalAccountId values
+ * under READ COMMITTED, where each transaction's own read of
+ * `otherConnectedCount` cannot see the other's uncommitted write.
+ * `syncShopifyCommerceConnectionForBrand` wraps the whole transaction in a
+ * bounded retry (`MAX_PRIMARY_CONFLICT_ATTEMPTS`) that catches the P2002
+ * (unique-violation) or P2034 (serialization failure) this produces and
+ * re-runs the transaction from scratch on a fresh read -- see
+ * `isPrimaryConflictError` below for why this converges rather than looping
+ * forever: the retry's fresh `otherConnectedCount` read sees whichever
+ * transaction won, so the loser correctly recomputes `isPrimary: false`
+ * instead of re-attempting the same conflicting write.
  *
  * SECRET MIRROR (Phase-1 decision D3): `CommerceConnectionSecret.encryptedPayload`
  * is WRITE-ONLY in Phase 1 — nothing reads it for authentication.
@@ -59,8 +77,8 @@
 
 import {
   CommerceProvider,
+  Prisma,
   type CommerceConnectionStatus,
-  type Prisma,
   type ShopifyAuthMode,
   type ShopifyConnectionStatus,
 } from "@prisma/client";
@@ -263,6 +281,31 @@ async function applyShopifyConnectionSync(
   });
   const isPrimary = otherConnectedCount === 0;
 
+  // ORDERING (required by the partial unique index
+  // `CommerceConnection_brandId_provider_primary_key` added by migration
+  // `20260806130000_commerce_connection_single_primary`): siblings are
+  // cleared to `isPrimary: false` FIRST, and only THEN is this row
+  // (re)written with its computed `isPrimary` value. Excluded by
+  // `externalAccountId` (not `id`) so this runs correctly even on the
+  // `create` path, before this row's id exists. Doing the clear first means
+  // this transaction never itself holds two `isPrimary: true` rows for
+  // (brandId, provider) at once, so the upsert below can never transiently
+  // violate the index for a single-writer sequence — see the file header
+  // comment ("SINGLE-PRIMARY ENFORCEMENT") for how genuine cross-transaction
+  // races are handled instead (the index plus the bounded retry in
+  // `syncShopifyCommerceConnectionForBrand`).
+  if (isPrimary) {
+    await tx.commerceConnection.updateMany({
+      where: {
+        brandId,
+        provider: CommerceProvider.SHOPIFY,
+        externalAccountId: { not: input.externalAccountId },
+        isPrimary: true,
+      },
+      data: { isPrimary: false },
+    });
+  }
+
   const sharedData = {
     brandId,
     status: input.status,
@@ -281,7 +324,11 @@ async function applyShopifyConnectionSync(
   // repeated install of the same shop domain always resolves to this same
   // row (idempotent), and RELINK (shop domain moving from brand A to brand
   // B) is handled by the `update` branch reassigning `brandId` — never a
-  // second row, never a failure.
+  // second row, never a failure. This upsert is the statement that can
+  // raise a P2002 against the partial unique index when a concurrent sync
+  // for a different externalAccountId on the same (brandId, provider) has
+  // already committed `isPrimary: true` since this transaction's count()
+  // read above — see `syncShopifyCommerceConnectionForBrand`'s retry loop.
   const connection = await tx.commerceConnection.upsert({
     where: uniqueWhere,
     create: {
@@ -292,18 +339,6 @@ async function applyShopifyConnectionSync(
     update: sharedData,
     select: { id: true },
   });
-
-  if (isPrimary) {
-    await tx.commerceConnection.updateMany({
-      where: {
-        brandId,
-        provider: CommerceProvider.SHOPIFY,
-        id: { not: connection.id },
-        isPrimary: true,
-      },
-      data: { isPrimary: false },
-    });
-  }
 
   if (input.secretPayload) {
     const encryptedPayload = encryptSecret(JSON.stringify(input.secretPayload));
@@ -457,6 +492,39 @@ const DEFAULT_SYNC_DEPS: ConnectionSyncDeps = {
 };
 
 // ---------------------------------------------------------------------------
+// Primary-assignment conflict retry (see the "SINGLE-PRIMARY ENFORCEMENT"
+// file header comment for the full picture)
+// ---------------------------------------------------------------------------
+
+/**
+ * Bounded attempt count for `syncShopifyCommerceConnectionForBrand`'s retry
+ * around the whole transaction. 3 (1 initial attempt + 2 retries) is enough
+ * to absorb a two-way race for the same (brandId, provider) — see the file
+ * header comment for why a retry converges instead of looping forever: each
+ * retry re-reads `otherConnectedCount` inside a brand-new transaction, so
+ * the loser of the race sees the winner's already-committed row and
+ * correctly computes `isPrimary: false` on its next attempt. Deliberately
+ * NOT unbounded — under sustained contention this must give up rather than
+ * retry forever.
+ */
+const MAX_PRIMARY_CONFLICT_ATTEMPTS = 3;
+
+/**
+ * True for a Prisma P2002 (unique-violation — almost certainly the partial
+ * unique index `CommerceConnection_brandId_provider_primary_key` rejecting
+ * a second `isPrimary: true` row for the same (brandId, provider)) or P2034
+ * (serialization/write-conflict) error. Both are the concurrency signature
+ * of two syncs racing to become primary for the same (brandId, provider)
+ * with different `externalAccountId` values.
+ */
+function isPrimaryConflictError(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    (error.code === "P2002" || error.code === "P2034")
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Public entry points
 // ---------------------------------------------------------------------------
 
@@ -466,6 +534,14 @@ const DEFAULT_SYNC_DEPS: ConnectionSyncDeps = {
  * IDEMPOTENCY doc comment at the top of this file. Returns a typed result
  * describing what happened; never throws for "nothing to sync" (brand not
  * found / no shop domain) — those are reported as `skipped_*` outcomes.
+ *
+ * Retries the whole transaction, up to `MAX_PRIMARY_CONFLICT_ATTEMPTS`
+ * times, when it fails with a primary-assignment conflict (see
+ * `isPrimaryConflictError`) — this is a bounded retry, never unbounded, and
+ * a conflict that still hasn't resolved after the last attempt is thrown
+ * exactly like any other DB error, never silently downgraded to
+ * `isPrimary: false`. Every other error is thrown immediately, on the first
+ * attempt, without retrying.
  *
  * Does not catch DB errors — use `safeSyncShopifyCommerceConnection` from a
  * request path per Phase-1 decision D2.
@@ -496,9 +572,23 @@ export async function syncShopifyCommerceConnectionForBrand(
     };
   }
 
-  return resolvedDeps.runTransaction((tx) =>
-    applyShopifyConnectionSync(tx, brandId, input),
-  );
+  let lastError: unknown;
+  for (let attempt = 0; attempt < MAX_PRIMARY_CONFLICT_ATTEMPTS; attempt++) {
+    try {
+      return await resolvedDeps.runTransaction((tx) =>
+        applyShopifyConnectionSync(tx, brandId, input),
+      );
+    } catch (error) {
+      lastError = error;
+      if (!isPrimaryConflictError(error)) {
+        throw error;
+      }
+      // Otherwise: bounded retry — loop around and re-run the whole
+      // transaction from scratch, so `otherConnectedCount` is re-read fresh
+      // and can see whichever side of the race already committed.
+    }
+  }
+  throw lastError;
 }
 
 /**
@@ -545,6 +635,204 @@ export async function deleteShopifyCommerceConnectionByShopDomain(
   const normalizedShopDomain = normalizeExternalAccountId(shopDomain);
   return resolvedDeps.runTransaction((tx) =>
     applyDeleteShopifyConnectionByShopDomain(tx, normalizedShopDomain),
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Secret-mirror rebuild (Phase-2 reconciliation helper)
+//
+// Narrower than `syncShopifyCommerceConnectionForBrand`: it touches ONLY
+// `CommerceConnectionSecret`, never `CommerceConnection`'s own columns
+// (displayName, status, isPrimary, grantedScopes, ...). Intended for a
+// reconciliation CLI repairing secret drift left over from the historical
+// gap this closes (a rotated Shopify token that updated `Brand.shopify*`
+// but never reached the mirror before the corresponding `getValidAccessToken`
+// call sites started mirroring on every winning rotation) — a full
+// `syncShopifyCommerceConnectionForBrand` re-sync would also be correct, but
+// this is the minimal-blast-radius fix: it operates only on a
+// `CommerceConnection` row that already exists (keyed on the brand's CURRENT
+// `shopifyShopDomain`, exactly like the sync's own lookup), and never
+// creates or mutates that row itself.
+// ---------------------------------------------------------------------------
+
+export type RebuildShopifyConnectionSecretOutcome =
+  | "created"
+  | "rebuilt"
+  | "up_to_date"
+  | "no_credentials"
+  | "skipped_brand_not_found"
+  | "skipped_no_shop_domain"
+  | "skipped_no_connection";
+
+/** Typed result — NEVER carries a credential value, only an outcome tag + id. */
+export type RebuildShopifyConnectionSecretResult = {
+  outcome: RebuildShopifyConnectionSecretOutcome;
+  connectionId: string | null;
+};
+
+/**
+ * True when `existingEncryptedPayload` already decrypts to a JSON payload
+ * equal (field-by-field) to `expected`. Used to make the rebuild a genuine
+ * no-op (no write, no `rotatedAt` bump) when a second run finds nothing has
+ * actually changed since the last one — `encryptSecret` uses a random IV per
+ * call, so ciphertexts alone can never be compared directly. A decrypt
+ * failure (corrupt payload, old key version, etc.) is treated as "not
+ * matching" so the row gets rebuilt rather than the comparison throwing.
+ */
+function shopifySecretPayloadMatches(
+  existingEncryptedPayload: string,
+  expected: ShopifyConnectionSecretPayload,
+): boolean {
+  try {
+    const existing = JSON.parse(
+      decryptSecret(existingEncryptedPayload),
+    ) as ShopifyConnectionSecretPayload;
+    return (
+      existing.accessToken === expected.accessToken &&
+      existing.accessTokenExpiresAt === expected.accessTokenExpiresAt &&
+      existing.refreshToken === expected.refreshToken &&
+      existing.refreshTokenExpiresAt === expected.refreshTokenExpiresAt &&
+      existing.authMode === expected.authMode
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * PURELY ADDITIVE (Phase-2 reconciliation CLI support) — read-only preview
+ * of what `rebuildShopifyConnectionSecretForBrand` would decide for a
+ * connection, WITHOUT performing any write. Reuses the exact same
+ * decrypt-and-compare predicate (`shopifySecretPayloadMatches`) the real
+ * rebuild path uses below, so a caller previewing staleness (e.g. a
+ * reconciliation tool's dry-run mode, which must never write) can never
+ * drift from what an `--apply` run of that same tool would actually decide
+ * — there is only ever one comparison, not two.
+ *
+ * NEVER returns, logs, or otherwise exposes a decrypted or encrypted secret
+ * value — only one of the four outcome tags below, matching
+ * `RebuildShopifyConnectionSecretOutcome`'s non-skip cases.
+ */
+export function determineShopifySecretRebuildOutcome(
+  existingEncryptedPayload: string | null,
+  expectedSecretPayload: ShopifyConnectionSecretPayload | null,
+): "no_credentials" | "up_to_date" | "rebuilt" | "created" {
+  if (!expectedSecretPayload) {
+    return "no_credentials";
+  }
+  if (
+    existingEncryptedPayload !== null &&
+    shopifySecretPayloadMatches(existingEncryptedPayload, expectedSecretPayload)
+  ) {
+    return "up_to_date";
+  }
+  return existingEncryptedPayload !== null ? "rebuilt" : "created";
+}
+
+async function applyRebuildShopifyConnectionSecret(
+  tx: TxClient,
+  input: ShopifyConnectionSyncInput,
+): Promise<RebuildShopifyConnectionSecretResult> {
+  const connection = await tx.commerceConnection.findUnique({
+    where: {
+      provider_externalAccountId: {
+        provider: CommerceProvider.SHOPIFY,
+        externalAccountId: input.externalAccountId,
+      },
+    },
+    select: { id: true },
+  });
+
+  if (!connection) {
+    // Nothing to attach a secret to. A full `syncShopifyCommerceConnectionForBrand`
+    // must run first to create the connection row; this helper deliberately
+    // never creates one itself (see file-header comment).
+    return { outcome: "skipped_no_connection", connectionId: null };
+  }
+
+  const existingSecret = await tx.commerceConnectionSecret.findUnique({
+    where: { connectionId: connection.id },
+    select: { encryptedPayload: true },
+  });
+
+  if (!input.secretPayload) {
+    // Brand has no credentials right now — match the sync's existing
+    // behavior (see `applyShopifyConnectionSync`): delete rather than write
+    // an empty/placeholder payload. `deleteMany` (not `delete`) so this is a
+    // no-op, never a throw, whether or not a secret row currently exists.
+    await tx.commerceConnectionSecret.deleteMany({
+      where: { connectionId: connection.id },
+    });
+    return { outcome: "no_credentials", connectionId: connection.id };
+  }
+
+  if (
+    existingSecret &&
+    shopifySecretPayloadMatches(existingSecret.encryptedPayload, input.secretPayload)
+  ) {
+    return { outcome: "up_to_date", connectionId: connection.id };
+  }
+
+  const encryptedPayload = encryptSecret(JSON.stringify(input.secretPayload));
+  const now = new Date();
+  await tx.commerceConnectionSecret.upsert({
+    where: { connectionId: connection.id },
+    create: {
+      connectionId: connection.id,
+      encryptedPayload,
+      keyVersion: 1,
+      rotatedAt: now,
+    },
+    update: {
+      encryptedPayload,
+      keyVersion: 1,
+      rotatedAt: now,
+    },
+  });
+
+  return {
+    outcome: existingSecret ? "rebuilt" : "created",
+    connectionId: connection.id,
+  };
+}
+
+/**
+ * Idempotently rebuilds `CommerceConnectionSecret` for a brand's existing
+ * Shopify `CommerceConnection` row from the current, authoritative
+ * `Brand.shopify*` columns. Never writes a plaintext credential (always
+ * `encryptSecret`s the JSON payload, exactly like `applyShopifyConnectionSync`),
+ * never returns or logs a credential value, and never touches any
+ * `CommerceConnection` column.
+ *
+ * Dependency-injectable in the same `Partial<ConnectionSyncDeps>` idiom as
+ * `syncShopifyCommerceConnectionForBrand` — a reconciliation CLI can pass a
+ * real `findBrandForSync`/`runTransaction` (the defaults) or inject fakes
+ * for a dry run / test.
+ *
+ * Does not catch DB errors — callers (e.g. a per-brand loop in a
+ * reconciliation script) should catch per-brand, the same way
+ * `scripts/backfill-commerce-connections.ts` does around
+ * `syncShopifyCommerceConnectionForBrand`, so one brand's failure doesn't
+ * abort the whole run.
+ */
+export async function rebuildShopifyConnectionSecretForBrand(
+  brandId: string,
+  deps: Partial<ConnectionSyncDeps> = {},
+): Promise<RebuildShopifyConnectionSecretResult> {
+  const resolvedDeps: ConnectionSyncDeps = { ...DEFAULT_SYNC_DEPS, ...deps };
+
+  const brand = await resolvedDeps.findBrandForSync(brandId);
+  if (!brand) {
+    return { outcome: "skipped_brand_not_found", connectionId: null };
+  }
+
+  const input = buildShopifyConnectionSyncInput(brand);
+  if (!input) {
+    return { outcome: "skipped_no_shop_domain", connectionId: null };
+  }
+
+  return resolvedDeps.runTransaction((tx) =>
+    applyRebuildShopifyConnectionSecret(tx, input),
   );
 }
 

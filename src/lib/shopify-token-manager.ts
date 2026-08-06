@@ -16,6 +16,10 @@
 import { encryptSecret, decryptSecret } from "@/lib/crypto";
 import { randomUUID } from "node:crypto";
 import { recordShopifyConnectionLoss } from "@/lib/shopify-connection-transitions";
+import {
+  safeSyncShopifyCommerceConnection,
+  safeMarkShopifyCommerceConnectionDisconnected,
+} from "@/lib/commerce/connection-sync";
 
 // ---------------------------------------------------------------------------
 // Lazy DB access — import only when a DB operation is needed
@@ -534,6 +538,13 @@ export async function getValidAccessToken(
         },
       });
     });
+    // Best-effort mirror: the legacy transaction above already committed the
+    // REQUIRES_RECONNECT status change. Tokens are NOT cleared on this path
+    // (only the status changes — the brand still has a granted-but-insufficient
+    // token), so a fresh full re-sync (not the disconnect-and-clear-secret
+    // helper) is what correctly reflects that on the CommerceConnection
+    // mirror. Never throws, never affects the return value below.
+    await safeSyncShopifyCommerceConnection(brand.id).catch(() => {});
     return { ok: false, reason: "NEEDS_RECONNECT" };
   }
 
@@ -603,6 +614,12 @@ export async function getValidAccessToken(
         takeoverLockId,
         tokenEndpoint,
       );
+      // Best-effort mirror — runs strictly AFTER performTokenRefresh's CAS
+      // updateMany has committed (count === 1, or it would have thrown
+      // staleWriter above). Re-reads the Brand row fresh internally, so it
+      // mirrors the winning rotation, never an in-memory snapshot. Never
+      // throws, never changes the return value below.
+      await safeSyncShopifyCommerceConnection(recheck.id).catch(() => {});
       return { ok: true, accessToken };
     } catch (err: unknown) {
       if ((err as { staleWriter?: boolean }).staleWriter) {
@@ -624,6 +641,14 @@ export async function getValidAccessToken(
             }
           );
         }
+        // Best-effort mirror — only after the CAS-guarded markRequiresReconnect
+        // actually committed (count === 1). Tokens were cleared on the Brand
+        // row by that same transaction, so the disconnect helper (which also
+        // deletes the secret mirror) matches legacy truth exactly.
+        await safeMarkShopifyCommerceConnectionDisconnected(
+          recheck.id,
+          "REQUIRES_RECONNECT",
+        ).catch(() => {});
         return { ok: false, reason: "NEEDS_RECONNECT" };
       }
       await releaseRefreshLock(recheck.id, takeoverLockId).catch(() => {});
@@ -634,6 +659,12 @@ export async function getValidAccessToken(
   // We hold the lock — perform the refresh
   try {
     const accessToken = await performTokenRefresh(brand, lockId, tokenEndpoint);
+    // Best-effort mirror — runs strictly AFTER performTokenRefresh's CAS
+    // updateMany has committed (count === 1, or it would have thrown
+    // staleWriter above). Re-reads the Brand row fresh internally, so it
+    // mirrors the winning rotation, never an in-memory snapshot. Never
+    // throws, never changes the return value below.
+    await safeSyncShopifyCommerceConnection(brand.id).catch(() => {});
     return { ok: true, accessToken };
   } catch (err: unknown) {
     if ((err as { staleWriter?: boolean }).staleWriter) {
@@ -655,6 +686,14 @@ export async function getValidAccessToken(
           }
         );
       }
+      // Best-effort mirror — only after the CAS-guarded markRequiresReconnect
+      // actually committed (count === 1). Tokens were cleared on the Brand
+      // row by that same transaction, so the disconnect helper (which also
+      // deletes the secret mirror) matches legacy truth exactly.
+      await safeMarkShopifyCommerceConnectionDisconnected(
+        brand.id,
+        "REQUIRES_RECONNECT",
+      ).catch(() => {});
       return { ok: false, reason: "NEEDS_RECONNECT" };
     }
     // Transient failure — release lock and return a soft error

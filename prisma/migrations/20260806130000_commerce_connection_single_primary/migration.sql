@@ -1,0 +1,75 @@
+-- Migration: 20260806130000_commerce_connection_single_primary
+--
+-- Adds a partial unique index enforcing "at most one primary
+-- CommerceConnection per (brandId, provider)" directly in PostgreSQL,
+-- scoped to rows where "isPrimary" = true. This migration is purely
+-- additive and forward-only: it creates one index and touches no existing
+-- table, column, row, or enum.
+--
+-- IMPORTANT: Prisma cannot express partial unique indexes in schema.prisma.
+-- This index exists in the DB only -- the intentional schema/DB drift is by
+-- design, exactly like `CampaignUnlock_campaignId_anonKey_key` added by
+-- `20260615113320_campaign_unlock_anon_unique` (see that migration for the
+-- established precedent). Do NOT add
+-- `@@unique([brandId, provider, isPrimary])` to schema.prisma to try to
+-- express this -- a non-partial unique across ALL rows (not just
+-- isPrimary: true ones) would prevent a brand from ever holding more than
+-- one CONNECTED-but-non-primary connection for the same provider, which is
+-- required (multi-store support), and would not match what this index
+-- actually enforces.
+--
+-- Because the index is DB-only, `prisma migrate diff` (schema vs. DB) and
+-- `prisma migrate status` will report it as drift on every future run --
+-- the live database will always have one index that `prisma/schema.prisma`
+-- does not describe. This is expected and must not be "fixed" by adding a
+-- non-partial @@unique (see above) or by dropping the index. See
+-- docs/prisma-migrations.md for how to interpret that drift going forward.
+--
+-- ─── PREFLIGHT ───────────────────────────────────────────────────────────────
+-- Run this query BEFORE applying and confirm it returns ZERO rows:
+--
+-- SELECT "brandId", "provider", count(*)
+-- FROM "CommerceConnection"
+-- WHERE "isPrimary" = true
+-- GROUP BY 1, 2
+-- HAVING count(*) > 1;
+--
+-- If it returns any rows, do NOT auto-delete. For each (brandId, provider)
+-- group returned, keep the row that `pickPreferredConnectionRow` in
+-- src/lib/commerce/connection-resolver.ts would choose -- its actual
+-- tiebreak, in order:
+--   1. `isPrimary: true` wins over `isPrimary: false` (not useful as a
+--      tiebreak here since every row in a preflight-returned group already
+--      has isPrimary = true, but stated for completeness).
+--   2. Otherwise, the row with the most recent `installedAt` wins (a row
+--      with a null `installedAt` sorts last, i.e. loses this tiebreak).
+--   3. Otherwise, the row with the most recent `createdAt` wins.
+-- Manually set `"isPrimary" = false` on every other row in that group (do
+-- NOT delete any row -- these are real connections, just not the primary
+-- one), then re-run the preflight query above and confirm it now returns
+-- zero rows before proceeding.
+--
+-- As of this migration's authoring, production holds 2 CommerceConnection
+-- rows with no duplicate primaries, so this preflight is expected to return
+-- zero rows -- but it must still be run and confirmed immediately before
+-- applying, not assumed from this note.
+-- ─────────────────────────────────────────────────────────────────────────────
+
+-- CreateIndex
+-- Plain CREATE UNIQUE INDEX, not CONCURRENTLY -- matching the house style
+-- established by 20260615113320_campaign_unlock_anon_unique.
+-- CREATE UNIQUE INDEX CONCURRENTLY cannot run inside a transaction, and
+-- `prisma migrate deploy` wraps each migration file in one, so using
+-- CONCURRENTLY here would fail outright rather than merely lock longer.
+CREATE UNIQUE INDEX "CommerceConnection_brandId_provider_primary_key"
+  ON "CommerceConnection"("brandId", "provider")
+  WHERE "isPrimary" = true;
+
+-- ─── ROLLBACK ─────────────────────────────────────────────────────────────────
+-- DROP INDEX "CommerceConnection_brandId_provider_primary_key";
+--
+-- Unlike the Phase-1 table-creating migration
+-- (20260806120000_add_commerce_connection_abstraction), rollback here is
+-- non-destructive: dropping a unique INDEX never deletes rows or column
+-- data, it only removes the constraint. No CommerceConnection row is
+-- touched by rolling this back.

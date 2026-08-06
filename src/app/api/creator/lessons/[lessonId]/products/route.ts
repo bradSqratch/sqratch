@@ -7,6 +7,7 @@ import {
   resolveSourceShopDomainForBrand,
 } from "@/lib/lesson-product-links";
 import { isProductLinkCurrent } from "@/lib/product-link-compatibility";
+import { externalAccountIdFromShopDomain } from "@/lib/commerce/connection-service";
 
 export async function GET(
   _request: NextRequest,
@@ -29,7 +30,7 @@ export async function GET(
     const domainByBrandId = new Map(
       access.data.candidateBrands.map((brand) => [
         brand.id,
-        brand.shopifyShopDomain,
+        externalAccountIdFromShopDomain(brand.shopifyShopDomain),
       ]),
     );
 

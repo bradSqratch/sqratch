@@ -3,19 +3,36 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
 import { normalizeShopDomain } from "@/lib/shopify";
+import {
+  externalAccountIdFromShopDomain,
+  isLegacyShopifyBrandConnectionUsable,
+} from "@/lib/commerce/connection-service";
 
 type LessonProductActor = {
   userId: string;
   role: Extract<Role, "ADMIN" | "CREATOR">;
 };
 
+/**
+ * Includes every field `isLegacyShopifyBrandConnectionUsable` (and, via it,
+ * `mapLegacyBrandToConnectionSummary`) needs to decide connectivity through
+ * the provider-neutral commerce connection service — NOT
+ * `shopifyAdminAccessTokenEncrypted`, which that service deliberately never
+ * needs (see `src/lib/commerce/connection-service.ts`'s file header for why
+ * `status` alone reproduces the old three-part check). None of these fields
+ * are ever serialized directly — every consumer only ever projects
+ * `{ id, name, slug }` out of a `CandidateBrand`.
+ */
 export type CandidateBrand = {
   id: string;
   name: string;
   slug: string;
   shopifyShopDomain: string | null;
-  shopifyAdminAccessTokenEncrypted: string | null;
   shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED" | "REQUIRES_RECONNECT";
+  shopifyInstalledAt: Date | null;
+  shopifyUninstalledAt: Date | null;
+  shopifyLastProductSyncAt: Date | null;
+  shopifyGrantedScopes: string | null;
 };
 
 export type LessonProductManagementContext = {
@@ -54,7 +71,13 @@ export type LessonProductLinkRecord = {
 /**
  * Resolves the normalized Shopify domain to stamp as a product link's
  * sourceShopDomain, from the brand's own current connection state — never
- * from client-provided input.
+ * from client-provided input. Routes the raw domain through the service's
+ * `externalAccountIdFromShopDomain` first (a trim-only pass, matching how
+ * `CommerceConnectionSummary.externalAccountId` is derived) and then through
+ * `normalizeShopDomain` exactly as before — `normalizeShopDomain` also
+ * lowercases and validates the domain SHAPE, which the provider-neutral
+ * service has no equivalent for, so that validation stays here rather than
+ * being silently dropped.
  */
 export function resolveSourceShopDomainForBrand(
   candidateBrands: CandidateBrand[],
@@ -65,7 +88,7 @@ export function resolveSourceShopDomainForBrand(
   }
 
   const brand = candidateBrands.find((candidate) => candidate.id === brandId);
-  return normalizeShopDomain(brand?.shopifyShopDomain ?? null);
+  return normalizeShopDomain(externalAccountIdFromShopDomain(brand?.shopifyShopDomain));
 }
 
 type ProductInputResult =
@@ -169,8 +192,11 @@ export async function getLessonProductManagementContext(
                           name: true,
                           slug: true,
                           shopifyShopDomain: true,
-                          shopifyAdminAccessTokenEncrypted: true,
                           shopifyConnectionStatus: true,
+                          shopifyInstalledAt: true,
+                          shopifyUninstalledAt: true,
+                          shopifyLastProductSyncAt: true,
+                          shopifyGrantedScopes: true,
                         },
                       },
                     },
@@ -207,12 +233,9 @@ export async function getLessonProductManagementContext(
   // editor gets an explicit brand selector, use the first connected brand by
   // campaign sort order and then fall back to the first campaign brand.
   const primaryBrand =
-    candidateBrands.find(
-      (brand) =>
-        brand.shopifyShopDomain &&
-        brand.shopifyAdminAccessTokenEncrypted &&
-        brand.shopifyConnectionStatus === "CONNECTED",
-    ) || candidateBrands[0] || null;
+    candidateBrands.find((brand) => isLegacyShopifyBrandConnectionUsable(brand)) ||
+    candidateBrands[0] ||
+    null;
 
   return {
     ok: true,

@@ -97,12 +97,41 @@ export class CommerceConnectionNotFoundError extends CommerceError {
 export class CommerceProviderApiError extends CommerceError {
   readonly provider: CommerceProvider;
   readonly providerCode?: string;
+  /**
+   * The HTTP status the upstream provider call itself failed with, when the
+   * caller that raised this error has one to report (e.g.
+   * `ShopifyCommerceAdapter.syncProducts` passes through the `status` field
+   * `fetchNormalizedShopifyProducts` already computed for the same failure —
+   * see `src/lib/shopify-products.ts`). Optional and never guessed: a caller
+   * with no meaningful upstream status (e.g. a token-resolution failure)
+   * simply omits it, and a route mapping this error back to an HTTP response
+   * must supply its own fallback status in that case.
+   */
+  readonly httpStatus?: number;
+  /**
+   * Opaque, provider-specific diagnostic detail attached to this failure
+   * (e.g. Shopify's `userErrors` array from a GraphQL mutation response).
+   * Deliberately typed `unknown`, never a named provider shape — this class
+   * must stay provider-neutral. Optional and never guessed: a caller with
+   * no such detail simply omits it. MUST NEVER carry or serialize an access
+   * token, secret, or any other credential material — the same rule as the
+   * rest of this class.
+   */
+  readonly details?: unknown;
 
-  constructor(provider: CommerceProvider, message: string, providerCode?: string) {
+  constructor(
+    provider: CommerceProvider,
+    message: string,
+    providerCode?: string,
+    httpStatus?: number,
+    details?: unknown,
+  ) {
     super(message, "COMMERCE_PROVIDER_API_ERROR");
     this.name = "CommerceProviderApiError";
     this.provider = provider;
     this.providerCode = providerCode;
+    this.httpStatus = httpStatus;
+    this.details = details;
     Object.setPrototypeOf(this, CommerceProviderApiError.prototype);
   }
 }

@@ -15,6 +15,7 @@ import type {
   CommerceCapabilities,
   CommerceConnectionResult,
   CreateDiscountInput,
+  CreateDiscountOptions,
   NormalizedWebhookEvent,
   ProductSyncResult,
   ProviderDiscount,
@@ -45,9 +46,17 @@ export interface CommerceAdapter {
   /**
    * Creates a discount code on the provider for the given
    * `CommerceConnection.id`. Optional: only implemented by adapters whose
-   * `getCapabilities().canCreateDiscount` is `true`.
+   * `getCapabilities().canCreateDiscount` is `true`. `options` is an
+   * escape hatch for caller-transport plumbing (see
+   * `CreateDiscountOptions` in `./types.ts`) — it never carries business
+   * data and every implementation must behave identically to omitting it
+   * when no option is set.
    */
-  createDiscount?(connectionId: string, input: CreateDiscountInput): Promise<ProviderDiscount>;
+  createDiscount?(
+    connectionId: string,
+    input: CreateDiscountInput,
+    options?: CreateDiscountOptions,
+  ): Promise<ProviderDiscount>;
 
   /**
    * Revokes/deactivates a previously created discount. Optional: only

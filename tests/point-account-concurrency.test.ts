@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { canUseRealDatabaseUnderTest } from "../src/lib/db-safety";
 
 // ---------------------------------------------------------------------------
 // This test exercises real PostgreSQL uniqueness-constraint and transaction
@@ -9,31 +10,71 @@ import { test } from "node:test";
 // DATABASE_URL — and is SKIPPED by default so `npm test`/`npm run verify`
 // stay fully mockable and safe to run without any database available.
 //
+// The documented invariant this code enforces (do not weaken this without
+// updating both): POINT_ACCOUNT_CONCURRENCY=true alone is NOT sufficient to
+// run these tests for real. Running against a real database additionally
+// requires the full three-part opt-in from src/lib/db-safety.ts's
+// canUseRealDatabaseUnderTest — (a) ALLOW_REAL_DATABASE_TESTS=true, (b) a
+// loopback/local DATABASE_URL host (never a production Supabase host), and
+// (c) a database name ending in "_test". This ensures that setting
+// POINT_ACCOUNT_CONCURRENCY=true by itself (e.g. by mistake, or via a stale
+// shell export) can never cause a real write against whatever DATABASE_URL
+// happens to be configured — it merely requests the test; the db-safety gate
+// separately decides whether a real database may actually be touched.
+//
+// IMPORTANT: canUseRealDatabaseUnderTest's three conditions are evaluated
+// UNCONDITIONALLY — this gate does NOT depend on test-mode detection (there
+// is no "isTestEnvironment" input to it at all). That is deliberate: this
+// file's own header tells a developer to run it directly with
+// `npx tsx --test tests/point-account-concurrency.test.ts`, but if it were
+// ever invoked WITHOUT `--test` (e.g. `npx tsx tests/point-account-...`),
+// Node's test-mode signals would not be present, and this repo's local dev
+// shells deliberately export a PRODUCTION DATABASE_URL. If the ENABLED gate
+// below depended on test-mode detection succeeding, that misconfiguration
+// would silently no-op the detection layer and fall through to running real
+// writes against production. Because canUseRealDatabaseUnderTest ignores
+// detection state entirely and fails closed on host/db-name/opt-in alone, a
+// production or non-"_test" DATABASE_URL is refused regardless of how this
+// file is invoked.
+//
 // To run it against a disposable local Postgres:
 //
 //   1. Start a throwaway cluster, e.g.:
 //        initdb -D /tmp/sqratch-concurrency-pgdata --no-locale
 //        pg_ctl -D /tmp/sqratch-concurrency-pgdata \
 //          -o "-p 5547 -k /tmp/sqratch-concurrency-sock -h 127.0.0.1" start
-//        createdb -h 127.0.0.1 -p 5547 sqratch_concurrency
-//   2. Sync the schema: DATABASE_URL=postgresql://postgres@127.0.0.1:5547/sqratch_concurrency \
+//        createdb -h 127.0.0.1 -p 5547 sqratch_concurrency_test
+//   2. Sync the schema: DATABASE_URL=postgresql://postgres@127.0.0.1:5547/sqratch_concurrency_test \
 //        npx prisma db push --accept-data-loss
 //   3. Enable SSL on that cluster (src/lib/prisma.ts requires it by default;
 //      a self-signed cert + `ssl = on` in postgresql.conf is sufficient with
 //      PG_SSL_REJECT_UNAUTHORIZED=false, see below).
-//   4. Run:
-//        DATABASE_URL=postgresql://postgres@127.0.0.1:5547/sqratch_concurrency \
-//        DIRECT_URL=postgresql://postgres@127.0.0.1:5547/sqratch_concurrency \
+//   4. Run (note the database name ends in "_test" — required by condition
+//      (c) above — and ALLOW_REAL_DATABASE_TESTS=true is required by
+//      condition (a); DATABASE_URL's loopback host satisfies condition (b)):
+//        DATABASE_URL=postgresql://postgres@127.0.0.1:5547/sqratch_concurrency_test \
+//        DIRECT_URL=postgresql://postgres@127.0.0.1:5547/sqratch_concurrency_test \
 //        PG_SSL_REJECT_UNAUTHORIZED=false \
+//        ALLOW_REAL_DATABASE_TESTS=true \
 //        POINT_ACCOUNT_CONCURRENCY=true \
 //        npx tsx --test tests/point-account-concurrency.test.ts
 // ---------------------------------------------------------------------------
 
-const ENABLED = process.env.POINT_ACCOUNT_CONCURRENCY === "true";
+const realDbDecision = canUseRealDatabaseUnderTest({
+  connectionString: process.env.DATABASE_URL ?? "",
+  allowRealDatabaseTestsEnv: process.env.ALLOW_REAL_DATABASE_TESTS,
+});
+
+const ENABLED =
+  process.env.POINT_ACCOUNT_CONCURRENCY === "true" && realDbDecision.allowed;
+
+const SKIP_REASON = realDbDecision.allowed
+  ? "requires POINT_ACCOUNT_CONCURRENCY=true and a real disposable Postgres (see file header)"
+  : `requires POINT_ACCOUNT_CONCURRENCY=true and the full db-safety opt-in (${realDbDecision.reason}) — see file header`;
 
 test(
   "two concurrent missing-account requests result in exactly one account, with no transaction-aborted error",
-  { skip: !ENABLED && "requires POINT_ACCOUNT_CONCURRENCY=true and a real disposable Postgres (see file header)" },
+  { skip: !ENABLED && SKIP_REASON },
   async () => {
     const { default: prisma } = await import("../src/lib/prisma");
     const { getUserSpendablePointBalance } = await import("../src/lib/points");
@@ -89,7 +130,7 @@ test(
 
 test(
   "getUserPointsOverview and ensureAccount (via getUserSpendablePointBalance) produce matching reconstructed lifetime totals",
-  { skip: !ENABLED && "requires POINT_ACCOUNT_CONCURRENCY=true and a real disposable Postgres (see file header)" },
+  { skip: !ENABLED && SKIP_REASON },
   async () => {
     const { default: prisma } = await import("../src/lib/prisma");
     const { getUserSpendablePointBalance, getUserPointsOverview } = await import("../src/lib/points");

@@ -276,7 +276,7 @@ describe("ShopifyCommerceAdapter", () => {
       },
       async fetchProducts(input) {
         calls.fetchProductsInput = input;
-        return { ok: true, items: [normalizedProduct], hasNextPage: false, limit: 100 };
+        return { ok: true, items: [normalizedProduct], hasNextPage: true, limit: 100 };
       },
       async markProductSync(connectionId, syncedAt) {
         calls.markProductSync = { connectionId, syncedAt };
@@ -294,6 +294,10 @@ describe("ShopifyCommerceAdapter", () => {
     assert.equal(result.connectionId, "conn-1");
     assert.equal(result.provider, CommerceProvider.SHOPIFY);
     assert.equal(result.productCount, 1);
+    // ProductSyncResult's widened pagination fields pass through unchanged
+    // from fetchNormalizedShopifyProducts's own ok:true result.
+    assert.equal(result.hasNextPage, true);
+    assert.equal(result.limit, 100);
 
     const product = result.products[0];
     assert.equal(product.externalId, "gid://shopify/Product/123");
@@ -302,6 +306,14 @@ describe("ShopifyCommerceAdapter", () => {
       !Object.prototype.hasOwnProperty.call(product, "shopifyProductGid"),
       "neutral product must not carry the shopifyProductGid key",
     );
+    assert.ok(
+      !Object.prototype.hasOwnProperty.call(product, "variantIds"),
+      "neutral product must not carry the Shopify-named variantIds key",
+    );
+    // Widened fields: priceRange mirrors NormalizedShopifyProduct.priceRange
+    // exactly, and externalVariantIds mirrors variantIds exactly.
+    assert.deepEqual(product.priceRange, { min: 10, max: 10 });
+    assert.deepEqual(product.externalVariantIds, ["456"]);
 
     assert.ok(calls.markProductSync, "markProductSync should have been called");
     assert.equal(calls.markProductSync.connectionId, "conn-1");

@@ -1,4 +1,4 @@
-process.env.DATABASE_URL = "postgres://dummy:dummy@localhost:5432/dummy";
+process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
 
 import assert from "node:assert/strict";
 import { test, describe, before } from "node:test";

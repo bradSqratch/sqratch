@@ -6,6 +6,7 @@ import {
 import prisma from "@/lib/prisma";
 import { attachSessionCookie, ensureViewerSession } from "@/lib/session";
 import { isProductLinkCurrent } from "@/lib/product-link-compatibility";
+import { externalAccountIdFromShopDomain } from "@/lib/commerce/connection-service";
 
 export async function GET(
   request: NextRequest,
@@ -79,7 +80,7 @@ export async function GET(
         })
       : [];
     const domainByBrandId = new Map(
-      brands.map((brand) => [brand.id, brand.shopifyShopDomain]),
+      brands.map((brand) => [brand.id, externalAccountIdFromShopDomain(brand.shopifyShopDomain)]),
     );
     const currentProductLinks = lesson.productLinks.filter((link) =>
       isProductLinkCurrent(link, domainByBrandId),

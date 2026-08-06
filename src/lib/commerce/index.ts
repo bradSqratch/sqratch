@@ -38,6 +38,7 @@ export type {
   CommerceProduct,
   ProductSyncResult,
   CreateDiscountInput,
+  CreateDiscountOptions,
   ProviderDiscount,
   WebhookRequestInput,
   CommerceWebhookEventType,

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
+import { deriveShopifyStorefrontUrl } from "@/lib/commerce/connection-service";
 
 export async function GET() {
   try {
@@ -54,9 +55,7 @@ export async function GET() {
         shopifyDiscountStatus: redemption.shopifyDiscountStatus,
         shopifyAsyncUsageCount: redemption.shopifyAsyncUsageCount,
         shopifyLastCheckedAt: redemption.shopifyLastCheckedAt,
-        shopUrl: redemption.brand.shopifyShopDomain
-          ? `https://${redemption.brand.shopifyShopDomain}`
-          : null,
+        shopUrl: deriveShopifyStorefrontUrl(redemption.brand.shopifyShopDomain),
       })),
     });
   } catch (error) {

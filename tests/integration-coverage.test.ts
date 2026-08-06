@@ -1,4 +1,4 @@
-process.env.DATABASE_URL = "postgres://dummy:dummy@localhost:5432/dummy";
+process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
 process.env.SHOPIFY_API_KEY = "test-api-key";
 process.env.SHOPIFY_API_SECRET = "test-api-secret";
 process.env.APP_ENCRYPTION_KEY = "dummy-encryption-key-at-least-32-chars-long";
@@ -105,6 +105,21 @@ before(async () => {
     "lessonProgress",
     "userSession",
     "analyticsEvent",
+    "commerceConnection",
+    "commerceConnectionSecret",
+    "creatorRequest",
+    "brandRequest",
+    "creatorProfile",
+    "experience",
+    "campaignExperience",
+    "post",
+    "postComment",
+    "question",
+    "questionAnswer",
+    "brandRewardOfferProduct",
+    "emailVerificationToken",
+    "emailQueue",
+    "waitlistEntry",
   ];
   const methods = [
     "findFirst",
@@ -205,6 +220,20 @@ before(async () => {
     findMany: async () => [],
   };
   prismaModule.course = { findUnique: async () => null };
+  // Safe default for the provider-neutral commerce-connection mirror lookup
+  // (src/lib/commerce/connection-service.ts's getActiveCommerceConnection)
+  // that the reward redeem route now consults before falling back to the
+  // legacy direct Shopify call. No test here exercises a real
+  // CommerceConnection row, so an empty mirror is correct for every
+  // existing test — `getActiveCommerceConnection` treats "no row" + a
+  // legacy shop domain present as legacy-wins (commerceSummary.id === null),
+  // i.e. exactly the pre-cutover legacy path. Individual tests may still
+  // override this with `t.mock.method` if they need to assert on the
+  // adapter path specifically.
+  prismaModule.commerceConnection = {
+    findMany: async () => [],
+    findUnique: async () => null,
+  };
 
   // Import route handlers
   appUninstalledPOST = (await import("../src/app/api/shopify/webhooks/app/uninstalled/route")).POST;

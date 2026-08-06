@@ -8,7 +8,7 @@ const originalApiSecret = process.env.SHOPIFY_API_SECRET;
 const originalDatabaseUrl = process.env.DATABASE_URL;
 process.env.SHOPIFY_API_KEY = "embedded-status-test-api-key";
 process.env.SHOPIFY_API_SECRET = "embedded-status-test-api-secret";
-process.env.DATABASE_URL ||= "postgresql://test:test@localhost:5432/test";
+process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
 
 after(() => {
   if (originalApiKey === undefined) delete process.env.SHOPIFY_API_KEY;

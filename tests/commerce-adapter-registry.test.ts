@@ -80,6 +80,8 @@ function makeFakeAdapter(
         products: [],
         productCount: 0,
         syncedAt: new Date(),
+        hasNextPage: false,
+        limit: 100,
       };
     },
     // canRevokeDiscount is false for this fake — revokeDiscount is

@@ -14,6 +14,7 @@ import {
 } from "@/lib/lesson-video-reference";
 import { parseRewardPoints } from "@/lib/reward-points-input";
 import { isProductLinkCurrent } from "@/lib/product-link-compatibility";
+import { externalAccountIdFromShopDomain } from "@/lib/commerce/connection-service";
 
 function normalizeVideoSource(value: unknown) {
   const normalized = String(value || "YOUTUBE")
@@ -181,7 +182,7 @@ export async function GET(request: NextRequest) {
     campaignBrandLinks.forEach((item) => {
       const brand = item.campaign.brand;
       if (brand) {
-        domainByBrandId.set(brand.id, brand.shopifyShopDomain);
+        domainByBrandId.set(brand.id, externalAccountIdFromShopDomain(brand.shopifyShopDomain));
       }
     });
 
