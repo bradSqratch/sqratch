@@ -5,6 +5,7 @@ import {
 } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
 import { recordShopifyConnectionLoss } from "@/lib/shopify-connection-transitions";
+import { safeMarkShopifyCommerceConnectionDisconnected } from "@/lib/commerce/connection-sync";
 
 export async function POST() {
   try {
@@ -69,6 +70,12 @@ export async function POST() {
 
       return updated;
     });
+
+    // Provider-neutral CommerceConnection mirror (Phase 1 dual-write) — best
+    // effort, runs in its own transaction AFTER the one above has already
+    // committed, and can never fail this request (see connection-sync.ts).
+    // Must never throw: the legacy disconnect above already committed, so a throw here would wrongly surface as a 500 via the outer catch.
+    await safeMarkShopifyCommerceConnectionDisconnected(brandId, "DISCONNECTED");
 
     return NextResponse.json({ data: brand });
   } catch (error) {

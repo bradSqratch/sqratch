@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import prisma from "@/lib/prisma";
 import { verifyShopifyWebhookRequest } from "@/lib/shopify-webhooks";
+import { safeDeleteShopifyCommerceConnectionByShopDomain } from "@/lib/commerce/connection-sync";
 
 // Shopify sends shop/redact 48 hours after a merchant uninstalls, confirming
 // all shop data must be erased. Per docs/shopify-data-inventory.md §5:
@@ -157,6 +158,22 @@ export async function POST(request: NextRequest) {
     if (operations.length > 0) {
       await prisma.$transaction(operations);
     }
+
+    // Provider-neutral CommerceConnection mirror (Phase 1 dual-write) — best
+    // effort, runs AFTER the transaction above has already committed, and
+    // can never fail this webhook (see connection-sync.ts). Deliberately
+    // NOT gated on `brand`: the CommerceConnection row is keyed on
+    // (provider, externalAccountId) = (SHOPIFY, shopDomain), not on
+    // whichever brand currently holds `Brand.shopifyShopDomain`. Those two
+    // can diverge — e.g. shop X's `app/uninstalled` doesn't null
+    // `Brand.shopifyShopDomain` (relink policy), so if the brand later
+    // relinks to shop Y before X's `shop/redact` arrives, no brand has
+    // `shopifyShopDomain === X` here (`brand` is null) even though the
+    // CommerceConnection row for X must still be erased. Deleting by
+    // shopDomain handles this correctly whether or not `brand` resolved,
+    // and never deletes a sibling connection for a different shop on the
+    // same brand.
+    await safeDeleteShopifyCommerceConnectionByShopDomain(shopDomain);
 
     // Sanitized audit log: topic + shop domain (the domain itself is being
     // removed, so logging it here for the final audit trail is appropriate).

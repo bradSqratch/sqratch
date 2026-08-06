@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { verifyShopifyWebhookRequest } from "@/lib/shopify-webhooks";
 import { recordShopifyConnectionLoss } from "@/lib/shopify-connection-transitions";
+import { safeSyncShopifyCommerceConnection } from "@/lib/commerce/connection-sync";
 
 // Shopify sends app/uninstalled immediately when a merchant uninstalls.
 // Per the relink policy: credentials are cleared but shopifyShopDomain is
@@ -18,14 +19,14 @@ export async function POST(request: NextRequest) {
   if (verification.shop) {
     const shopDomain = verification.shop;
 
-    await prisma.$transaction(async (tx) => {
+    const uninstalledBrandId = await prisma.$transaction(async (tx) => {
       const brand = await tx.brand.findUnique({
         where: { shopifyShopDomain: shopDomain },
         select: { id: true, shopifyCurrencyCode: true, shopifyClientId: true },
       });
 
       if (!brand) {
-        return;
+        return null;
       }
 
       await tx.brand.update({
@@ -55,7 +56,19 @@ export async function POST(request: NextRequest) {
           shopifyClientId: brand.shopifyClientId,
         },
       });
+
+      return brand.id;
     });
+
+    // Provider-neutral CommerceConnection mirror (Phase 1 dual-write) — best
+    // effort, runs in its own transaction AFTER the one above has already
+    // committed, and can never fail this webhook (see connection-sync.ts).
+    // shopifyShopDomain is preserved above, so a full sync (not just a
+    // status mark) can still correctly re-derive the row — this is also
+    // self-healing if the original install-time dual-write never ran.
+    if (uninstalledBrandId) {
+      await safeSyncShopifyCommerceConnection(uninstalledBrandId);
+    }
 
     // Sanitized audit log: topic + shop domain only — no secrets or PII.
     console.log(

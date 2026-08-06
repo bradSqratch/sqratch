@@ -116,6 +116,7 @@ model Brand {
   rewardOffers                     BrandRewardOffer[]
   shopifyRewardRedemptions         ShopifyRewardRedemption[]
   shopifyConnectionEvents          ShopifyConnectionEvent[]
+  commerceConnections              CommerceConnection[]
 }
 
 model BrandMember {
@@ -482,6 +483,45 @@ model ShopifyConnectionEvent {
   @@index([previousShopDomain, createdAt])
 }
 
+model CommerceConnection {
+  id                String                    @id @default(cuid())
+  brandId           String
+  provider          CommerceProvider
+  status            CommerceConnectionStatus  @default(DISCONNECTED)
+  displayName       String
+  externalAccountId String
+  storefrontUrl     String?
+  providerClientId  String?
+  isPrimary         Boolean                   @default(false)
+  grantedScopes     Json?
+  providerMetadata  Json?
+  installedAt       DateTime?
+  uninstalledAt     DateTime?
+  lastProductSyncAt DateTime?
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
+  brand             Brand                     @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  secret            CommerceConnectionSecret?
+
+  @@unique([provider, externalAccountId])
+  @@index([brandId])
+  @@index([brandId, provider])
+  @@index([brandId, isPrimary])
+  @@index([provider, status])
+}
+
+model CommerceConnectionSecret {
+  id               String             @id @default(cuid())
+  connectionId     String             @unique
+  encryptedPayload String
+  keyVersion       Int                @default(1)
+  rotatedAt        DateTime?
+  expiresAt        DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  connection       CommerceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+}
+
 model ShopifyRewardRedemption {
   id                            String                        @id @default(cuid())
   userId                        String
@@ -747,6 +787,20 @@ enum ShopifyConnectionEventType {
 enum ShopifyAuthMode {
   LEGACY_OFFLINE
   EXPIRING_OFFLINE
+}
+
+enum CommerceProvider {
+  SHOPIFY
+  COMMERCE7
+}
+
+enum CommerceConnectionStatus {
+  PENDING
+  CONNECTED
+  REQUIRES_RECONNECT
+  DISCONNECTED
+  UNINSTALLED
+  ERROR
 }
 
 enum RewardAppliesTo {

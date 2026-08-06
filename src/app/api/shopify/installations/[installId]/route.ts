@@ -19,6 +19,7 @@ import {
   resolveInstallConnectionEventType,
   resolveLastKnownShopDomain,
 } from "@/lib/shopify-connection-transitions";
+import { safeSyncShopifyCommerceConnection } from "@/lib/commerce/connection-sync";
 
 
 // Re-export types for backward compatibility if needed elsewhere
@@ -379,6 +380,11 @@ export async function installationsPostImpl(
 
       return updated;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    // Provider-neutral CommerceConnection mirror (Phase 1 dual-write) — best
+    // effort, runs in its own transaction AFTER the one above has already
+    // committed, and can never fail this request (see connection-sync.ts).
+    await safeSyncShopifyCommerceConnection(brand.id);
 
     // Sanitized state-transition log — no tokens, no encrypted values.
     console.log("[shopify/installations]", {
