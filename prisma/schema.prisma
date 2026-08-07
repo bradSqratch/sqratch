@@ -82,21 +82,21 @@ model CreatorProfile {
 }
 
 model Brand {
-  id                               String                    @id @default(cuid())
-  name                             String                    @unique
-  slug                             String                    @unique
+  id                               String                     @id @default(cuid())
+  name                             String                     @unique
+  slug                             String                     @unique
   bio                              String?
   websiteUrl                       String?
   logoUrl                          String?
-  isActive                         Boolean                   @default(true)
-  shopifyShopDomain                String?                   @unique
+  isActive                         Boolean                    @default(true)
+  shopifyShopDomain                String?                    @unique
   shopifyAdminAccessTokenEncrypted String?
   shopifyInstalledAt               DateTime?
   shopifyDisconnectedAt            DateTime?
   shopifyUninstalledAt             DateTime?
-  shopifyConnectionStatus          ShopifyConnectionStatus   @default(DISCONNECTED)
-  createdAt                        DateTime                  @default(now())
-  updatedAt                        DateTime                  @updatedAt
+  shopifyConnectionStatus          ShopifyConnectionStatus    @default(DISCONNECTED)
+  createdAt                        DateTime                   @default(now())
+  updatedAt                        DateTime                   @updatedAt
   coverImageUrl                    String?
   shopifyLastProductSyncAt         DateTime?
   shopifyCurrencyCode              String?
@@ -107,7 +107,7 @@ model Brand {
   shopifyClientId                  String?
   shopifyTokenRefreshLockedUntil   DateTime?
   shopifyTokenRefreshLockId        String?
-  shopifyAuthMode                  ShopifyAuthMode           @default(LEGACY_OFFLINE)
+  shopifyAuthMode                  ShopifyAuthMode            @default(LEGACY_OFFLINE)
   analyticsEvents                  AnalyticsEvent[]
   members                          BrandMember[]
   campaigns                        Campaign[]
@@ -117,6 +117,9 @@ model Brand {
   shopifyRewardRedemptions         ShopifyRewardRedemption[]
   shopifyConnectionEvents          ShopifyConnectionEvent[]
   commerceConnections              CommerceConnection[]
+  connectedCommerceProducts        ConnectedCommerceProduct[]
+  commerceProductSyncRuns          CommerceProductSyncRun[]
+  brandCommerceProducts            BrandCommerceProduct[]
 }
 
 model BrandMember {
@@ -484,24 +487,26 @@ model ShopifyConnectionEvent {
 }
 
 model CommerceConnection {
-  id                String                    @id @default(cuid())
+  id                String                     @id @default(cuid())
   brandId           String
   provider          CommerceProvider
-  status            CommerceConnectionStatus  @default(DISCONNECTED)
+  status            CommerceConnectionStatus   @default(DISCONNECTED)
   displayName       String
   externalAccountId String
   storefrontUrl     String?
   providerClientId  String?
-  isPrimary         Boolean                   @default(false)
+  isPrimary         Boolean                    @default(false)
   grantedScopes     Json?
   providerMetadata  Json?
   installedAt       DateTime?
   uninstalledAt     DateTime?
   lastProductSyncAt DateTime?
-  createdAt         DateTime                  @default(now())
-  updatedAt         DateTime                  @updatedAt
-  brand             Brand                     @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+  brand             Brand                      @relation(fields: [brandId], references: [id], onDelete: Cascade)
   secret            CommerceConnectionSecret?
+  connectedProducts ConnectedCommerceProduct[]
+  productSyncRuns   CommerceProductSyncRun[]
 
   @@unique([provider, externalAccountId])
   @@index([brandId])
@@ -520,6 +525,97 @@ model CommerceConnectionSecret {
   createdAt        DateTime           @default(now())
   updatedAt        DateTime           @updatedAt
   connection       CommerceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+}
+
+model ConnectedCommerceProduct {
+  id                     String                 @id @default(cuid())
+  connectionId           String
+  brandId                String
+  provider               CommerceProvider
+  externalKey            String
+  externalId             String
+  title                  String
+  handle                 String?
+  productUrl             String
+  imageUrl               String?
+  images                 String[]
+  externalVariantIds     String[]
+  descriptionText        String?
+  sku                    String?
+  currencyCode           String?
+  priceMinMinor          Int?
+  priceMaxMinor          Int?
+  priceMinorUnitExponent Int?
+  isAvailable            Boolean                @default(true)
+  firstSeenAt            DateTime               @default(now())
+  lastSeenAt             DateTime               @default(now())
+  unavailableSince       DateTime?
+  providerCreatedAt      DateTime?
+  providerUpdatedAt      DateTime?
+  providerMetadata       Json?
+  lastSyncRunId          String?
+  createdAt              DateTime               @default(now())
+  updatedAt              DateTime               @updatedAt
+  connection             CommerceConnection     @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  brand                  Brand                  @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  brandSelections        BrandCommerceProduct[]
+
+  @@unique([connectionId, externalKey])
+  @@index([connectionId])
+  @@index([connectionId, isAvailable])
+  @@index([brandId])
+  @@index([brandId, isAvailable])
+  @@index([connectionId, lastSeenAt])
+}
+
+model CommerceProductSyncRun {
+  id                     String                       @id @default(cuid())
+  connectionId           String
+  brandId                String
+  provider               CommerceProvider
+  status                 CommerceProductSyncRunStatus @default(RUNNING)
+  startedAt              DateTime                     @default(now())
+  finishedAt             DateTime?
+  fetchedCount           Int                          @default(0)
+  createdCount           Int                          @default(0)
+  updatedCount           Int                          @default(0)
+  unchangedCount         Int                          @default(0)
+  markedUnavailableCount Int                          @default(0)
+  failedCount            Int                          @default(0)
+  hasNextPage            Boolean                      @default(false)
+  requestedLimit         Int?
+  failureSummary         String?
+  triggeredBy            String?
+  createdAt              DateTime                     @default(now())
+  connection             CommerceConnection           @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  brand                  Brand                        @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@index([connectionId, startedAt])
+  @@index([brandId, startedAt])
+  @@index([status])
+}
+
+model BrandCommerceProduct {
+  id                       String                   @id @default(cuid())
+  brandId                  String
+  connectedProductId       String
+  isVisibleInShop          Boolean                  @default(false)
+  isCampaignEligible       Boolean                  @default(false)
+  displayOrder             Int                      @default(0)
+  titleOverride            String?
+  shortDescriptionOverride String?
+  imageUrlOverride         String?
+  approvedByUserId         String?
+  approvedAt               DateTime?
+  createdAt                DateTime                 @default(now())
+  updatedAt                DateTime                 @updatedAt
+  brand                    Brand                    @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  connectedProduct         ConnectedCommerceProduct @relation(fields: [connectedProductId], references: [id], onDelete: Cascade)
+
+  @@unique([brandId, connectedProductId])
+  @@index([brandId, isVisibleInShop, displayOrder])
+  @@index([brandId, isCampaignEligible])
+  @@index([connectedProductId])
 }
 
 model ShopifyRewardRedemption {
@@ -801,6 +897,13 @@ enum CommerceConnectionStatus {
   DISCONNECTED
   UNINSTALLED
   ERROR
+}
+
+enum CommerceProductSyncRunStatus {
+  RUNNING
+  SUCCEEDED
+  PARTIAL
+  FAILED
 }
 
 enum RewardAppliesTo {

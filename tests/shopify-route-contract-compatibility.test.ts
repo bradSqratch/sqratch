@@ -210,6 +210,12 @@ const canonicalProduct: NormalizedShopifyProduct = {
   priceText: "$19.99 - $29.99",
   currency: "USD",
   variantIds: ["1001", "1002"],
+  priceRangeRaw: { min: "19.99", max: "29.99" },
+  descriptionText: "Canonical product description.",
+  status: "ACTIVE",
+  providerCreatedAt: new Date("2024-01-01T00:00:00.000Z"),
+  providerUpdatedAt: new Date("2024-01-02T00:00:00.000Z"),
+  sku: "SKU-1",
 };
 
 const expectedProductResponseItem = {
@@ -537,7 +543,7 @@ describe("brand/shopify/products route contract", () => {
           return null;
         },
         async fetchProductsDirect() {
-          return { ok: true, items: [canonicalProduct], hasNextPage: true, limit: 100 };
+          return { ok: true, items: [canonicalProduct], hasNextPage: true, limit: 100, endCursor: null };
         },
         async markLegacyProductSync(brandId) {
           marked.push(brandId);
@@ -570,7 +576,7 @@ describe("brand/shopify/products route contract", () => {
         },
         async fetchProductsDirect(input) {
           assert.deepEqual(input, { shopDomain: brand.shopifyShopDomain, brandId: brand.id, limit: 100 });
-          return { ok: true, items: [canonicalProduct], hasNextPage: true, limit: 100 };
+          return { ok: true, items: [canonicalProduct], hasNextPage: true, limit: 100, endCursor: null };
         },
         async markLegacyProductSync() {},
       }),
@@ -587,7 +593,7 @@ describe("brand/shopify/products route contract", () => {
       },
       async fetchProducts(input) {
         assert.deepEqual(input, { shopDomain: brand.shopifyShopDomain, brandId: brand.id });
-        return { ok: true, items: [canonicalProduct], hasNextPage: true, limit: 100 };
+        return { ok: true, items: [canonicalProduct], hasNextPage: true, limit: 100, endCursor: null };
       },
     });
     const adapterResponse = await productsGetImpl(
@@ -702,7 +708,7 @@ describe("brand/shopify/products route contract", () => {
           return legacyFallbackSummary(brand);
         },
         async fetchProductsDirect() {
-          return { ok: true, items: [canonicalProduct], hasNextPage: false, limit: 100 };
+          return { ok: true, items: [canonicalProduct], hasNextPage: false, limit: 100, endCursor: null };
         },
         async markLegacyProductSync(brandId) {
           markedSuccess.push(brandId);
@@ -748,7 +754,7 @@ describe("brand/shopify/products route contract", () => {
           return legacyFallbackSummary(brand);
         },
         async fetchProductsDirect() {
-          return { ok: true, items: [canonicalProduct], hasNextPage: false, limit: 100 };
+          return { ok: true, items: [canonicalProduct], hasNextPage: false, limit: 100, endCursor: null };
         },
         async markLegacyProductSync() {},
       }),
@@ -779,7 +785,7 @@ describe("brand/shopify/products route contract", () => {
         return fakeConnectionRow();
       },
       async fetchProducts() {
-        return { ok: true, items: [canonicalProduct], hasNextPage: false, limit: 100 };
+        return { ok: true, items: [canonicalProduct], hasNextPage: false, limit: 100, endCursor: null };
       },
     });
 

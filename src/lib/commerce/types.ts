@@ -81,6 +81,18 @@ export type CommerceProductPriceRange = {
  * `externalVariantIds` replaces provider-specific variant ids (e.g.
  * Shopify's numeric variant ids, stringified).
  */
+/**
+ * Raw provider decimal price strings, mirroring
+ * `NormalizedShopifyProduct.priceRangeRaw` (`src/lib/shopify-products.ts`) —
+ * kept alongside the existing float `priceRange` so a persistence layer can
+ * convert to exact integer minor units (via `src/lib/commerce/money.ts`)
+ * instead of re-deriving from the already-lossy float value.
+ */
+export type CommerceProductPriceRangeRaw = {
+  min: string | null;
+  max: string | null;
+};
+
 export type CommerceProduct = {
   externalId: string;
   title: string;
@@ -92,6 +104,23 @@ export type CommerceProduct = {
   currency: string;
   priceRange: CommerceProductPriceRange;
   externalVariantIds: string[];
+  /**
+   * Optional additive fields (Phase 3 data acquisition). All are `undefined`
+   * unless the underlying provider adapter populates them — existing
+   * callers that don't read them are completely unaffected.
+   */
+  /** Plain-text product description, if the provider exposes one. */
+  descriptionText?: string | null;
+  /** Product-level SKU (provider-specific derivation; see the Shopify adapter for how it's chosen). */
+  sku?: string | null;
+  /** Provider-reported lifecycle status (e.g. "ACTIVE" | "DRAFT" | "ARCHIVED"), passed through verbatim. */
+  status?: string | null;
+  /** When the provider reports the product was created. */
+  providerCreatedAt?: Date | null;
+  /** When the provider reports the product was last updated. */
+  providerUpdatedAt?: Date | null;
+  /** Raw decimal price strings — see `CommerceProductPriceRangeRaw`. */
+  priceRangeRaw?: CommerceProductPriceRangeRaw;
 };
 
 /**

@@ -221,6 +221,12 @@ function toCommerceProduct(product: NormalizedShopifyProduct): CommerceProduct {
     currency: product.currency,
     priceRange: product.priceRange,
     externalVariantIds: product.variantIds,
+    descriptionText: product.descriptionText,
+    sku: product.sku,
+    status: product.status,
+    providerCreatedAt: product.providerCreatedAt,
+    providerUpdatedAt: product.providerUpdatedAt,
+    priceRangeRaw: product.priceRangeRaw,
   };
 }
 

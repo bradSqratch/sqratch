@@ -132,6 +132,12 @@ function makeNormalizedProduct(
     priceText: "$10.00",
     currency: "USD",
     variantIds: ["456"],
+    priceRangeRaw: { min: "10.00", max: "10.00" },
+    descriptionText: "A test product.",
+    status: "ACTIVE",
+    providerCreatedAt: new Date("2026-01-01T00:00:00Z"),
+    providerUpdatedAt: new Date("2026-01-02T00:00:00Z"),
+    sku: "SKU-123",
     ...overrides,
   };
 }
@@ -276,7 +282,13 @@ describe("ShopifyCommerceAdapter", () => {
       },
       async fetchProducts(input) {
         calls.fetchProductsInput = input;
-        return { ok: true, items: [normalizedProduct], hasNextPage: true, limit: 100 };
+        return {
+          ok: true,
+          items: [normalizedProduct],
+          hasNextPage: true,
+          limit: 100,
+          endCursor: "cursor-abc",
+        };
       },
       async markProductSync(connectionId, syncedAt) {
         calls.markProductSync = { connectionId, syncedAt };
@@ -314,6 +326,13 @@ describe("ShopifyCommerceAdapter", () => {
     // exactly, and externalVariantIds mirrors variantIds exactly.
     assert.deepEqual(product.priceRange, { min: 10, max: 10 });
     assert.deepEqual(product.externalVariantIds, ["456"]);
+    // New optional additive fields (Task 4) map through unchanged.
+    assert.equal(product.descriptionText, "A test product.");
+    assert.equal(product.sku, "SKU-123");
+    assert.equal(product.status, "ACTIVE");
+    assert.deepEqual(product.providerCreatedAt, new Date("2026-01-01T00:00:00Z"));
+    assert.deepEqual(product.providerUpdatedAt, new Date("2026-01-02T00:00:00Z"));
+    assert.deepEqual(product.priceRangeRaw, { min: "10.00", max: "10.00" });
 
     assert.ok(calls.markProductSync, "markProductSync should have been called");
     assert.equal(calls.markProductSync.connectionId, "conn-1");
