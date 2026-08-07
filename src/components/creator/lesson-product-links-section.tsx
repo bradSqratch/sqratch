@@ -34,6 +34,10 @@ export type LessonProductLinkItem = {
 
 type AvailableLessonProduct = {
   id: string;
+  /** Present only for campaign-curated results. This is a SQRATCH catalog id,
+   * not a provider product id, and is the only value sent for authorized
+   * attachments. */
+  catalogProductId?: string;
   title: string;
   handle: string;
   productUrl: string;
@@ -48,6 +52,13 @@ type AvailableLessonProduct = {
   variantIds: string[];
 };
 
+type CampaignCurationPickerState = {
+  enabled: true;
+  campaignId?: string;
+  requiresCampaignSelection: boolean;
+  campaigns: Array<{ id: string; name: string; brandId: string }>;
+};
+
 type AvailableLessonProductsResponse = {
   brand: {
     id: string;
@@ -57,6 +68,7 @@ type AvailableLessonProductsResponse = {
   candidateBrandCount: number;
   connected: boolean;
   items: AvailableLessonProduct[];
+  curation?: CampaignCurationPickerState;
 };
 
 export function LessonProductLinksSection({
@@ -74,6 +86,7 @@ export function LessonProductLinksSection({
   const [loadingAvailable, setLoadingAvailable] = useState(false);
   const [pickerError, setPickerError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [campaignId, setCampaignId] = useState<string>("");
   const [selectedUrls, setSelectedUrls] = useState<string[]>([]);
   const [linking, setLinking] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
@@ -107,6 +120,7 @@ export function LessonProductLinksSection({
     if (!open) {
       setQuery("");
       setSelectedUrls([]);
+      setCampaignId("");
       setPickerError(null);
       return;
     }
@@ -116,8 +130,11 @@ export function LessonProductLinksSection({
       setPickerError(null);
 
       try {
+        const selectedCampaign = campaignId.trim();
         const result = await fetchJson<AvailableLessonProductsResponse>(
-          `/api/creator/lessons/${lessonId}/available-products`,
+          `/api/creator/lessons/${lessonId}/available-products${
+            selectedCampaign ? `?campaignId=${encodeURIComponent(selectedCampaign)}` : ""
+          }`,
         );
         setAvailable(result);
       } catch (error) {
@@ -130,7 +147,7 @@ export function LessonProductLinksSection({
     }
 
     void loadAvailableProducts();
-  }, [lessonId, open]);
+  }, [campaignId, lessonId, open]);
 
   function toggleSelection(productUrl: string, checked: boolean) {
     setSelectedUrls((current) => {
@@ -156,15 +173,21 @@ export function LessonProductLinksSection({
       );
 
       for (const product of selectedProducts) {
+        const curated = available.curation?.enabled === true;
         await fetchJson(`/api/creator/lessons/${lessonId}/products`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            product,
-            brandId: available.brand?.id || null,
-          }),
+          body: JSON.stringify(curated
+            ? {
+                catalogProductId: product.catalogProductId,
+                campaignId: available.curation?.campaignId || campaignId,
+              }
+            : {
+                product,
+                brandId: available.brand?.id || null,
+              }),
         });
       }
 
@@ -330,9 +353,28 @@ export function LessonProductLinksSection({
                   : "This lesson does not resolve to a campaign brand with a connected Shopify store yet."}
               </div>
             ) : available.items.length === 0 ? (
-              <div className="rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/60">
-                No Shopify products were returned for the selected brand.
-              </div>
+              available.curation?.requiresCampaignSelection ? (
+                <div className="space-y-3 rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/60">
+                  <p>Select the campaign whose approved products you want to attach.</p>
+                  <select
+                    value={campaignId}
+                    onChange={(event) => setCampaignId(event.target.value)}
+                    className="w-full rounded-xl border border-white/15 bg-[#111528] px-3 py-2 text-white"
+                    aria-label="Campaign"
+                  >
+                    <option value="">Select a campaign</option>
+                    {available.curation.campaigns.map((campaign) => (
+                      <option key={campaign.id} value={campaign.id}>{campaign.name}</option>
+                    ))}
+                  </select>
+                </div>
+              ) : (
+                <div className="rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/60">
+                  {available.curation?.enabled
+                    ? "No approved active products are assigned to this campaign."
+                    : "No Shopify products were returned for the selected brand."}
+                </div>
+              )
             ) : (
               <div className="space-y-3">
                 {available.brand && (

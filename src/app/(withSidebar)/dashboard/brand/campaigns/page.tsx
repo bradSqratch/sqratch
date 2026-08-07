@@ -13,6 +13,7 @@ type CampaignListItem = {
   slug: string;
   description: string | null;
   isActive: boolean;
+  commerceProductCurationEnabled: boolean;
   qrBatchesCount: number;
   experiencesCount: number;
 };
@@ -77,6 +78,11 @@ export default function BrandCampaignsPage() {
                 <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/65">
                   {campaign.isActive ? "Active" : "Inactive"}
                 </span>
+                {campaign.commerceProductCurationEnabled && (
+                  <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">
+                    Curated products
+                  </span>
+                )}
               </div>
               {campaign.description && (
                 <p className="mt-4 text-sm leading-6 text-white/70">
@@ -108,6 +114,15 @@ export default function BrandCampaignsPage() {
                 >
                   <Link href={`/dashboard/brand/campaigns/${campaign.id}/edit`}>
                     Edit
+                  </Link>
+                </Button>
+                <Button
+                  asChild
+                  variant="outline"
+                  className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                >
+                  <Link href={`/dashboard/brand/campaigns/${campaign.id}/products`}>
+                    Campaign products
                   </Link>
                 </Button>
                 <Button

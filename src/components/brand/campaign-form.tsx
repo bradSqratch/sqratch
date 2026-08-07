@@ -15,6 +15,7 @@ type CampaignForm = {
   slug: string;
   description: string;
   isActive: boolean;
+  commerceProductCurationEnabled: boolean;
 };
 
 function slugifyValue(value: string) {
@@ -39,6 +40,7 @@ export function BrandCampaignForm({
     slug: "",
     description: "",
     isActive: true,
+    commerceProductCurationEnabled: false,
   });
   const [slugTouched, setSlugTouched] = useState(false);
   const [loading, setLoading] = useState(mode === "edit");
@@ -61,6 +63,7 @@ export function BrandCampaignForm({
           slug: string;
           description: string | null;
           isActive: boolean;
+          commerceProductCurationEnabled: boolean;
         }>(`/api/brand/campaigns/${campaignId}`);
 
         setForm({
@@ -68,6 +71,7 @@ export function BrandCampaignForm({
           slug: data.slug,
           description: data.description || "",
           isActive: data.isActive,
+          commerceProductCurationEnabled: data.commerceProductCurationEnabled,
         });
         setSlugTouched(data.slug !== slugifyValue(data.name));
       } catch (loadError) {
@@ -202,6 +206,39 @@ export function BrandCampaignForm({
               />
               Campaign is active
             </label>
+
+            {mode === "edit" && (
+              <div className="space-y-3 rounded-xl border border-white/10 bg-black/20 p-4">
+                <label className="flex items-start gap-3 text-sm text-white/70">
+                  <input
+                    type="checkbox"
+                    checked={form.commerceProductCurationEnabled}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        commerceProductCurationEnabled: event.target.checked,
+                      }))
+                    }
+                    className="mt-1"
+                  />
+                  <span>
+                    <span className="block font-medium text-white">
+                      Use a curated campaign product catalog
+                    </span>
+                    <span className="mt-1 block text-white/55">
+                      When enabled, creators can attach only this campaign’s active,
+                      eligible products. An empty assignment list intentionally shows
+                      no products.
+                    </span>
+                  </span>
+                </label>
+                <Button asChild type="button" variant="outline" className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10">
+                  <Link href={`/dashboard/brand/campaigns/${campaignId}/products`}>
+                    Manage campaign products
+                  </Link>
+                </Button>
+              </div>
+            )}
 
             {error && <p className="text-sm text-red-300">{error}</p>}
 

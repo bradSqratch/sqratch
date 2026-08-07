@@ -122,6 +122,7 @@ export async function getOwnedBrandCampaign(
       slug: true,
       description: true,
       isActive: true,
+      commerceProductCurationEnabled: true,
       brandId: true,
     },
   });

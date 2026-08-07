@@ -29,6 +29,7 @@ export async function GET() {
         slug: true,
         description: true,
         isActive: true,
+        commerceProductCurationEnabled: true,
         createdAt: true,
         updatedAt: true,
         _count: {
@@ -47,6 +48,7 @@ export async function GET() {
         slug: campaign.slug,
         description: campaign.description,
         isActive: campaign.isActive,
+        commerceProductCurationEnabled: campaign.commerceProductCurationEnabled,
         createdAt: campaign.createdAt,
         updatedAt: campaign.updatedAt,
         qrBatchesCount: campaign._count.qrBatches,
@@ -79,6 +81,9 @@ export async function POST(request: NextRequest) {
     const slug = slugifyValue(String(body?.slug || "").trim() || name);
     const description = String(body?.description || "").trim();
     const isActive = Boolean(body?.isActive);
+    const commerceProductCurationEnabled = Boolean(
+      body?.commerceProductCurationEnabled,
+    );
 
     if (!name || !slug) {
       return NextResponse.json(
@@ -107,6 +112,7 @@ export async function POST(request: NextRequest) {
         slug,
         description: description || null,
         isActive,
+        commerceProductCurationEnabled,
         brandId: context.membership.brand.id,
         createdById: context.userId,
       },
@@ -116,6 +122,7 @@ export async function POST(request: NextRequest) {
         slug: true,
         description: true,
         isActive: true,
+        commerceProductCurationEnabled: true,
       },
     });
 

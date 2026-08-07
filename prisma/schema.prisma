@@ -120,6 +120,7 @@ model Brand {
   connectedCommerceProducts        ConnectedCommerceProduct[]
   commerceProductSyncRuns          CommerceProductSyncRun[]
   brandCommerceProducts            BrandCommerceProduct[]
+  campaignCommerceProducts         CampaignCommerceProduct[]
 }
 
 model BrandMember {
@@ -137,25 +138,31 @@ model BrandMember {
 }
 
 model Campaign {
-  id              String               @id @default(cuid())
-  name            String               @unique
-  description     String?
-  inviteUrl       String?
-  createdAt       DateTime             @default(now())
-  updatedAt       DateTime             @updatedAt
-  createdById     String
-  isActive        Boolean              @default(true)
-  brandId         String?
-  slug            String               @unique
-  analyticsEvents AnalyticsEvent[]
-  brand           Brand?               @relation(fields: [brandId], references: [id])
-  createdBy       User                 @relation("CampaignCreatedByUser", fields: [createdById], references: [id])
-  experiences     CampaignExperience[]
-  unlocks         CampaignUnlock[]
-  qrCodes         QRCode[]
-  qrBatches       QRCodeBatch[]
-  userSessions    UserSession[]
+  id                             String                    @id @default(cuid())
+  name                           String                    @unique
+  description                    String?
+  inviteUrl                      String?
+  createdAt                      DateTime                  @default(now())
+  updatedAt                      DateTime                  @updatedAt
+  createdById                    String
+  isActive                       Boolean                   @default(true)
+  commerceProductCurationEnabled Boolean                   @default(false)
+  brandId                        String?
+  slug                           String                    @unique
+  analyticsEvents                AnalyticsEvent[]
+  brand                          Brand?                    @relation(fields: [brandId], references: [id])
+  createdBy                      User                      @relation("CampaignCreatedByUser", fields: [createdById], references: [id])
+  experiences                    CampaignExperience[]
+  unlocks                        CampaignUnlock[]
+  qrCodes                        QRCode[]
+  qrBatches                      QRCodeBatch[]
+  userSessions                   UserSession[]
+  commerceProductAssignments     CampaignCommerceProduct[]
 
+  // Supports the Phase-4 same-brand composite FK from CampaignCommerceProduct.
+  // brandId remains nullable for legacy campaigns; a curated assignment always
+  // carries a non-null brandId and therefore can only target a branded campaign.
+  @@unique([id, brandId])
   @@index([brandId])
 }
 
@@ -596,26 +603,56 @@ model CommerceProductSyncRun {
 }
 
 model BrandCommerceProduct {
-  id                       String                   @id @default(cuid())
+  id                       String                    @id @default(cuid())
   brandId                  String
   connectedProductId       String
-  isVisibleInShop          Boolean                  @default(false)
-  isCampaignEligible       Boolean                  @default(false)
-  displayOrder             Int                      @default(0)
+  isVisibleInShop          Boolean                   @default(false)
+  isCampaignEligible       Boolean                   @default(false)
+  displayOrder             Int                       @default(0)
   titleOverride            String?
   shortDescriptionOverride String?
   imageUrlOverride         String?
   approvedByUserId         String?
   approvedAt               DateTime?
-  createdAt                DateTime                 @default(now())
-  updatedAt                DateTime                 @updatedAt
-  brand                    Brand                    @relation(fields: [brandId], references: [id], onDelete: Cascade)
-  connectedProduct         ConnectedCommerceProduct @relation(fields: [connectedProductId], references: [id], onDelete: Cascade)
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
+  brand                    Brand                     @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  connectedProduct         ConnectedCommerceProduct  @relation(fields: [connectedProductId], references: [id], onDelete: Cascade)
+  campaignAssignments      CampaignCommerceProduct[]
 
   @@unique([brandId, connectedProductId])
+  // Supports the Phase-4 same-brand composite FK from CampaignCommerceProduct.
+  @@unique([id, brandId])
   @@index([brandId, isVisibleInShop, displayOrder])
   @@index([brandId, isCampaignEligible])
   @@index([connectedProductId])
+}
+
+/// Provider-neutral assignment of one brand-curated catalog product to one
+/// campaign. This is deliberately a single reversible row per
+/// (campaign, BrandCommerceProduct): toggling isActive reuses the row, so a
+/// duplicate active assignment is structurally impossible and historical
+/// LessonProductLink rows never need to be deleted or rewritten.
+model CampaignCommerceProduct {
+  id                     String               @id @default(cuid())
+  brandId                String
+  campaignId             String
+  brandCommerceProductId String
+  isActive               Boolean              @default(true)
+  displayOrder           Int                  @default(0)
+  deactivatedAt          DateTime?
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
+  brand                  Brand                @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  // Both composite FKs include brandId. PostgreSQL therefore rejects a
+  // cross-brand campaign/product assignment even if callers bypass services.
+  campaign               Campaign             @relation(fields: [campaignId, brandId], references: [id, brandId], onDelete: Cascade)
+  brandCommerceProduct   BrandCommerceProduct @relation(fields: [brandCommerceProductId, brandId], references: [id, brandId], onDelete: Cascade)
+
+  @@unique([campaignId, brandCommerceProductId])
+  @@index([brandId, campaignId, isActive, displayOrder])
+  @@index([campaignId, isActive, displayOrder])
+  @@index([brandCommerceProductId, isActive])
 }
 
 model ShopifyRewardRedemption {

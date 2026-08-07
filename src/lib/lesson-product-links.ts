@@ -7,6 +7,7 @@ import {
   externalAccountIdFromShopDomain,
   isLegacyShopifyBrandConnectionUsable,
 } from "@/lib/commerce/connection-service";
+import type { LessonCampaignContext } from "@/lib/commerce/campaign-product-curation";
 
 type LessonProductActor = {
   userId: string;
@@ -53,6 +54,10 @@ export type LessonProductManagementContext = {
   };
   candidateBrands: CandidateBrand[];
   primaryBrand: CandidateBrand | null;
+  /** Campaigns actually linked to this Lesson's Experience, in the persisted
+   * campaign sort order. This is server-only context for Phase 4 curation;
+   * it is never inferred from a client-supplied brand or provider id. */
+  campaigns: LessonCampaignContext[];
 };
 
 export type LessonProductLinkRecord = {
@@ -186,6 +191,10 @@ export async function getLessonProductManagementContext(
                 select: {
                   campaign: {
                     select: {
+                      id: true,
+                      name: true,
+                      brandId: true,
+                      commerceProductCurationEnabled: true,
                       brand: {
                         select: {
                           id: true,
@@ -228,6 +237,12 @@ export async function getLessonProductManagementContext(
   });
 
   const candidateBrands = Array.from(brandMap.values());
+  const campaigns = lesson.course.experience.campaigns.map((item) => ({
+    id: item.campaign.id,
+    name: item.campaign.name,
+    brandId: item.campaign.brandId,
+    commerceProductCurationEnabled: item.campaign.commerceProductCurationEnabled,
+  }));
 
   // Experiences can be attached to multiple campaign brands. Until the lesson
   // editor gets an explicit brand selector, use the first connected brand by
@@ -260,6 +275,7 @@ export async function getLessonProductManagementContext(
       },
       candidateBrands,
       primaryBrand,
+      campaigns,
     },
   };
 }
