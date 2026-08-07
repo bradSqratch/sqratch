@@ -286,6 +286,8 @@ export async function fetchNormalizedShopifyProducts(options: {
    * byte-identical to before this change.
    */
   after?: string;
+  /** Optional cancellation signal used by bounded catalog synchronization. */
+  signal?: AbortSignal;
   /** @deprecated Pass brandId instead; encryptedToken is kept for callers
    *  that have not yet been migrated. When brandId is provided the token
    *  manager is used and this field is ignored. */
@@ -322,6 +324,7 @@ export async function fetchNormalizedShopifyProducts(options: {
         },
       }),
       cache: "no-store",
+      signal: options.signal,
     },
   );
 

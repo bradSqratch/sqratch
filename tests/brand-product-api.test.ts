@@ -285,7 +285,6 @@ describe("GET /api/brand/products — filters", () => {
               displayOrder: 3,
               titleOverride: "Custom Title",
               shortDescriptionOverride: "Custom desc",
-              imageUrlOverride: "https://cdn.example.com/override.jpg",
             },
           ],
         }),
@@ -299,7 +298,6 @@ describe("GET /api/brand/products — filters", () => {
       displayOrder: 3,
       titleOverride: "Custom Title",
       shortDescriptionOverride: "Custom desc",
-      imageUrlOverride: "https://cdn.example.com/override.jpg",
     });
   });
 
@@ -316,7 +314,6 @@ describe("GET /api/brand/products — filters", () => {
       displayOrder: 0,
       titleOverride: null,
       shortDescriptionOverride: null,
-      imageUrlOverride: null,
     });
   });
 });
@@ -461,7 +458,6 @@ describe("PATCH .../selection — SQRATCH-only, no provider call", () => {
         displayOrder: 5,
         titleOverride: "New title",
         shortDescriptionOverride: "New desc",
-        imageUrlOverride: "https://cdn.example.com/img.jpg",
       }),
       { params: Promise.resolve({ connectedProductId: "prod-1" }) },
       {
@@ -476,7 +472,6 @@ describe("PATCH .../selection — SQRATCH-only, no provider call", () => {
             displayOrder: data.displayOrder ?? 0,
             titleOverride: data.titleOverride ?? null,
             shortDescriptionOverride: data.shortDescriptionOverride ?? null,
-            imageUrlOverride: data.imageUrlOverride ?? null,
           };
         },
       },
@@ -491,7 +486,6 @@ describe("PATCH .../selection — SQRATCH-only, no provider call", () => {
         displayOrder: 5,
         titleOverride: "New title",
         shortDescriptionOverride: "New desc",
-        imageUrlOverride: "https://cdn.example.com/img.jpg",
       },
     });
     // Only ConnectedCommerceProduct/BrandCommerceProduct-shaped writes
@@ -537,24 +531,12 @@ describe("validateSelectionUpdate — override bounds", () => {
     assert.equal(result.ok, false);
   });
 
-  test("rejects a non-http(s) imageUrlOverride", () => {
-    for (const bad of ["javascript:alert(1)", "ftp://example.com/a.jpg", "not a url", "data:image/png;base64,AAAA"]) {
-      const result = validateSelectionUpdate({ imageUrlOverride: bad });
-      assert.equal(result.ok, false, `expected ${bad} to be rejected`);
-    }
-  });
-
-  test("accepts http and https imageUrlOverride", () => {
-    assert.equal(validateSelectionUpdate({ imageUrlOverride: "http://example.com/a.jpg" }).ok, true);
-    assert.equal(validateSelectionUpdate({ imageUrlOverride: "https://example.com/a.jpg" }).ok, true);
-  });
-
   test("null clears an override", () => {
-    const result = validateSelectionUpdate({ titleOverride: null, imageUrlOverride: null });
+    const result = validateSelectionUpdate({ titleOverride: null, shortDescriptionOverride: null });
     assert.equal(result.ok, true);
     if (result.ok) {
       assert.equal(result.data.titleOverride, null);
-      assert.equal(result.data.imageUrlOverride, null);
+      assert.equal(result.data.shortDescriptionOverride, null);
     }
   });
 
@@ -563,23 +545,69 @@ describe("validateSelectionUpdate — override bounds", () => {
     assert.equal(validateSelectionUpdate({ displayOrder: -1 }).ok, false);
   });
 
-  test("the route itself returns 400 for an invalid body, never reaching upsertSelection", async () => {
+  test("accepts displayOrder zero and the upper bound, while rejecting values above it", () => {
+    for (const displayOrder of [0, 1_000_000]) {
+      const result = validateSelectionUpdate({ displayOrder });
+      assert.equal(result.ok, true);
+      if (result.ok) assert.equal(result.data.displayOrder, displayOrder);
+    }
+    assert.equal(validateSelectionUpdate({ displayOrder: 1_000_001 }).ok, false);
+  });
+
+  test("a PATCH persists an explicit displayOrder zero rather than defaulting it away", async () => {
+    let received: unknown;
+    const res = await selectionPatchImpl(
+      jsonRequest("https://x/api/brand/products/prod-1/selection", { displayOrder: 0 }),
+      { params: Promise.resolve({ connectedProductId: "prod-1" }) },
+      {
+        getContext: async () => makeContext(BRAND),
+        findOwnedProduct: async (id) => ({ id }),
+        upsertSelection: async (_brandId, connectedProductId, data) => {
+          received = data;
+          return {
+            connectedProductId,
+            isVisibleInShop: false,
+            isCampaignEligible: false,
+            displayOrder: data.displayOrder ?? 999,
+            titleOverride: null,
+            shortDescriptionOverride: null,
+          };
+        },
+      },
+    );
+    assert.equal(res.status, 200);
+    assert.deepEqual(received, { displayOrder: 0 });
+    const body = await res.json();
+    assert.equal(body.data.displayOrder, 0);
+  });
+
+  test("an image override is ignored rather than accepted into the active selection DTO", async () => {
+    let received: unknown;
     const res = await selectionPatchImpl(
       jsonRequest("https://x/api/brand/products/prod-1/selection", {
-        imageUrlOverride: "javascript:alert(1)",
+        imageUrlOverride: "https://historical.example/override.jpg",
       }),
       { params: Promise.resolve({ connectedProductId: "prod-1" }) },
       {
         getContext: async () => makeContext(BRAND),
-        findOwnedProduct: async () => {
-          throw new Error("findOwnedProduct must not be called for an invalid body");
-        },
-        upsertSelection: async () => {
-          throw new Error("upsertSelection must not be called for an invalid body");
+        findOwnedProduct: async (id) => ({ id }),
+        upsertSelection: async (_brandId, connectedProductId, data) => {
+          received = data;
+          return {
+            connectedProductId,
+            isVisibleInShop: false,
+            isCampaignEligible: false,
+            displayOrder: 0,
+            titleOverride: null,
+            shortDescriptionOverride: null,
+          };
         },
       },
     );
-    assert.equal(res.status, 400);
+    assert.equal(res.status, 200);
+    assert.deepEqual(received, {});
+    const body = await res.json();
+    assert.equal("imageUrlOverride" in body.data, false);
   });
 });
 

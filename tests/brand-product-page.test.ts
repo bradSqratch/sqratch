@@ -29,12 +29,13 @@ import path from "node:path";
 
 import {
   buildProductQueryString,
+  DISPLAY_ORDER_MAX,
+  DISPLAY_ORDER_MIN,
   describeSyncOutcome,
   formatPriceDisplay,
-  IMAGE_URL_OVERRIDE_MAX_LENGTH,
   SHORT_DESCRIPTION_OVERRIDE_MAX_LENGTH,
   TITLE_OVERRIDE_MAX_LENGTH,
-  validateImageUrlOverride,
+  validateDisplayOrder,
   validateShortDescriptionOverride,
   validateTitleOverride,
   type ProductPrice,
@@ -232,6 +233,16 @@ describe("buildProductQueryString", () => {
 // ---------------------------------------------------------------------------
 
 describe("client-side override validation", () => {
+  test("displayOrder bounds match the server and preserve zero", () => {
+    assert.equal(DISPLAY_ORDER_MIN, 0);
+    assert.equal(DISPLAY_ORDER_MAX, 1_000_000);
+    assert.equal(validateDisplayOrder("0"), null);
+    assert.equal(validateDisplayOrder("1000000"), null);
+    assert.match(validateDisplayOrder("") ?? "", /required/i);
+    assert.match(validateDisplayOrder("1.5") ?? "", /integer/i);
+    assert.match(validateDisplayOrder("1000001") ?? "", /1000000/);
+  });
+
   test("titleOverride bound matches the server (200)", () => {
     assert.equal(TITLE_OVERRIDE_MAX_LENGTH, 200);
     assert.equal(validateTitleOverride("a".repeat(200)), null);
@@ -244,19 +255,6 @@ describe("client-side override validation", () => {
     assert.match(validateShortDescriptionOverride("a".repeat(1001)) ?? "", /1000/);
   });
 
-  test("imageUrlOverride bound matches the server (2048) and requires http(s)", () => {
-    assert.equal(IMAGE_URL_OVERRIDE_MAX_LENGTH, 2048);
-    assert.equal(validateImageUrlOverride("https://example.com/a.png"), null);
-    assert.equal(validateImageUrlOverride("http://example.com/a.png"), null);
-    assert.match(validateImageUrlOverride("ftp://example.com/a.png") ?? "", /http\(s\)/);
-    assert.match(validateImageUrlOverride("not-a-url") ?? "", /http\(s\)/);
-    const tooLong = `https://example.com/${"a".repeat(2048)}`;
-    assert.match(validateImageUrlOverride(tooLong) ?? "", /2048/);
-  });
-
-  test("empty imageUrlOverride is treated as clearing the override, not an error", () => {
-    assert.equal(validateImageUrlOverride(""), null);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -298,5 +296,25 @@ describe("static source assertions", () => {
   test("page.tsx is a minimal server wrapper matching the Shopify page pattern", () => {
     assert.doesNotMatch(pageSource, /"use client"/);
     assert.match(pageSource, /BrandProductsClient/);
+  });
+
+  test("presentation overrides submit a bounded display order with the existing save feedback", () => {
+    assert.match(clientSource, /type="number"/);
+    assert.match(clientSource, /min=\{DISPLAY_ORDER_MIN\}/);
+    assert.match(clientSource, /max=\{DISPLAY_ORDER_MAX\}/);
+    assert.match(clientSource, /displayOrder: Number\(draft\.displayOrder\)/);
+    assert.match(clientSource, /validateDisplayOrder\(draft\.displayOrder\)/);
+    assert.match(clientSource, /state\?\.error/);
+    assert.match(clientSource, /state\?\.success/);
+  });
+
+  test("does not render or submit an image-override control", () => {
+    assert.doesNotMatch(clientSource, /imageUrlOverride|Image URL override/i);
+  });
+
+  test("explains current product-status and curation-control semantics", () => {
+    assert.match(clientSource, /changing a product between Active and Draft/i);
+    assert.match(clientSource, /Shows this product in the public SQRATCH campaign storefront/i);
+    assert.match(clientSource, /eligible for future campaign assignment/i);
   });
 });

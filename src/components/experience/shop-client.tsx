@@ -38,6 +38,7 @@ type ShopResponse = {
     productId: string;
     productLinkId: string | null;
     title: string;
+    description?: string | null;
     imageUrl: string | null;
     priceText: string | null;
     productUrl: string;
@@ -60,6 +61,7 @@ export function ExperienceShopClient({
   const [shopLoading, setShopLoading] = useState(false);
   const [shopError, setShopError] = useState<string | null>(null);
   const [clickingId, setClickingId] = useState<string | null>(null);
+  const [failedImageIds, setFailedImageIds] = useState<Set<string>>(() => new Set());
   const [pageSize, setPageSize] =
     useState<(typeof PAGE_SIZE_OPTIONS)[number]>(25);
   const [currentPage, setCurrentPage] = useState(1);
@@ -73,6 +75,7 @@ export function ExperienceShopClient({
         `/api/public/experience/${experienceSlug}/products`,
       );
       setShopData(result);
+      setFailedImageIds(new Set());
       setCurrentPage(1);
     } catch (loadError) {
       setShopError(getErrorMessage(loadError, "Failed to load shop products."));
@@ -258,13 +261,21 @@ export function ExperienceShopClient({
                   <PageCard key={product.id} className="h-full">
                     <div className="flex h-full flex-col">
                       <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/20">
-                        {product.imageUrl ? (
+                        {product.imageUrl && !failedImageIds.has(product.id) ? (
                           <Image
                             src={product.imageUrl}
                             alt={product.title}
                             width={400}
                             height={300}
                             unoptimized
+                            onError={() => {
+                              setFailedImageIds((current) => {
+                                if (current.has(product.id)) return current;
+                                const next = new Set(current);
+                                next.add(product.id);
+                                return next;
+                              });
+                            }}
                             className="aspect-[4/3] w-full object-cover"
                           />
                         ) : (
@@ -291,6 +302,11 @@ export function ExperienceShopClient({
                         <h3 className="mt-4 text-xl font-semibold text-[#988dbf]">
                           {product.title}
                         </h3>
+                        {product.description && (
+                          <p className="mt-2 text-sm leading-6 text-white/65">
+                            {product.description}
+                          </p>
+                        )}
                         <p className="mt-2 text-sm text-white/55">
                           {product.priceText || "Price available on Shopify"}
                         </p>

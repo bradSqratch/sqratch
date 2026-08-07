@@ -39,22 +39,14 @@
  * therefore runs ONLY when the fetch fully and successfully exhausted the
  * catalog:
  *
- *   - The adapter call THROWS               -> run status FAILED. No
- *     products were even fetched (the adapter's `syncProducts` is a single
- *     all-or-nothing call — see `./providers/shopify-commerce-adapter.ts`),
- *     so nothing is upserted and the mark-unavailable step never runs. The
- *     existing catalog is untouched, byte for byte.
- *   - The adapter call SUCCEEDS but `result.hasNextPage` is `true` -> run
- *     status PARTIAL. This means pagination did NOT exhaust the catalog (the
- *     adapter only fetched one page — see `ShopifyCommerceAdapter.syncProducts`
- *     in `./providers/shopify-commerce-adapter.ts`, which does not loop). The
- *     products that WERE returned are still upserted (they are real,
- *     current data), but the mark-unavailable step is skipped — a product
- *     that exists on a page we didn't reach must never be marked unavailable
- *     just because this run didn't see it.
- *   - The adapter call SUCCEEDS and `result.hasNextPage` is `false` -> run
- *     status SUCCEEDED. Only now does the mark-unavailable step run, scoped
- *     to `connectionId` and excluding every `externalKey` this run saw.
+ *   - A provider-page failure before any usable result -> run status FAILED.
+ *   - A page failure, malformed cursor, guard, timeout, or write failure
+ *     after usable products -> run status PARTIAL. Returned products may be
+ *     persisted, but absence reconciliation is skipped.
+ *   - Only a page sequence that explicitly terminates with `isComplete:true`
+ *     and has no write failures -> run status SUCCEEDED. Only then does
+ *     absence reconciliation run, scoped to `connectionId` and excluding
+ *     every external key seen in the complete catalog.
  *
  * The guard itself lives in `runProductSync` below, directly on the branch
  * that decides `finalStatus`: `markUnavailableExcept` is called from exactly
@@ -112,11 +104,10 @@
  * ---------------------------------------------------------------------------
  * It never hard-deletes a `ConnectedCommerceProduct` row (soft-unavailable
  * only, per the schema's design). It never touches
- * `CommerceConnection.lastProductSyncAt` itself — the Shopify adapter's
- * `syncProducts` already stamps that via its own `markProductSync` dep (see
- * `./providers/shopify-commerce-adapter.ts`), so writing it again here would
- * be a double-write of the same field from two different modules; this file
- * only touches `ConnectedCommerceProduct` / `CommerceProductSyncRun`.
+ * `CommerceConnection.lastProductSyncAt` directly — the optional adapter
+ * completion hook owns that provider-connection write after this service has
+ * confirmed a complete persisted catalog. This file only directly touches
+ * `ConnectedCommerceProduct` / `CommerceProductSyncRun`.
  */
 
 import { CommerceProvider, type Prisma } from "@prisma/client";
@@ -713,7 +704,211 @@ function formatFailureSummary(tag: string, message: string): string {
 export type SyncBrandCommerceProductsOptions = {
   /** Free-text provenance tag stored on `CommerceProductSyncRun.triggeredBy` (e.g. "cron", "manual", "webhook"). */
   triggeredBy?: string;
+  /** Provider-neutral page size. Defaults to Shopify's established 100-item page size. */
+  pageSize?: number;
+  /** Bounded safety guard for a synchronous catalog request. */
+  maxPages?: number;
+  /** Bounded safety guard for total provider rows observed, before deduplication. */
+  maxProducts?: number;
+  /** Bounded elapsed-time guard for the complete logical sync. */
+  maxDurationMs?: number;
+  /** Injectable clock for deterministic unit tests. */
+  now?: () => number;
 };
+
+const DEFAULT_PAGE_SIZE = 100;
+const DEFAULT_MAX_PAGES = 100;
+const DEFAULT_MAX_PRODUCTS = 10_000;
+const DEFAULT_MAX_DURATION_MS = 45_000;
+
+type CollectedCatalog = {
+  products: CommerceProduct[];
+  hasNextPage: boolean;
+  requestedLimit: number | null;
+  failureSummary: string | null;
+  providerFailed: boolean;
+};
+
+function positiveBound(value: number | undefined, fallback: number, maximum: number): number {
+  if (!Number.isFinite(value) || !value || value < 1) {
+    return fallback;
+  }
+  return Math.min(Math.floor(value), maximum);
+}
+
+function pageFailureSummary(tag: string, message: string): string {
+  return formatFailureSummary(tag, message.slice(0, MAX_FAILURE_MESSAGE_LENGTH));
+}
+
+/**
+ * Fetches the whole logical catalog through the optional neutral page method.
+ * Older adapters retain their established single-call behavior; they simply
+ * report `hasNextPage` and are therefore never mistaken for a complete sync.
+ */
+async function collectCatalog(
+  adapter: CommerceAdapter,
+  connectionId: string,
+  options: SyncBrandCommerceProductsOptions,
+): Promise<CollectedCatalog> {
+  if (!adapter.fetchProductPage) {
+    const result = await adapter.syncProducts(connectionId);
+    return {
+      products: result.products,
+      hasNextPage: result.hasNextPage,
+      requestedLimit: result.limit,
+      failureSummary: result.hasNextPage
+        ? pageFailureSummary("TRUNCATED_PAGINATION", "Adapter returned an incomplete catalog.")
+        : null,
+      providerFailed: false,
+    };
+  }
+
+  const pageSize = positiveBound(options.pageSize, DEFAULT_PAGE_SIZE, DEFAULT_PAGE_SIZE);
+  const maxPages = positiveBound(options.maxPages, DEFAULT_MAX_PAGES, 10_000);
+  const maxProducts = positiveBound(options.maxProducts, DEFAULT_MAX_PRODUCTS, 1_000_000);
+  const maxDurationMs = positiveBound(options.maxDurationMs, DEFAULT_MAX_DURATION_MS, 10 * 60_000);
+  const now = options.now ?? Date.now;
+  const startedAt = now();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), maxDurationMs);
+  const observed: CommerceProduct[] = [];
+  const seenCursors = new Set<string>();
+  let cursor: string | null = null;
+  let pagesFetched = 0;
+
+  try {
+    while (true) {
+      if (now() - startedAt >= maxDurationMs) {
+        return {
+          products: deduplicateCatalogProducts(observed),
+          hasNextPage: true,
+          requestedLimit: pageSize,
+          failureSummary: pageFailureSummary("PAGINATION_TIMEOUT", "Elapsed-time guard reached before catalog completion."),
+          providerFailed: false,
+        };
+      }
+
+      let page;
+      try {
+        page = await adapter.fetchProductPage(connectionId, {
+          cursor,
+          limit: pageSize,
+          signal: controller.signal,
+        });
+      } catch (error) {
+        const timedOut = controller.signal.aborted || now() - startedAt >= maxDurationMs;
+        const classified = classifySyncFailure(error);
+        return {
+          products: deduplicateCatalogProducts(observed),
+          hasNextPage: true,
+          requestedLimit: pageSize,
+          failureSummary: timedOut
+            ? pageFailureSummary("PAGINATION_TIMEOUT", "Elapsed-time guard reached before catalog completion.")
+            : pageFailureSummary("PROVIDER_PAGE_FAILURE", classified.message),
+          providerFailed: !timedOut,
+        };
+      }
+
+      pagesFetched += 1;
+      if (!Array.isArray(page.products) || typeof page.isComplete !== "boolean") {
+        return {
+          products: deduplicateCatalogProducts(observed),
+          hasNextPage: true,
+          requestedLimit: pageSize,
+          failureSummary: pageFailureSummary("INVALID_PAGE", "Provider returned an invalid product page."),
+          providerFailed: false,
+        };
+      }
+
+      for (const product of page.products) {
+        if (!product || typeof product.externalId !== "string" || !product.externalId.trim()) {
+          return {
+            products: deduplicateCatalogProducts(observed),
+            hasNextPage: true,
+            requestedLimit: pageSize,
+            failureSummary: pageFailureSummary("INVALID_PAGE", "Provider returned a product without an external key."),
+            providerFailed: false,
+          };
+        }
+        observed.push(product);
+      }
+
+      if (observed.length > maxProducts) {
+        return {
+          products: deduplicateCatalogProducts(observed),
+          hasNextPage: true,
+          requestedLimit: pageSize,
+          failureSummary: pageFailureSummary("MAX_PRODUCTS_REACHED", "Maximum product guard reached before catalog completion."),
+          providerFailed: false,
+        };
+      }
+
+      const nextCursor = page.nextCursor;
+      if (page.isComplete) {
+        if (nextCursor !== null) {
+          return {
+            products: deduplicateCatalogProducts(observed),
+            hasNextPage: true,
+            requestedLimit: pageSize,
+            failureSummary: pageFailureSummary("INVALID_PAGE", "Complete page returned a next cursor."),
+            providerFailed: false,
+          };
+        }
+        return {
+          products: deduplicateCatalogProducts(observed),
+          hasNextPage: false,
+          requestedLimit: page.limit,
+          failureSummary: null,
+          providerFailed: false,
+        };
+      }
+
+      if (typeof nextCursor !== "string" || !nextCursor.trim()) {
+        return {
+          products: deduplicateCatalogProducts(observed),
+          hasNextPage: true,
+          requestedLimit: pageSize,
+          failureSummary: pageFailureSummary("MISSING_CURSOR", "Incomplete page did not return a usable next cursor."),
+          providerFailed: false,
+        };
+      }
+
+      if (seenCursors.has(nextCursor)) {
+        return {
+          products: deduplicateCatalogProducts(observed),
+          hasNextPage: true,
+          requestedLimit: pageSize,
+          failureSummary: pageFailureSummary("CURSOR_LOOP", "Provider returned a repeated catalog cursor."),
+          providerFailed: false,
+        };
+      }
+
+      if (pagesFetched >= maxPages) {
+        return {
+          products: deduplicateCatalogProducts(observed),
+          hasNextPage: true,
+          requestedLimit: pageSize,
+          failureSummary: pageFailureSummary("MAX_PAGES_REACHED", "Maximum page guard reached before catalog completion."),
+          providerFailed: false,
+        };
+      }
+
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/** Later pages win for an overlapping external key; first-seen key order remains stable. */
+function deduplicateCatalogProducts(products: CommerceProduct[]): CommerceProduct[] {
+  const byExternalKey = new Map<string, CommerceProduct>();
+  for (const product of products) {
+    byExternalKey.set(product.externalId, product);
+  }
+  return [...byExternalKey.values()];
+}
 
 /**
  * Syncs `brandId`'s catalog for `provider` (default SHOPIFY) into
@@ -779,9 +974,9 @@ async function runProductSync(
     triggeredBy: options.triggeredBy ?? null,
   });
 
-  let syncResult: Awaited<ReturnType<CommerceAdapter["syncProducts"]>>;
+  let catalog: CollectedCatalog;
   try {
-    syncResult = await adapter.syncProducts(connectionId);
+    catalog = await collectCatalog(adapter, connectionId, options);
   } catch (error) {
     const { tag, message } = classifySyncFailure(error);
     const stats = zeroStats();
@@ -820,15 +1015,15 @@ async function runProductSync(
   // review this block closes.
   let finalStatus: "SUCCEEDED" | "PARTIAL" | "FAILED" = "FAILED";
   let failureSummary: string | null = null;
-  const hasNextPage = syncResult.hasNextPage;
-  const requestedLimit: number | null = syncResult.limit;
+  const hasNextPage = catalog.hasNextPage;
+  const requestedLimit: number | null = catalog.requestedLimit;
 
   try {
     const brandCurrencyCode = await deps.getBrandCurrencyCode(brandId);
     const existingRows = await deps.findExistingProducts(connectionId);
     const existingByKey = new Map(existingRows.map((row) => [row.externalKey, row]));
 
-    for (const product of syncResult.products) {
+    for (const product of catalog.products) {
       const computed = computeProductFields(product, brandCurrencyCode);
       const existing = existingByKey.get(computed.externalKey) ?? null;
       const decision = decideProductWrite(existing, computed, now, run.id);
@@ -869,11 +1064,14 @@ async function runProductSync(
     // mark-unavailable step below is the ONLY thing this status gates, and
     // it is called from exactly this one place, inside
     // `if (finalStatus === "SUCCEEDED")` — see the file header.
-    const isTruncated = syncResult.hasNextPage;
+    const isTruncated = catalog.hasNextPage;
+    if (catalog.providerFailed) {
+      stats.failedCount += 1;
+    }
     const hadWriteFailures = stats.failedCount > 0;
     const succeededCount = stats.createdCount + stats.updatedCount + stats.unchangedCount;
 
-    if (hadWriteFailures && succeededCount === 0) {
+    if ((catalog.providerFailed || isTruncated) && succeededCount === 0) {
       finalStatus = "FAILED";
     } else if (isTruncated || hadWriteFailures) {
       finalStatus = "PARTIAL";
@@ -889,18 +1087,28 @@ async function runProductSync(
         run.id,
       );
       stats.markedUnavailableCount = unavailableResult.count;
+      // The connection must advertise completion only after absence
+      // reconciliation succeeds as well; otherwise its timestamp would
+      // falsely describe a partial catalog as complete.
+      await adapter.completeProductSync?.(connectionId, now);
     } else {
-      const reasons: string[] = [];
-      if (isTruncated) {
+      const reasons: string[] = catalog.failureSummary ? [catalog.failureSummary] : [];
+      if (isTruncated && reasons.length === 0) {
         reasons.push("pagination did not reach the end of the catalog (hasNextPage=true)");
       }
       if (hadWriteFailures) {
         reasons.push(`${stats.failedCount} product write(s) failed`);
       }
-      failureSummary = formatFailureSummary(
+      failureSummary = catalog.failureSummary ?? formatFailureSummary(
         hadWriteFailures ? "PARTIAL_WRITE_FAILURE" : "TRUNCATED_PAGINATION",
         `${reasons.join("; ")}; no product was marked unavailable this run.`,
       );
+      if (hadWriteFailures && catalog.failureSummary) {
+        failureSummary = formatFailureSummary(
+          "PARTIAL_WRITE_FAILURE",
+          `${catalog.failureSummary}; ${stats.failedCount} product write(s) or provider page(s) failed; no product was marked unavailable this run.`,
+        );
+      }
     }
   } catch (error) {
     // An unexpected throw anywhere above (currency lookup, existing-row

@@ -297,7 +297,6 @@ describe("brand product routes — client-supplied brandId is never trusted", ()
             displayOrder: 0,
             titleOverride: null,
             shortDescriptionOverride: null,
-            imageUrlOverride: null,
           };
         },
       },

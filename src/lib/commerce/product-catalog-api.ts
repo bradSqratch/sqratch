@@ -243,7 +243,6 @@ export function buildSearchWhere(q: string | null): Prisma.ConnectedCommerceProd
 
 export const TITLE_OVERRIDE_MAX_LENGTH = 200;
 export const SHORT_DESCRIPTION_OVERRIDE_MAX_LENGTH = 1000;
-export const IMAGE_URL_OVERRIDE_MAX_LENGTH = 2048;
 export const DISPLAY_ORDER_MIN = 0;
 export const DISPLAY_ORDER_MAX = 1_000_000;
 
@@ -253,27 +252,15 @@ export type SelectionUpdateInput = {
   displayOrder?: number;
   titleOverride?: string | null;
   shortDescriptionOverride?: string | null;
-  imageUrlOverride?: string | null;
 };
 
 export type SelectionValidationResult =
   | { ok: true; data: SelectionUpdateInput }
   | { ok: false; error: string };
 
-function isHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Validates and bounds a `PATCH .../selection` request body. Total: never
- * throws. Rejects (does not silently clamp) any out-of-bounds string/number
- * — a caller that supplies an over-long override or a non-http(s) image URL
- * gets an explicit 400, not a silently truncated write.
+ * throws. Rejects (does not silently clamp) any out-of-bounds string/number.
  */
 export function validateSelectionUpdate(body: unknown): SelectionValidationResult {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
@@ -331,24 +318,6 @@ export function validateSelectionUpdate(body: unknown): SelectionValidationResul
         return { ok: false, error: `${key} must be at most ${maxLength} characters.` };
       }
       data[key] = value;
-    }
-  }
-
-  if ("imageUrlOverride" in input && input.imageUrlOverride !== undefined) {
-    const value = input.imageUrlOverride;
-    if (value === null) {
-      data.imageUrlOverride = null;
-    } else if (typeof value !== "string") {
-      return { ok: false, error: "imageUrlOverride must be a string or null." };
-    } else if (value.length > IMAGE_URL_OVERRIDE_MAX_LENGTH) {
-      return {
-        ok: false,
-        error: `imageUrlOverride must be at most ${IMAGE_URL_OVERRIDE_MAX_LENGTH} characters.`,
-      };
-    } else if (!isHttpUrl(value)) {
-      return { ok: false, error: "imageUrlOverride must be a valid http(s) URL." };
-    } else {
-      data.imageUrlOverride = value;
     }
   }
 

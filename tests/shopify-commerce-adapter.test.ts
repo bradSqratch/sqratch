@@ -357,6 +357,46 @@ describe("ShopifyCommerceAdapter", () => {
     );
   });
 
+  test("6a. fetchProductPage maps Shopify cursor state to the neutral page contract without stamping completion", async () => {
+    const row = makeRow();
+    const product = makeNormalizedProduct();
+    const calls: { captured: Record<string, unknown> | null } = { captured: null };
+    let stampCount = 0;
+    const adapter = new ShopifyCommerceAdapter(makeDeps({
+      async loadConnection() {
+        return row;
+      },
+      async fetchProducts(input) {
+        calls.captured = input;
+        return {
+          ok: true,
+          items: [product],
+          hasNextPage: true,
+          endCursor: "opaque-next-cursor",
+          limit: 25,
+        };
+      },
+      async markProductSync() {
+        stampCount += 1;
+      },
+    }));
+
+    const page = await adapter.fetchProductPage("conn-1", { cursor: "opaque-current-cursor", limit: 25 });
+
+    assert.ok(calls.captured);
+    assert.equal(calls.captured.shopDomain, "test-shop.myshopify.com");
+    assert.equal(calls.captured.brandId, "brand-1");
+    assert.equal(calls.captured.after, "opaque-current-cursor");
+    assert.equal(calls.captured.limit, 25);
+    assert.equal(page.isComplete, false);
+    assert.equal(page.nextCursor, "opaque-next-cursor");
+    assert.equal(page.products[0]?.externalId, product.shopifyProductGid);
+    assert.equal(stampCount, 0);
+
+    await adapter.completeProductSync("conn-1", page.fetchedAt);
+    assert.equal(stampCount, 1);
+  });
+
   test("7. createDiscount maps CreateDiscountInput fields onto createShopifyRewardDiscountCode's input exactly", async () => {
     const row = makeRow();
     let createDiscountCodeCalledWith: unknown = null;

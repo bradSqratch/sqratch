@@ -14,6 +14,8 @@ import type { CommerceProvider } from "@prisma/client";
 import type {
   CommerceCapabilities,
   CommerceConnectionResult,
+  ProductSyncPageRequest,
+  ProductSyncPageResult,
   CreateDiscountInput,
   CreateDiscountOptions,
   NormalizedWebhookEvent,
@@ -42,6 +44,23 @@ export interface CommerceAdapter {
    * reconciliation against stored rows.
    */
   syncProducts(connectionId: string): Promise<ProductSyncResult>;
+
+  /**
+   * Fetches one opaque-cursor product page. Optional so existing adapters and
+   * the long-standing single-page `syncProducts` route contract remain
+   * compatible while catalog persistence can opt into complete pagination.
+   */
+  fetchProductPage?(
+    connectionId: string,
+    request: ProductSyncPageRequest,
+  ): Promise<ProductSyncPageResult>;
+
+  /**
+   * Records a fully persisted catalog sync. It is deliberately separate from
+   * page fetching so a partial/timed-out run never advertises itself as a
+   * completed connection sync.
+   */
+  completeProductSync?(connectionId: string, completedAt: Date): Promise<void>;
 
   /**
    * Creates a discount code on the provider for the given

@@ -54,6 +54,7 @@ import type {
   CommerceCapabilities,
   CommerceConnectionSummary,
   CommerceProduct,
+  ProductSyncPageResult,
   ProductSyncResult,
 } from "../src/lib/commerce/types";
 
@@ -139,6 +140,48 @@ function makeAdapter(
       throw new Error("getConnection should not be called in product-sync tests");
     },
     syncProducts: syncProductsImpl,
+  };
+}
+
+function makePagedAdapter(
+  fetchPage: (cursor: string | null, limit: number) => Promise<ProductSyncPageResult>,
+  onComplete?: (connectionId: string, completedAt: Date) => Promise<void>,
+): CommerceAdapter {
+  return {
+    provider: CommerceProvider.SHOPIFY,
+    getCapabilities(): CommerceCapabilities {
+      return {
+        canSyncProducts: true,
+        canCreateDiscount: false,
+        canRevokeDiscount: false,
+        canVerifyWebhooks: false,
+      };
+    },
+    async getConnection() {
+      throw new Error("getConnection should not be called in product-sync tests");
+    },
+    async syncProducts() {
+      throw new Error("legacy syncProducts should not be called for a paged adapter");
+    },
+    async fetchProductPage(connectionId, request) {
+      assert.equal(connectionId, "conn-1");
+      return fetchPage(request.cursor ?? null, request.limit ?? 0);
+    },
+    completeProductSync: onComplete,
+  };
+}
+
+function makePage(
+  products: CommerceProduct[],
+  options: Partial<Omit<ProductSyncPageResult, "products" | "fetchedAt" | "limit">> = {},
+): ProductSyncPageResult {
+  return {
+    products,
+    nextCursor: null,
+    isComplete: true,
+    fetchedAt: new Date("2026-08-06T00:00:00Z"),
+    limit: 100,
+    ...options,
   };
 }
 
@@ -828,6 +871,179 @@ describe("syncBrandCommerceProducts", () => {
     const [row] = [...store.rows.values()];
     assert.equal(row.priceMinMinor, null, "the out-of-range bound must be null, not a wrapped/truncated garbage value");
     assert.equal(row.priceMaxMinor, 1999, "the in-range bound must be unaffected by the other bound's failure");
+  });
+
+  test("19. paged sync follows opaque cursors, persists all unique products, and deterministically keeps the latest duplicate", async () => {
+    const store = new FakeStore();
+    const calls: Array<{ cursor: string | null; limit: number }> = [];
+    const completed: string[] = [];
+    const productA = makeProduct({ externalId: "A", title: "A" });
+    const olderShared = makeProduct({ externalId: "shared", title: "Old shared title" });
+    const newerShared = makeProduct({ externalId: "shared", title: "New shared title" });
+    const productB = makeProduct({ externalId: "B", title: "B" });
+    const adapter = makePagedAdapter(
+      async (cursor, limit) => {
+        calls.push({ cursor, limit });
+        if (cursor === null) {
+          return makePage([productA, olderShared], { isComplete: false, nextCursor: "page-2" });
+        }
+        assert.equal(cursor, "page-2");
+        return makePage([newerShared, productB]);
+      },
+      async (connectionId) => {
+        completed.push(connectionId);
+      },
+    );
+    setupBrand(store, "brand-1", "conn-1", adapter);
+
+    const outcome = await syncBrandCommerceProducts("brand-1", CommerceProvider.SHOPIFY, {}, makeDeps(store));
+
+    assert.equal(outcome.status, "SUCCEEDED");
+    assert.equal(outcome.stats.fetchedCount, 3, "duplicate page data must not inflate processed statistics");
+    assert.equal(outcome.stats.createdCount, 3);
+    assert.deepEqual(calls, [
+      { cursor: null, limit: 100 },
+      { cursor: "page-2", limit: 100 },
+    ]);
+    assert.deepEqual(completed, ["conn-1"]);
+    assert.equal(store.rowsForConnection("conn-1").find((row) => row.externalKey === "shared")?.title, "New shared title");
+  });
+
+  test("20. a provider failure after a successful page is PARTIAL and never reconciles absence", async () => {
+    const store = new FakeStore();
+    const productA = makeProduct({ externalId: "A" });
+    const productB = makeProduct({ externalId: "B" });
+    let run = 0;
+    const adapter = makePagedAdapter(async (cursor) => {
+      if (run === 0) return makePage([productA, productB]);
+      if (cursor === null) return makePage([productA], { isComplete: false, nextCursor: "page-2" });
+      throw new CommerceProviderApiError(CommerceProvider.SHOPIFY, "page two unavailable");
+    });
+    setupBrand(store, "brand-1", "conn-1", adapter);
+    const deps = makeDeps(store);
+
+    await syncBrandCommerceProducts("brand-1", CommerceProvider.SHOPIFY, {}, deps);
+    run = 1;
+    const outcome = await syncBrandCommerceProducts("brand-1", CommerceProvider.SHOPIFY, {}, deps);
+
+    assert.equal(outcome.status, "PARTIAL");
+    assert.equal(outcome.stats.failedCount, 1);
+    assert.equal(outcome.stats.markedUnavailableCount, 0);
+    assert.equal(store.rowsForConnection("conn-1").find((row) => row.externalKey === "B")?.isAvailable, true);
+  });
+
+  test("21. malformed and bounded cursors never reconcile absence; an empty failed catalog is FAILED", async () => {
+    const cases: Array<{
+      name: string;
+      options: Parameters<typeof syncBrandCommerceProducts>[2];
+      fetchPage: (cursor: string | null) => Promise<ProductSyncPageResult>;
+      expectedTag: string;
+      expectedStatus: "PARTIAL" | "FAILED";
+    }> = [
+      {
+        name: "missing cursor",
+        options: {},
+        fetchPage: async () => makePage([makeProduct({ externalId: "A" })], { isComplete: false, nextCursor: null }),
+        expectedTag: "MISSING_CURSOR",
+        expectedStatus: "PARTIAL",
+      },
+      {
+        name: "repeated cursor",
+        options: {},
+        fetchPage: async (cursor) =>
+          cursor === null
+            ? makePage([makeProduct({ externalId: "A" })], { isComplete: false, nextCursor: "same" })
+            : makePage([makeProduct({ externalId: "B" })], { isComplete: false, nextCursor: "same" }),
+        expectedTag: "CURSOR_LOOP",
+        expectedStatus: "PARTIAL",
+      },
+      {
+        name: "cursor cycle",
+        options: {},
+        fetchPage: async (cursor) =>
+          cursor === null
+            ? makePage([], { isComplete: false, nextCursor: "a" })
+            : cursor === "a"
+              ? makePage([], { isComplete: false, nextCursor: "b" })
+              : makePage([], { isComplete: false, nextCursor: "a" }),
+        expectedTag: "CURSOR_LOOP",
+        expectedStatus: "FAILED",
+      },
+      {
+        name: "page bound",
+        options: { maxPages: 1 },
+        fetchPage: async () => makePage([], { isComplete: false, nextCursor: "next" }),
+        expectedTag: "MAX_PAGES_REACHED",
+        expectedStatus: "FAILED",
+      },
+      {
+        name: "product bound",
+        options: { maxProducts: 1 },
+        fetchPage: async () => makePage([makeProduct({ externalId: "A" }), makeProduct({ externalId: "B" })]),
+        expectedTag: "MAX_PRODUCTS_REACHED",
+        expectedStatus: "PARTIAL",
+      },
+    ];
+
+    for (const scenario of cases) {
+      const store = new FakeStore();
+      const adapter = makePagedAdapter(async (cursor) => scenario.fetchPage(cursor));
+      setupBrand(store, "brand-1", "conn-1", adapter);
+      const outcome = await syncBrandCommerceProducts("brand-1", CommerceProvider.SHOPIFY, scenario.options, makeDeps(store));
+      assert.equal(outcome.status, scenario.expectedStatus, scenario.name);
+      assert.equal(outcome.stats.markedUnavailableCount, 0, scenario.name);
+      assert.match(outcome.failureSummary ?? "", new RegExp(scenario.expectedTag), scenario.name);
+    }
+  });
+
+  test("22. elapsed-time guard prevents the second page and does not mark absence", async () => {
+    const store = new FakeStore();
+    const cursors: Array<string | null> = [];
+    let clock = 0;
+    const adapter = makePagedAdapter(async (cursor) => {
+      cursors.push(cursor);
+      clock = 100;
+      return makePage([makeProduct({ externalId: "A" })], { isComplete: false, nextCursor: "page-2" });
+    });
+    setupBrand(store, "brand-1", "conn-1", adapter);
+
+    const outcome = await syncBrandCommerceProducts(
+      "brand-1",
+      CommerceProvider.SHOPIFY,
+      { maxDurationMs: 50, now: () => clock },
+      makeDeps(store),
+    );
+
+    assert.equal(outcome.status, "PARTIAL");
+    assert.deepEqual(cursors, [null]);
+    assert.match(outcome.failureSummary ?? "", /PAGINATION_TIMEOUT/);
+    assert.equal(outcome.stats.markedUnavailableCount, 0);
+  });
+
+  test("23. a reconciliation failure does not stamp connection completion", async () => {
+    const store = new FakeStore();
+    const completed: string[] = [];
+    const adapter = makePagedAdapter(
+      async () => makePage([makeProduct({ externalId: "A" })]),
+      async (connectionId) => {
+        completed.push(connectionId);
+      },
+    );
+    setupBrand(store, "brand-1", "conn-1", adapter);
+
+    const outcome = await syncBrandCommerceProducts(
+      "brand-1",
+      CommerceProvider.SHOPIFY,
+      {},
+      makeDeps(store, {
+        async markUnavailableExcept() {
+          throw new Error("reconciliation failed");
+        },
+      }),
+    );
+
+    assert.equal(outcome.status, "PARTIAL");
+    assert.deepEqual(completed, []);
   });
 
   test("bonus: an adapter without canSyncProducts throws UnsupportedCapabilityError before any run is created", async () => {

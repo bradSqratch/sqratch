@@ -12,12 +12,13 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import {
   buildProductQueryString,
+  DISPLAY_ORDER_MAX,
+  DISPLAY_ORDER_MIN,
   describeSyncOutcome,
   formatPriceDisplay,
-  IMAGE_URL_OVERRIDE_MAX_LENGTH,
   SHORT_DESCRIPTION_OVERRIDE_MAX_LENGTH,
   TITLE_OVERRIDE_MAX_LENGTH,
-  validateImageUrlOverride,
+  validateDisplayOrder,
   validateShortDescriptionOverride,
   validateTitleOverride,
   type SyncOutcomeNotice,
@@ -33,7 +34,6 @@ type ProductSelection = {
   displayOrder: number;
   titleOverride: string | null;
   shortDescriptionOverride: string | null;
-  imageUrlOverride: string | null;
 };
 
 type ProductRow = {
@@ -88,9 +88,9 @@ type BrandShopifyStatus = {
 type AvailabilityFilter = "available" | "unavailable" | "all";
 
 type OverrideDraft = {
+  displayOrder: string;
   titleOverride: string;
   shortDescriptionOverride: string;
-  imageUrlOverride: string;
 };
 
 type OverrideRowState = {
@@ -101,9 +101,9 @@ type OverrideRowState = {
 
 function draftFromSelection(selection: ProductSelection): OverrideDraft {
   return {
+    displayOrder: String(selection.displayOrder),
     titleOverride: selection.titleOverride ?? "",
     shortDescriptionOverride: selection.shortDescriptionOverride ?? "",
-    imageUrlOverride: selection.imageUrlOverride ?? "",
   };
 }
 
@@ -338,9 +338,9 @@ export function BrandProductsClient() {
     body: Partial<{
       isVisibleInShop: boolean;
       isCampaignEligible: boolean;
+      displayOrder: number;
       titleOverride: string | null;
       shortDescriptionOverride: string | null;
-      imageUrlOverride: string | null;
     }>,
   ) {
     const response = await fetch(`/api/brand/products/${productId}/selection`, {
@@ -401,7 +401,6 @@ export function BrandProductsClient() {
         displayOrder: 0,
         titleOverride: null,
         shortDescriptionOverride: null,
-        imageUrlOverride: null,
       })), ...patch },
     }));
   }
@@ -411,8 +410,8 @@ export function BrandProductsClient() {
 
     const titleError = validateTitleOverride(draft.titleOverride);
     const descriptionError = validateShortDescriptionOverride(draft.shortDescriptionOverride);
-    const imageError = validateImageUrlOverride(draft.imageUrlOverride);
-    const firstError = titleError || descriptionError || imageError;
+    const displayOrderError = validateDisplayOrder(draft.displayOrder);
+    const firstError = titleError || descriptionError || displayOrderError;
 
     if (firstError) {
       setRowState((current) => ({
@@ -429,12 +428,12 @@ export function BrandProductsClient() {
 
     try {
       const updated = await patchSelection(product.id, {
+        displayOrder: Number(draft.displayOrder),
         titleOverride: draft.titleOverride.trim().length > 0 ? draft.titleOverride : null,
         shortDescriptionOverride:
           draft.shortDescriptionOverride.trim().length > 0
             ? draft.shortDescriptionOverride
             : null,
-        imageUrlOverride: draft.imageUrlOverride.trim().length > 0 ? draft.imageUrlOverride : null,
       });
       setProducts((current) =>
         current.map((p) =>
@@ -506,6 +505,10 @@ export function BrandProductsClient() {
               {syncNotice.message}
             </div>
           ) : null}
+          <p className="text-xs leading-5 text-white/50">
+            Changes made in Shopify, including changing a product between Active and Draft,
+            appear in SQRATCH after the next successful product sync.
+          </p>
         </div>
       </PageCard>
 
@@ -521,14 +524,14 @@ export function BrandProductsClient() {
             />
           </label>
           <label className="space-y-2 text-sm text-white/70">
-            <span>Availability</span>
+            <span>Product status</span>
             <select
               value={availability}
               onChange={(event) => setAvailability(event.target.value as AvailabilityFilter)}
               className="h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
             >
-              <option value="available">Available</option>
-              <option value="unavailable">Unavailable</option>
+              <option value="available">Active</option>
+              <option value="unavailable">Inactive</option>
               <option value="all">All</option>
             </select>
           </label>
@@ -616,13 +619,14 @@ export function BrandProductsClient() {
                           {product.title}
                         </a>
                         <span
+                          title="Active means this product was present and active in the latest successful product sync."
                           className={`rounded-full border px-3 py-1 text-xs ${
                             product.isAvailable
                               ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-100"
                               : "border-white/10 bg-white/5 text-white/50"
                           }`}
                         >
-                          {product.isAvailable ? "Available" : "Unavailable"}
+                          {product.isAvailable ? "Active" : "Inactive"}
                         </span>
                       </div>
                       <p className="text-sm text-white/55">
@@ -632,8 +636,8 @@ export function BrandProductsClient() {
                         {formatPriceDisplay(product.price)}
                       </p>
 
-                      <div className="flex flex-wrap gap-4 pt-1">
-                        <label className="flex items-center gap-2 text-sm text-white/70">
+                      <div className="grid gap-3 pt-1 text-sm text-white/70">
+                        <label className="flex items-center gap-2">
                           <Checkbox
                             checked={product.selection.isVisibleInShop}
                             disabled={togglingId === product.id}
@@ -642,7 +646,11 @@ export function BrandProductsClient() {
                           />
                           Visible in SQRATCH Shop
                         </label>
-                        <label className="flex items-center gap-2 text-sm text-white/70">
+                        <p className="-mt-2 pl-6 text-xs leading-5 text-white/50">
+                          Shows this product in the public SQRATCH campaign storefront when the
+                          campaign uses the brand catalog.
+                        </p>
+                        <label className="flex items-center gap-2">
                           <Checkbox
                             checked={product.selection.isCampaignEligible}
                             disabled={togglingId === product.id}
@@ -651,6 +659,11 @@ export function BrandProductsClient() {
                           />
                           Campaign eligible
                         </label>
+                        <p className="-mt-2 pl-6 text-xs leading-5 text-white/50">
+                          Marks this product as eligible for future campaign assignment.
+                          Campaign-level product selection and creator filtering will be added in
+                          a later phase.
+                        </p>
                       </div>
 
                       <details className="pt-2">
@@ -658,6 +671,21 @@ export function BrandProductsClient() {
                           Presentation overrides
                         </summary>
                         <div className="mt-3 grid gap-3 lg:grid-cols-2">
+                          <label className="space-y-1 text-xs text-white/55">
+                            <span>Display order</span>
+                            <Input
+                              type="number"
+                              min={DISPLAY_ORDER_MIN}
+                              max={DISPLAY_ORDER_MAX}
+                              step={1}
+                              inputMode="numeric"
+                              value={draft.displayOrder}
+                              onChange={(event) =>
+                                updateDraft(product.id, { displayOrder: event.target.value })
+                              }
+                              className="border-white/10 bg-black/20 text-white"
+                            />
+                          </label>
                           <label className="space-y-1 text-xs text-white/55">
                             <span>
                               Title override ({draft.titleOverride.length}/
@@ -669,20 +697,6 @@ export function BrandProductsClient() {
                                 updateDraft(product.id, { titleOverride: event.target.value })
                               }
                               placeholder={product.title}
-                              className="border-white/10 bg-black/20 text-white"
-                            />
-                          </label>
-                          <label className="space-y-1 text-xs text-white/55">
-                            <span>
-                              Image URL override ({draft.imageUrlOverride.length}/
-                              {IMAGE_URL_OVERRIDE_MAX_LENGTH})
-                            </span>
-                            <Input
-                              value={draft.imageUrlOverride}
-                              onChange={(event) =>
-                                updateDraft(product.id, { imageUrlOverride: event.target.value })
-                              }
-                              placeholder="https://..."
                               className="border-white/10 bg-black/20 text-white"
                             />
                           </label>

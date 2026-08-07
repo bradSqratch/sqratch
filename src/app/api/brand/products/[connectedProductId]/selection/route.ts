@@ -10,7 +10,7 @@ import { validateSelectionUpdate, type SelectionUpdateInput } from "@/lib/commer
 /**
  * `PATCH /api/brand/products/[connectedProductId]/selection` — upserts the
  * brand's `BrandCommerceProduct` row for a `ConnectedCommerceProduct`
- * (visibility, campaign eligibility, display order, and the three
+ * (visibility, campaign eligibility, display order, and the two
  * SQRATCH-side presentation overrides).
  *
  * SECURITY: the product is resolved with
@@ -35,7 +35,6 @@ export type SelectionResult = {
   displayOrder: number;
   titleOverride: string | null;
   shortDescriptionOverride: string | null;
-  imageUrlOverride: string | null;
 };
 
 export type BrandProductSelectionDeps = {
@@ -74,7 +73,6 @@ async function defaultUpsertSelection(
       displayOrder: data.displayOrder ?? 0,
       titleOverride: data.titleOverride ?? null,
       shortDescriptionOverride: data.shortDescriptionOverride ?? null,
-      imageUrlOverride: data.imageUrlOverride ?? null,
     },
     update: {
       ...(data.isVisibleInShop !== undefined ? { isVisibleInShop: data.isVisibleInShop } : {}),
@@ -86,7 +84,6 @@ async function defaultUpsertSelection(
       ...("shortDescriptionOverride" in data
         ? { shortDescriptionOverride: data.shortDescriptionOverride }
         : {}),
-      ...("imageUrlOverride" in data ? { imageUrlOverride: data.imageUrlOverride } : {}),
     },
     select: {
       connectedProductId: true,
@@ -95,7 +92,6 @@ async function defaultUpsertSelection(
       displayOrder: true,
       titleOverride: true,
       shortDescriptionOverride: true,
-      imageUrlOverride: true,
     },
   });
   return row;

@@ -59,7 +59,6 @@ export type BrandProductRow = {
     displayOrder: number;
     titleOverride: string | null;
     shortDescriptionOverride: string | null;
-    imageUrlOverride: string | null;
   }>;
 };
 
@@ -140,7 +139,6 @@ async function defaultFindProducts(args: FindProductsArgs): Promise<BrandProduct
           displayOrder: true,
           titleOverride: true,
           shortDescriptionOverride: true,
-          imageUrlOverride: true,
         },
       },
     },
@@ -200,7 +198,6 @@ function serializeProduct(row: BrandProductRow) {
       displayOrder: selection?.displayOrder ?? 0,
       titleOverride: selection?.titleOverride ?? null,
       shortDescriptionOverride: selection?.shortDescriptionOverride ?? null,
-      imageUrlOverride: selection?.imageUrlOverride ?? null,
     },
   };
 }

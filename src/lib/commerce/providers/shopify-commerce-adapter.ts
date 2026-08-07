@@ -45,6 +45,8 @@ import type {
   CreateDiscountInput,
   CreateDiscountOptions,
   NormalizedWebhookEvent,
+  ProductSyncPageRequest,
+  ProductSyncPageResult,
   ProductSyncResult,
   ProviderDiscount,
   WebhookRequestInput,
@@ -337,6 +339,51 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
       hasNextPage: result.hasNextPage,
       limit: result.limit,
     };
+  }
+
+  /**
+   * The persisted-catalog service calls this method repeatedly with opaque
+   * cursors. `syncProducts` above intentionally remains a one-page wrapper:
+   * dashboard Shopify route responses keep their established contract.
+   */
+  async fetchProductPage(
+    connectionId: string,
+    request: ProductSyncPageRequest,
+  ): Promise<ProductSyncPageResult> {
+    const row = await this.deps.loadConnection(connectionId);
+
+    if (!row) {
+      throw new CommerceConnectionNotFoundError(connectionId);
+    }
+
+    const result = await this.deps.fetchProducts({
+      shopDomain: row.externalAccountId,
+      brandId: row.brandId,
+      ...(request.cursor ? { after: request.cursor } : {}),
+      ...(request.limit ? { limit: request.limit } : {}),
+      ...(request.signal ? { signal: request.signal } : {}),
+    });
+
+    if (!result.ok) {
+      throw new CommerceProviderApiError(
+        CommerceProvider.SHOPIFY,
+        result.error || "Failed to fetch Shopify products.",
+        undefined,
+        result.status,
+      );
+    }
+
+    return {
+      products: result.items.map(toCommerceProduct),
+      nextCursor: result.endCursor ?? null,
+      isComplete: !result.hasNextPage,
+      fetchedAt: new Date(),
+      limit: result.limit,
+    };
+  }
+
+  async completeProductSync(connectionId: string, completedAt: Date): Promise<void> {
+    await this.deps.markProductSync(connectionId, completedAt);
   }
 
   async createDiscount(

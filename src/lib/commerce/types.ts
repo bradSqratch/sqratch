@@ -144,6 +144,31 @@ export type ProductSyncResult = {
 };
 
 /**
+ * Provider-neutral request for one catalog page. `cursor` is opaque: callers
+ * must only return a value previously supplied by the same adapter, never
+ * inspect or construct it from provider-specific page-info data.
+ */
+export type ProductSyncPageRequest = {
+  cursor?: string | null;
+  limit?: number;
+  /** Cancels an in-flight provider request when the logical sync expires. */
+  signal?: AbortSignal;
+};
+
+/**
+ * One provider-neutral catalog page. A complete page MUST have
+ * `nextCursor: null`; an incomplete page MUST provide a non-empty opaque
+ * cursor. This deliberately exposes no provider GraphQL page-info shape.
+ */
+export type ProductSyncPageResult = {
+  products: CommerceProduct[];
+  nextCursor: string | null;
+  isComplete: boolean;
+  fetchedAt: Date;
+  limit: number;
+};
+
+/**
  * Neutral input for creating a provider discount code. Mirrors the fields
  * `createShopifyRewardDiscountCode` accepts today, generalized so a future
  * provider (Commerce7, etc.) could implement the same shape.

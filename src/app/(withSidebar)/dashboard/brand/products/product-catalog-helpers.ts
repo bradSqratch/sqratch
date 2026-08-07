@@ -8,7 +8,7 @@
  *
  * These helpers deliberately duplicate (rather than import) the validation
  * bounds enforced server-side in `src/lib/commerce/product-catalog-api.ts`
- * (200 / 1000 / 2048, http(s)-only image URLs). This is friendly
+ * (200 / 1000). This is friendly
  * client-side validation only — the server remains authoritative and
  * re-validates independently.
  */
@@ -215,7 +215,10 @@ export function buildProductQueryString(params: ProductListQueryParams): string 
 
 export const TITLE_OVERRIDE_MAX_LENGTH = 200;
 export const SHORT_DESCRIPTION_OVERRIDE_MAX_LENGTH = 1000;
-export const IMAGE_URL_OVERRIDE_MAX_LENGTH = 2048;
+// Keep these aligned with the authoritative PATCH validation in
+// `src/lib/commerce/product-catalog-api.ts`.
+export const DISPLAY_ORDER_MIN = 0;
+export const DISPLAY_ORDER_MAX = 1_000_000;
 
 export function validateTitleOverride(value: string): string | null {
   if (value.length > TITLE_OVERRIDE_MAX_LENGTH) {
@@ -231,25 +234,26 @@ export function validateShortDescriptionOverride(value: string): string | null {
   return null;
 }
 
-function isHttpUrl(value: string): boolean {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:";
-  } catch {
-    return false;
+/**
+ * Validates the text value of the display-order number input before it is
+ * serialized as JSON. Keeping the draft as text lets a user temporarily clear
+ * or replace the field without accidentally converting that intermediate
+ * state to zero.
+ */
+export function validateDisplayOrder(value: string): string | null {
+  if (value.trim().length === 0) {
+    return "Display order is required.";
   }
-}
 
-/** An empty string is treated as "clear the override" — not a validation error. */
-export function validateImageUrlOverride(value: string): string | null {
-  if (value.length === 0) {
-    return null;
+  const numberValue = Number(value);
+  if (
+    !Number.isFinite(numberValue) ||
+    !Number.isInteger(numberValue) ||
+    numberValue < DISPLAY_ORDER_MIN ||
+    numberValue > DISPLAY_ORDER_MAX
+  ) {
+    return `Display order must be an integer between ${DISPLAY_ORDER_MIN} and ${DISPLAY_ORDER_MAX}.`;
   }
-  if (value.length > IMAGE_URL_OVERRIDE_MAX_LENGTH) {
-    return `Image URL override must be at most ${IMAGE_URL_OVERRIDE_MAX_LENGTH} characters.`;
-  }
-  if (!isHttpUrl(value)) {
-    return "Image URL override must be a valid http(s) URL.";
-  }
+
   return null;
 }
