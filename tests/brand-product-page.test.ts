@@ -139,10 +139,49 @@ describe("describeSyncOutcome — every documented outcome", () => {
     assert.equal(notice.tone, "success");
   });
 
-  test("PARTIAL is never presented as a full success", () => {
-    const notice = describeSyncOutcome({ status: "PARTIAL" });
+  test("PARTIAL without a reason is a truthful generic warning", () => {
+    const notice = describeSyncOutcome({ status: "PARTIAL", failureSummary: null });
     assert.notEqual(notice.tone, "success");
-    assert.match(notice.message, /truncat|not (all|every)/i);
+    assert.match(notice.message, /did not complete|preserved|not marked inactive/i);
+    assert.doesNotMatch(notice.message, /continue|resume/i);
+  });
+
+  test("PARTIAL diagnostics use reason-specific, conservative messages", () => {
+    const cases = [
+      ["PAGINATION_TIMEOUT", /time limit/i],
+      ["MAX_PAGES_REACHED", /page safety limit/i],
+      ["MAX_PRODUCTS_REACHED", /product safety limit/i],
+      ["MISSING_CURSOR", /incomplete pagination/i],
+      ["CURSOR_LOOP", /incomplete pagination/i],
+      ["INVALID_PAGE", /incomplete pagination/i],
+      ["PARTIAL_WRITE_FAILURE", /could not be saved/i],
+    ] as const;
+
+    for (const [tag, expected] of cases) {
+      const notice = describeSyncOutcome({
+        status: "PARTIAL",
+        failureSummary: `${tag}: internal detail that must not be rendered`,
+        fetchedCount: 12,
+        failedCount: tag === "PARTIAL_WRITE_FAILURE" ? 2 : 0,
+      });
+      assert.equal(notice.tone, "warning");
+      assert.match(notice.message, expected);
+      assert.match(notice.message, /preserved|kept|not marked inactive/i);
+      assert.doesNotMatch(notice.message, /internal detail|continue|resume/i);
+    }
+  });
+
+  test("PARTIAL count details are bounded and only safe numeric counts are shown", () => {
+    const notice = describeSyncOutcome({
+      status: "PARTIAL",
+      failureSummary: "PARTIAL_WRITE_FAILURE: detail",
+      fetchedCount: 7,
+      failedCount: 3,
+      runId: "run-secret-like-id",
+    });
+    assert.match(notice.message, /Products fetched: 7/);
+    assert.match(notice.message, /Product writes failed: 3/);
+    assert.doesNotMatch(notice.message, /run-secret-like-id|detail/);
   });
 
   test("SKIPPED/NO_CONNECTION is an error, distinct from LEGACY_FALLBACK", () => {
@@ -306,6 +345,14 @@ describe("static source assertions", () => {
     assert.match(clientSource, /validateDisplayOrder\(draft\.displayOrder\)/);
     assert.match(clientSource, /state\?\.error/);
     assert.match(clientSource, /state\?\.success/);
+  });
+
+  test("the dashboard passes sanitized partial diagnostics from the API response", () => {
+    assert.match(clientSource, /failureSummary: syncData\.failureSummary/);
+    assert.match(clientSource, /hasNextPage: syncData\.hasNextPage/);
+    assert.match(clientSource, /fetchedCount: syncData\.stats\?\.fetchedCount/);
+    assert.match(clientSource, /failedCount: syncData\.stats\?\.failedCount/);
+    assert.match(clientSource, /runId: syncData\.runId/);
   });
 
   test("does not render or submit an image-override control", () => {

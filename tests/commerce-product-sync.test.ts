@@ -909,6 +909,38 @@ describe("syncBrandCommerceProducts", () => {
     assert.equal(store.rowsForConnection("conn-1").find((row) => row.externalKey === "shared")?.title, "New shared title");
   });
 
+  test("19a. complete 100-product and 101-product catalogs both succeed, following the first-page cursor only when needed", async () => {
+    for (const total of [100, 101]) {
+      const store = new FakeStore();
+      const calls: Array<string | null> = [];
+      const products = Array.from({ length: total }, (_, index) =>
+        makeProduct({ externalId: `product-${index + 1}`, title: `Product ${index + 1}` }),
+      );
+      const adapter = makePagedAdapter(async (cursor) => {
+        calls.push(cursor);
+        if (cursor === null && total === 101) {
+          return makePage(products.slice(0, 100), { isComplete: false, nextCursor: "page-2" });
+        }
+        if (cursor === "page-2") {
+          return makePage(products.slice(100));
+        }
+        return makePage(products);
+      });
+      setupBrand(store, "brand-1", "conn-1", adapter);
+
+      const outcome = await syncBrandCommerceProducts(
+        "brand-1",
+        CommerceProvider.SHOPIFY,
+        {},
+        makeDeps(store),
+      );
+
+      assert.equal(outcome.status, "SUCCEEDED", `${total} products`);
+      assert.equal(outcome.stats.fetchedCount, total, `${total} products`);
+      assert.deepEqual(calls, total === 101 ? [null, "page-2"] : [null], `${total} products`);
+    }
+  });
+
   test("20. a provider failure after a successful page is PARTIAL and never reconciles absence", async () => {
     const store = new FakeStore();
     const productA = makeProduct({ externalId: "A" });

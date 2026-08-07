@@ -106,7 +106,14 @@ export type SyncOutcomeNotice = {
 
 export type SyncOutcomeInput =
   | { status: "SUCCEEDED" }
-  | { status: "PARTIAL" }
+  | {
+      status: "PARTIAL";
+      failureSummary?: string | null;
+      hasNextPage?: boolean;
+      fetchedCount?: number;
+      failedCount?: number;
+      runId?: string;
+    }
   | { status: "SKIPPED"; code: "NO_CONNECTION" | "LEGACY_FALLBACK" }
   | { status: "SYNC_IN_PROGRESS" }
   | { status: "SYNC_FAILED"; failureSummary: string | null }
@@ -115,8 +122,8 @@ export type SyncOutcomeInput =
 /**
  * Maps every documented `POST /api/brand/products/sync` outcome to a
  * distinct, non-misleading notice. A skipped or failed sync NEVER maps to
- * `tone: "success"` — `PARTIAL` (catalog truncated) is surfaced as a
- * warning, never presented as if the sync fully completed.
+ * `tone: "success"`. Partial diagnostics are classified by the server's
+ * sanitized failure tag; raw provider details are deliberately not rendered.
  */
 export function describeSyncOutcome(input: SyncOutcomeInput): SyncOutcomeNotice {
   switch (input.status) {
@@ -126,11 +133,7 @@ export function describeSyncOutcome(input: SyncOutcomeInput): SyncOutcomeNotice 
         message: "Sync completed successfully. All available products were synced.",
       };
     case "PARTIAL":
-      return {
-        tone: "warning",
-        message:
-          "Sync completed, but the catalog was truncated — not every product was synced yet. Run sync again to continue.",
-      };
+      return describePartialSyncOutcome(input);
     case "SKIPPED":
       if (input.code === "NO_CONNECTION") {
         return {
@@ -163,6 +166,58 @@ export function describeSyncOutcome(input: SyncOutcomeInput): SyncOutcomeNotice 
         message: input.message || "Failed to sync products.",
       };
   }
+}
+
+const PARTIAL_FAILURE_TAG = /^([A-Z][A-Z0-9_]{2,63})\s*:/;
+
+function partialFailureTag(summary: string | null | undefined): string | null {
+  if (!summary) return null;
+  const match = PARTIAL_FAILURE_TAG.exec(summary.trim());
+  return match?.[1] ?? null;
+}
+
+function safeCount(value: number | undefined): number | null {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 1_000_000
+    ? value
+    : null;
+}
+
+function describePartialSyncOutcome(
+  input: Extract<SyncOutcomeInput, { status: "PARTIAL" }>,
+): SyncOutcomeNotice {
+  const tag = partialFailureTag(input.failureSummary);
+  let message: string;
+
+  switch (tag) {
+    case "PAGINATION_TIMEOUT":
+      message = "The sync reached its time limit before the complete catalog was retrieved. Products already synchronized were kept, and no missing products were marked inactive. Retry the sync.";
+      break;
+    case "MAX_PAGES_REACHED":
+      message = "The sync reached its page safety limit before the complete catalog was retrieved. Existing products were preserved, and no missing products were marked inactive. Retry the sync.";
+      break;
+    case "MAX_PRODUCTS_REACHED":
+      message = "The sync reached its product safety limit before the complete catalog was retrieved. Existing products were preserved, and no missing products were marked inactive. Retry the sync.";
+      break;
+    case "MISSING_CURSOR":
+    case "CURSOR_LOOP":
+    case "INVALID_PAGE":
+      message = "Shopify returned incomplete pagination information. Products already synchronized were kept, and no missing products were marked inactive. Retry the sync.";
+      break;
+    case "PARTIAL_WRITE_FAILURE":
+      message = "Some products could not be saved. Successfully synchronized products were kept, and no missing products were marked inactive. Retry the sync.";
+      break;
+    default:
+      message = "The product sync did not complete. Products already synchronized were kept, and no missing products were marked inactive. Retry the sync.";
+      break;
+  }
+
+  const fetchedCount = safeCount(input.fetchedCount);
+  const failedCount = safeCount(input.failedCount);
+  const details: string[] = [];
+  if (fetchedCount !== null) details.push(`Products fetched: ${fetchedCount}.`);
+  if (failedCount !== null && failedCount > 0) details.push(`Product writes failed: ${failedCount}.`);
+
+  return { tone: "warning", message: details.length ? `${message} ${details.join(" ")}` : message };
 }
 
 // ---------------------------------------------------------------------------

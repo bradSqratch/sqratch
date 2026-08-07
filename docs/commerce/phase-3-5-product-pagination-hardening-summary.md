@@ -10,7 +10,11 @@ Phase 3.5 removes the persisted Shopify catalog's one-page ceiling while preserv
 
 Only a fully fetched and fully persisted catalog is `SUCCEEDED`. Provider-page failures, invalid pages, timeout/bound exits, and persistence failures become `PARTIAL` or `FAILED` and never mark unseen products unavailable. Connection sync metadata is stamped only after the persisted catalog completes. A future background worker may be needed for catalogs that cannot complete within the synchronous request bound.
 
+`PARTIAL` outcomes preserve the existing catalog and never mark products absent from the partial result inactive. The brand dashboard displays the server-classified partial reason (for example, a timeout, cursor problem, safety bound, or partial write failure) with conservative fetched/write counts where available. Retrying starts a fresh synchronization from the beginning; it does not resume the prior run.
+
 Shopify pagination reuses the existing GraphQL `after` / `endCursor` path. It does not change scopes, token refresh behavior, Shopify configuration, products, orders, or inventory access. Currency remains sourced from the authoritative brand/store configuration and prices remain integer minor units in persistence.
+
+Shopify may include an `endCursor` on a final page even when `hasNextPage` is false. The Shopify adapter therefore exposes a next cursor only when `hasNextPage` is true; a complete provider-neutral page always has `nextCursor: null`.
 
 ## Brand catalog completion
 

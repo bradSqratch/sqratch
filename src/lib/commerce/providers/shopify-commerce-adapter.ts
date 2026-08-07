@@ -373,10 +373,23 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
       );
     }
 
+    // Shopify can include an endCursor for the final returned edge even when
+    // `hasNextPage` is false. The neutral contract treats a cursor as
+    // actionable only when another page exists: complete pages MUST expose
+    // `nextCursor: null` so the catalog collector cannot mistake a final
+    // edge cursor for an incomplete traversal.
+    const hasNextPage = result.hasNextPage === true;
+    const nextCursor =
+      hasNextPage &&
+      typeof result.endCursor === "string" &&
+      result.endCursor.trim().length > 0
+        ? result.endCursor
+        : null;
+
     return {
       products: result.items.map(toCommerceProduct),
-      nextCursor: result.endCursor ?? null,
-      isComplete: !result.hasNextPage,
+      nextCursor,
+      isComplete: !hasNextPage,
       fetchedAt: new Date(),
       limit: result.limit,
     };

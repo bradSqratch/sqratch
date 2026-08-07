@@ -296,9 +296,20 @@ export function BrandProductsClient() {
       const json = await response.json().catch(() => null);
 
       if (response.status === 200) {
-        const status = json?.data?.status;
-        if (status === "SUCCEEDED" || status === "PARTIAL") {
-          setSyncNotice(describeSyncOutcome({ status }));
+        const syncData = json?.data;
+        if (syncData?.status === "SUCCEEDED") {
+          setSyncNotice(describeSyncOutcome({ status: "SUCCEEDED" }));
+        } else if (syncData?.status === "PARTIAL") {
+          setSyncNotice(
+            describeSyncOutcome({
+              status: "PARTIAL",
+              failureSummary: syncData.failureSummary ?? null,
+              hasNextPage: syncData.hasNextPage === true,
+              fetchedCount: syncData.stats?.fetchedCount,
+              failedCount: syncData.stats?.failedCount,
+              runId: syncData.runId,
+            }),
+          );
         } else {
           setSyncNotice(describeSyncOutcome({ status: "UNKNOWN_ERROR" }));
         }

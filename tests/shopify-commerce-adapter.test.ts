@@ -397,6 +397,55 @@ describe("ShopifyCommerceAdapter", () => {
     assert.equal(stampCount, 1);
   });
 
+  test("6b. fetchProductPage ignores Shopify's final-edge cursor on a complete page", async () => {
+    const row = makeRow();
+    const adapter = new ShopifyCommerceAdapter(makeDeps({
+      async loadConnection() {
+        return row;
+      },
+      async fetchProducts() {
+        return {
+          ok: true,
+          items: [makeNormalizedProduct()],
+          hasNextPage: false,
+          endCursor: "final-edge-cursor",
+          limit: 100,
+        };
+      },
+    }));
+
+    const page = await adapter.fetchProductPage("conn-1", { limit: 100 });
+
+    assert.equal(page.isComplete, true);
+    assert.equal(page.nextCursor, null);
+  });
+
+  test("6c. empty and null-cursor final Shopify pages are complete, while a non-final page without a cursor stays incomplete", async () => {
+    const row = makeRow();
+    const results = [
+      { ok: true as const, items: [], hasNextPage: false, endCursor: null, limit: 100 },
+      { ok: true as const, items: [], hasNextPage: true, endCursor: null, limit: 100 },
+    ];
+    let index = 0;
+    const adapter = new ShopifyCommerceAdapter(makeDeps({
+      async loadConnection() {
+        return row;
+      },
+      async fetchProducts() {
+        return results[index++];
+      },
+    }));
+
+    const finalPage = await adapter.fetchProductPage("conn-1", { limit: 100 });
+    assert.deepEqual(finalPage.products, []);
+    assert.equal(finalPage.isComplete, true);
+    assert.equal(finalPage.nextCursor, null);
+
+    const incompletePage = await adapter.fetchProductPage("conn-1", { limit: 100 });
+    assert.equal(incompletePage.isComplete, false);
+    assert.equal(incompletePage.nextCursor, null);
+  });
+
   test("7. createDiscount maps CreateDiscountInput fields onto createShopifyRewardDiscountCode's input exactly", async () => {
     const row = makeRow();
     let createDiscountCodeCalledWith: unknown = null;

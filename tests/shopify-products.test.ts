@@ -186,7 +186,7 @@ describe("fetchNormalizedShopifyProducts — new GraphQL field parsing", () => {
     pagesByCursor.set(null, {
       nodes: [rawProductNode()],
       hasNextPage: false,
-      endCursor: null,
+      endCursor: "final-edge-cursor",
     });
 
     const result = await fetchNormalizedShopifyProducts({
@@ -208,8 +208,10 @@ describe("fetchNormalizedShopifyProducts — new GraphQL field parsing", () => {
     // empty string sku is skipped.
     assert.equal(product.sku, "SKU-A");
     assert.deepEqual(product.priceRangeRaw, { min: "19.99", max: "29.99" });
-    // endCursor propagates through even on a single, final page.
-    assert.equal(result.endCursor, null);
+    // Shopify may provide an endCursor for the final returned edge. The
+    // low-level page helper preserves raw provider page information; the
+    // commerce adapter decides whether the cursor is actionable.
+    assert.equal(result.endCursor, "final-edge-cursor");
     assert.equal(result.hasNextPage, false);
   });
 
