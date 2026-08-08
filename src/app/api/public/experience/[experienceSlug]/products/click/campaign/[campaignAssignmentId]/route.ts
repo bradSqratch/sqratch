@@ -17,6 +17,6 @@ export async function GET(
   const { experienceSlug, campaignAssignmentId } = await context.params;
   return handleCommerceClick(request, {
     experienceSlug,
-    surface: { kind: "CAMPAIGN_ASSIGNMENT_CATALOG", campaignAssignmentId },
+    surface: { kind: "CAMPAIGN_PRODUCT", campaignAssignmentId },
   });
 }

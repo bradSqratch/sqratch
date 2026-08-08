@@ -8,6 +8,6 @@ export async function GET(
   const { experienceSlug, brandCommerceProductId } = await context.params;
   return handleCommerceClick(request, {
     experienceSlug,
-    surface: { kind: "CAMPAIGN_CATALOG", brandCommerceProductId },
+    surface: { kind: "BRAND_STOREFRONT", brandCommerceProductId },
   });
 }

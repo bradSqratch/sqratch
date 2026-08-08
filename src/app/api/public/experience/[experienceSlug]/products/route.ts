@@ -50,10 +50,11 @@ type PublicShopProduct = {
     slug: string;
   } | null;
   /**
-   * Always "CAMPAIGN" now. The "LINKED" variant identified an
-   * `ExperienceProductLink` snapshot card; that table and its cards are gone.
+   * Explicit canonical card source:
+   * - "CAMPAIGN_PRODUCT": explicit active campaign assignment (CampaignCommerceProduct)
+   * - "BRAND_STOREFRONT": generic brand-level storefront selection (BrandCommerceProduct.isVisibleInShop)
    */
-  source: "CAMPAIGN";
+  source: "CAMPAIGN_PRODUCT" | "BRAND_STOREFRONT";
   /** Present only for curated campaign catalog products. */
   description?: string | null;
   /**
@@ -65,6 +66,8 @@ type PublicShopProduct = {
     id: string;
     name: string;
   } | null;
+  /** Present for brand storefront catalog items. */
+  campaignProductId?: string;
   /** Opaque CampaignCommerceProduct id for a campaign-scoped click hop. */
   campaignAssignmentId?: string;
 };
@@ -391,6 +394,7 @@ function serializeCuratedProduct(options: {
   selection: CuratedCampaignProduct;
   brand: PublicShopBrand;
   productCampaign?: { id: string; name: string } | null;
+  source?: "CAMPAIGN_PRODUCT" | "BRAND_STOREFRONT";
   /** Keeps pre-union single-brand card ids response-compatible. */
   directUnion?: boolean;
 }): PublicShopProduct {
@@ -401,6 +405,10 @@ function serializeCuratedProduct(options: {
     : options.directUnion
       ? `${options.brand.id}-${selectionId}`
       : product.externalId;
+
+  const isCampaignProduct = Boolean(options.selection.campaignAssignmentId || options.productCampaign);
+  const source: "CAMPAIGN_PRODUCT" | "BRAND_STOREFRONT" =
+    options.source || (isCampaignProduct ? "CAMPAIGN_PRODUCT" : "BRAND_STOREFRONT");
 
   return {
     id: `campaign-${idSuffix}`,
@@ -426,8 +434,8 @@ function serializeCuratedProduct(options: {
       name: options.brand.name,
       slug: options.brand.slug,
     },
-    source: "CAMPAIGN",
-    ...(options.productCampaign
+    source,
+    ...(source === "CAMPAIGN_PRODUCT" && options.productCampaign
       ? { productCampaign: options.productCampaign }
       : {}),
   };
@@ -542,6 +550,7 @@ export async function publicExperienceProductsGetImpl(
           product: serializeCuratedProduct({
             selection,
             brand,
+            source: "CAMPAIGN_PRODUCT",
             productCampaign: {
               id: campaignLink.campaign.id,
               name: campaignLink.campaign.name,
@@ -594,6 +603,7 @@ export async function publicExperienceProductsGetImpl(
             product: serializeCuratedProduct({
               selection,
               brand,
+              source: "BRAND_STOREFRONT",
               directUnion: isDirectUnion,
             }),
           }));

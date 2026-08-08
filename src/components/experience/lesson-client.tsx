@@ -682,7 +682,7 @@ export function ExperienceLessonClient({
                       >
                         {clickingProductId === product.id
                           ? "Opening..."
-                          : "View on Shopify"}
+                          : "View product"}
                       </Button>
                     </div>
                   ))

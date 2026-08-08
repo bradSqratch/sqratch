@@ -1,3 +1,5 @@
+import "./env-setup";
+
 /**
  * tests/lesson-product-links-scoping.test.ts
  *

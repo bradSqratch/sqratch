@@ -234,6 +234,9 @@ describe("public products route: explicit campaign scope and direct union", () =
       ["campaign-a", "campaign-b"],
     );
     assert.equal(body.data.products[0].campaignAssignmentId, "assignment-a");
+    assert.equal(body.data.products[0].source, "CAMPAIGN_PRODUCT");
+    assert.equal(body.data.products[1].source, "CAMPAIGN_PRODUCT");
+    assert.equal(body.data.products[2].source, "BRAND_STOREFRONT");
   });
 
   test("2+ eligible campaigns WITH a trusted stored session campaign resolves to that exact campaign, never the other one", async () => {
@@ -264,6 +267,55 @@ describe("public products route: explicit campaign scope and direct union", () =
     assert.equal(body.data.campaign.id, "campaign-b");
     assert.equal(requestedBrandId, "brand-b");
     assert.deepEqual(scopedCampaignIds, ["campaign-b"]);
+  });
+
+  test("Matrix 10: Multi-campaign Experience: Campaign A entry never sees Campaign B campaign-scoped products", async () => {
+    const response = await getProducts(
+      request(),
+      routeContext,
+      baseDeps({
+        getAccess: async () => ({
+          ...twoCampaignAccess("campaign-a"),
+          entryContext: { kind: "CAMPAIGN" as const, campaignId: "campaign-a" },
+        }),
+        findBrands: async () => [brand("brand-a")],
+        findCampaignProducts: async ({ campaignId }) => {
+          if (campaignId === "campaign-a") {
+            return [
+              catalogProduct({
+                selectionId: "bcp-a",
+                assignmentId: "assignment-a",
+                connectedId: "connected-a",
+                brandId: "brand-a",
+                title: "Campaign A Exclusive",
+              }),
+            ];
+          }
+          return [
+            catalogProduct({
+              selectionId: "bcp-b",
+              assignmentId: "assignment-b",
+              connectedId: "connected-b",
+              brandId: "brand-b",
+              title: "Campaign B Exclusive",
+            }),
+          ];
+        },
+        findCuratedProducts: async () => [],
+      }),
+    );
+
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.data.campaign.id, "campaign-a");
+    assert.equal(body.data.products.length, 1);
+    assert.equal(body.data.products[0].title, "Campaign A Exclusive");
+    assert.equal(body.data.products[0].source, "CAMPAIGN_PRODUCT");
+    assert.equal(body.data.products[0].campaignAssignmentId, "assignment-a");
+    assert.equal(
+      body.data.products.some((p: { title: string }) => p.title.includes("Campaign B")),
+      false,
+    );
   });
 
   test("a stored session campaign for an unrelated Experience is not trusted, and 2+ contexts still resolve to null", async () => {

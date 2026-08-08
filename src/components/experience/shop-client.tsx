@@ -49,7 +49,7 @@ type ShopResponse = {
       name: string;
       slug: string;
     } | null;
-    source: "CAMPAIGN";
+    source: "CAMPAIGN_PRODUCT" | "BRAND_STOREFRONT";
     productCampaign?: {
       id: string;
       name: string;
@@ -162,7 +162,7 @@ export function ExperienceShopClient({
             {shopData?.products.length ?? 0}
           </p>
           <p className="mt-2 text-sm text-white/55">
-            Opens the brand&apos;s Shopify storefront in a new tab
+            Opens the merchant storefront in a new tab.
           </p>
         </div>
       }
@@ -276,17 +276,20 @@ export function ExperienceShopClient({
                 </div>
               )}
 
-              <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-3">
+              <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
                 {visibleProducts.map((product) => (
-                  <PageCard key={product.id} className="h-full">
-                    <div className="flex h-full flex-col">
-                      <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-black/20">
+                  <PageCard
+                    key={product.id}
+                    className="flex flex-col justify-between overflow-hidden"
+                  >
+                    <div>
+                      <div className="overflow-hidden rounded-3xl border border-white/10">
                         {product.imageUrl && !failedImageIds.has(product.id) ? (
                           <Image
                             src={product.imageUrl}
                             alt={product.title}
-                            width={400}
-                            height={300}
+                            width={640}
+                            height={480}
                             unoptimized
                             onError={() => {
                               setFailedImageIds((current) => {
@@ -308,7 +311,9 @@ export function ExperienceShopClient({
                       <div className="mt-5 flex flex-1 flex-col">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/60">
-                            Campaign storefront
+                            {product.source === "CAMPAIGN_PRODUCT"
+                              ? "Campaign product"
+                              : "Brand storefront"}
                           </span>
                           {product.brand && (
                             <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/60">
@@ -331,7 +336,7 @@ export function ExperienceShopClient({
                           </p>
                         )}
                         <p className="mt-2 text-sm text-white/55">
-                          {product.priceText || "Price available on Shopify"}
+                          {product.priceText || "Price available in store"}
                         </p>
 
                         <div className="mt-6">
@@ -343,7 +348,7 @@ export function ExperienceShopClient({
                           >
                             {clickingId === product.id
                               ? "Opening..."
-                              : "View on Shopify"}
+                              : "View product"}
                           </Button>
                         </div>
                       </div>

@@ -136,12 +136,12 @@ describe("campaign-assignment catalog authorization", () => {
       "utf8",
     );
     const assignmentClickSection = attributionSource.slice(
-      attributionSource.indexOf("async findCampaignAssignmentCatalogProduct"),
+      attributionSource.indexOf("async findCampaignProduct"),
       attributionSource.indexOf("async recordAttribution"),
     );
     const genericClickSection = attributionSource.slice(
-      attributionSource.indexOf("async findCampaignCatalogProduct"),
-      attributionSource.indexOf("async findCampaignAssignmentCatalogProduct"),
+      attributionSource.indexOf("async findBrandStorefrontProduct"),
+      attributionSource.indexOf("async findCampaignProduct"),
     );
     // `findCampaignProducts` is the LAST entry in DEFAULT_DEPS now that Phase 8
     // removed the live-Shopify `fetchLegacyCampaignProducts` fallback that used

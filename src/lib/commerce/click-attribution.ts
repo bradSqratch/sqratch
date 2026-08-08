@@ -91,8 +91,8 @@ const MAX_USER_AGENT_LENGTH = 512;
  * which is what supplies the destination, the provider, and the connection.
  */
 export type CommerceClickSurface =
-  | { kind: "CAMPAIGN_CATALOG"; brandCommerceProductId: string }
-  | { kind: "CAMPAIGN_ASSIGNMENT_CATALOG"; campaignAssignmentId: string }
+  | { kind: "BRAND_STOREFRONT"; brandCommerceProductId: string }
+  | { kind: "CAMPAIGN_PRODUCT"; campaignAssignmentId: string }
   | { kind: "LESSON"; lessonId: string; campaignLessonProductId: string };
 
 /**
@@ -143,12 +143,12 @@ export type CommerceClickDeps = {
     userId: string | null;
     campaignId: string | null;
   }): Promise<string>;
-  findCampaignCatalogProduct(options: {
+  findBrandStorefrontProduct(options: {
     brandCommerceProductId: string;
     experienceId: string;
     entryCampaignId: string | null;
   }): Promise<ResolvedLink | null>;
-  findCampaignAssignmentCatalogProduct(options: {
+  findCampaignProduct(options: {
     campaignAssignmentId: string;
     experienceId: string;
   }): Promise<ResolvedLink | null>;
@@ -431,7 +431,7 @@ const DEFAULT_DEPS: CommerceClickDeps = {
       hasProviderSuppliedStorefrontUrl: hasProviderSuppliedStorefrontUrl(product.providerMetadata),
     };
   },
-  async findCampaignCatalogProduct({
+  async findBrandStorefrontProduct({
     brandCommerceProductId,
     experienceId,
     entryCampaignId,
@@ -484,7 +484,7 @@ const DEFAULT_DEPS: CommerceClickDeps = {
       hasProviderSuppliedStorefrontUrl: hasProviderSuppliedStorefrontUrl(product.providerMetadata),
     };
   },
-  async findCampaignAssignmentCatalogProduct({
+  async findCampaignProduct({
     campaignAssignmentId,
     experienceId,
   }) {
@@ -645,14 +645,14 @@ export async function handleCommerceClick(
 
     const visitorCampaign = resolveVisitorCampaign(access);
     const link =
-      options.surface.kind === "CAMPAIGN_CATALOG"
-        ? await deps.findCampaignCatalogProduct({
+      options.surface.kind === "BRAND_STOREFRONT"
+        ? await deps.findBrandStorefrontProduct({
             brandCommerceProductId: options.surface.brandCommerceProductId,
             experienceId: access.experience.id,
             entryCampaignId: visitorCampaign?.campaignId ?? null,
           })
-        : options.surface.kind === "CAMPAIGN_ASSIGNMENT_CATALOG"
-          ? await deps.findCampaignAssignmentCatalogProduct({
+        : options.surface.kind === "CAMPAIGN_PRODUCT"
+          ? await deps.findCampaignProduct({
               campaignAssignmentId: options.surface.campaignAssignmentId,
               experienceId: access.experience.id,
             })

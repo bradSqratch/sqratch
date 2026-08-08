@@ -153,6 +153,6 @@ export async function creatorAvailableProductsGetImpl(
     });
   } catch (error) {
     console.error("[creator/lessons/[lessonId]/available-products][GET] Error:", error);
-    return NextResponse.json({ error: "Failed to load Shopify products." }, { status: 500 });
+    return NextResponse.json({ error: "Failed to load products." }, { status: 500 });
   }
 }

@@ -96,10 +96,18 @@ export async function GET(
       select: {
         id: true,
         isCampaignEligible: true,
+        isVisibleInShop: true,
         titleOverride: true,
         shortDescriptionOverride: true,
         connectedProduct: {
-          select: { id: true, title: true, imageUrl: true, isAvailable: true, productUrl: true },
+          select: {
+            id: true,
+            title: true,
+            imageUrl: true,
+            isAvailable: true,
+            hasPublicStorefrontUrl: true,
+            productUrl: true,
+          },
         },
         campaignAssignments: {
           where: { campaignId: campaign.id },
@@ -123,8 +131,10 @@ export async function GET(
             description: row.shortDescriptionOverride || null,
             imageUrl: row.connectedProduct.imageUrl,
             productUrl: row.connectedProduct.productUrl,
+            isVisibleInShop: row.isVisibleInShop,
             isCampaignEligible: row.isCampaignEligible,
             isAvailable: row.connectedProduct.isAvailable,
+            hasPublicStorefrontUrl: row.connectedProduct.hasPublicStorefrontUrl,
             assignment: assignment
               ? {
                   id: assignment.id,

@@ -177,7 +177,8 @@ function deps(overrides: Partial<CommerceClickDeps> = {}): Partial<CommerceClick
   return {
     getAccess: async () => access(),
     ensureSession: async () => "minted-session",
-    findCampaignCatalogProduct: async () => resolvedLink(),
+    findBrandStorefrontProduct: async () => resolvedLink(),
+    findCampaignProduct: async () => null,
     findCampaignLessonProduct: async () => null,
     recordAttribution: async () => {},
     ...overrides,
@@ -197,7 +198,7 @@ async function click(
  * `EXPERIENCE_SHOP` surface as this file's default "unscoped click" case.
  */
 const SHOP_SURFACE: CommerceClickSurface = {
-  kind: "CAMPAIGN_CATALOG",
+  kind: "BRAND_STOREFRONT",
   brandCommerceProductId: "bcp-1",
 };
 
@@ -211,7 +212,7 @@ describe("cross-brand and cross-campaign integrity", () => {
   test("resolved brandId always comes from the looked-up link row, never a poisoned dependency's echo of client input", async () => {
     const captured: AttributionInput[] = [];
     const response = await click(SHOP_SURFACE, {
-      findCampaignCatalogProduct: async () => resolvedLink({ brandId: "brand-real" }),
+      findBrandStorefrontProduct: async () => resolvedLink({ brandId: "brand-real" }),
       recordAttribution: async (input) => {
         captured.push(input);
       },
@@ -420,7 +421,7 @@ describe("cross-brand and cross-campaign integrity", () => {
   test("direct generic brand catalog click does not invent a product campaign", async () => {
     const captured: AttributionInput[] = [];
     const response = await click(
-      { kind: "CAMPAIGN_CATALOG", brandCommerceProductId: "bcp-1" },
+      { kind: "BRAND_STOREFRONT", brandCommerceProductId: "bcp-1" },
       {
         getAccess: async () =>
           access({
@@ -428,7 +429,7 @@ describe("cross-brand and cross-campaign integrity", () => {
             storedCampaignId: "campaign-A",
             entryContext: { kind: "DIRECT" },
           }),
-        findCampaignCatalogProduct: async (options) => {
+        findBrandStorefrontProduct: async (options) => {
           assert.equal(options.entryCampaignId, null);
           return resolvedLink();
         },
@@ -446,11 +447,11 @@ describe("cross-brand and cross-campaign integrity", () => {
   test("direct campaign-assignment catalog click preserves its product campaign only", async () => {
     const captured: AttributionInput[] = [];
     const response = await click(
-      { kind: "CAMPAIGN_ASSIGNMENT_CATALOG", campaignAssignmentId: "assignment-a" },
+      { kind: "CAMPAIGN_PRODUCT", campaignAssignmentId: "assignment-a" },
       {
         getAccess: async () =>
           access({ campaigns: twoEligibleCampaigns(), entryContext: { kind: "DIRECT" } }),
-        findCampaignAssignmentCatalogProduct: async (options) => {
+        findCampaignProduct: async (options) => {
           assert.equal(options.campaignAssignmentId, "assignment-a");
           return resolvedLink({
             id: "assignment-a",
@@ -626,7 +627,7 @@ describe("public lesson click: storefront gate fails closed behaviorally (item 1
 describe("forged input handling", () => {
   test("an unknown catalog id returns the generic 404, not a 500 and not a redirect", async () => {
     const response = await click(SHOP_SURFACE, {
-      findCampaignCatalogProduct: async () => null,
+      findBrandStorefrontProduct: async () => null,
     });
 
     assert.equal(response.status, 404);
@@ -637,7 +638,7 @@ describe("forged input handling", () => {
   test("a non-http(s) destination scheme is rejected, not redirected to", async () => {
     let mintCalled = false;
     const response = await click(SHOP_SURFACE, {
-      findCampaignCatalogProduct: async () =>
+      findBrandStorefrontProduct: async () =>
         resolvedLink({ productUrl: "javascript:alert(1)" }),
       recordAttribution: async () => {
         mintCalled = true;
@@ -650,7 +651,7 @@ describe("forged input handling", () => {
 
   test("a data: destination scheme is also rejected", async () => {
     const response = await click(SHOP_SURFACE, {
-      findCampaignCatalogProduct: async () =>
+      findBrandStorefrontProduct: async () =>
         resolvedLink({ productUrl: "data:text/html,<script>alert(1)</script>" }),
     });
 
@@ -705,7 +706,7 @@ describe("anonymous vs. logged-in clicks", () => {
 describe("redirect target and PII", () => {
   test("a Shopify custom-domain URL redirects only when provider-supplied provenance was persisted", async () => {
     const response = await click(SHOP_SURFACE, {
-      findCampaignCatalogProduct: async () =>
+      findBrandStorefrontProduct: async () =>
         resolvedLink({
           productUrl: "https://shop.acme.example/products/widget",
           connectionExternalAccountId: "acme.myshopify.com",
@@ -723,7 +724,7 @@ describe("redirect target and PII", () => {
   test("a synthesized custom-domain URL is rejected rather than becoming an open redirect", async () => {
     let mintCalled = false;
     const response = await click(SHOP_SURFACE, {
-      findCampaignCatalogProduct: async () =>
+      findBrandStorefrontProduct: async () =>
         resolvedLink({
           productUrl: "https://attacker.example/products/widget",
           connectionExternalAccountId: "acme.myshopify.com",
@@ -756,7 +757,7 @@ describe("redirect target and PII", () => {
 
   test("an existing ?ref= on the merchant's own URL is left untouched, not clobbered", async () => {
     const response = await click(SHOP_SURFACE, {
-      findCampaignCatalogProduct: async () =>
+      findBrandStorefrontProduct: async () =>
         resolvedLink({ productUrl: "https://acme.test/products/widget?ref=merchant-own-value" }),
     });
 
@@ -870,6 +871,128 @@ describe("schema-level idempotency seam (unused by Phase 6 code)", () => {
     );
     assert.doesNotMatch(attributionSource, /consumedAt/);
     assert.doesNotMatch(attributionSource, /consumedByOrderRef/);
+  });
+});
+
+describe("Phase 8.3 commerce click attribution matrix", () => {
+  test("Matrix 6: Campaign A visitor clicks generic Brand storefront product -> entryCampaignId=Campaign A, productCampaignId=null", async () => {
+    const captured: AttributionInput[] = [];
+    const response = await click(
+      { kind: "BRAND_STOREFRONT", brandCommerceProductId: "bcp-1" },
+      {
+        getAccess: async () =>
+          access({
+            campaigns: twoEligibleCampaigns(),
+            entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" },
+          }),
+        findBrandStorefrontProduct: async (options) => {
+          assert.equal(options.entryCampaignId, "campaign-A");
+          return resolvedLink({ scope: null });
+        },
+        recordAttribution: async (input) => {
+          captured.push(input);
+        },
+      },
+    );
+
+    assert.equal(response.status, 302);
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].entryCampaignId, "campaign-A");
+    assert.equal(captured[0].productCampaignId, null);
+    assert.equal(captured[0].campaignLessonProductId, null);
+  });
+
+  test("Matrix 7: Campaign A visitor clicks Campaign A-scoped product -> entryCampaignId=Campaign A, productCampaignId=Campaign A", async () => {
+    const captured: AttributionInput[] = [];
+    const response = await click(
+      { kind: "CAMPAIGN_PRODUCT", campaignAssignmentId: "assignment-a" },
+      {
+        getAccess: async () =>
+          access({
+            campaigns: twoEligibleCampaigns(),
+            entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" },
+          }),
+        findCampaignProduct: async (options) => {
+          assert.equal(options.campaignAssignmentId, "assignment-a");
+          return resolvedLink({
+            id: "assignment-a",
+            scope: { campaignId: "campaign-A", isActive: true },
+          });
+        },
+        recordAttribution: async (input) => {
+          captured.push(input);
+        },
+      },
+    );
+
+    assert.equal(response.status, 302);
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].entryCampaignId, "campaign-A");
+    assert.equal(captured[0].productCampaignId, "campaign-A");
+    assert.equal(captured[0].campaignLessonProductId, null);
+  });
+
+  test("Matrix 8: Direct Experience visitor clicks Campaign A-scoped product -> entryCampaignId=null, productCampaignId=Campaign A", async () => {
+    const captured: AttributionInput[] = [];
+    const response = await click(
+      { kind: "CAMPAIGN_PRODUCT", campaignAssignmentId: "assignment-a" },
+      {
+        getAccess: async () =>
+          access({
+            campaigns: twoEligibleCampaigns(),
+            entryContext: { kind: "DIRECT" },
+          }),
+        findCampaignProduct: async (options) => {
+          assert.equal(options.campaignAssignmentId, "assignment-a");
+          return resolvedLink({
+            id: "assignment-a",
+            scope: { campaignId: "campaign-A", isActive: true },
+          });
+        },
+        recordAttribution: async (input) => {
+          captured.push(input);
+        },
+      },
+    );
+
+    assert.equal(response.status, 302);
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].entryCampaignId, null);
+    assert.equal(captured[0].productCampaignId, "campaign-A");
+    assert.equal(captured[0].campaignLessonProductId, null);
+  });
+
+  test("Matrix 9: Direct Experience visitor clicks Lesson product -> entryCampaignId=null, productCampaignId=Campaign A, campaignLessonProductId populated", async () => {
+    const captured: AttributionInput[] = [];
+    const response = await click(
+      { kind: "LESSON", lessonId: "lesson-1", campaignLessonProductId: "clp-1" },
+      {
+        getAccess: async () =>
+          access({
+            campaigns: twoEligibleCampaigns(),
+            entryContext: { kind: "DIRECT" },
+          }),
+        findCampaignLessonProduct: async (options) => {
+          assert.equal(options.campaignLessonProductId, "clp-1");
+          assert.equal(options.lessonId, "lesson-1");
+          return resolvedLink({
+            id: "clp-1",
+            lessonId: "lesson-1",
+            campaignLessonProductId: "clp-1",
+            scope: { campaignId: "campaign-A", isActive: true },
+          });
+        },
+        recordAttribution: async (input) => {
+          captured.push(input);
+        },
+      },
+    );
+
+    assert.equal(response.status, 302);
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].entryCampaignId, null);
+    assert.equal(captured[0].productCampaignId, "campaign-A");
+    assert.equal(captured[0].campaignLessonProductId, "clp-1");
   });
 });
 

@@ -181,7 +181,7 @@ describe("public experience product catalog cutover", () => {
       priceText: "$19.99",
       productUrl: "https://acme.test/products/provider-title",
       brand: { id: "brand-1", name: "Acme", slug: "acme" },
-      source: "CAMPAIGN",
+      source: "BRAND_STOREFRONT",
     });
   });
 
@@ -321,20 +321,189 @@ describe("public experience product catalog cutover", () => {
     assert.equal(products[0].description, "Provider description");
   });
 
-  test("every product is a canonical catalog card: no LINKED source survives", async () => {
-    // Replaces "current direct ExperienceProductLinks remain first while
-    // curation stays available". The precedence rule it asserted existed only
-    // for ExperienceProductLink rows, which no longer exist.
+  test("every product is a canonical catalog card: generic brand storefront yields BRAND_STOREFRONT", async () => {
     const products = await productsFrom({
       findCuratedProducts: async () => [curated()],
     });
 
     assert.equal(products.length, 1);
-    assert.equal(products[0].source, "CAMPAIGN");
+    assert.equal(products[0].source, "BRAND_STOREFRONT");
     assert.equal(
       products.every((product) => product.productLinkId === null),
       true,
     );
+  });
+
+  test("campaign-scoped products yield CAMPAIGN_PRODUCT source with assignment id and campaign metadata", async () => {
+    const products = await productsFrom({
+      findCuratedProducts: async () => [],
+      findCampaignProducts: async () => [
+        curated({
+          id: "bcp-1",
+          campaignAssignmentId: "assignment-1",
+        }),
+      ],
+    });
+
+    assert.equal(products.length, 1);
+    assert.equal(products[0].source, "CAMPAIGN_PRODUCT");
+    assert.equal(products[0].campaignAssignmentId, "assignment-1");
+    assert.deepEqual(products[0].productCampaign, {
+      id: "campaign-1",
+      name: "Campaign",
+    });
+  });
+
+  test("deduplication: campaign-scoped product wins over duplicate generic brand storefront card", async () => {
+    const sharedConnectedProduct = {
+      id: "connected-1",
+      brandId: "brand-1",
+      externalId: "gid://shopify/Product/1",
+      title: "Shared Product",
+      productUrl: "https://acme.test/products/shared",
+      imageUrl: "https://cdn.test/shared.jpg",
+      descriptionText: "Shared description",
+      isAvailable: true,
+      hasPublicStorefrontUrl: true,
+      currencyCode: "USD",
+      priceMinMinor: 2999,
+      priceMaxMinor: 2999,
+      priceMinorUnitExponent: 2,
+    };
+
+    const products = await productsFrom({
+      findCampaignProducts: async () => [
+        {
+          id: "bcp-1",
+          campaignAssignmentId: "assignment-1",
+          displayOrder: 0,
+          titleOverride: null,
+          shortDescriptionOverride: null,
+          connectedProduct: sharedConnectedProduct,
+        },
+      ],
+      findCuratedProducts: async () => [
+        {
+          id: "bcp-1",
+          displayOrder: 1,
+          titleOverride: null,
+          shortDescriptionOverride: null,
+          connectedProduct: sharedConnectedProduct,
+        },
+      ],
+    });
+
+    // Exactly one card rendered; the campaign-scoped card wins
+    assert.equal(products.length, 1);
+    assert.equal(products[0].source, "CAMPAIGN_PRODUCT");
+    assert.equal(products[0].campaignAssignmentId, "assignment-1");
+  });
+
+  test("Matrix 1: isVisibleInShop=true, assignment inactive, provider reachable -> BRAND_STOREFRONT, no productCampaign", async () => {
+    const products = await productsFrom({
+      findCuratedProducts: async () => [curated({ id: "bcp-1" })],
+      findCampaignProducts: async () => [],
+    });
+
+    assert.equal(products.length, 1);
+    assert.equal(products[0].source, "BRAND_STOREFRONT");
+    assert.equal(products[0].productCampaign, undefined);
+  });
+
+  test("Matrix 2: isVisibleInShop=false, assignment active, isCampaignEligible=true, provider reachable -> CAMPAIGN_PRODUCT, productCampaign present", async () => {
+    const products = await productsFrom({
+      findCuratedProducts: async () => [],
+      findCampaignProducts: async () => [
+        curated({
+          id: "bcp-1",
+          campaignAssignmentId: "assignment-1",
+        }),
+      ],
+    });
+
+    assert.equal(products.length, 1);
+    assert.equal(products[0].source, "CAMPAIGN_PRODUCT");
+    assert.equal(products[0].campaignAssignmentId, "assignment-1");
+    assert.deepEqual(products[0].productCampaign, {
+      id: "campaign-1",
+      name: "Campaign",
+    });
+  });
+
+  test("Matrix 3: isVisibleInShop=true, assignment active, isCampaignEligible=true, provider reachable -> exactly 1 card, CAMPAIGN_PRODUCT wins", async () => {
+    const sharedProduct = {
+      id: "bcp-1",
+      displayOrder: 0,
+      titleOverride: null,
+      shortDescriptionOverride: null,
+      connectedProduct: {
+        id: "connected-1",
+        brandId: "brand-1",
+        externalId: "gid://shopify/Product/1",
+        title: "Product 1",
+        productUrl: "https://acme.test/products/1",
+        imageUrl: "https://cdn.test/1.jpg",
+        descriptionText: null,
+        isAvailable: true,
+        hasPublicStorefrontUrl: true,
+        currencyCode: "USD",
+        priceMinMinor: 1000,
+        priceMaxMinor: 1000,
+        priceMinorUnitExponent: 2,
+      },
+    };
+
+    const products = await productsFrom({
+      findCampaignProducts: async () => [
+        { ...sharedProduct, campaignAssignmentId: "assignment-1" },
+      ],
+      findCuratedProducts: async () => [sharedProduct],
+    });
+
+    assert.equal(products.length, 1);
+    assert.equal(products[0].source, "CAMPAIGN_PRODUCT");
+    assert.equal(products[0].campaignAssignmentId, "assignment-1");
+  });
+
+  test("Matrix 4: isVisibleInShop=false, assignment inactive -> hidden from storefront", async () => {
+    const products = await productsFrom({
+      findCuratedProducts: async () => [],
+      findCampaignProducts: async () => [],
+    });
+
+    assert.equal(products.length, 0);
+  });
+
+  test("Matrix 5: hasPublicStorefrontUrl=false -> hidden from storefront even if isVisibleInShop=true and assignment active", async () => {
+    const unpublishedProduct = {
+      id: "bcp-unpub",
+      campaignAssignmentId: "assignment-unpub",
+      displayOrder: 0,
+      titleOverride: null,
+      shortDescriptionOverride: null,
+      connectedProduct: {
+        id: "connected-unpub",
+        brandId: "brand-1",
+        externalId: "gid://shopify/Product/unpub",
+        title: "Unpublished Product",
+        productUrl: "https://acme.test/products/unpub",
+        imageUrl: null,
+        descriptionText: null,
+        isAvailable: true,
+        hasPublicStorefrontUrl: false,
+        currencyCode: "USD",
+        priceMinMinor: 1000,
+        priceMaxMinor: 1000,
+        priceMinorUnitExponent: 2,
+      },
+    };
+
+    const products = await productsFrom({
+      findCampaignProducts: async () => [unpublishedProduct],
+      findCuratedProducts: async () => [unpublishedProduct],
+    });
+
+    assert.equal(products.length, 0);
   });
 
 });

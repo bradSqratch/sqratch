@@ -196,7 +196,7 @@ export function LessonProductLinksSection({
         });
       } catch (error) {
         setPickerError(
-          getErrorMessage(error, "Failed to load available Shopify products."),
+          getErrorMessage(error, "Failed to load available products."),
         );
       } finally {
         setLoadingAvailable(false);
@@ -305,8 +305,8 @@ export function LessonProductLinksSection({
           <div>
             <h3 className="text-lg font-semibold">Related Products</h3>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-white/60">
-              Link Shopify products to this lesson so they can appear directly
-              on the public lesson page.
+              Link products to this lesson so they can appear directly on the
+              public lesson page.
             </p>
           </div>
           <Button
@@ -364,7 +364,7 @@ export function LessonProductLinksSection({
                         </p>
                       </div>
                       <p className="mt-1 text-sm text-white/55">
-                        {product.priceText || "Price available on Shopify"}
+                        {product.priceText || "Price available in store"}
                       </p>
                       {(campaignLabel || brandLabel) && (
                         <p className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -410,7 +410,7 @@ export function LessonProductLinksSection({
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="max-w-5xl border-white/10 bg-[#0d1021] text-white">
           <DialogHeader>
-            <DialogTitle>Attach Shopify products</DialogTitle>
+            <DialogTitle>Attach products</DialogTitle>
             <DialogDescription className="text-white/55">
               Choose products from the connected lesson brand storefront and add
               them to this lesson.
@@ -429,7 +429,7 @@ export function LessonProductLinksSection({
 
             {loadingAvailable ? (
               <div className="rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/60">
-                Loading Shopify products...
+                Loading products...
               </div>
             ) : pickerError ? (
               <div className="space-y-3 rounded-3xl border border-red-400/25 bg-red-500/10 p-6 text-sm text-red-200">
@@ -469,7 +469,6 @@ export function LessonProductLinksSection({
                         </span>
                         {" — "}
                         {campaign.brandName || "Unknown brand"}
-                        {" — Shopify"}
                       </span>
                     </button>
                   ))}
@@ -478,8 +477,8 @@ export function LessonProductLinksSection({
             ) : !available?.connected ? (
               <div className="rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/60">
                 {available?.brand
-                  ? `${available.brand.name} does not have a connected Shopify store yet.`
-                  : "This lesson does not resolve to a campaign brand with a connected Shopify store yet."}
+                  ? `${available.brand.name} does not have a connected store yet.`
+                  : "This lesson does not resolve to a campaign brand with a connected store yet."}
               </div>
             ) : available.items.length === 0 ? (
               <div className="rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/60">
@@ -498,7 +497,6 @@ export function LessonProductLinksSection({
                           </span>
                           {" — "}
                           {selectedCampaign.brandName || available.brand.name}
-                          {" — Shopify"}
                         </span>
                         <button
                           type="button"
@@ -567,7 +565,7 @@ export function LessonProductLinksSection({
                             )}
                           </div>
                           <p className="mt-2 text-sm text-white/55">
-                            {product.priceText || "Price available on Shopify"}
+                            {product.priceText || "Price available in store"}
                           </p>
                           <p className="mt-2 truncate text-xs text-white/40">
                             {product.productUrl}
