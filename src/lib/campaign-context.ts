@@ -88,6 +88,57 @@ export type PublicExperienceEntryContext =
   | { kind: "CAMPAIGN"; campaignId: string };
 
 /**
+ * The minimal server-derived scope attached to a public lesson product.  A
+ * missing scope is a legacy/global link; an inactive scope is deliberately
+ * not the same thing.  Deactivation revokes that attachment rather than
+ * turning it into a global product.
+ */
+export type PublicCampaignScopedContent = {
+  campaignId: string;
+  isActive: boolean;
+};
+
+/**
+ * Shared authorization predicate for public campaign-scoped lesson content.
+ *
+ * The list route and its outbound click route must apply the exact same rule:
+ * a visible card must be clickable, and a hidden card must never be
+ * redirectable. `eligibleCampaignIds` is derived from CampaignExperience
+ * rows for the current Experience (and filters out brandless campaigns), so
+ * a stale CampaignLessonProduct remains denied after its campaign is removed
+ * from the Experience.
+ */
+export function isPublicCampaignScopedContentVisible(options: {
+  scope: PublicCampaignScopedContent | null;
+  entryContext: PublicExperienceEntryContext;
+  resolvedCampaignId: string | null;
+  eligibleCampaignIds: readonly string[];
+}): boolean {
+  const { scope, entryContext, resolvedCampaignId, eligibleCampaignIds } = options;
+
+  // No row is the pre-Phase-5 global compatibility case. An inactive row is
+  // an explicit revocation and must not be downgraded into a global link.
+  if (!scope) {
+    return true;
+  }
+
+  if (!scope.isActive || !eligibleCampaignIds.includes(scope.campaignId)) {
+    return false;
+  }
+
+  // Direct Experience entry intentionally unions every active, currently
+  // linked campaign scope without fabricating acquisition attribution.
+  if (entryContext.kind === "DIRECT") {
+    return true;
+  }
+
+  // A campaign entry needs the independently resolved, validated campaign as
+  // well as the marker. This fails closed if a malformed/stale access object
+  // claims CAMPAIGN but cannot resolve that campaign against the Experience.
+  return scope.campaignId === resolvedCampaignId;
+}
+
+/**
  * Filters to eligible contexts and orders them deterministically.
  *
  * A campaign with a null `brandId` is NEVER an eligible context: brand

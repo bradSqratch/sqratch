@@ -145,6 +145,9 @@ function experienceLink(overrides: Partial<Record<string, unknown>> = {}) {
     lessonProductLinkId: null,
     campaignLessonProductId: null,
     scopedCampaignId: null,
+    // A fixture with a scopedCampaignId represents a current active scope by
+    // default; the inactive-scope regression case overrides this explicitly.
+    scopedCampaignIsActive: true,
     brandCommerceProductId: null,
     ...overrides,
   };
@@ -201,6 +204,49 @@ describe("cross-brand and cross-campaign integrity", () => {
             lessonProductLinkId: "link-1",
             experienceProductLinkId: null,
             scopedCampaignId: "campaign-OTHER",
+          }),
+      },
+    );
+
+    assert.equal(response.status, 404);
+  });
+
+  test("an inactive lesson scope is denied instead of becoming a global click target", async () => {
+    const response = await click(
+      { kind: "LESSON", lessonId: "lesson-1", productLinkId: "link-1" },
+      {
+        getAccess: async () => access({
+          entryContext: { kind: "DIRECT" },
+          campaigns: twoEligibleCampaigns(),
+        }),
+        findExperienceProductLink: async () => null,
+        findLessonProductLink: async () =>
+          experienceLink({
+            lessonProductLinkId: "link-1",
+            experienceProductLinkId: null,
+            scopedCampaignId: "campaign-A",
+            scopedCampaignIsActive: false,
+          }),
+      },
+    );
+
+    assert.equal(response.status, 404);
+  });
+
+  test("direct lesson union rejects a scope whose campaign is no longer linked to the Experience", async () => {
+    const response = await click(
+      { kind: "LESSON", lessonId: "lesson-1", productLinkId: "link-1" },
+      {
+        getAccess: async () => access({
+          entryContext: { kind: "DIRECT" },
+          campaigns: twoEligibleCampaigns(),
+        }),
+        findExperienceProductLink: async () => null,
+        findLessonProductLink: async () =>
+          experienceLink({
+            lessonProductLinkId: "link-1",
+            experienceProductLinkId: null,
+            scopedCampaignId: "campaign-removed",
           }),
       },
     );
@@ -405,7 +451,10 @@ describe("forged input handling", () => {
     // or a request body.
     assert.doesNotMatch(source, /request\.nextUrl\.searchParams/);
     assert.doesNotMatch(source, /await request\.json\(\)/);
-    assert.match(source, /validateDestination\(link\.productUrl, link\.sourceShopDomain\)/);
+    assert.match(
+      source,
+      /validateDestination\(\s*link\.productUrl,\s*link\.sourceShopDomain,?\s*\)/,
+    );
   });
 });
 

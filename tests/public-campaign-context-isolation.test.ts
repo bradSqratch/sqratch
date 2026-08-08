@@ -378,23 +378,46 @@ const progressRouteSource = readFileSync(
 );
 
 describe("public lesson-products route wiring (source inspection)", () => {
-  test("resolves the visitor's campaign through resolvePublicCampaignId, never campaigns[0] (item 20)", () => {
-    assert.match(lessonProductsRouteSource, /resolvePublicCampaignId\(/);
+  test("resolves the visitor's campaign from trusted entryContext, never campaigns[0] or stale stored state (item 20)", () => {
+    assert.match(
+      lessonProductsRouteSource,
+      /access\.entryContext\.kind === "CAMPAIGN"[\s\S]*?access\.entryContext\.campaignId[\s\S]*?: null/,
+    );
     assert.equal(/\.campaigns\[0\]/.test(lessonProductsRouteSource), false);
   });
 
-  test("an unscoped link (no active CampaignLessonProduct) always renders regardless of context (item 11)", () => {
+  test("only a truly unscoped link renders globally; an inactive scope remains a denial", () => {
     assert.match(
       lessonProductsRouteSource,
-      /if \(!scope \|\| !scope\.isActive\) \{\s*return true;\s*\}/,
+      /isPublicCampaignScopedContentVisible\(\{[\s\S]*?scope,[\s\S]*?entryContext: access\.entryContext,[\s\S]*?eligibleCampaignIds,/,
     );
   });
 
-  test("a scoped link renders only when its campaignId equals the resolved visitor context (items 18, 19)", () => {
+  test("direct lesson rendering and click authorization share the exact campaign-scope predicate", () => {
+    const clickSource = readFileSync(
+      join(root, "src/lib/commerce/click-attribution.ts"),
+      "utf8",
+    );
     assert.match(
       lessonProductsRouteSource,
-      /return scope\.campaignId === visitorCampaign\?\.campaignId;/,
+      /isPublicCampaignScopedContentVisible/,
     );
+    assert.match(clickSource, /isPublicCampaignScopedContentVisible/);
+    assert.match(clickSource, /scopedCampaignIsActive/);
+  });
+
+  test("the supplementary lesson-click beacon also uses the shared scope predicate and explicit entry context", () => {
+    const postStart = lessonProductsRouteSource.indexOf("export async function POST(");
+    assert.ok(postStart >= 0, "POST handler must exist");
+    const postBody = lessonProductsRouteSource.slice(postStart);
+    assert.match(postBody, /campaignProductLink:\s*\{\s*select:/);
+    assert.match(
+      postBody,
+      /isPublicCampaignScopedContentVisible\(\{[\s\S]*?scope: linkedProduct\.campaignProductLink,[\s\S]*?entryContext: access\.entryContext,[\s\S]*?eligibleCampaignIds,/,
+    );
+    // This is deliberately a 404 so the beacon cannot be used as an oracle
+    // for a sibling campaign's private/revoked product state.
+    assert.match(postBody, /error: "Product not found\."[\s\S]*?status: 404/);
   });
 
   test("the CampaignLessonProduct projection selects only campaignId and isActive — no internal ids or provider metadata (item 22)", () => {

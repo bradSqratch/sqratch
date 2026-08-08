@@ -33,7 +33,10 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import type { CommerceProvider } from "@prisma/client";
-import { getExperienceAccessContext, type ExperienceAccessContext } from "@/lib/experience-access";
+import {
+  getExperienceAccessContext,
+  type ExperienceAccessContext,
+} from "@/lib/experience-access";
 import prisma from "@/lib/prisma";
 import { attachSessionCookie, ensureViewerSession } from "@/lib/session";
 import { getRequestIp, rateLimit, rateLimitResponse } from "@/lib/rate-limit";
@@ -45,6 +48,8 @@ import {
   hashClickIp,
   hashClickToken,
 } from "@/lib/commerce/click-token";
+import { isPublicCampaignScopedContentVisible } from "@/lib/campaign-context";
+import { isCampaignAssignmentCatalogAuthorized } from "@/lib/commerce/campaign-assignment-authorization";
 
 /**
  * Per-IP click budget. Generous enough that no real visitor is ever stopped,
@@ -84,6 +89,8 @@ type ResolvedLink = {
   lessonProductLinkId: string | null;
   campaignLessonProductId: string | null;
   scopedCampaignId: string | null;
+  /** Meaningful only when scopedCampaignId is non-null. */
+  scopedCampaignIsActive: boolean;
   brandCommerceProductId: string | null;
   sourceShopDomain: string | null;
 };
@@ -199,7 +206,10 @@ function resolveVisitorCampaign(access: ExperienceAccessContext) {
  * and `https:` are accepted: anything else (notably `javascript:`, `data:`) is
  * refused outright rather than redirected to.
  */
-function validateDestination(productUrl: string, expectedShopDomain?: string | null): URL | null {
+function validateDestination(
+  productUrl: string,
+  expectedShopDomain?: string | null,
+): URL | null {
   let parsed: URL;
 
   try {
@@ -218,7 +228,8 @@ function validateDestination(productUrl: string, expectedShopDomain?: string | n
   // A click redirect is security-sensitive: without a provider domain we
   // cannot prove a historical snapshot remains a product destination. Fail
   // closed instead of turning the route into a durable open redirect.
-  const expectedHost = normalizeShopDomain(expectedShopDomain) || expectedShopDomain.toLowerCase();
+  const expectedHost =
+    normalizeShopDomain(expectedShopDomain) || expectedShopDomain.toLowerCase();
   if (parsed.hostname !== expectedHost) return null;
 
   return parsed;
@@ -271,6 +282,7 @@ const DEFAULT_DEPS: CommerceClickDeps = {
       lessonProductLinkId: null,
       campaignLessonProductId: null,
       scopedCampaignId: null,
+      scopedCampaignIsActive: false,
       brandCommerceProductId: null,
     };
   },
@@ -324,10 +336,10 @@ const DEFAULT_DEPS: CommerceClickDeps = {
       return null;
     }
 
-    const scope =
-      link.campaignProductLink && link.campaignProductLink.isActive
-        ? link.campaignProductLink
-        : null;
+    // Keep an inactive scope visible to the authorization layer. Treating it
+    // as null would accidentally turn an explicitly revoked attachment into
+    // a global/legacy link.
+    const scope = link.campaignProductLink;
 
     return {
       id: link.id,
@@ -340,10 +352,15 @@ const DEFAULT_DEPS: CommerceClickDeps = {
       lessonProductLinkId: link.id,
       campaignLessonProductId: scope?.id ?? null,
       scopedCampaignId: scope?.campaignId ?? null,
+      scopedCampaignIsActive: scope?.isActive ?? false,
       brandCommerceProductId: scope?.brandCommerceProductId ?? null,
     };
   },
-  async findCampaignCatalogProduct({ brandCommerceProductId, experienceId, entryCampaignId }) {
+  async findCampaignCatalogProduct({
+    brandCommerceProductId,
+    experienceId,
+    entryCampaignId,
+  }) {
     const row = await prisma.brandCommerceProduct.findFirst({
       where: {
         id: brandCommerceProductId,
@@ -359,26 +376,47 @@ const DEFAULT_DEPS: CommerceClickDeps = {
         },
       },
       select: {
-        id: true, brandId: true,
-        connectedProduct: { select: { productUrl: true, connection: { select: { externalAccountId: true } } } },
+        id: true,
+        brandId: true,
+        connectedProduct: {
+          select: {
+            productUrl: true,
+            connection: { select: { externalAccountId: true } },
+          },
+        },
       },
     });
-    return row ? {
-      id: row.id, productUrl: row.connectedProduct.productUrl, brandId: row.brandId,
-      sourceShopDomain: row.connectedProduct.connection.externalAccountId, courseId: null, lessonId: null,
-      experienceProductLinkId: null, lessonProductLinkId: null,
-      campaignLessonProductId: null, scopedCampaignId: null,
-      brandCommerceProductId: row.id,
-    } : null;
+    return row
+      ? {
+          id: row.id,
+          productUrl: row.connectedProduct.productUrl,
+          brandId: row.brandId,
+          sourceShopDomain: row.connectedProduct.connection.externalAccountId,
+          courseId: null,
+          lessonId: null,
+          experienceProductLinkId: null,
+          lessonProductLinkId: null,
+          campaignLessonProductId: null,
+          scopedCampaignId: null,
+          scopedCampaignIsActive: false,
+          brandCommerceProductId: row.id,
+        }
+      : null;
   },
-  async findCampaignAssignmentCatalogProduct({ campaignAssignmentId, experienceId }) {
+  async findCampaignAssignmentCatalogProduct({
+    campaignAssignmentId,
+    experienceId,
+  }) {
     const assignment = await prisma.campaignCommerceProduct.findFirst({
       where: {
         id: campaignAssignmentId,
         isActive: true,
-        campaign: { experiences: { some: { experienceId } } },
+        campaign: {
+          commerceProductCurationEnabled: true,
+          experiences: { some: { experienceId } },
+        },
         brandCommerceProduct: {
-          isVisibleInShop: true,
+          isCampaignEligible: true,
           connectedProduct: { isAvailable: true },
         },
       },
@@ -386,12 +424,24 @@ const DEFAULT_DEPS: CommerceClickDeps = {
         id: true,
         campaignId: true,
         brandId: true,
+        isActive: true,
+        campaign: {
+          select: {
+            id: true,
+            brandId: true,
+            commerceProductCurationEnabled: true,
+          },
+        },
         brandCommerceProductId: true,
         brandCommerceProduct: {
           select: {
+            brandId: true,
+            isCampaignEligible: true,
             connectedProduct: {
               select: {
                 productUrl: true,
+                brandId: true,
+                isAvailable: true,
                 connection: { select: { externalAccountId: true } },
               },
             },
@@ -400,19 +450,27 @@ const DEFAULT_DEPS: CommerceClickDeps = {
       },
     });
 
-    return assignment
+    return assignment &&
+      isCampaignAssignmentCatalogAuthorized({
+        assignment,
+        campaign: assignment.campaign,
+        brandCommerceProduct: assignment.brandCommerceProduct,
+      })
       ? {
           id: assignment.id,
-          productUrl: assignment.brandCommerceProduct.connectedProduct.productUrl,
+          productUrl:
+            assignment.brandCommerceProduct.connectedProduct.productUrl,
           brandId: assignment.brandId,
           sourceShopDomain:
-            assignment.brandCommerceProduct.connectedProduct.connection.externalAccountId,
+            assignment.brandCommerceProduct.connectedProduct.connection
+              .externalAccountId,
           courseId: null,
           lessonId: null,
           experienceProductLinkId: null,
           lessonProductLinkId: null,
           campaignLessonProductId: null,
           scopedCampaignId: assignment.campaignId,
+          scopedCampaignIsActive: true,
           brandCommerceProductId: assignment.brandCommerceProductId,
         }
       : null;
@@ -445,7 +503,9 @@ const DEFAULT_DEPS: CommerceClickDeps = {
         // The catalog row was part of the authorization proof used to resolve
         // this click. If it disappeared before minting, do not issue an
         // unpinned token that another same-brand connection could claim.
-        throw new Error("Catalog product no longer exists for click attribution");
+        throw new Error(
+          "Catalog product no longer exists for click attribution",
+        );
       }
     }
     if (!commerceConnectionId && input.sourceShopDomain && input.brandId) {
@@ -468,19 +528,23 @@ const DEFAULT_DEPS: CommerceClickDeps = {
         throw new Error("Commerce connection not found for link source domain");
       }
     }
-    if (!commerceConnectionId && input.brandId && !input.brandCommerceProductId) {
+    if (
+      !commerceConnectionId &&
+      input.brandId &&
+      !input.brandCommerceProductId
+    ) {
       // Legacy snapshots without a resolvable catalog connection may still be
       // navigable, but cannot mint order-attribution evidence safely.
       throw new Error("Commerce connection cannot be pinned for legacy link");
     }
 
     const qrCodeId = input.sessionId
-      ? (
+      ? ((
           await prisma.userSession.findUnique({
             where: { id: input.sessionId },
             select: { qrCodeId: true },
           })
-        )?.qrCodeId ?? null
+        )?.qrCodeId ?? null)
       : null;
 
     await prisma.commerceClickAttribution.create({
@@ -561,21 +625,21 @@ export async function handleCommerceClick(
           })
         : options.surface.kind === "CAMPAIGN_CATALOG"
           ? await deps.findCampaignCatalogProduct({
-                brandCommerceProductId: options.surface.brandCommerceProductId,
-                experienceId: access.experience.id,
-                entryCampaignId: visitorCampaign?.campaignId ?? null,
-              })
+              brandCommerceProductId: options.surface.brandCommerceProductId,
+              experienceId: access.experience.id,
+              entryCampaignId: visitorCampaign?.campaignId ?? null,
+            })
           : options.surface.kind === "CAMPAIGN_ASSIGNMENT_CATALOG"
             ? await deps.findCampaignAssignmentCatalogProduct({
                 campaignAssignmentId: options.surface.campaignAssignmentId,
                 experienceId: access.experience.id,
               })
-          : await deps.findLessonProductLink({
-            productLinkId: options.surface.productLinkId,
-            lessonId: options.surface.lessonId,
-            experienceId: access.experience.id,
-            canAccessPrivate: access.canAccessPrivate,
-          });
+            : await deps.findLessonProductLink({
+                productLinkId: options.surface.productLinkId,
+                lessonId: options.surface.lessonId,
+                experienceId: access.experience.id,
+                canAccessPrivate: access.canAccessPrivate,
+              });
 
     if (!link) {
       return genericNotFound();
@@ -587,17 +651,25 @@ export async function handleCommerceClick(
       access.entryContext.kind === "CAMPAIGN" && visitorCampaign !== null;
     const resolvedCampaignBrandId = visitorCampaign?.campaign.brand?.id ?? null;
 
-    // A campaign-scoped attachment is clickable only inside its own campaign
-    // entry context. Explicit direct entry is deliberately different: direct
-    // union rendering may expose the attachment and preserves its campaign as
-    // product authorization without fabricating acquisition credit. Invalid
-    // campaign entry context still fails closed; unscoped legacy rows remain
-    // unaffected.
-    if (
-      link.scopedCampaignId &&
-      access.entryContext.kind === "CAMPAIGN" &&
-      link.scopedCampaignId !== visitorCampaign?.campaignId
-    ) {
+    // This is intentionally the same predicate as public lesson rendering.
+    // In particular, a direct Experience entry may click any active scope
+    // whose campaign remains linked to this Experience, but an inactive or
+    // detached scope must not become clickable merely because it is direct.
+    const eligibleCampaignIds = access.experience.campaigns
+      .filter((item) => item.campaign.brand !== null)
+      .map((item) => item.campaignId);
+    const scope = link.scopedCampaignId
+      ? {
+          campaignId: link.scopedCampaignId,
+          isActive: link.scopedCampaignIsActive,
+        }
+      : null;
+    if (!isPublicCampaignScopedContentVisible({
+      scope,
+      entryContext: access.entryContext,
+      resolvedCampaignId: visitorCampaign?.campaignId ?? null,
+      eligibleCampaignIds,
+    })) {
       return genericNotFound();
     }
 
@@ -606,7 +678,9 @@ export async function handleCommerceClick(
       (await deps.ensureSession({
         request,
         userId: access.viewer.userId,
-        campaignId: entryCampaignContextResolved ? visitorCampaign!.campaignId : null,
+        campaignId: entryCampaignContextResolved
+          ? visitorCampaign!.campaignId
+          : null,
       }));
 
     // BRAND — re-derived from the link row first, falling back to the resolved

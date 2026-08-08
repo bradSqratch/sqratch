@@ -145,13 +145,16 @@ so an active row never points at a null legacy link.
 
 ## Compatibility strategy
 
-**Dual-read.** A `LessonProductLink` with no active `CampaignLessonProduct`
+**Dual-read.** A `LessonProductLink` with no `CampaignLessonProduct`
 counterpart is *unscoped* and renders unconditionally on the public lesson
 products route, exactly as it always has — this is the correct reading for
-every row that predates Phase 5. A row with an active scoping row renders
-only under that row's own campaign's resolved visitor context; on an
-ambiguous (unresolved) context, scoped rows are hidden while unscoped rows
-are unaffected.
+every row that predates Phase 5. An existing but inactive scoping row is an
+explicit revocation, not an unscoped fallback, and is hidden. An active scope
+renders only when its campaign is still brand-owning and linked to the current
+Experience. Campaign entry exposes only the trusted entry campaign's scope;
+direct Experience entry exposes the deterministic union of every such active
+scope. The lesson list and its outbound click route share this same predicate,
+so a rendered product cannot fail solely because click authorization drifted.
 
 **`ExperienceProductLink` was deliberately not touched.** It has no writer
 anywhere in the codebase for either creation or update outside the
@@ -226,9 +229,25 @@ brand storefront catalogs. Campaign-scoped entries preserve their individual
 campaign identities; equivalent products from different campaigns are not
 silently collapsed.
 
-The public lesson-products route fails closed the same way for *scoped*
-`LessonProductLink` rows only: unscoped rows (pre-Phase-5, or a detached
-scoping row) render regardless of context.
+The public lesson-products route follows the same direct-union rule as the
+Experience Shop: global/unscoped rows always render; Campaign A entry sees
+only active A-scoped rows; Campaign B entry sees only active B-scoped rows;
+and a direct root Experience entry sees all active scopes whose campaigns are
+still linked to the Experience. Inactive or detached-from-the-Experience
+scopes remain hidden. Direct lesson clicks retain `entryCampaignId = null`
+and the scoped row's `productCampaignId`; campaign-entry clicks carry both as
+that trusted campaign.
+
+**Nested direct-deep-link limitation.** `/x/<experience-slug>` is the
+server-owned direct-entry boundary and clears stale campaign context unless a
+signed campaign handoff is present. A bare nested URL such as
+`/x/<experience-slug>/lessons/<lessonId>` does not currently pass through
+that boundary, because clearing context on every nested navigation would
+break normal Campaign → Experience → Lesson navigation. Consequently, a
+visitor who already carries a valid campaign session is treated as that
+campaign when opening a nested link directly. This is documented rather than
+papered over with a client-controlled parameter; resolving it requires a
+broader server-owned entry-mode design.
 
 ## Migration
 
@@ -271,6 +290,15 @@ bug this phase exists to eliminate elsewhere.
    creation/update anywhere in the codebase (confirmed by inspection) and was
    intentionally left as-is; see Compatibility strategy above.
 2. **No backfill of historical unscoped links** — see above; intentional.
+3. **Legacy creator picker remains live-Shopify backed.** `GET
+   /api/creator/lessons/[lessonId]/available-products` calls
+   `fetchNormalizedShopifyProducts` for a legacy campaign. On a
+   multi-campaign Experience, a chosen live product must also exist as a
+   persisted `BrandCommerceProduct` before it can receive the mandatory
+   `CampaignLessonProduct` scope; otherwise the attach route safely rejects
+   it with the sync-first message. This preserves canonical same-brand
+   integrity but is poor picker UX. It is intentionally deferred to the next
+   canonical-commerce cleanup phase; this phase adds no further legacy path.
 
 ## Phase 6 boundary
 

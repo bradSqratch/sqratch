@@ -2,13 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   createAnalyticsEvent,
   getExperienceAccessContext,
-  resolvePublicCampaignId,
   type ExperienceAccessContext,
 } from "@/lib/experience-access";
 import prisma from "@/lib/prisma";
 import { attachSessionCookie, ensureViewerSession } from "@/lib/session";
 import { isProductLinkCurrent } from "@/lib/product-link-compatibility";
 import { externalAccountIdFromShopDomain } from "@/lib/commerce/connection-service";
+import { isPublicCampaignScopedContentVisible } from "@/lib/campaign-context";
 
 /**
  * The campaign context this visitor is in on this Experience, or null when it
@@ -16,13 +16,14 @@ import { externalAccountIdFromShopDomain } from "@/lib/commerce/connection-servi
  * campaign). Never `campaigns[0]`.
  */
 function resolveVisitorCampaign(access: ExperienceAccessContext) {
-  const resolvedCampaignId = resolvePublicCampaignId({
-    campaigns: access.experience.campaigns.map((item) => ({
-      campaignId: item.campaignId,
-      brandId: item.campaign.brand?.id ?? null,
-    })),
-    storedCampaignId: access.storedCampaignId,
-  });
+  // `entryContext` is the server-owned decision established at the public
+  // Experience boundary. In particular, DIRECT must override an old valid
+  // UserSession.campaignId: a direct product-click beacon must not credit a
+  // campaign merely because the visitor arrived through one earlier.
+  const resolvedCampaignId =
+    access.entryContext.kind === "CAMPAIGN"
+      ? access.entryContext.campaignId
+      : null;
 
   return (
     access.experience.campaigns.find(
@@ -121,25 +122,25 @@ export async function GET(
 
     // CAMPAIGN-SCOPED VISIBILITY, applied server-side before serialization.
     //
-    //  - A link with NO CampaignLessonProduct row, or whose row is not active,
-    //    is unscoped: it predates Phase 5 or its campaign attachment was
-    //    detached (deactivation also nulls `legacyLessonProductLinkId`), so it
-    //    carries no campaign claim and renders unconditionally, exactly as
-    //    before. These rows are never filtered by campaign context.
-    //  - A link with an ACTIVE CampaignLessonProduct row belongs to exactly one
-    //    campaign and renders only inside that campaign's context.
-    //  - An ambiguous context (`resolvedCampaignId === null`) fails closed for
-    //    scoped rows: no campaign matches, so none of them render. Unscoped
-    //    rows are unaffected.
+    //  - A link with NO CampaignLessonProduct row is global legacy content.
+    //  - An INACTIVE row is a revocation, never a downgrade into global content.
+    //  - An active scope must still name a brand-owning campaign currently
+    //    linked to this Experience. Direct entry unions all such scopes;
+    //    campaign entry exposes only its own scope. The shared predicate is
+    //    also used by the lesson click route.
     const visitorCampaign = resolveVisitorCampaign(access);
+    const eligibleCampaignIds = access.experience.campaigns
+      .filter((item) => item.campaign.brand !== null)
+      .map((item) => item.campaignId);
     const visibleProductLinks = currentProductLinks.filter((link) => {
       const scope = link.campaignProductLink;
 
-      if (!scope || !scope.isActive) {
-        return true;
-      }
-
-      return scope.campaignId === visitorCampaign?.campaignId;
+      return isPublicCampaignScopedContentVisible({
+        scope,
+        entryContext: access.entryContext,
+        resolvedCampaignId: visitorCampaign?.campaignId ?? null,
+        eligibleCampaignIds,
+      });
     });
 
     return NextResponse.json({
@@ -246,10 +247,33 @@ export async function POST(
         brandId: true,
         productUrl: true,
         title: true,
+        campaignProductLink: {
+          select: {
+            campaignId: true,
+            isActive: true,
+          },
+        },
       },
     });
 
     if (!linkedProduct) {
+      return NextResponse.json({ error: "Product not found." }, { status: 404 });
+    }
+
+    // A beacon is not authorization evidence, but it is still a public click
+    // endpoint. Apply the exact same scope predicate as rendering and the
+    // server redirect so a forged POST cannot create cross-campaign or
+    // revoked-product analytics that the visitor could never have clicked.
+    const visitorCampaign = resolveVisitorCampaign(access);
+    const eligibleCampaignIds = access.experience.campaigns
+      .filter((item) => item.campaign.brand !== null)
+      .map((item) => item.campaignId);
+    if (!isPublicCampaignScopedContentVisible({
+      scope: linkedProduct.campaignProductLink,
+      entryContext: access.entryContext,
+      resolvedCampaignId: visitorCampaign?.campaignId ?? null,
+      eligibleCampaignIds,
+    })) {
       return NextResponse.json({ error: "Product not found." }, { status: 404 });
     }
 
@@ -259,7 +283,6 @@ export async function POST(
     // co-sponsor; the click itself is still recorded. The clicked link's OWN
     // brand still attributes normally — it is a property of the product, not a
     // guess about the visitor.
-    const visitorCampaign = resolveVisitorCampaign(access);
     const sessionId =
       access.viewer.sessionId ||
       (await ensureViewerSession({

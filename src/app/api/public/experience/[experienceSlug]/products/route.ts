@@ -12,6 +12,7 @@ import {
   externalAccountIdFromShopDomain,
   isLegacyShopifyBrandConnectionUsable,
 } from "@/lib/commerce/connection-service";
+import { isCampaignAssignmentCatalogAuthorized } from "@/lib/commerce/campaign-assignment-authorization";
 
 type PublicShopProduct = {
   id?: string;
@@ -265,10 +266,22 @@ const DEFAULT_DEPS: PublicExperienceProductsDeps = {
         ],
         select: {
           id: true,
+          campaignId: true,
+          brandId: true,
+          isActive: true,
           displayOrder: true,
+          campaign: {
+            select: {
+              id: true,
+              brandId: true,
+              commerceProductCurationEnabled: true,
+            },
+          },
           brandCommerceProduct: {
             select: {
               id: true,
+              brandId: true,
+              isCampaignEligible: true,
               titleOverride: true,
               shortDescriptionOverride: true,
               connectedProduct: {
@@ -292,11 +305,19 @@ const DEFAULT_DEPS: PublicExperienceProductsDeps = {
         },
       })
       .then((rows) =>
-        rows.map((row) => ({
-          campaignAssignmentId: row.id,
-          displayOrder: row.displayOrder,
-          ...row.brandCommerceProduct,
-        })),
+        rows
+          .filter((row) =>
+            isCampaignAssignmentCatalogAuthorized({
+              assignment: row,
+              campaign: row.campaign,
+              brandCommerceProduct: row.brandCommerceProduct,
+            }),
+          )
+          .map((row) => ({
+            campaignAssignmentId: row.id,
+            displayOrder: row.displayOrder,
+            ...row.brandCommerceProduct,
+          })),
       );
   },
   fetchLegacyCampaignProducts: fetchNormalizedShopifyProducts,

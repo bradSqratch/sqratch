@@ -21,6 +21,7 @@ import { join } from "node:path";
 
 import {
   buildEligibleCampaignContexts,
+  isPublicCampaignScopedContentVisible,
   resolveCampaignSelection,
   resolvePublicExperienceEntryContext,
   resolveValidatedPublicCampaignContext,
@@ -227,6 +228,82 @@ describe("resolveValidatedPublicCampaignContext", () => {
       }),
       { kind: "CAMPAIGN", campaignId: "campaign-b" },
     );
+  });
+});
+
+describe("isPublicCampaignScopedContentVisible", () => {
+  const eligibleCampaignIds = ["campaign-a", "campaign-b"];
+
+  test("Campaign A and B entries each see global content plus only their own active scope", () => {
+    const global = { scope: null, eligibleCampaignIds } as const;
+    const campaignA = {
+      entryContext: { kind: "CAMPAIGN" as const, campaignId: "campaign-a" },
+      resolvedCampaignId: "campaign-a",
+    };
+    const campaignB = {
+      entryContext: { kind: "CAMPAIGN" as const, campaignId: "campaign-b" },
+      resolvedCampaignId: "campaign-b",
+    };
+
+    assert.equal(isPublicCampaignScopedContentVisible({ ...global, ...campaignA }), true);
+    assert.equal(isPublicCampaignScopedContentVisible({
+      scope: { campaignId: "campaign-a", isActive: true },
+      eligibleCampaignIds,
+      ...campaignA,
+    }), true);
+    assert.equal(isPublicCampaignScopedContentVisible({
+      scope: { campaignId: "campaign-b", isActive: true },
+      eligibleCampaignIds,
+      ...campaignA,
+    }), false);
+    assert.equal(isPublicCampaignScopedContentVisible({
+      scope: { campaignId: "campaign-a", isActive: true },
+      eligibleCampaignIds,
+      ...campaignB,
+    }), false);
+    assert.equal(isPublicCampaignScopedContentVisible({
+      scope: { campaignId: "campaign-b", isActive: true },
+      eligibleCampaignIds,
+      ...campaignB,
+    }), true);
+  });
+
+  test("direct entry unions every active linked scope without fabricating a campaign", () => {
+    const direct = {
+      entryContext: { kind: "DIRECT" as const },
+      resolvedCampaignId: null,
+      eligibleCampaignIds,
+    };
+
+    assert.equal(isPublicCampaignScopedContentVisible({ scope: null, ...direct }), true);
+    assert.equal(isPublicCampaignScopedContentVisible({
+      scope: { campaignId: "campaign-a", isActive: true },
+      ...direct,
+    }), true);
+    assert.equal(isPublicCampaignScopedContentVisible({
+      scope: { campaignId: "campaign-b", isActive: true },
+      ...direct,
+    }), true);
+  });
+
+  test("inactive and no-longer-linked scopes fail closed for both entry modes", () => {
+    for (const entryContext of [
+      { kind: "DIRECT" as const },
+      { kind: "CAMPAIGN" as const, campaignId: "campaign-a" },
+    ]) {
+      assert.equal(isPublicCampaignScopedContentVisible({
+        scope: { campaignId: "campaign-a", isActive: false },
+        entryContext,
+        resolvedCampaignId: entryContext.kind === "CAMPAIGN" ? "campaign-a" : null,
+        eligibleCampaignIds,
+      }), false);
+      assert.equal(isPublicCampaignScopedContentVisible({
+        scope: { campaignId: "foreign-campaign", isActive: true },
+        entryContext,
+        resolvedCampaignId: entryContext.kind === "CAMPAIGN" ? "campaign-a" : null,
+        eligibleCampaignIds,
+      }), false);
+    }
   });
 });
 
