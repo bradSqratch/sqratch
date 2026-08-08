@@ -110,36 +110,16 @@ function baseDeps(
   return {
     getAccess: async () => twoCampaignAccess(null),
     ensureSession: async () => "session-1",
-    findProductLinks: async () => [],
     findBrands: async () => [],
-    countBrandSelections: async () => 0,
     findCuratedProducts: async () => [],
     findCampaignProducts: async () => [],
-    fetchLegacyCampaignProducts: async () => ({
-      ok: true,
-      items: [],
-      hasNextPage: false,
-      limit: 100,
-      endCursor: null,
-    }),
     ...overrides,
   };
 }
 
 function brand(id: "brand-a" | "brand-b") {
   const label = id === "brand-a" ? "Brand A" : "Brand B";
-  return {
-    id,
-    name: label,
-    slug: id,
-    shopifyShopDomain: `${id}.myshopify.com`,
-    shopifyConnectionStatus: "CONNECTED",
-    shopifyInstalledAt: new Date("2026-01-01T00:00:00Z"),
-    shopifyUninstalledAt: null,
-    shopifyLastProductSyncAt: null,
-    shopifyGrantedScopes: "read_products",
-    shopifyCurrencyCode: "USD",
-  };
+  return { id, name: label, slug: id };
 }
 
 function catalogProduct(options: {
@@ -166,6 +146,7 @@ function catalogProduct(options: {
       imageUrl: null,
       descriptionText: null,
       isAvailable: true,
+      hasPublicStorefrontUrl: true,
       currencyCode: "USD",
       priceMinMinor: null,
       priceMaxMinor: null,
@@ -210,7 +191,6 @@ describe("public products route: explicit campaign scope and direct union", () =
                 }),
               ];
         },
-        countBrandSelections: async () => 1,
         findCuratedProducts: async (brandId) => {
           if (brandId === "brand-a") {
             // The same BCP is already campaign-scoped, so the generic card
@@ -267,21 +247,7 @@ describe("public products route: explicit campaign scope and direct union", () =
           ...twoCampaignAccess("campaign-b"),
           entryContext: { kind: "CAMPAIGN" as const, campaignId: "campaign-b" },
         }),
-        findBrands: async () => [
-          {
-            id: "brand-b",
-            name: "Brand B",
-            slug: "brand-b",
-            shopifyShopDomain: "brand-b.myshopify.com",
-            shopifyConnectionStatus: "CONNECTED",
-            shopifyInstalledAt: new Date("2026-01-01T00:00:00Z"),
-            shopifyUninstalledAt: null,
-            shopifyLastProductSyncAt: null,
-            shopifyGrantedScopes: "read_products",
-            shopifyCurrencyCode: "USD",
-          },
-        ],
-        countBrandSelections: async () => 1,
+        findBrands: async () => [brand("brand-b")],
         findCampaignProducts: async ({ campaignId }) => {
           scopedCampaignIds.push(campaignId);
           return [];
@@ -314,48 +280,25 @@ describe("public products route: explicit campaign scope and direct union", () =
     assert.equal(body.data.campaign, null);
   });
 
-  test("direct ExperienceProductLink rows still render even when the campaign context is ambiguous (precedence over fallback is unaffected)", async () => {
+  test("an ambiguous campaign context yields no product at all: there is no global/legacy card to fall back to", async () => {
+    // Replaces the deleted ExperienceProductLink precedence test. Those rows
+    // were the only globally-visible public shop cards; with them gone, an
+    // ambiguous context renders each eligible campaign's OWN scoped catalog and
+    // nothing global. Here neither brand has any persisted selection, so the
+    // response is empty rather than falling back to anything.
     const response = await getProducts(
       request(),
       routeContext,
       baseDeps({
         getAccess: async () => twoCampaignAccess(null),
-        findProductLinks: async () => [
-          {
-            id: "direct-1",
-            productUrl: "https://acme.test/products/direct",
-            title: "Direct product",
-            imageUrl: null,
-            priceText: null,
-            currency: null,
-            brandId: "brand-a",
-            sourceShopDomain: "brand-a.myshopify.com",
-          },
-        ],
-        findBrands: async () => [
-          {
-            id: "brand-a",
-            name: "Brand A",
-            slug: "brand-a",
-            shopifyShopDomain: "brand-a.myshopify.com",
-            shopifyConnectionStatus: "CONNECTED",
-            shopifyInstalledAt: new Date("2026-01-01T00:00:00Z"),
-            shopifyUninstalledAt: null,
-            shopifyLastProductSyncAt: null,
-            shopifyGrantedScopes: "read_products",
-            shopifyCurrencyCode: "USD",
-          },
-        ],
+        findBrands: async () => [brand("brand-a"), brand("brand-b")],
       }),
     );
 
     assert.equal(response.status, 200);
     const body = await response.json();
-    assert.equal(body.data.products.length, 1);
-    assert.equal(body.data.products[0].source, "LINKED");
-    // The link carries its OWN brand (a property of the product), not the
-    // ambiguous visitor context — this is unaffected by campaign ambiguity.
-    assert.equal(body.data.products[0].brand.id, "brand-a");
+    assert.equal(body.data.campaign, null);
+    assert.deepEqual(body.data.products, []);
   });
 });
 
@@ -377,6 +320,25 @@ const progressRouteSource = readFileSync(
   "utf8",
 );
 
+/**
+ * Executable lines only. These route/library headers deliberately NAME the
+ * legacy machinery they replaced so a future reader knows what went and why, so
+ * "this identifier is gone" assertions must be made against code, not prose.
+ */
+function codeLinesOf(source: string): string {
+  return source
+    .split("\n")
+    .filter(
+      (line) =>
+        !line.trim().startsWith("//") &&
+        !line.trim().startsWith("*") &&
+        !line.trim().startsWith("/*"),
+    )
+    .join("\n");
+}
+
+const lessonProductsRouteCode = codeLinesOf(lessonProductsRouteSource);
+
 describe("public lesson-products route wiring (source inspection)", () => {
   test("resolves the visitor's campaign from trusted entryContext, never campaigns[0] or stale stored state (item 20)", () => {
     assert.match(
@@ -386,11 +348,64 @@ describe("public lesson-products route wiring (source inspection)", () => {
     assert.equal(/\.campaigns\[0\]/.test(lessonProductsRouteSource), false);
   });
 
-  test("only a truly unscoped link renders globally; an inactive scope remains a denial", () => {
+  test("the query root is CampaignLessonProduct, so nothing can render unscoped, and an inactive scope remains a denial", () => {
+    // Phase 8: the list is derived from `Lesson.campaignProducts`
+    // (CampaignLessonProduct), whose campaignId is NOT NULL. There is no
+    // LessonProductLink read and therefore no unscoped item to leak.
+    assert.match(lessonProductsRouteCode, /campaignProducts:\s*\{/);
+    assert.doesNotMatch(lessonProductsRouteCode, /productLinks/i);
+    assert.doesNotMatch(lessonProductsRouteCode, /lessonProductLink/i);
     assert.match(
       lessonProductsRouteSource,
-      /isPublicCampaignScopedContentVisible\(\{[\s\S]*?scope,[\s\S]*?entryContext: access\.entryContext,[\s\S]*?eligibleCampaignIds,/,
+      /isPublicCampaignScopedContentVisible\(\{[\s\S]*?scope: \{[\s\S]*?campaignId: attachment\.campaignId,[\s\S]*?isActive: attachment\.isActive,[\s\S]*?entryContext: access\.entryContext,[\s\S]*?eligibleCampaignIds,/,
     );
+  });
+
+  test("the shared visibility predicate has NO unscoped branch and a non-nullable scope parameter", () => {
+    const predicateSource = readFileSync(
+      join(root, "src/lib/campaign-context.ts"),
+      "utf8",
+    );
+    // The `!scope -> return true` branch was the last global-visibility path in
+    // the public commerce surface. It must not come back, and the parameter must
+    // stay non-nullable so the type system prevents a caller from needing it.
+    assert.match(
+      predicateSource,
+      /export function isPublicCampaignScopedContentVisible\(options: \{\s*scope: PublicCampaignScopedContent;/,
+    );
+    const codeOnly = codeLinesOf(predicateSource);
+    assert.doesNotMatch(codeOnly, /if \(!scope\)/);
+    assert.doesNotMatch(
+      codeOnly,
+      /scope: PublicCampaignScopedContent \| null/,
+    );
+  });
+
+  test("public lesson rendering requires BOTH isAvailable and hasPublicStorefrontUrl", () => {
+    assert.match(
+      lessonProductsRouteSource,
+      /const PUBLICLY_LISTABLE_CONNECTED_PRODUCT = \{\s*isAvailable: true,\s*hasPublicStorefrontUrl: true,\s*\} as const;/,
+    );
+    assert.match(
+      lessonProductsRouteSource,
+      /connectedProduct: PUBLICLY_LISTABLE_CONNECTED_PRODUCT/,
+    );
+  });
+
+  test("the click path applies the same pair, so a hidden card is never redirectable", () => {
+    const clickSource = readFileSync(
+      join(root, "src/lib/commerce/click-attribution.ts"),
+      "utf8",
+    );
+    assert.match(
+      clickSource,
+      /const PUBLICLY_CLICKABLE_CONNECTED_PRODUCT = \{\s*isAvailable: true,\s*hasPublicStorefrontUrl: true,\s*\} as const;/,
+    );
+    // Every finder query in the module applies it.
+    const usages = clickSource.match(
+      /connectedProduct: PUBLICLY_CLICKABLE_CONNECTED_PRODUCT/g,
+    );
+    assert.equal(usages?.length, 3);
   });
 
   test("direct lesson rendering and click authorization share the exact campaign-scope predicate", () => {
@@ -403,56 +418,51 @@ describe("public lesson-products route wiring (source inspection)", () => {
       /isPublicCampaignScopedContentVisible/,
     );
     assert.match(clickSource, /isPublicCampaignScopedContentVisible/);
-    assert.match(clickSource, /scopedCampaignIsActive/);
+    assert.match(clickSource, /scope: link\.scope/);
   });
 
-  test("the supplementary lesson-click beacon also uses the shared scope predicate and explicit entry context", () => {
-    const postStart = lessonProductsRouteSource.indexOf("export async function POST(");
-    assert.ok(postStart >= 0, "POST handler must exist");
-    const postBody = lessonProductsRouteSource.slice(postStart);
-    assert.match(postBody, /campaignProductLink:\s*\{\s*select:/);
-    assert.match(
-      postBody,
-      /isPublicCampaignScopedContentVisible\(\{[\s\S]*?scope: linkedProduct\.campaignProductLink,[\s\S]*?entryContext: access\.entryContext,[\s\S]*?eligibleCampaignIds,/,
+  test("lesson commerce analytics beacon was removed; canonical click route remains", () => {
+    const clickSource = readFileSync(
+      join(root, "src/lib/commerce/click-attribution.ts"),
+      "utf8",
     );
-    // This is deliberately a 404 so the beacon cannot be used as an oracle
-    // for a sibling campaign's private/revoked product state.
-    assert.match(postBody, /error: "Product not found\."[\s\S]*?status: 404/);
+    assert.doesNotMatch(lessonProductsRouteSource, /export async function POST/);
+    assert.doesNotMatch(lessonProductsRouteSource, /lesson_product_click/);
+    assert.match(clickSource, /kind: "LESSON"/);
   });
 
-  test("the CampaignLessonProduct projection selects only campaignId and isActive — no internal ids or provider metadata (item 22)", () => {
-    const selectMatch = lessonProductsRouteSource.match(
-      /campaignProductLink:\s*\{\s*select:\s*\{([\s\S]*?)\},?\s*\},/,
+  test("the serialized lesson item exposes only public display fields — no catalog or scoping keys (item 22)", () => {
+    const itemsMatch = lessonProductsRouteSource.match(
+      /return \{\s*id: attachment\.id,([\s\S]*?)\};/,
     );
-    assert.ok(selectMatch, "campaignProductLink select clause must exist");
-    const fields = selectMatch![1];
-    assert.match(fields, /campaignId:\s*true/);
-    assert.match(fields, /isActive:\s*true/);
-    // Nothing else: no id, no brandCommerceProductId, no displayOrder.
-    const fieldNames = Array.from(fields.matchAll(/(\w+):\s*true/g)).map(
-      (m) => m[1],
-    );
-    assert.deepEqual(new Set(fieldNames), new Set(["campaignId", "isActive"]));
+    assert.ok(itemsMatch, "the item projection must exist");
+    const projected = Array.from(
+      itemsMatch![1].matchAll(/^\s{16}(\w+):/gm),
+    ).map((m) => m[1]);
+    assert.deepEqual(new Set(projected), new Set([
+      "productUrl",
+      "title",
+      "imageUrl",
+      "priceText",
+      "currency",
+      "brandId",
+    ]));
+    // `sourceShopDomain` was legacy-compat only and has no client consumer.
+    assert.doesNotMatch(lessonProductsRouteCode, /sourceShopDomain/);
   });
 
   test("no response body construction in the GET handler matches a credential/secret/internal-id leak pattern (item 22)", () => {
-    // Isolate the exported GET function's body (up to the sibling exported
-    // POST) and assert none of these forbidden substrings appear anywhere in
-    // it — the strongest available guarantee without a live response to
-    // introspect, matching the technique the prompt itself sanctions for
-    // this exact check.
+    // Isolate the exported GET function's body and assert none of these
+    // forbidden substrings appear anywhere in it.
     const getStart = lessonProductsRouteSource.indexOf(
       "export async function GET(",
     );
-    const postStart = lessonProductsRouteSource.indexOf(
-      "export async function POST(",
-    );
     assert.ok(
-      getStart >= 0 && postStart > getStart,
-      "GET must precede POST in this route file",
+      getStart >= 0,
+      "GET handler must exist",
     );
     const getBody = lessonProductsRouteSource
-      .slice(getStart, postStart)
+      .slice(getStart)
       .split("\n")
       .filter(
         (line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"),

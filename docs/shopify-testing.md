@@ -88,11 +88,15 @@ Current limitation: the embedded shell loads the minimum App Bridge script/meta 
 ## Product Edge Cases
 
 - Product with no image: product should render with no image instead of crashing.
-- Product with no `onlineStoreUrl`: product should use the safe `/products/{handle}` fallback.
+- Password-protected development store: a product returned by
+  `published_status:published` may have no `onlineStoreUrl`, should use the
+  canonical `/products/{handle}` navigation fallback, and must still persist
+  as storefront-published after a complete publication scan.
 - Product with no variants: product should render with zero variants and no price.
 - Product with no price: product should render without showing `$0.00` unless Shopify actually returns `0`.
 - Draft or archived product: product should be excluded by the `status:active` Admin GraphQL query.
-- Unpublished active product: product should not crash if Shopify omits `onlineStoreUrl`.
+- Unpublished active product: product should not crash if Shopify omits
+  `onlineStoreUrl`, but must stay excluded from public Shop and Lesson views.
 - More than 100 active products: dashboard fetch is intentionally limited to the first 100 and should communicate that limit.
 
 ## Disconnect And Uninstall Checklist
@@ -132,7 +136,7 @@ All four webhooks live under `/api/shopify/webhooks/`, are HMAC-verified via `ve
 - Send each of `customers/data_request`, `customers/redact`, `shop/redact`, and `app/uninstalled` with an invalid HMAC and confirm the request is rejected (non-200) before any processing.
 - Confirm `customers/data_request` and `customers/redact` return `200` and write a sanitized audit log entry (topic + shop domain only, no customer PII) without touching any database row — SQRATCH stores no Shopify-customer-keyed data.
 - Confirm `shop/redact` for a shop with no matching `Brand` returns `200` without error.
-- Confirm `shop/redact` for a shop with a matching `Brand`: nulls the brand's Shopify credentials and `shopifyShopDomain`; anonymizes `ShopifyRewardRedemption` Shopify-specific metadata (discount node id, discount status, user errors) while preserving the redemption's SQRATCH core fields (`userId`, `brandId`, `offerId`, `code`, `pointsCost`, `status`, timestamps); sets the brand's `BrandRewardOffer` rows `isActive: false`; nulls `sourceShopDomain` on any `BrandRewardOffer`/`ExperienceProductLink`/`LessonProductLink` row that referenced the redacted domain, across all brands; scrubs the domain/currency/client-id out of `ShopifyConnectionEvent` history while preserving the event type and timestamp; deletes orphaned OAuth-state/pending-install `TokenStore` rows for that shop.
+- Confirm `shop/redact` for a shop with a matching `Brand`: nulls the brand's Shopify credentials and `shopifyShopDomain`; anonymizes `ShopifyRewardRedemption` Shopify-specific metadata (discount node id, discount status, user errors) while preserving the redemption's SQRATCH core fields (`userId`, `brandId`, `offerId`, `code`, `pointsCost`, `status`, timestamps); sets the brand's `BrandRewardOffer` rows `isActive: false`; nulls `sourceShopDomain` on any `BrandRewardOffer` row that referenced the redacted domain, across all brands (Phase 8 removed the `ExperienceProductLink`/`LessonProductLink` scrubs with those tables — the canonical product chain cascades from the `CommerceConnection` this handler deletes instead); scrubs the domain/currency/client-id out of `ShopifyConnectionEvent` history while preserving the event type and timestamp; deletes orphaned OAuth-state/pending-install `TokenStore` rows for that shop.
 - Confirm `app/uninstalled` clears credential/token fields and sets `UNINSTALLED`, but intentionally preserves `shopifyShopDomain` (unlike `shop/redact`) so the same shop can reinstall and relink seamlessly.
 - Automated coverage: `tests/integration-coverage.test.ts` (shop/redact temp-token cleanup) and `tests/shopify-connection-transitions.test.ts`.
 

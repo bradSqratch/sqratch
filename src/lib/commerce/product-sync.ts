@@ -52,6 +52,19 @@
  * that decides `finalStatus`: `markUnavailableExcept` is called from exactly
  * one place, inside `if (finalStatus === "SUCCEEDED")`.
  *
+ * `hasPublicStorefrontUrl` (Phase 8) is held to the SAME discipline, and is
+ * deliberately narrower: it is only ever written from a page that actually
+ * returned that specific product, i.e. through `decideProductWrite`'s
+ * CREATE/UPDATE data for a fetched row. The absence sweep
+ * (`markUnavailableExcept`) must never touch it — a truncated fetch would
+ * otherwise mass-clear every unfetched product's public destination. It is
+ * also never derived from `isAvailable` (or vice versa): one is provider
+ * inventory/lifecycle status, the other is whether the provider gave us a
+ * provider-confirmed Online Store publication, and a public click destination
+ * needs both. Shopify's password-protected development stores can return
+ * `onlineStoreUrl: null` for every published product, so the adapter's fact
+ * comes from its complete publication scan, never URL presence alone.
+ *
  * ---------------------------------------------------------------------------
  * MONEY / CURRENCY
  * ---------------------------------------------------------------------------
@@ -90,9 +103,10 @@
  * ---------------------------------------------------------------------------
  * SANITIZED providerMetadata
  * ---------------------------------------------------------------------------
- * `buildProviderMetadata` whitelists exactly four benign, non-credential
+ * `buildProviderMetadata` whitelists exactly five benign, non-credential
  * fields from the neutral `CommerceProduct` — `status`, `priceText`,
- * `providerCreatedAt` (ISO string), `providerUpdatedAt` (ISO string) — and
+ * `providerCreatedAt` (ISO string), `providerUpdatedAt` (ISO string), and a
+ * boolean URL-provenance marker — and
  * NEVER spreads the provider payload or stores a raw provider node, URL with
  * embedded credentials, header, or token. `failureSummary` (on
  * `CommerceProductSyncRun`) is built by `classifySyncFailure` below, which
@@ -186,6 +200,7 @@ export type ExistingConnectedProductRow = {
   priceMaxMinor: number | null;
   priceMinorUnitExponent: number | null;
   isAvailable: boolean;
+  hasPublicStorefrontUrl: boolean;
   unavailableSince: Date | null;
   providerMetadata: Prisma.JsonValue | null;
 };
@@ -205,6 +220,7 @@ export type ConnectedProductWriteData = {
   priceMaxMinor: number | null;
   priceMinorUnitExponent: number | null;
   isAvailable: boolean;
+  hasPublicStorefrontUrl: boolean;
   unavailableSince: Date | null;
   providerCreatedAt: Date | null;
   providerUpdatedAt: Date | null;
@@ -300,6 +316,7 @@ const EXISTING_PRODUCT_SELECT = {
   priceMaxMinor: true,
   priceMinorUnitExponent: true,
   isAvailable: true,
+  hasPublicStorefrontUrl: true,
   unavailableSince: true,
   providerMetadata: true,
 } as const;
@@ -502,7 +519,7 @@ function computePrice(
 }
 
 /**
- * Whitelisted, sanitized `providerMetadata`. Only these four fields are ever
+ * Whitelisted, sanitized `providerMetadata`. Only these five fields are ever
  * copied out of the neutral `CommerceProduct` — never the raw provider node,
  * never a token/header/URL. See the file header's providerMetadata section.
  */
@@ -519,6 +536,11 @@ function buildProviderMetadata(product: CommerceProduct): Prisma.JsonObject {
   }
   if (product.providerUpdatedAt) {
     metadata.providerUpdatedAt = product.providerUpdatedAt.toISOString();
+  }
+  if (typeof product.hasProviderSuppliedStorefrontUrl === "boolean") {
+    metadata.storefrontUrlSource = product.hasProviderSuppliedStorefrontUrl
+      ? "PROVIDER"
+      : "FALLBACK";
   }
   return metadata;
 }
@@ -547,6 +569,7 @@ type ComputedProductFields = {
   descriptionText: string | null;
   sku: string | null;
   isAvailable: boolean;
+  hasPublicStorefrontUrl: boolean;
   providerCreatedAt: Date | null;
   providerUpdatedAt: Date | null;
   providerMetadata: Prisma.JsonObject;
@@ -568,6 +591,10 @@ function computeProductFields(
     descriptionText: product.descriptionText ?? null,
     sku: product.sku ?? null,
     isAvailable: isStatusActive(product.status),
+    // Fail-closed: an adapter that does not report complete storefront
+    // publication evidence is treated as "not publicly usable". Never
+    // derived from `status` / `isAvailable`, or a possibly fabricated URL.
+    hasPublicStorefrontUrl: product.hasProviderStorefrontPublication === true,
     providerCreatedAt: product.providerCreatedAt ?? null,
     providerUpdatedAt: product.providerUpdatedAt ?? null,
     providerMetadata: buildProviderMetadata(product),
@@ -600,8 +627,11 @@ function contentChanged(
     existing.priceMinMinor !== computed.priceMinMinor ||
     existing.priceMaxMinor !== computed.priceMaxMinor ||
     existing.priceMinorUnitExponent !== computed.priceMinorUnitExponent ||
+    existing.hasPublicStorefrontUrl !== computed.hasPublicStorefrontUrl ||
     jsonStringField(existing.providerMetadata, "status") !==
-      jsonStringField(computed.providerMetadata, "status")
+      jsonStringField(computed.providerMetadata, "status") ||
+    jsonStringField(existing.providerMetadata, "storefrontUrlSource") !==
+      jsonStringField(computed.providerMetadata, "storefrontUrlSource")
   );
 }
 
@@ -630,6 +660,7 @@ function toWriteData(
     priceMaxMinor: computed.priceMaxMinor,
     priceMinorUnitExponent: computed.priceMinorUnitExponent,
     isAvailable: computed.isAvailable,
+    hasPublicStorefrontUrl: computed.hasPublicStorefrontUrl,
     unavailableSince,
     providerCreatedAt: computed.providerCreatedAt,
     providerUpdatedAt: computed.providerUpdatedAt,
@@ -777,6 +808,33 @@ async function collectCatalog(
   let pagesFetched = 0;
 
   try {
+    // Some providers must obtain one complete, catalog-wide fact before the
+    // first row can be safely persisted (for example, Shopify's Online Store
+    // publication set). Keep that state opaque and provider-owned. If it is
+    // incomplete or fails, do not write a catalog page with false/unknown
+    // evidence over previously trusted facts.
+    let syncContext: unknown;
+    try {
+      syncContext = await adapter.prepareProductSync?.(connectionId, {
+        limit: pageSize,
+        maxPages,
+        maxProducts,
+        signal: controller.signal,
+      });
+    } catch (error) {
+      const timedOut = controller.signal.aborted || now() - startedAt >= maxDurationMs;
+      const classified = classifySyncFailure(error);
+      return {
+        products: [],
+        hasNextPage: true,
+        requestedLimit: pageSize,
+        failureSummary: timedOut
+          ? pageFailureSummary("PAGINATION_TIMEOUT", "Elapsed-time guard reached before publication preparation completed.")
+          : pageFailureSummary("PROVIDER_PREPARATION_FAILURE", classified.message),
+        providerFailed: !timedOut,
+      };
+    }
+
     while (true) {
       if (now() - startedAt >= maxDurationMs) {
         return {
@@ -794,6 +852,7 @@ async function collectCatalog(
           cursor,
           limit: pageSize,
           signal: controller.signal,
+          syncContext,
         });
       } catch (error) {
         const timedOut = controller.signal.aborted || now() - startedAt >= maxDurationMs;

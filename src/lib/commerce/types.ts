@@ -121,6 +121,24 @@ export type CommerceProduct = {
   providerUpdatedAt?: Date | null;
   /** Raw decimal price strings — see `CommerceProductPriceRangeRaw`. */
   priceRangeRaw?: CommerceProductPriceRangeRaw;
+  /**
+   * TRUE only when the provider confirmed the product is published/usable on
+   * its merchant storefront. It is never inferred from a URL, product status,
+   * handle, inventory, or SQRATCH curation. Deliberately separate from
+   * lifecycle availability; a public clickable destination requires both.
+   * Undefined means the adapter did not provide complete evidence, which
+   * persistence treats as fail-closed false.
+   */
+  hasProviderStorefrontPublication?: boolean;
+  /**
+   * TRUE only when `productUrl` itself was returned by the provider. This is
+   * navigation provenance, not publication authorization: a passworded dev
+   * store can have a published product but require the canonical fallback URL.
+   * Sync persists only this boolean (never the raw provider payload) so the
+   * click redirect can safely allow a Shopify custom-domain URL while keeping
+   * synthesized fallback URLs pinned to the connection's shop domain.
+   */
+  hasProviderSuppliedStorefrontUrl?: boolean;
 };
 
 /**
@@ -152,6 +170,24 @@ export type ProductSyncPageRequest = {
   cursor?: string | null;
   limit?: number;
   /** Cancels an in-flight provider request when the logical sync expires. */
+  signal?: AbortSignal;
+  /**
+   * Opaque provider-owned context prepared once for the logical catalog sync.
+   * Business code must never inspect or construct it. It exists so a provider
+   * can safely gather catalog-wide facts (such as storefront publication)
+   * exactly once instead of re-fetching them for every product page.
+   */
+  syncContext?: unknown;
+};
+
+/**
+ * Bounds and cancellation shared with an optional provider preparation step.
+ * The returned context remains opaque to the neutral sync service.
+ */
+export type ProductSyncPreparationRequest = {
+  limit?: number;
+  maxPages?: number;
+  maxProducts?: number;
   signal?: AbortSignal;
 };
 

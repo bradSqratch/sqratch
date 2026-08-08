@@ -42,7 +42,6 @@ async function getCampaignForBrand(campaignId: string, brandId: string) {
     select: {
       id: true,
       name: true,
-      commerceProductCurationEnabled: true,
     },
   });
 }

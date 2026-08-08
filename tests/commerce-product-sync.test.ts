@@ -146,6 +146,7 @@ function makeAdapter(
 function makePagedAdapter(
   fetchPage: (cursor: string | null, limit: number) => Promise<ProductSyncPageResult>,
   onComplete?: (connectionId: string, completedAt: Date) => Promise<void>,
+  prepare?: () => Promise<unknown>,
 ): CommerceAdapter {
   return {
     provider: CommerceProvider.SHOPIFY,
@@ -163,6 +164,13 @@ function makePagedAdapter(
     async syncProducts() {
       throw new Error("legacy syncProducts should not be called for a paged adapter");
     },
+    ...(prepare
+      ? {
+          async prepareProductSync() {
+            return prepare();
+          },
+        }
+      : {}),
     async fetchProductPage(connectionId, request) {
       assert.equal(connectionId, "conn-1");
       return fetchPage(request.cursor ?? null, request.limit ?? 0);
@@ -209,6 +217,7 @@ type StoredRow = {
   priceMaxMinor: number | null;
   priceMinorUnitExponent: number | null;
   isAvailable: boolean;
+  hasPublicStorefrontUrl: boolean;
   firstSeenAt: Date;
   lastSeenAt: Date;
   unavailableSince: Date | null;
@@ -281,6 +290,7 @@ function makeDeps(store: FakeStore, overrides: Partial<ProductSyncDeps> = {}): P
         priceMaxMinor: row.priceMaxMinor,
         priceMinorUnitExponent: row.priceMinorUnitExponent,
         isAvailable: row.isAvailable,
+        hasPublicStorefrontUrl: row.hasPublicStorefrontUrl,
         unavailableSince: row.unavailableSince,
         providerMetadata: row.providerMetadata,
       }));
@@ -521,6 +531,109 @@ describe("syncBrandCommerceProducts", () => {
     assert.equal(row.sku, "SKU-NEW");
   });
 
+  test("7b. hasPublicStorefrontUrl is persisted from provider publication evidence, defaults to false when omitted, and is never derived from status", async () => {
+    const store = new FakeStore();
+    // Deliberately omits hasProviderStorefrontPublication entirely (an adapter that
+    // does not report it) while reporting an ACTIVE status.
+    const silent = makeProduct({ externalId: "SILENT", status: "ACTIVE" });
+    const published = makeProduct({
+      externalId: "PUBLISHED",
+      hasProviderStorefrontPublication: true,
+    });
+    const unpublished = makeProduct({
+      externalId: "UNPUBLISHED",
+      status: "ACTIVE",
+      hasProviderStorefrontPublication: false,
+    });
+    const adapter = makeAdapter(async (connectionId) =>
+      makeSyncResult(connectionId, [silent, published, unpublished]),
+    );
+    setupBrand(store, "brand-1", "conn-1", adapter);
+
+    const outcome = await syncBrandCommerceProducts(
+      "brand-1",
+      CommerceProvider.SHOPIFY,
+      {},
+      makeDeps(store),
+    );
+    assert.equal(outcome.status, "SUCCEEDED");
+
+    const byKey = new Map(
+      [...store.rows.values()].map((row) => [row.externalKey, row]),
+    );
+    assert.equal(byKey.get("SILENT")!.hasPublicStorefrontUrl, false);
+    assert.equal(byKey.get("PUBLISHED")!.hasPublicStorefrontUrl, true);
+    assert.equal(byKey.get("UNPUBLISHED")!.hasPublicStorefrontUrl, false);
+    // Availability is the orthogonal concept and is unaffected either way.
+    assert.equal(byKey.get("UNPUBLISHED")!.isAvailable, true);
+  });
+
+  test("7c. a flip in hasPublicStorefrontUrl alone is a detected change (UPDATE, never absorbed into TOUCH)", async () => {
+    const store = new FakeStore();
+    let hasProviderStorefrontPublication = true;
+    const adapter = makeAdapter(async (connectionId) =>
+      makeSyncResult(connectionId, [makeProduct({ hasProviderStorefrontPublication })]),
+    );
+    setupBrand(store, "brand-1", "conn-1", adapter);
+    const deps = makeDeps(store);
+
+    await syncBrandCommerceProducts("brand-1", CommerceProvider.SHOPIFY, {}, deps);
+    hasProviderStorefrontPublication = false; // the merchant unpublished the product
+    const second = await syncBrandCommerceProducts("brand-1", CommerceProvider.SHOPIFY, {}, deps);
+
+    assert.equal(second.status, "SUCCEEDED");
+    if (second.status !== "SUCCEEDED") throw new Error("unreachable");
+    assert.equal(second.stats.updatedCount, 1);
+    assert.equal(second.stats.unchangedCount, 0);
+    const [row] = [...store.rows.values()];
+    assert.equal(row.hasPublicStorefrontUrl, false);
+  });
+
+  test("7c. a false-to-true storefront publication flip is persisted as an UPDATE", async () => {
+    const store = new FakeStore();
+    let hasProviderStorefrontPublication = false;
+    const adapter = makeAdapter(async (connectionId) =>
+      makeSyncResult(connectionId, [makeProduct({ hasProviderStorefrontPublication })]),
+    );
+    setupBrand(store, "brand-1", "conn-1", adapter);
+    const deps = makeDeps(store);
+
+    await syncBrandCommerceProducts("brand-1", CommerceProvider.SHOPIFY, {}, deps);
+    hasProviderStorefrontPublication = true; // the merchant published the product
+    const second = await syncBrandCommerceProducts("brand-1", CommerceProvider.SHOPIFY, {}, deps);
+
+    assert.equal(second.status, "SUCCEEDED");
+    if (second.status !== "SUCCEEDED") throw new Error("unreachable");
+    assert.equal(second.stats.updatedCount, 1);
+    assert.equal(second.stats.unchangedCount, 0);
+    const [row] = [...store.rows.values()];
+    assert.equal(row.hasPublicStorefrontUrl, true);
+  });
+
+  test("7d. the absent-product sweep never touches hasPublicStorefrontUrl", async () => {
+    const store = new FakeStore();
+    const productA = makeProduct({ externalId: "A", hasProviderStorefrontPublication: true });
+    const productB = makeProduct({ externalId: "B", hasProviderStorefrontPublication: true });
+    let products = [productA, productB];
+    const adapter = makeAdapter(async (connectionId) => makeSyncResult(connectionId, products));
+    setupBrand(store, "brand-1", "conn-1", adapter);
+    const deps = makeDeps(store);
+
+    await syncBrandCommerceProducts("brand-1", CommerceProvider.SHOPIFY, {}, deps);
+
+    products = [productA]; // B disappears from a complete catalog
+    const second = await syncBrandCommerceProducts("brand-1", CommerceProvider.SHOPIFY, {}, deps);
+    assert.equal(second.status, "SUCCEEDED");
+    if (second.status !== "SUCCEEDED") throw new Error("unreachable");
+    assert.equal(second.stats.markedUnavailableCount, 1);
+
+    const rowB = [...store.rows.values()].find((row) => row.externalKey === "B")!;
+    assert.equal(rowB.isAvailable, false);
+    // Only availability is swept. The storefront-URL fact is only ever written
+    // from a page that actually returned that product.
+    assert.equal(rowB.hasPublicStorefrontUrl, true);
+  });
+
   test("8. a product absent from a complete successful sync becomes unavailable once, never deleted", async () => {
     const store = new FakeStore();
     const productA = makeProduct({ externalId: "A" });
@@ -755,6 +868,7 @@ describe("syncBrandCommerceProducts", () => {
       priceText: "$19.99",
       providerCreatedAt: new Date("2026-01-01T00:00:00Z"),
       providerUpdatedAt: new Date("2026-01-02T00:00:00Z"),
+      hasProviderSuppliedStorefrontUrl: true,
     });
     const adapter = makeAdapter(async (connectionId) => makeSyncResult(connectionId, [product]));
     setupBrand(store, "brand-1", "conn-1", adapter);
@@ -763,7 +877,14 @@ describe("syncBrandCommerceProducts", () => {
 
     const [row] = [...store.rows.values()];
     const keys = Object.keys(row.providerMetadata).sort();
-    assert.deepEqual(keys, ["priceText", "providerCreatedAt", "providerUpdatedAt", "status"]);
+    assert.deepEqual(keys, [
+      "priceText",
+      "providerCreatedAt",
+      "providerUpdatedAt",
+      "status",
+      "storefrontUrlSource",
+    ]);
+    assert.equal(row.providerMetadata.storefrontUrlSource, "PROVIDER");
 
     const serialized = JSON.stringify(row.providerMetadata);
     assert.equal(/token|secret|encrypted|password|authorization/i.test(serialized), false);
@@ -962,6 +1083,35 @@ describe("syncBrandCommerceProducts", () => {
     assert.equal(outcome.stats.failedCount, 1);
     assert.equal(outcome.stats.markedUnavailableCount, 0);
     assert.equal(store.rowsForConnection("conn-1").find((row) => row.externalKey === "B")?.isAvailable, true);
+  });
+
+  test("20b. incomplete storefront-publication preparation writes nothing and never clears previously trusted publication", async () => {
+    const store = new FakeStore();
+    let publicationScanFails = false;
+    const adapter = makePagedAdapter(
+      async () => makePage([makeProduct({ externalId: "A", hasProviderStorefrontPublication: true })]),
+      undefined,
+      async () => {
+        if (publicationScanFails) {
+          throw new CommerceProviderApiError(CommerceProvider.SHOPIFY, "publication scan truncated");
+        }
+        return { publishedProductIds: new Set(["A"]) };
+      },
+    );
+    setupBrand(store, "brand-1", "conn-1", adapter);
+    const deps = makeDeps(store);
+
+    const first = await syncBrandCommerceProducts("brand-1", CommerceProvider.SHOPIFY, {}, deps);
+    assert.equal(first.status, "SUCCEEDED");
+    const before = JSON.stringify([...store.rows.values()]);
+
+    publicationScanFails = true;
+    const failed = await syncBrandCommerceProducts("brand-1", CommerceProvider.SHOPIFY, {}, deps);
+    assert.equal(failed.status, "FAILED");
+    assert.equal(failed.stats.fetchedCount, 0);
+    assert.equal(failed.stats.markedUnavailableCount, 0);
+    assert.match(failed.failureSummary ?? "", /PROVIDER_PREPARATION_FAILURE/);
+    assert.equal(JSON.stringify([...store.rows.values()]), before);
   });
 
   test("21. malformed and bounded cursors never reconcile absence; an empty failed catalog is FAILED", async () => {

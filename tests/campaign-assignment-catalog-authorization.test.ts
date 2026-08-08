@@ -22,7 +22,6 @@ function facts(
     campaign: {
       id: "campaign-a",
       brandId: "brand-a",
-      commerceProductCurationEnabled: true,
     },
     brandCommerceProduct: {
       brandId: "brand-a",
@@ -105,7 +104,6 @@ describe("campaign-assignment catalog authorization", () => {
           campaign: {
             id: "campaign-a",
             brandId: "brand-other",
-            commerceProductCurationEnabled: true,
           },
         }),
       ),
@@ -145,11 +143,17 @@ describe("campaign-assignment catalog authorization", () => {
       attributionSource.indexOf("async findCampaignCatalogProduct"),
       attributionSource.indexOf("async findCampaignAssignmentCatalogProduct"),
     );
+    // `findCampaignProducts` is the LAST entry in DEFAULT_DEPS now that Phase 8
+    // removed the live-Shopify `fetchLegacyCampaignProducts` fallback that used
+    // to terminate this slice, so the section ends at the next top-level
+    // declaration instead.
     const campaignRenderSection = publicProductsSource.slice(
       publicProductsSource.indexOf(
         "findCampaignProducts({ campaignId, brandId })",
       ),
-      publicProductsSource.indexOf("fetchLegacyCampaignProducts"),
+      publicProductsSource.indexOf(
+        "export type PublicExperienceProductsPostDeps",
+      ),
     );
 
     assert.match(publicProductsSource, /isCampaignAssignmentCatalogAuthorized/);
@@ -159,9 +163,11 @@ describe("campaign-assignment catalog authorization", () => {
     );
     assert.doesNotMatch(campaignRenderSection, /isVisibleInShop/);
     assert.doesNotMatch(assignmentClickSection, /isVisibleInShop/);
-    assert.match(
+    // PHASE 8: `commerceProductCurationEnabled` is no longer read by
+    // authorization anywhere. See the landmine-fix test below for why.
+    assert.doesNotMatch(
       assignmentClickSection,
-      /commerceProductCurationEnabled: true/,
+      /commerceProductCurationEnabled/,
     );
     assert.match(assignmentClickSection, /isCampaignEligible: true/);
     assert.match(assignmentClickSection, /isAvailable: true/);
@@ -172,5 +178,42 @@ describe("campaign-assignment catalog authorization", () => {
     // Generic BrandCommerceProduct storefront clicks must not inherit the
     // campaign exception for hidden products.
     assert.match(genericClickSection, /isVisibleInShop: true/);
+  });
+
+  // ---------------------------------------------------------------------
+  // Landmine fix: `commerceProductCurationEnabled` is DEFAULT false and was
+  // never backfilled, so most existing campaigns have it false. Before this
+  // change, all five authorization sites required it true, so a campaign
+  // that never ticked the checkbox authorized ZERO products — a live
+  // fail-closed regression. The predicate is now gone from all five sites,
+  // so a brand-owned campaign authorizes its active assignments regardless
+  // of that historical flag.
+  // ---------------------------------------------------------------------
+
+  test("a campaign whose commerceProductCurationEnabled would have been false still authorizes its active assignment (landmine fix)", () => {
+    // `facts()` intentionally builds a `campaign` object with no
+    // `commerceProductCurationEnabled` field at all — the type no longer has
+    // one, so there is nothing that could have been `false`. This proves
+    // authorization succeeds purely from same-brand + isActive +
+    // isCampaignEligible + isAvailable, with no curation flag in the mix.
+    assert.equal(isCampaignAssignmentCatalogAuthorized(facts()), true);
+  });
+
+  test("no authorization module reads commerceProductCurationEnabled anywhere (source inspection, all five sites)", () => {
+    const sites = [
+      "src/lib/commerce/campaign-assignment-authorization.ts",
+      "src/lib/commerce/click-attribution.ts",
+      "src/app/api/public/experience/[experienceSlug]/products/route.ts",
+      "src/lib/commerce/campaign-product-curation.ts",
+      "src/lib/commerce/campaign-product-reconciliation.ts",
+    ];
+    for (const relativePath of sites) {
+      const source = readFileSync(join(process.cwd(), relativePath), "utf8");
+      assert.doesNotMatch(
+        source,
+        /commerceProductCurationEnabled/,
+        `${relativePath} must not reference commerceProductCurationEnabled`,
+      );
+    }
   });
 });

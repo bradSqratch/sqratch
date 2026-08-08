@@ -12,8 +12,11 @@
  * generalizes the principle already established by
  * `resolveDeterministicCampaignByExperience` in `src/lib/points.ts`
  * ("deterministic only when an experience has exactly one. Never 'the first of
- * several.'") to any number of contexts, to explicit client selection, and to
- * curated and legacy campaigns alike.
+ * several.'") to any number of contexts and to explicit client selection.
+ *
+ * PHASE 8: there is no longer a curated/legacy mode distinction. Every
+ * brand-owned campaign (`Campaign.brandId != null`) is a single canonical
+ * commerce context; a brandless campaign is never eligible at all.
  *
  * It is deliberately PURE: no Prisma import, no I/O, no `Date.now()`. Callers
  * load their own rows and map them into `CampaignContextSource`. That keeps it
@@ -22,19 +25,8 @@
  */
 
 /**
- * Whether a campaign's products come from the Phase-4 curated catalog
- * (`CampaignCommerceProduct` -> `BrandCommerceProduct`) or from the legacy
- * free-form `LessonProductLink` snapshot path. Both are legitimate eligible
- * contexts; a selector must be able to render them together without collapsing
- * one into the other.
- */
-export type CampaignContextMode = "CURATED" | "LEGACY";
-
-/**
- * Caller-normalized input row. Every field is required on purpose: an optional
- * `curationEnabled` that silently defaults to `false` when a query forgot to
- * select it would downgrade a curated campaign to legacy mode, which is an
- * authorization downgrade. Callers must map explicitly.
+ * Caller-normalized input row. Every field is required on purpose: a caller
+ * must map every field explicitly rather than relying on a silent default.
  *
  * `sortOrder` is the persisted `CampaignExperience.sortOrder` when the caller
  * loaded it. A caller that only has an already-ordered list (because its query
@@ -52,7 +44,6 @@ export type CampaignContextSource = {
   brandId: string | null;
   /** Null only when the caller did not load the brand relation. */
   brandName: string | null;
-  curationEnabled: boolean;
 };
 
 /**
@@ -64,8 +55,6 @@ export type CampaignContextCandidate = {
   campaignName: string;
   brandId: string;
   brandName: string | null;
-  curationEnabled: boolean;
-  mode: CampaignContextMode;
   /** Carried through for stable presentation ordering only. */
   sortOrder: number;
 };
@@ -88,10 +77,14 @@ export type PublicExperienceEntryContext =
   | { kind: "CAMPAIGN"; campaignId: string };
 
 /**
- * The minimal server-derived scope attached to a public lesson product.  A
- * missing scope is a legacy/global link; an inactive scope is deliberately
- * not the same thing.  Deactivation revokes that attachment rather than
- * turning it into a global product.
+ * The minimal server-derived scope of one public campaign-scoped attachment.
+ *
+ * Phase 8: this is now ALWAYS present for the content it governs. Public lesson
+ * commerce products are read directly from `CampaignLessonProduct`, whose
+ * `campaignId` is NOT NULL, so an unscoped lesson product cannot exist. An
+ * inactive scope is an explicit revocation and is deliberately not the same
+ * thing as "no scope" — see the predicate below, which no longer has a
+ * "no scope" case to confuse it with.
  */
 export type PublicCampaignScopedContent = {
   campaignId: string;
@@ -107,21 +100,34 @@ export type PublicCampaignScopedContent = {
  * rows for the current Experience (and filters out brandless campaigns), so
  * a stale CampaignLessonProduct remains denied after its campaign is removed
  * from the Experience.
+ *
+ * PHASE 8: `scope` IS NON-NULLABLE, AND THERE IS NO "NO SCOPE" BRANCH.
+ *
+ * This function used to begin with `if (!scope) return true;` — "a link with no
+ * CampaignLessonProduct row is pre-Phase-5 global content, so show it to
+ * everyone". That branch was the last global-visibility path in the public
+ * commerce surface, and it existed only because the query root was the legacy
+ * `LessonProductLink` snapshot table, where the scoping row was an optional
+ * side-relation. The root is now `CampaignLessonProduct` itself, whose
+ * `campaignId` is NOT NULL, so an unscoped public lesson product is no longer
+ * representable.
+ *
+ * The parameter is therefore non-nullable BY DESIGN: the type system, not a
+ * runtime branch, is what guarantees every caller has a real scope. Do not
+ * re-widen it to `| null` "just in case" — a caller that cannot produce a scope
+ * is reading the wrong table, and a silently-visible unscoped product is
+ * precisely the leak this signature eliminates.
  */
 export function isPublicCampaignScopedContentVisible(options: {
-  scope: PublicCampaignScopedContent | null;
+  scope: PublicCampaignScopedContent;
   entryContext: PublicExperienceEntryContext;
   resolvedCampaignId: string | null;
   eligibleCampaignIds: readonly string[];
 }): boolean {
   const { scope, entryContext, resolvedCampaignId, eligibleCampaignIds } = options;
 
-  // No row is the pre-Phase-5 global compatibility case. An inactive row is
-  // an explicit revocation and must not be downgraded into a global link.
-  if (!scope) {
-    return true;
-  }
-
+  // An inactive row is an explicit revocation. It is NOT a downgrade to global
+  // visibility — there is no longer any such thing.
   if (!scope.isActive || !eligibleCampaignIds.includes(scope.campaignId)) {
     return false;
   }
@@ -167,8 +173,6 @@ export function buildEligibleCampaignContexts(
       campaignName: source.campaignName,
       brandId: source.brandId,
       brandName: source.brandName,
-      curationEnabled: source.curationEnabled,
-      mode: source.curationEnabled ? "CURATED" : "LEGACY",
       sortOrder: source.sortOrder,
     });
   }

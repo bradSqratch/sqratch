@@ -38,6 +38,7 @@ export type {
   CommerceProduct,
   ProductSyncResult,
   ProductSyncPageRequest,
+  ProductSyncPreparationRequest,
   ProductSyncPageResult,
   CreateDiscountInput,
   CreateDiscountOptions,

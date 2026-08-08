@@ -170,6 +170,70 @@ export function decimalStringToMinorUnits(
   return { ok: true, minorUnits };
 }
 
+/**
+ * Formats a persisted minor-unit price RANGE for display, e.g. "$12.00" or
+ * "$12.00 - $19.99". Returns `null` — never a partial or guessed string —
+ * whenever any input needed to name the amount is missing or unusable.
+ *
+ * This is the ONE shared implementation of a formatter that was previously
+ * duplicated verbatim across four route/service modules
+ * (`formatPersistedPrice` / `formatCatalogProductPrice`). Its behavior is
+ * deliberately IDENTICAL to those copies, including:
+ *
+ *  - the guard: all four of priceMin/priceMax/exponent/currency must be
+ *    present, and the exponent must be an integer in [0, 6];
+ *  - the HARDCODED "en-US" locale. This is not an oversight and must not be
+ *    "improved" to a request locale: doing so would silently change every
+ *    price string SQRATCH has ever rendered. Only the currency SYMBOL and
+ *    grouping come from `currencyCode`;
+ *  - a `null` result rather than a throw for an unusable currency code
+ *    (`Intl.NumberFormat` throws `RangeError` for one).
+ *
+ * `bigint` inputs are accepted because the Phase 7 order money columns are
+ * BIGINT while the catalog columns are INTEGER; a value too large to be an
+ * exact `number` yields `null` rather than a silently rounded amount.
+ */
+export function formatMinorUnitPriceRange(input: {
+  priceMinMinor: number | bigint | null;
+  priceMaxMinor: number | bigint | null;
+  priceMinorUnitExponent: number | null;
+  currencyCode: string | null;
+}): string | null {
+  const { priceMinMinor, priceMaxMinor, priceMinorUnitExponent, currencyCode } = input;
+
+  if (
+    priceMinMinor === null ||
+    priceMaxMinor === null ||
+    priceMinorUnitExponent === null ||
+    !currencyCode ||
+    !Number.isInteger(priceMinorUnitExponent) ||
+    priceMinorUnitExponent < 0 ||
+    priceMinorUnitExponent > 6
+  ) {
+    return null;
+  }
+
+  const min = Number(priceMinMinor);
+  const max = Number(priceMaxMinor);
+
+  if (!Number.isSafeInteger(min) || !Number.isSafeInteger(max)) {
+    return null;
+  }
+
+  try {
+    const formatter = new Intl.NumberFormat("en-US", {
+      style: "currency",
+      currency: currencyCode,
+    });
+    const divisor = 10 ** priceMinorUnitExponent;
+    const minText = formatter.format(min / divisor);
+    const maxText = formatter.format(max / divisor);
+    return min === max ? minText : `${minText} - ${maxText}`;
+  } catch {
+    return null;
+  }
+}
+
 export type PriceStringToMinorUnitsResult =
   | {
       ok: true;

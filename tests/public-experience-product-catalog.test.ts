@@ -9,7 +9,6 @@ import { NextRequest } from "next/server";
 import type {
   CuratedCampaignProduct,
   PublicExperienceProductsDeps,
-  PublicExperienceProductsPostDeps,
 } from "../src/app/api/public/experience/[experienceSlug]/products/route";
 
 let getProducts: (
@@ -17,17 +16,11 @@ let getProducts: (
   context: { params: Promise<{ experienceSlug: string }> },
   overrides?: Partial<PublicExperienceProductsDeps>,
 ) => Promise<Response>;
-let postProductClick: (
-  request: NextRequest,
-  context: { params: Promise<{ experienceSlug: string }> },
-  overrides?: Partial<PublicExperienceProductsPostDeps>,
-) => Promise<Response>;
 
 before(async () => {
   const route =
     await import("../src/app/api/public/experience/[experienceSlug]/products/route");
   getProducts = route.publicExperienceProductsGetImpl;
-  postProductClick = route.publicExperienceProductsPostImpl;
 });
 
 const routeContext = {
@@ -71,17 +64,13 @@ function access() {
 }
 
 function brand(id = "brand-1") {
+  // Phase 8: public rendering no longer reads ANY brand Shopify connection
+  // field. The live-provider fallback that needed them is gone, so the deps
+  // contract only carries what a card actually displays.
   return {
     id,
     name: id === "brand-1" ? "Acme" : "Other",
     slug: id === "brand-1" ? "acme" : "other",
-    shopifyShopDomain: "acme.myshopify.com",
-    shopifyConnectionStatus: "CONNECTED",
-    shopifyInstalledAt: new Date("2026-01-01T00:00:00Z"),
-    shopifyUninstalledAt: null,
-    shopifyLastProductSyncAt: null,
-    shopifyGrantedScopes: "read_products",
-    shopifyCurrencyCode: "USD",
   };
 }
 
@@ -106,6 +95,7 @@ function curated(
       imageUrl: "https://cdn.test/provider.jpg",
       descriptionText: "Provider description",
       isAvailable: true,
+      hasPublicStorefrontUrl: true,
       currencyCode: "USD",
       priceMinMinor: 1999,
       priceMaxMinor: 1999,
@@ -119,38 +109,9 @@ function deps(overrides: Partial<PublicExperienceProductsDeps> = {}) {
   return {
     getAccess: async () => access(),
     ensureSession: async () => "new-session",
-    findProductLinks: async () => [],
     findBrands: async () => [brand()],
-    countBrandSelections: async () => 1,
     findCuratedProducts: async () => [],
     findCampaignProducts: async () => [],
-    fetchLegacyCampaignProducts: async () => ({
-      ok: true as const,
-      items: [
-        {
-          id: "legacy-1",
-          shopifyProductGid: "legacy-1",
-          title: "Legacy product",
-          handle: "legacy-product",
-          productUrl: "https://acme.test/products/legacy-product",
-          images: [],
-          imageUrl: null,
-          priceRange: { min: 10, max: 10 },
-          priceText: "$10.00",
-          currency: "USD",
-          variantIds: [],
-          priceRangeRaw: { min: "10.00", max: "10.00" },
-          descriptionText: null,
-          status: "ACTIVE",
-          providerCreatedAt: null,
-          providerUpdatedAt: null,
-          sku: null,
-        },
-      ],
-      hasNextPage: false,
-      limit: 100,
-      endCursor: null,
-    }),
     ...overrides,
   } satisfies PublicExperienceProductsDeps;
 }
@@ -166,20 +127,38 @@ async function productsFrom(
 }
 
 describe("public experience product catalog cutover", () => {
-  test("uses the legacy Shopify fallback when the brand has no selections", async () => {
-    let legacyCalls = 0;
-    const products = await productsFrom({
-      countBrandSelections: async () => 0,
-      fetchLegacyCampaignProducts: async (options) => {
-        legacyCalls += 1;
-        assert.equal(options.brandId, "brand-1");
-        return deps().fetchLegacyCampaignProducts(options);
-      },
-    });
+  test("zero persisted selections renders zero products: there is no live-provider fallback left", async () => {
+    // This replaces the deleted "uses the legacy Shopify fallback when the brand
+    // has no selections" test. The public storefront must never call a provider
+    // API on the visitor request path, and must never publish a product the
+    // brand did not curate.
+    const products = await productsFrom({ findCuratedProducts: async () => [] });
 
-    assert.equal(legacyCalls, 1);
-    assert.equal(products.length, 1);
-    assert.equal(products[0].title, "Legacy product");
+    assert.deepEqual(products, []);
+
+    const routeSource = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "src/app/api/public/experience/[experienceSlug]/products/route.ts",
+      ),
+      "utf8",
+    );
+    // Executable lines only: the header comment deliberately NAMES the removed
+    // machinery so a future reader knows what went and why.
+    const codeOnly = routeSource
+      .split("\n")
+      .filter(
+        (line) =>
+          !line.trim().startsWith("//") &&
+          !line.trim().startsWith("*") &&
+          !line.trim().startsWith("/*"),
+      )
+      .join("\n");
+    assert.doesNotMatch(codeOnly, /fetchNormalizedShopifyProducts/);
+    assert.doesNotMatch(codeOnly, /fetchLegacyCampaignProducts/);
+    assert.doesNotMatch(codeOnly, /countBrandSelections/);
+    assert.doesNotMatch(codeOnly, /isLegacyShopifyBrandConnectionUsable/);
+    assert.doesNotMatch(codeOnly, /experienceProductLink/i);
   });
 
   test("publishes only visible curated products and applies title and description overrides", async () => {
@@ -206,21 +185,13 @@ describe("public experience product catalog cutover", () => {
     });
   });
 
-  test("selection presence is authoritative, including an intentionally empty storefront", async () => {
-    let legacyCalls = 0;
-    const products = await productsFrom({
-      findCuratedProducts: async () => [],
-      fetchLegacyCampaignProducts: async (options) => {
-        legacyCalls += 1;
-        return deps().fetchLegacyCampaignProducts(options);
-      },
-    });
+  test("an intentionally empty storefront stays empty", async () => {
+    const products = await productsFrom({ findCuratedProducts: async () => [] });
 
     assert.deepEqual(products, []);
-    assert.equal(legacyCalls, 0);
   });
 
-  test("does not surface unavailable or cross-brand curated products", async () => {
+  test("does not surface unavailable, cross-brand, or non-publicly-reachable curated products", async () => {
     const products = await productsFrom({
       findCuratedProducts: async () => [
         curated({
@@ -229,10 +200,41 @@ describe("public experience product catalog cutover", () => {
         curated({
           connectedProduct: { id: "unavailable", isAvailable: false },
         }),
+        // THE PHASE 8 STOREFRONT GATE. `isAvailable: true` (Shopify
+        // `status: ACTIVE`) is deliberately kept here: publication is orthogonal
+        // to lifecycle status, and a product with no public storefront URL 404s
+        // for the visitor even though it is perfectly "available".
+        curated({
+          connectedProduct: {
+            id: "no-storefront",
+            isAvailable: true,
+            hasPublicStorefrontUrl: false,
+          },
+        }),
       ],
     });
 
     assert.deepEqual(products, []);
+  });
+
+  test("the storefront gate is enforced by the real query predicate, not only in process", () => {
+    const routeSource = fs.readFileSync(
+      path.join(
+        process.cwd(),
+        "src/app/api/public/experience/[experienceSlug]/products/route.ts",
+      ),
+      "utf8",
+    );
+    // Both conditions, together, in the shared predicate object used by every
+    // listing query in this route.
+    assert.match(
+      routeSource,
+      /const PUBLICLY_LISTABLE_CONNECTED_PRODUCT = \{\s*isAvailable: true,\s*hasPublicStorefrontUrl: true,\s*\} as const;/,
+    );
+    const usages = routeSource.match(
+      /\.\.\.PUBLICLY_LISTABLE_CONNECTED_PRODUCT/g,
+    );
+    assert.equal(usages?.length, 2, "both catalog queries must apply the gate");
   });
 
   test("returns curated items in display order with deterministic title/id ties", async () => {
@@ -319,70 +321,22 @@ describe("public experience product catalog cutover", () => {
     assert.equal(products[0].description, "Provider description");
   });
 
-  test("current direct ExperienceProductLinks remain first while curation stays available", async () => {
-    let selectionCountCalls = 0;
+  test("every product is a canonical catalog card: no LINKED source survives", async () => {
+    // Replaces "current direct ExperienceProductLinks remain first while
+    // curation stays available". The precedence rule it asserted existed only
+    // for ExperienceProductLink rows, which no longer exist.
     const products = await productsFrom({
-      findProductLinks: async () => [
-        {
-          id: "link-1",
-          productUrl: "https://acme.test/products/direct",
-          title: "Direct product",
-          imageUrl: null,
-          priceText: "$5.00",
-          currency: "USD",
-          brandId: "brand-1",
-          sourceShopDomain: "acme.myshopify.com",
-        },
-      ],
-      countBrandSelections: async () => {
-        selectionCountCalls += 1;
-        return 1;
-      },
       findCuratedProducts: async () => [curated()],
     });
 
-    assert.equal(selectionCountCalls, 1);
-    assert.equal(products.length, 2);
-    assert.equal(products[0].source, "LINKED");
-    assert.equal(products[0].title, "Direct product");
-    assert.equal(products[0].description, undefined);
-    assert.equal(products[1].source, "CAMPAIGN");
-  });
-
-  test("records shop click analytics without accepting a client-supplied product URL", async () => {
-    const received: {
-      event: { name: string; data?: Record<string, unknown> } | null;
-    } = {
-      event: null,
-    };
-    const response = await postProductClick(
-      request("POST", {
-        productId: "gid://shopify/Product/1",
-        productLinkId: null,
-        productUrl: "https://attacker.example/not-a-validated-product",
-      }),
-      routeContext,
-      {
-        getAccess: async () => access(),
-        ensureSession: async () => "new-session",
-        findViewerSession: async () => ({
-          qrCodeId: "qr-1",
-          qrCode: { batchId: "batch-1" },
-        }),
-        createAnalyticsEvent: async (options) => {
-          received.event = options;
-        },
-      },
+    assert.equal(products.length, 1);
+    assert.equal(products[0].source, "CAMPAIGN");
+    assert.equal(
+      products.every((product) => product.productLinkId === null),
+      true,
     );
-
-    assert.equal(response.status, 200);
-    assert.equal(received.event?.name, "shop_click");
-    assert.deepEqual(received.event?.data, {
-      productId: "gid://shopify/Product/1",
-      productLinkId: null,
-      batchId: "batch-1",
-    });
   });
+
 });
 
 test("Experience Shop renders the optional curated description", () => {
@@ -394,6 +348,24 @@ test("Experience Shop renders the optional curated description", () => {
   assert.match(source, /description\?: string \| null/);
   assert.match(source, /product\.description &&/);
   assert.match(source, /\{product\.description\}/);
+});
+
+test("commerce clicks use the canonical server redirect only", () => {
+  const routeSource = fs.readFileSync(
+    path.join(
+      process.cwd(),
+      "src/app/api/public/experience/[experienceSlug]/products/route.ts",
+    ),
+    "utf8",
+  );
+  const shopClientSource = fs.readFileSync(
+    path.join(process.cwd(), "src/components/experience/shop-client.tsx"),
+    "utf8",
+  );
+  assert.doesNotMatch(routeSource, /export async function POST/);
+  assert.doesNotMatch(routeSource, /shop_click/);
+  assert.doesNotMatch(shopClientSource, /method:\s*["']POST["']/);
+  assert.match(shopClientSource, /products\/click\//);
 });
 
 test("Experience Shop replaces a failed synchronized image with the existing placeholder", () => {

@@ -19,7 +19,7 @@ type ProductRow = {
   assignment: { id: string; isActive: boolean; displayOrder: number } | null;
 };
 type Response = {
-  campaign: { id: string; name: string; commerceProductCurationEnabled: boolean };
+  campaign: { id: string; name: string };
   products: ProductRow[];
 };
 type PageMeta = { hasNextPage: boolean; nextCursor: string | null; limit: number };
@@ -99,9 +99,6 @@ export default function BrandCampaignProductsPage({ params }: { params: { id: st
     <PageCard>
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search catalog products" className="max-w-xl border-white/10 bg-black/20 text-white placeholder:text-white/35" />
-        {data && <span className={data.campaign.commerceProductCurationEnabled ? "text-sm text-emerald-200" : "text-sm text-amber-200"}>
-          {data.campaign.commerceProductCurationEnabled ? "Curated catalog is enabled" : "Compatibility mode is enabled — assignments are not yet enforced for creators"}
-        </span>}
       </div>
     </PageCard>
     {error && <PageCard><p className="text-sm text-red-300">{error}</p></PageCard>}

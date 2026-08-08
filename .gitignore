@@ -52,4 +52,6 @@ graphify-out/
 # Local AI / agent tooling
 .agents/
 .claude/
+.codex/
+
 skills-lock.json

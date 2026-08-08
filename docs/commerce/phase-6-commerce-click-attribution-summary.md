@@ -223,10 +223,10 @@ to, regardless of attribution outcome.
   `productCampaignId`/`brandId` pair; its independent entry campaign evidence
   remains intact.
 - **Rollback limitations**: there is no automatic rollback SQL. Once click
-  rows exist, dropping the table destroys click evidence that cannot be
-  re-derived from the `shop_click` / `lesson_product_click` analytics
-  beacons (those are client-fired, forgeable, carry no server-minted token,
-  and do not record the validated campaign context or destination host).
+  rows exist, dropping the table destroys click evidence. Historical
+  `shop_click` / `lesson_product_click` AnalyticsEvent rows are disposable
+  client-fired telemetry: they are forgeable, carry no server-minted token,
+  and do not record the validated campaign context or destination host.
   Nothing else in the schema depends on this table, so a rollback breaks no
   other feature — the click routes simply degrade to redirecting without
   minting, matching the same fail-open behavior a missing pepper already

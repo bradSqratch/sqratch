@@ -49,7 +49,7 @@ type ShopResponse = {
       name: string;
       slug: string;
     } | null;
-    source: "LINKED" | "CAMPAIGN";
+    source: "CAMPAIGN";
     productCampaign?: {
       id: string;
       name: string;
@@ -105,33 +105,31 @@ export function ExperienceShopClient({
   }, [pageSize]);
 
   function handleOpenProduct(product: ShopResponse["products"][number]) {
-    setClickingId(product.id);
-    // Every persisted product uses a server-side click hop. A campaign-scoped
-    // card uses its opaque assignment id so a direct Experience union never
-    // has to choose a campaign in the browser.
-    const target = product.productLinkId
-      ? `/api/public/experience/${experienceSlug}/products/click/${product.productLinkId}`
-      : product.campaignAssignmentId
-        ? `/api/public/experience/${experienceSlug}/products/click/campaign/${product.campaignAssignmentId}`
-        : product.campaignProductId
-          ? `/api/public/experience/${experienceSlug}/products/click/catalog/${product.campaignProductId}`
-          : product.productUrl;
-    window.open(target, "_blank", "noopener,noreferrer");
+    // Every public shop product is a persisted canonical catalog product, so it
+    // always carries one of these two opaque server-side click ids: a
+    // campaign-scoped assignment id, or a brand-storefront catalog id. A
+    // campaign-scoped card uses its assignment id so a direct Experience union
+    // never has to choose a campaign in the browser.
+    //
+    // There is deliberately NO raw-`productUrl` fallback. Opening the merchant
+    // URL directly would bypass the public-storefront gate (a product with no
+    // reachable storefront URL 404s), the campaign-scope check, and click
+    // attribution. If neither id is present the item is not a canonical catalog
+    // product and is simply not clickable.
+    const target = product.campaignAssignmentId
+      ? `/api/public/experience/${experienceSlug}/products/click/campaign/${product.campaignAssignmentId}`
+      : product.campaignProductId
+        ? `/api/public/experience/${experienceSlug}/products/click/catalog/${product.campaignProductId}`
+        : null;
 
-    fetch(`/api/public/experience/${experienceSlug}/products`, {
-      method: "POST",
-      credentials: "include",
-      keepalive: true,
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        productId: product.productId,
-        productLinkId: product.productLinkId,
-      }),
-    }).finally(() => {
-      setClickingId((current) => (current === product.id ? null : current));
-    });
+    if (!target) {
+      return;
+    }
+
+    setClickingId(product.id);
+    // The server-side click hop is the sole commerce click evidence.
+    window.open(target, "_blank", "noopener,noreferrer");
+    setClickingId((current) => (current === product.id ? null : current));
   }
 
   const productCount = shopData?.products.length ?? 0;
@@ -310,9 +308,7 @@ export function ExperienceShopClient({
                       <div className="mt-5 flex flex-1 flex-col">
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/60">
-                            {product.source === "LINKED"
-                              ? "Experience linked"
-                              : "Campaign storefront"}
+                            Campaign storefront
                           </span>
                           {product.brand && (
                             <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/60">

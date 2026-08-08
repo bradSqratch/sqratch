@@ -114,8 +114,6 @@ model Brand {
   analyticsEvents                  AnalyticsEvent[]
   members                          BrandMember[]
   campaigns                        Campaign[]
-  experienceProductLinks           ExperienceProductLink[]
-  lessonProductLinks               LessonProductLink[]
   rewardOffers                     BrandRewardOffer[]
   shopifyRewardRedemptions         ShopifyRewardRedemption[]
   shopifyConnectionEvents          ShopifyConnectionEvent[]
@@ -153,7 +151,6 @@ model Campaign {
   updatedAt                        DateTime                   @updatedAt
   createdById                      String
   isActive                         Boolean                    @default(true)
-  commerceProductCurationEnabled   Boolean                    @default(false)
   brandId                          String?
   slug                             String                     @unique
   analyticsEvents                  AnalyticsEvent[]
@@ -259,7 +256,6 @@ model Experience {
   campaigns                 CampaignExperience[]
   courses                   Course[]
   creator                   CreatorProfile             @relation(fields: [creatorId], references: [id], onDelete: Cascade)
-  shopLinks                 ExperienceProductLink[]
   posts                     Post[]
   questions                 Question[]
   commerceClickAttributions CommerceClickAttribution[]
@@ -321,7 +317,6 @@ model Lesson {
   updatedAt                 DateTime                   @updatedAt
   analyticsEvents           AnalyticsEvent[]
   course                    Course                     @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  productLinks              LessonProductLink[]
   campaignProducts          CampaignLessonProduct[]
   progress                  LessonProgress[]
   commerceClickAttributions CommerceClickAttribution[]
@@ -408,54 +403,14 @@ model QuestionAnswer {
   @@index([answeredById])
 }
 
-model ExperienceProductLink {
-  id               String     @id @default(cuid())
-  experienceId     String
-  productUrl       String
-  title            String?
-  imageUrl         String?
-  priceText        String?
-  currency         String?
-  brandId          String?
-  sourceShopDomain String?
-  createdAt        DateTime   @default(now())
-  brand            Brand?     @relation(fields: [brandId], references: [id])
-  experience       Experience @relation(fields: [experienceId], references: [id], onDelete: Cascade)
-
-  commerceClickAttributions CommerceClickAttribution[]
-
-  @@index([experienceId])
-  @@index([brandId])
-  @@index([experienceId, sourceShopDomain])
-  @@index([brandId, sourceShopDomain])
-}
-
-model LessonProductLink {
-  id               String   @id @default(cuid())
-  lessonId         String
-  productUrl       String
-  title            String?
-  imageUrl         String?
-  priceText        String?
-  currency         String?
-  brandId          String?
-  sourceShopDomain String?
-  createdAt        DateTime @default(now())
-  brand            Brand?   @relation(fields: [brandId], references: [id])
-  lesson           Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
-
-  /// Reverse of CampaignLessonProduct.legacyLessonProductLinkId. Optional 1:1:
-  /// a snapshot row may predate Phase 5 (no scoping row at all), and deleting
-  /// the snapshot detaches rather than destroys the scoping row.
-  campaignProductLink CampaignLessonProduct?
-
-  commerceClickAttributions CommerceClickAttribution[]
-
-  @@index([lessonId])
-  @@index([brandId])
-  @@index([lessonId, sourceShopDomain])
-  @@index([brandId, sourceShopDomain])
-}
+// PHASE 8 TOMBSTONE: the `ExperienceProductLink` and `LessonProductLink`
+// models used to be declared here. They were free-form, creator-typed product SNAPSHOT tables whose
+// rows carried their own productUrl/title/imageUrl/priceText/currency and had no
+// provider-verified identity, no brand ownership guarantee, and no campaign
+// scoping. Both are removed by
+// 20260808130000_remove_legacy_product_link_snapshots. The canonical replacement
+// chain is Brand -> CommerceConnection -> ConnectedCommerceProduct ->
+// BrandCommerceProduct -> CampaignCommerceProduct -> CampaignLessonProduct.
 
 model BrandRewardOffer {
   id                            String                    @id @default(cuid())
@@ -583,6 +538,25 @@ model ConnectedCommerceProduct {
   priceMaxMinor             Int?
   priceMinorUnitExponent    Int?
   isAvailable               Boolean                    @default(true)
+  /// Phase 8.2: records the FACT that the provider confirmed Online Store
+  /// publication for this product. Shopify's `Product.onlineStoreUrl` remains
+  /// navigation data only: password-protected development stores return null
+  /// even for published products, where sync uses a canonical fallback URL.
+  /// It is NOT named `isPublished` because it is an intentionally
+  /// provider-neutral public-destination gate, not a generic lifecycle field.
+  ///
+  /// DELIBERATELY DISTINCT FROM `isAvailable`. `isAvailable` encodes provider
+  /// inventory/lifecycle status (Shopify `status === ACTIVE`), which is
+  /// orthogonal to publication: an ACTIVE unpublished product has no public
+  /// destination. Neither
+  /// field may be derived from, or substituted for, the other — a public
+  /// click destination requires BOTH.
+  ///
+  /// `false` is the fail-closed default so an unknown publication state can
+  /// never be exposed as a clickable public product. Every row that existed
+  /// before this column was added therefore reads `false` until the brand
+  /// re-runs a product sync.
+  hasPublicStorefrontUrl    Boolean                    @default(false)
   firstSeenAt               DateTime                   @default(now())
   lastSeenAt                DateTime                   @default(now())
   unavailableSince          DateTime?
@@ -664,8 +638,8 @@ model BrandCommerceProduct {
 /// Provider-neutral assignment of one brand-curated catalog product to one
 /// campaign. This is deliberately a single reversible row per
 /// (campaign, BrandCommerceProduct): toggling isActive reuses the row, so a
-/// duplicate active assignment is structurally impossible and historical
-/// LessonProductLink rows never need to be deleted or rewritten.
+/// duplicate active assignment is structurally impossible and an assignment's
+/// history is never deleted or rewritten to express a lifecycle change.
 model CampaignCommerceProduct {
   id                     String               @id @default(cuid())
   brandId                String
@@ -688,8 +662,20 @@ model CampaignCommerceProduct {
   @@index([brandCommerceProductId, isActive])
 }
 
-/// Campaign-scoped attachment of one brand-curated catalog product to one
-/// Lesson.
+/// THE canonical Lesson product attachment. Campaign-scoped attachment of one
+/// brand-curated catalog product to one Lesson.
+///
+/// This table is the ONLY representation of "a product is attached to this
+/// lesson". As of Phase 8 there is no other one: the legacy
+/// `LessonProductLink` / `ExperienceProductLink` snapshot tables are gone, and
+/// no bridge column to them remains.
+///
+/// This row carries NO display data of its own. Title, image, price, currency
+/// and the outbound product URL all derive from
+/// `BrandCommerceProduct -> ConnectedCommerceProduct`, i.e. from
+/// provider-verified catalog data that a product sync owns and refreshes. A
+/// public, clickable destination additionally requires
+/// `ConnectedCommerceProduct.hasPublicStorefrontUrl` — see that field.
 ///
 /// WHY campaignId is on this row (rather than a campaign-less "canonical
 /// lesson product"): an Experience can be co-sponsored by several campaigns
@@ -703,27 +689,23 @@ model CampaignCommerceProduct {
 /// A's product and Campaign B's product (or the same product under both)
 /// without the two corrupting each other's attribution.
 ///
-/// `@@unique([campaignId, lessonId, brandCommerceProductId])` mirrors
-/// CampaignCommerceProduct's "one reversible lifecycle row per tuple,
-/// reactivate rather than duplicate" pattern: toggling isActive reuses the row
-/// so a duplicate active attachment is structurally impossible.
-///
-/// `legacyLessonProductLinkId` bridges to the existing LessonProductLink
-/// snapshot. Display data (title/image/price/url) still lives there exactly as
-/// before — this table only adds a campaign-scoping layer on top of it, and is
-/// deliberately optional so pre-Phase-5 snapshot rows keep working untouched.
+/// `@@unique([campaignId, lessonId, brandCommerceProductId])` is THE reversible
+/// lifecycle key. It mirrors CampaignCommerceProduct's "one reversible
+/// lifecycle row per tuple, reactivate rather than duplicate" pattern: attach
+/// and detach toggle `isActive` on the SAME row, so a duplicate active
+/// attachment is structurally impossible and detach/reattach preserves the
+/// row's identity (and therefore the attribution history keyed to it).
 model CampaignLessonProduct {
-  id                        String    @id @default(cuid())
-  brandId                   String
-  campaignId                String
-  lessonId                  String
-  brandCommerceProductId    String
-  legacyLessonProductLinkId String?   @unique
-  isActive                  Boolean   @default(true)
-  displayOrder              Int       @default(0)
-  deactivatedAt             DateTime?
-  createdAt                 DateTime  @default(now())
-  updatedAt                 DateTime  @updatedAt
+  id                     String    @id @default(cuid())
+  brandId                String
+  campaignId             String
+  lessonId               String
+  brandCommerceProductId String
+  isActive               Boolean   @default(true)
+  displayOrder           Int       @default(0)
+  deactivatedAt          DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   brand                Brand                @relation(fields: [brandId], references: [id], onDelete: Cascade)
   lesson               Lesson               @relation(fields: [lessonId], references: [id], onDelete: Cascade)
@@ -731,9 +713,6 @@ model CampaignLessonProduct {
   // cross-brand attachment even if a caller bypasses the application service.
   campaign             Campaign             @relation(fields: [campaignId, brandId], references: [id, brandId], onDelete: Cascade)
   brandCommerceProduct BrandCommerceProduct @relation(fields: [brandCommerceProductId, brandId], references: [id, brandId], onDelete: Cascade)
-  // SetNull, not Cascade: removing the snapshot must detach this row, not
-  // destroy the campaign-scoped attribution history it carries.
-  legacyLink           LessonProductLink?   @relation(fields: [legacyLessonProductLinkId], references: [id], onDelete: SetNull)
 
   commerceClickAttributions CommerceClickAttribution[]
 
@@ -791,10 +770,17 @@ model CampaignLessonProduct {
 ///
 /// PRODUCT IDENTITY
 /// ----------------
-/// Every product-identity foreign key is optional. A click may originate from
-/// a curated catalog row, a legacy snapshot, a direct Experience link, or a
-/// campaign-scoped attachment, and only some of those are knowable at once.
+/// Every product-identity foreign key is optional, and each is SetNull, so a
+/// click survives the deletion of whatever it pointed at.
 /// `destinationUrl`/`destinationHost` are the two columns ALWAYS populated.
+///
+/// PHASE 8 removed the `lessonProductLinkId` / `experienceProductLinkId`
+/// columns along with the legacy snapshot tables they referenced. Historical
+/// rows whose ONLY structured product identity was one of those two columns
+/// therefore keep `destinationUrl`/`destinationHost` but no longer resolve to a
+/// product row. That is a recorded, accepted evidence degradation, not a bug:
+/// every click minted from Phase 8 onward carries `campaignLessonProductId`
+/// and/or `brandCommerceProductId` instead.
 ///
 /// FORWARD SEAM
 /// ------------
@@ -822,8 +808,6 @@ model CommerceClickAttribution {
 
   brandCommerceProductId  String?
   connectedProductId      String?
-  lessonProductLinkId     String?
-  experienceProductLinkId String?
   campaignLessonProductId String?
   commerceConnectionId    String?
 
@@ -872,8 +856,6 @@ model CommerceClickAttribution {
 
   brandCommerceProduct  BrandCommerceProduct?     @relation(fields: [brandCommerceProductId], references: [id], onDelete: SetNull)
   connectedProduct      ConnectedCommerceProduct? @relation(fields: [connectedProductId], references: [id], onDelete: SetNull)
-  lessonProductLink     LessonProductLink?        @relation(fields: [lessonProductLinkId], references: [id], onDelete: SetNull)
-  experienceProductLink ExperienceProductLink?    @relation(fields: [experienceProductLinkId], references: [id], onDelete: SetNull)
   campaignLessonProduct CampaignLessonProduct?    @relation(fields: [campaignLessonProductId], references: [id], onDelete: SetNull)
   commerceConnection    CommerceConnection?       @relation(fields: [commerceConnectionId], references: [id], onDelete: SetNull)
 

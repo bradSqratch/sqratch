@@ -1,0 +1,108 @@
+-- Migration: 20260808120000_add_connected_product_storefront_availability
+--
+-- Phase 8, Step 1. Adds ONE boolean column to "ConnectedCommerceProduct":
+-- "hasPublicStorefrontUrl". This migration is additive and forward-only: it
+-- contains no UPDATE, DELETE, TRUNCATE, DROP, ALTER COLUMN, type change, or
+-- renamed object. No existing column, index, or constraint is modified, so
+-- every existing row keeps every value it already had.
+--
+-- WHAT THIS COLUMN IS, AND THE BUG IT EXISTS TO FIX
+-- -------------------------------------------------
+-- Shopify's Product.onlineStoreUrl is NULL when a product has no publicly
+-- reachable storefront URL — either it is not published to the Online Store
+-- sales channel, or the storefront is password-protected. The Shopify
+-- normalizer (src/lib/shopify-products.ts) collapsed that signal with
+--
+--   productUrl: product.onlineStoreUrl || `https://<shop>/products/<handle>`
+--
+-- which FABRICATES a URL that 404s, and the product sync then persisted that
+-- fabricated URL with isAvailable: true (isAvailable encodes Shopify
+-- status === ACTIVE, which is orthogonal to publication). The click route's
+-- destination validator cannot catch this either: it only checks that the
+-- hostname equals the brand's expected shop domain, and the fabricated URL
+-- uses exactly that host.
+--
+-- This column captures the signal that was being destroyed: it records the
+-- FACT that the provider handed us a real storefront URL, evaluated BEFORE
+-- that `||` fallback.
+--
+-- NOT NAMED "isPublished", AND NOT A SUBSTITUTE FOR "isAvailable"
+-- --------------------------------------------------------------
+-- The password-protected-store case means a product can be genuinely
+-- published and still have no reachable URL, so this column deliberately
+-- records the observable fact rather than an inference about publication
+-- state. It is also deliberately SEPARATE from "isAvailable" (provider
+-- inventory/lifecycle status): neither field may be derived from, or
+-- substituted for, the other. A public, clickable destination requires BOTH.
+--
+-- EXISTING ROWS DEFAULT TO false — A POST-DEPLOY RESYNC IS MANDATORY
+-- -----------------------------------------------------------------
+-- ****  Every already-synced ConnectedCommerceProduct row gets              ****
+-- ****  "hasPublicStorefrontUrl" = false, i.e. is treated as having NO      ****
+-- ****  public storefront destination, until the brand re-runs a product    ****
+-- ****  sync. This is intentional fail-closed behavior: an unknown          ****
+-- ****  publication state must never be exposed as a clickable public       ****
+-- ****  product. The post-deploy product resync for every connected brand   ****
+-- ****  is therefore MANDATORY, not optional.                               ****
+--
+-- The code shipped alongside this migration only WRITES the column (through
+-- the normalizer -> neutral CommerceProduct -> product-sync chain); no read
+-- path gates on it yet, so applying this migration on its own changes no
+-- runtime behavior. The gating queries land in a later, separately-reviewed
+-- change — at which point the resync above must already have run.
+--
+-- NO NEW INDEX, ON PURPOSE
+-- ------------------------
+-- The existing ConnectedCommerceProduct_brandId_isAvailable_idx and
+-- ConnectedCommerceProduct_connectionId_isAvailable_idx keep serving the
+-- render/click gates: adding this column to those gates extends their
+-- PREDICATE, not the shape of the rows they select, and the additional
+-- boolean is filtered from an already-narrow index result. Adding an index to
+-- a pre-existing table is a separate, evidence-driven decision.
+--
+-- PREFLIGHT (run manually immediately before deploying; do NOT run during
+-- development against a production DATABASE_URL):
+--
+-- 1. Confirm the table this migration alters exists:
+--
+--    SELECT to_regclass('public."ConnectedCommerceProduct"') IS NOT NULL AS has_table;
+--
+--    Must be true.
+--
+-- 2. Confirm the column is not already present from a manual partial
+--    application (this must return ZERO rows):
+--
+--    SELECT column_name FROM information_schema.columns
+--    WHERE table_schema = 'public'
+--      AND table_name = 'ConnectedCommerceProduct'
+--      AND column_name = 'hasPublicStorefrontUrl';
+--
+-- 3. Confirm the migration that created the table is applied and not rolled
+--    back:
+--
+--    SELECT migration_name, finished_at, rolled_back_at
+--    FROM _prisma_migrations
+--    WHERE migration_name = '20260806140000_add_commerce_product_catalog';
+--
+--    One row, non-null finished_at, null rolled_back_at.
+--
+-- 4. Plan the mandatory post-deploy product resync for every connected brand
+--    (see the fail-closed note above) BEFORE deploying.
+--
+-- LOCKING NOTE
+-- ------------
+-- PostgreSQL 11+ adds a NOT NULL column with a non-volatile DEFAULT without
+-- rewriting the table; the ACCESS EXCLUSIVE lock is held only briefly for the
+-- catalog update. No back-fill statement is needed or included.
+--
+-- ROLLBACK
+-- --------
+-- Dropping this column is lossless only in the sense that its values can be
+-- recomputed by a full product resync; it carries no history that cannot be
+-- re-derived from the provider. There is deliberately no automatic rollback
+-- SQL: dropping a column read by shipped code is a manual, deliberate
+-- operation.
+
+
+-- AlterTable
+ALTER TABLE "ConnectedCommerceProduct" ADD COLUMN     "hasPublicStorefrontUrl" BOOLEAN NOT NULL DEFAULT false;

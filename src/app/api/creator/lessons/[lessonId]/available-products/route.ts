@@ -9,19 +9,15 @@ import {
   getLessonProductManagementContext,
   type LessonProductManagementContext,
 } from "@/lib/lesson-product-links";
-import { fetchNormalizedShopifyProducts } from "@/lib/shopify-products";
-import { isLegacyShopifyBrandConnectionUsable } from "@/lib/commerce/connection-service";
 
 export type CreatorAvailableProductsDeps = {
   getAccess(lessonId: string): ReturnType<typeof getLessonProductManagementContext>;
   curationRepository: CampaignCurationRepository;
-  fetchLegacyProducts: typeof fetchNormalizedShopifyProducts;
 };
 
 const DEFAULT_DEPS: CreatorAvailableProductsDeps = {
   getAccess: getLessonProductManagementContext,
   curationRepository: defaultCampaignCurationRepository,
-  fetchLegacyProducts: fetchNormalizedShopifyProducts,
 };
 
 function publicBrand(
@@ -55,9 +51,16 @@ export async function GET(
 }
 
 /**
- * Injectable implementation so authorization coverage uses fakes rather than
- * a database. The compatibility (legacy) branch intentionally retains the
- * exact pre-Phase-4 response and live-Shopify call path.
+ * Injectable implementation so authorization coverage uses fakes rather than a
+ * database.
+ *
+ * NO CREATOR PICKER MAY CALL LIVE SHOPIFY. The persisted catalog is the only
+ * source: this module imports nothing from `@/lib/shopify-products`, so a
+ * provider call is not reachable from here even by mistake.
+ *
+ * The Phase 5 campaign-selection behavior is unchanged: zero eligible contexts
+ * -> controlled empty response; exactly one -> auto-resolved; two or more ->
+ * explicit `selection_required` with the campaign list and no catalog.
  */
 export async function creatorAvailableProductsGetImpl(
   request: Request,
@@ -90,12 +93,9 @@ export async function creatorAvailableProductsGetImpl(
           connected: true,
           items: [],
           curation: {
-            // Selection is now required for legacy-only multi-campaign
-            // Experiences too, so `enabled` must reflect the actual mode of
-            // the offered contexts rather than being hardcoded true.
-            enabled: resolution.campaigns.some(
-              (campaign) => campaign.mode === "CURATED",
-            ),
+            // Every offered context is a canonical commerce context now, so
+            // this is always true.
+            enabled: true,
             requiresCampaignSelection: true,
             campaigns: resolution.campaigns,
           },
@@ -103,73 +103,52 @@ export async function creatorAvailableProductsGetImpl(
       });
     }
 
-    if (resolution.kind === "curated") {
-      const products = await deps.curationRepository.listAuthorizedProducts({
-        campaignId: resolution.campaign.campaignId,
-        brandId: resolution.campaign.brandId,
-      });
-      const brand = brandForContext(access.data, resolution.campaign.brandId);
-
+    if (resolution.kind === "none") {
+      // No brand-owning campaign at all: there is no catalog to offer and no
+      // brand to name. A controlled empty response, never a provider call.
       return NextResponse.json({
         data: {
-          brand: publicBrand(brand),
+          brand: null,
           candidateBrandCount: access.data.candidateBrands.length,
-          // A curated picker reads the persisted catalog and must remain
-          // usable after a connection is disconnected. `connected` is kept
-          // true to preserve the existing UI gate/response contract.
-          connected: true,
-          items: products.map(toCreatorCatalogProduct),
+          connected: false,
+          items: [],
           curation: {
-            enabled: true,
-            campaignId: resolution.campaign.campaignId,
+            enabled: false,
             requiresCampaignSelection: false,
-            campaigns: [{
-              id: resolution.campaign.campaignId,
-              name: resolution.campaign.campaignName,
-              brandId: resolution.campaign.brandId,
-              brandName: resolution.campaign.brandName,
-              mode: resolution.campaign.mode,
-            }],
+            campaigns: [],
           },
         },
       });
     }
 
-    // Legacy compatibility mode begins here. Do not add curation fields,
-    // alter item ids, or change the current connected-brand behavior. The
-    // brand comes from the single resolved context ("legacy"), or is null when
-    // the Experience has no brand-owning campaign at all ("none").
-    const brand =
-      resolution.kind === "legacy"
-        ? brandForContext(access.data, resolution.campaign.brandId)
-        : null;
-    if (!brand?.shopifyShopDomain || !isLegacyShopifyBrandConnectionUsable(brand)) {
-      return NextResponse.json({
-        data: {
-          brand: publicBrand(brand),
-          candidateBrandCount: access.data.candidateBrands.length,
-          connected: false,
-          items: [],
-        },
-      });
-    }
-
-    const products = await deps.fetchLegacyProducts({
-      shopDomain: brand.shopifyShopDomain,
-      brandId: brand.id,
-      limit: 100,
+    // Exactly one resolved context, reading the persisted canonical catalog
+    // through the shared repository.
+    const products = await deps.curationRepository.listAuthorizedProducts({
+      campaignId: resolution.campaign.campaignId,
+      brandId: resolution.campaign.brandId,
     });
-
-    if (!products.ok) {
-      return NextResponse.json({ error: products.error }, { status: products.status });
-    }
+    const brand = brandForContext(access.data, resolution.campaign.brandId);
 
     return NextResponse.json({
       data: {
         brand: publicBrand(brand),
         candidateBrandCount: access.data.candidateBrands.length,
+        // A canonical picker reads the persisted catalog and must remain usable
+        // after a connection is disconnected. `connected` is kept true to
+        // preserve the existing UI gate/response contract.
         connected: true,
-        items: products.items,
+        items: products.map(toCreatorCatalogProduct),
+        curation: {
+          enabled: true,
+          campaignId: resolution.campaign.campaignId,
+          requiresCampaignSelection: false,
+          campaigns: [{
+            id: resolution.campaign.campaignId,
+            name: resolution.campaign.campaignName,
+            brandId: resolution.campaign.brandId,
+            brandName: resolution.campaign.brandName,
+          }],
+        },
       },
     });
   } catch (error) {

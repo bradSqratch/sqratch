@@ -20,6 +20,7 @@ import assert from "node:assert/strict";
 
 import {
   decimalStringToMinorUnits,
+  formatMinorUnitPriceRange,
   providerPriceStringToMinorUnits,
   getCurrencyExponent,
   DEFAULT_MINOR_UNIT_EXPONENT,
@@ -305,5 +306,110 @@ describe("providerPriceStringToMinorUnits (price-domain wrapper)", () => {
       exponent: 2,
       currencyExponentDefaulted: false,
     });
+  });
+});
+
+describe("formatMinorUnitPriceRange (the one shared price formatter)", () => {
+  test("exponent 2, min === max -> a single formatted value", () => {
+    assert.equal(
+      formatMinorUnitPriceRange({
+        priceMinMinor: 1200,
+        priceMaxMinor: 1200,
+        priceMinorUnitExponent: 2,
+        currencyCode: "USD",
+      }),
+      "$12.00",
+    );
+  });
+
+  test("exponent 2, min !== max -> a joined range", () => {
+    assert.equal(
+      formatMinorUnitPriceRange({
+        priceMinMinor: 1200,
+        priceMaxMinor: 2999,
+        priceMinorUnitExponent: 2,
+        currencyCode: "USD",
+      }),
+      "$12.00 - $29.99",
+    );
+  });
+
+  test("exponent 0 (JPY) formats whole units with no decimals", () => {
+    assert.equal(
+      formatMinorUnitPriceRange({
+        priceMinMinor: 1200,
+        priceMaxMinor: 1200,
+        priceMinorUnitExponent: 0,
+        currencyCode: "JPY",
+      }),
+      "¥1,200",
+    );
+  });
+
+  test("exponent 3 (KWD) divides by 1000", () => {
+    const formatted = formatMinorUnitPriceRange({
+      priceMinMinor: 12500,
+      priceMaxMinor: 12500,
+      priceMinorUnitExponent: 3,
+      currencyCode: "KWD",
+    });
+    assert.ok(formatted);
+    assert.match(formatted!, /12\.500$/);
+  });
+
+  test("any missing field yields null, never a partial or guessed string", () => {
+    const base = {
+      priceMinMinor: 1200,
+      priceMaxMinor: 1200,
+      priceMinorUnitExponent: 2,
+      currencyCode: "USD",
+    };
+    assert.equal(formatMinorUnitPriceRange({ ...base, priceMinMinor: null }), null);
+    assert.equal(formatMinorUnitPriceRange({ ...base, priceMaxMinor: null }), null);
+    assert.equal(formatMinorUnitPriceRange({ ...base, priceMinorUnitExponent: null }), null);
+    assert.equal(formatMinorUnitPriceRange({ ...base, currencyCode: null }), null);
+    assert.equal(formatMinorUnitPriceRange({ ...base, currencyCode: "" }), null);
+  });
+
+  test("an out-of-contract exponent (negative, > 6, or fractional) yields null", () => {
+    const base = { priceMinMinor: 1200, priceMaxMinor: 1200, currencyCode: "USD" };
+    assert.equal(formatMinorUnitPriceRange({ ...base, priceMinorUnitExponent: -1 }), null);
+    assert.equal(formatMinorUnitPriceRange({ ...base, priceMinorUnitExponent: 7 }), null);
+    assert.equal(formatMinorUnitPriceRange({ ...base, priceMinorUnitExponent: 2.5 }), null);
+  });
+
+  test("an unusable currency code yields null instead of throwing", () => {
+    assert.equal(
+      formatMinorUnitPriceRange({
+        priceMinMinor: 1200,
+        priceMaxMinor: 1200,
+        priceMinorUnitExponent: 2,
+        currencyCode: "not-a-currency",
+      }),
+      null,
+    );
+  });
+
+  test("bigint inputs are accepted; a value beyond exact integer range yields null", () => {
+    // BigInt(...) rather than a literal: this project's TS target predates
+    // ES2020 bigint literals.
+    assert.equal(
+      formatMinorUnitPriceRange({
+        priceMinMinor: BigInt(1200),
+        priceMaxMinor: BigInt(1200),
+        priceMinorUnitExponent: 2,
+        currencyCode: "USD",
+      }),
+      "$12.00",
+    );
+    assert.equal(
+      formatMinorUnitPriceRange({
+        priceMinMinor: BigInt("9007199254740993"),
+        priceMaxMinor: BigInt("9007199254740993"),
+        priceMinorUnitExponent: 2,
+        currencyCode: "USD",
+      }),
+      null,
+    );
   });
 });

@@ -120,14 +120,14 @@ export async function POST(request: NextRequest) {
         where: { sourceShopDomain: shopDomain },
         data: { sourceShopDomain: null },
       }),
-      prisma.experienceProductLink.updateMany({
-        where: { sourceShopDomain: shopDomain },
-        data: { sourceShopDomain: null },
-      }),
-      prisma.lessonProductLink.updateMany({
-        where: { sourceShopDomain: shopDomain },
-        data: { sourceShopDomain: null },
-      }),
+      // PHASE 8: the ExperienceProductLink / LessonProductLink
+      // sourceShopDomain scrubs that used to sit here are gone with those
+      // tables (20260808130000_remove_legacy_product_link_snapshots). No
+      // coverage is lost: the canonical product chain
+      // (ConnectedCommerceProduct / BrandCommerceProduct /
+      // CampaignLessonProduct) cascades from CommerceConnection, which this
+      // webhook deletes outright below, so those rows are removed wholesale
+      // rather than needing a field-level scrub.
       // Scrub the redacted domain out of connection history. Rows are kept
       // (event type + timestamp remain useful audit history) but never
       // retain the redacted shop domain, currency, or client id. Matched

@@ -1,21 +1,25 @@
 /**
  * tests/creator-lesson-product-routes-campaign-scoping.test.ts
  *
- * End-to-end coverage for the multi-campaign lesson product attach/replace
- * flow through the ACTUAL creator route implementations:
+ * End-to-end coverage for the CANONICAL multi-campaign lesson product
+ * attach/replace flow through the ACTUAL creator route implementations:
  *   src/app/api/creator/lessons/[lessonId]/products/route.ts (POST)
- *   src/app/api/creator/lessons/[lessonId]/products/[productLinkId]/route.ts
+ *   src/app/api/creator/lessons/[lessonId]/products/[campaignLessonProductId]/route.ts
  *     (PATCH, DELETE)
  *
  * Unlike tests/campaign-product-curation.test.ts (which only injects
  * `getAccess`/`curationRepository` and exercises paths that return before any
  * Prisma write), these tests drive the routes all the way through their
- * `prisma.lessonProductLink` / `prisma.campaignLessonProduct` writes by
- * mocking the shared `prisma` singleton — the same pattern
- * tests/shopify-reward-adapter-cutover.test.ts uses for routes that are not
- * fully dependency-injected. `$transaction` is stubbed to just invoke its
- * callback with the mocked client, so the same mocked model methods observe
- * both the outer call and any writes made "inside" the transaction.
+ * `prisma.campaignLessonProduct` writes by mocking the shared `prisma`
+ * singleton — the same pattern tests/shopify-reward-adapter-cutover.test.ts
+ * uses for routes that are not fully dependency-injected. `$transaction` is
+ * stubbed to just invoke its callback with the mocked client, so the same
+ * mocked model methods observe both the outer call and any writes made "inside"
+ * the transaction.
+ *
+ * `prisma.lessonProductLink` is deliberately stubbed to THROW on every method:
+ * the canonical routes must never touch the legacy snapshot table again, and
+ * any regression that reintroduces such a write fails here loudly.
  *
  * No real DB connection or network call is made anywhere in this file.
  */
@@ -36,7 +40,7 @@ import type {
   CampaignCurationRepository,
 } from "../src/lib/commerce/campaign-product-curation";
 import type { CreatorLessonProductMutationDeps } from "../src/app/api/creator/lessons/[lessonId]/products/route";
-import type { CreatorLessonProductPatchDeps } from "../src/app/api/creator/lessons/[lessonId]/products/[productLinkId]/route";
+import type { CreatorLessonProductPatchDeps } from "../src/app/api/creator/lessons/[lessonId]/products/[campaignLessonProductId]/route";
 import type { LessonProductManagementContext } from "../src/lib/lesson-product-links";
 
 interface MockedPrismaClient {
@@ -55,7 +59,7 @@ let lessonProductsPost: (
 ) => Promise<Response>;
 let lessonProductPatch: (
   request: NextRequest,
-  context: { params: Promise<{ lessonId: string; productLinkId: string }> },
+  context: { params: Promise<{ lessonId: string; campaignLessonProductId: string }> },
   overrides?: Partial<CreatorLessonProductPatchDeps>,
 ) => Promise<Response>;
 before(async () => {
@@ -71,9 +75,11 @@ before(async () => {
   for (const model of ["lessonProductLink", "connectedCommerceProduct", "brandCommerceProduct", "campaignLessonProduct"]) {
     prismaModule[model] = {
       findFirst: stub(model, "findFirst"),
+      findMany: stub(model, "findMany"),
       findUnique: stub(model, "findUnique"),
       create: stub(model, "create"),
       update: stub(model, "update"),
+      updateMany: stub(model, "updateMany"),
       upsert: stub(model, "upsert"),
       delete: stub(model, "delete"),
     };
@@ -91,25 +97,30 @@ before(async () => {
   const postRoute = await import("../src/app/api/creator/lessons/[lessonId]/products/route");
   lessonProductsPost = postRoute.creatorLessonProductsPostImpl;
   const patchRoute = await import(
-    "../src/app/api/creator/lessons/[lessonId]/products/[productLinkId]/route"
+    "../src/app/api/creator/lessons/[lessonId]/products/[campaignLessonProductId]/route"
   );
   lessonProductPatch = patchRoute.creatorLessonProductPatchImpl;
 });
 
 beforeEach(() => {
-  // Always-fail defaults; each test wires only the calls it expects.
+  // Always-fail defaults; each test wires only the calls it expects. The legacy
+  // snapshot table stays failing in EVERY test on purpose.
   const fail = (model: string, method: string) => async () => {
     throw new Error(`Unmocked prisma.${model}.${method} in this test.`);
   };
-  prisma.lessonProductLink.findFirst = fail("lessonProductLink", "findFirst");
-  prisma.lessonProductLink.create = fail("lessonProductLink", "create");
-  prisma.lessonProductLink.update = fail("lessonProductLink", "update");
-  prisma.lessonProductLink.delete = fail("lessonProductLink", "delete");
-  prisma.connectedCommerceProduct.findFirst = async () => null;
-  prisma.brandCommerceProduct.findFirst = async () => null;
-  prisma.campaignLessonProduct.findUnique = async () => null;
-  prisma.campaignLessonProduct.upsert = async () => ({ id: "clp-mock" });
-  prisma.campaignLessonProduct.update = async () => ({ id: "clp-mock" });
+  for (const method of ["findFirst", "findMany", "create", "update", "updateMany", "delete", "upsert"]) {
+    prisma.lessonProductLink[method] = fail("lessonProductLink", method);
+  }
+  prisma.connectedCommerceProduct.findFirst = fail("connectedCommerceProduct", "findFirst");
+  prisma.brandCommerceProduct.findFirst = fail("brandCommerceProduct", "findFirst");
+  prisma.campaignLessonProduct.findFirst = async () => null;
+  prisma.campaignLessonProduct.updateMany = async () => ({ count: 1 });
+  prisma.campaignLessonProduct.upsert = async () => ({
+    id: "clp-mock",
+    lessonId: "lesson-1",
+    displayOrder: 0,
+    createdAt: new Date("2026-08-08T00:00:00Z"),
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -151,18 +162,18 @@ function twoCampaignAccess(): { ok: true; data: LessonProductManagementContext }
       },
       candidateBrands: [brandA, brandB],
       campaigns: [
-        { id: "campaign-a", name: "Campaign A", brandId: "brand-a", brandName: "Brand A", sortOrder: 0, commerceProductCurationEnabled: true },
-        { id: "campaign-b", name: "Campaign B", brandId: "brand-b", brandName: "Brand B", sortOrder: 1, commerceProductCurationEnabled: true },
+        { id: "campaign-a", name: "Campaign A", brandId: "brand-a", brandName: "Brand A", sortOrder: 0 },
+        { id: "campaign-b", name: "Campaign B", brandId: "brand-b", brandName: "Brand B", sortOrder: 1 },
       ],
       campaignContexts: [
-        { campaignId: "campaign-a", campaignName: "Campaign A", brandId: "brand-a", brandName: "Brand A", curationEnabled: true, mode: "CURATED", sortOrder: 0 },
-        { campaignId: "campaign-b", campaignName: "Campaign B", brandId: "brand-b", brandName: "Brand B", curationEnabled: true, mode: "CURATED", sortOrder: 1 },
+        { campaignId: "campaign-a", campaignName: "Campaign A", brandId: "brand-a", brandName: "Brand A", sortOrder: 0 },
+        { campaignId: "campaign-b", campaignName: "Campaign B", brandId: "brand-b", brandName: "Brand B", sortOrder: 1 },
       ],
     },
   };
 }
 
-function oneLegacyContextAccess(): { ok: true; data: LessonProductManagementContext } {
+function oneCuratedContextAccess(): { ok: true; data: LessonProductManagementContext } {
   const brand = {
     id: "brand-a",
     name: "Brand A",
@@ -189,29 +200,17 @@ function oneLegacyContextAccess(): { ok: true; data: LessonProductManagementCont
       },
       candidateBrands: [brand],
       campaigns: [
-        { id: "campaign-legacy", name: "Legacy Campaign", brandId: "brand-a", brandName: "Brand A", sortOrder: 0, commerceProductCurationEnabled: false },
+        { id: "campaign-a", name: "Campaign A", brandId: "brand-a", brandName: "Brand A", sortOrder: 0 },
       ],
       campaignContexts: [
-        { campaignId: "campaign-legacy", campaignName: "Legacy Campaign", brandId: "brand-a", brandName: "Brand A", curationEnabled: false, mode: "LEGACY", sortOrder: 0 },
+        { campaignId: "campaign-a", campaignName: "Campaign A", brandId: "brand-a", brandName: "Brand A", sortOrder: 0 },
       ],
     },
   };
 }
 
-function twoContextsOneCuratedOneLegacyAccess(): { ok: true; data: LessonProductManagementContext } {
-  const brandA = {
-    id: "brand-a",
-    name: "Brand A",
-    slug: "brand-a",
-    shopifyShopDomain: "brand-a.myshopify.com",
-    shopifyConnectionStatus: "CONNECTED" as const,
-    shopifyInstalledAt: new Date("2026-01-01T00:00:00Z"),
-    shopifyUninstalledAt: null,
-    shopifyLastProductSyncAt: null,
-    shopifyGrantedScopes: "read_products",
-  };
-  const brandB = { ...brandA, id: "brand-b", name: "Brand B", slug: "brand-b", shopifyShopDomain: "brand-b.myshopify.com" };
-
+/** An Experience with no brand-owning campaign at all: never a commerce context. */
+function brandlessAccess(): { ok: true; data: LessonProductManagementContext } {
   return {
     ok: true,
     data: {
@@ -225,15 +224,11 @@ function twoContextsOneCuratedOneLegacyAccess(): { ok: true; data: LessonProduct
           experience: { id: "experience-1", title: "Experience", slug: "experience-1", creatorUserId: "creator-1" },
         },
       },
-      candidateBrands: [brandA, brandB],
+      candidateBrands: [],
       campaigns: [
-        { id: "campaign-curated", name: "Curated Campaign", brandId: "brand-a", brandName: "Brand A", sortOrder: 0, commerceProductCurationEnabled: true },
-        { id: "campaign-legacy", name: "Legacy Campaign", brandId: "brand-b", brandName: "Brand B", sortOrder: 1, commerceProductCurationEnabled: false },
+        { id: "campaign-brandless", name: "Brandless", brandId: null, brandName: null, sortOrder: 0 },
       ],
-      campaignContexts: [
-        { campaignId: "campaign-curated", campaignName: "Curated Campaign", brandId: "brand-a", brandName: "Brand A", curationEnabled: true, mode: "CURATED", sortOrder: 0 },
-        { campaignId: "campaign-legacy", campaignName: "Legacy Campaign", brandId: "brand-b", brandName: "Brand B", curationEnabled: false, mode: "LEGACY", sortOrder: 1 },
-      ],
+      campaignContexts: [],
     },
   };
 }
@@ -253,6 +248,8 @@ function product(overrides: Partial<AuthorizedCatalogProduct> = {}): AuthorizedC
     priceMinMinor: 1200,
     priceMaxMinor: 1200,
     priceMinorUnitExponent: 2,
+    titleOverride: null,
+    shortDescriptionOverride: null,
     ...overrides,
   };
 }
@@ -288,23 +285,25 @@ function postRequest(body: unknown) {
 // ---------------------------------------------------------------------------
 
 describe("creator attach: two campaigns on the same lesson (item 4)", () => {
-  test("sequential attaches under different campaignIds create two distinct LessonProductLink + CampaignLessonProduct rows", async () => {
+  test("sequential attaches under different campaignIds create two distinct CampaignLessonProduct rows and no snapshot rows", async () => {
     const productA = product({ id: "catalog-campaign-a-1", brandId: "brand-a", brandCommerceProductId: "bcp-a-1", productUrl: "https://brand-a.myshopify.com/products/a" });
     const productB = product({ id: "catalog-campaign-b-1", brandId: "brand-b", brandCommerceProductId: "bcp-b-1", productUrl: "https://brand-b.myshopify.com/products/b" });
     const repo = repoFor([productA, productB]);
 
-    let createCalls = 0;
-    prisma.lessonProductLink.findFirst = async () => null;
-    prisma.lessonProductLink.create = async (args: unknown) => {
-      createCalls += 1;
-      const data = (args as { data: Record<string, unknown> }).data;
-      return { id: `link-${createCalls}`, lessonId: "lesson-1", ...data, createdAt: new Date() };
-    };
-    const scopeCalls: Array<{ campaignId: string; brandCommerceProductId: string }> = [];
+    const scopeCalls: Array<{ campaignId: string; brandId: string; brandCommerceProductId: string }> = [];
     prisma.campaignLessonProduct.upsert = async (args: unknown) => {
-      const create = (args as { create: { campaignId: string; brandCommerceProductId: string } }).create;
-      scopeCalls.push({ campaignId: create.campaignId, brandCommerceProductId: create.brandCommerceProductId });
-      return { id: `clp-${scopeCalls.length}` };
+      const create = (args as { create: { campaignId: string; brandId: string; brandCommerceProductId: string } }).create;
+      scopeCalls.push({
+        campaignId: create.campaignId,
+        brandId: create.brandId,
+        brandCommerceProductId: create.brandCommerceProductId,
+      });
+      return {
+        id: `clp-${scopeCalls.length}`,
+        lessonId: "lesson-1",
+        displayOrder: 0,
+        createdAt: new Date("2026-08-08T00:00:00Z"),
+      };
     };
 
     const responseA = await lessonProductsPost(
@@ -321,9 +320,9 @@ describe("creator attach: two campaigns on the same lesson (item 4)", () => {
     );
     assert.equal(responseB.status, 201);
 
-    assert.equal(createCalls, 2);
     assert.equal(scopeCalls.length, 2);
     assert.deepEqual(scopeCalls.map((c) => c.campaignId), ["campaign-a", "campaign-b"]);
+    assert.deepEqual(scopeCalls.map((c) => c.brandId), ["brand-a", "brand-b"]);
     assert.notEqual(scopeCalls[0].brandCommerceProductId, scopeCalls[1].brandCommerceProductId);
   });
 });
@@ -378,39 +377,134 @@ describe("creator attach: cross-brand product id rejected (item 6)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Item 7: forged provider URL rejected on legacy attach
+// Phase 8 replacement for the deleted legacy free-form attach coverage
+// (previously "item 7: forged provider URL rejected" and
+// parseLessonProductInput's allowedBrandIds enforcement).
+//
+// A creator can no longer supply a productUrl, title, price, brandId, provider
+// GID or shop domain at all. These tests prove those fields cannot influence
+// EITHER authorization or persisted data.
 // ---------------------------------------------------------------------------
 
-describe("creator attach: legacy forged URL rejected (item 7)", () => {
-  test("a legacy attach whose URL matches neither the brand domain nor its synced catalog is rejected with 400", async () => {
-    prisma.connectedCommerceProduct.findFirst = async () => null;
+describe("creator attach: client-supplied product/brand fields are inert (Phase 8)", () => {
+  test("a hostile productUrl/title/priceText/currency/brandId/shopDomain/GID payload is ignored; authorization uses only the resolved campaign's brand, and nothing client-supplied is persisted", async () => {
+    const authorized = product({
+      id: "catalog-1",
+      brandId: "brand-a",
+      brandCommerceProductId: "bcp-1",
+      title: "Synced title",
+      productUrl: "https://brand-a.myshopify.com/products/synced-title",
+    });
+    let lookupArgs: unknown = null;
+    const repo: CampaignCurationRepository = {
+      listAuthorizedProducts: async () => [],
+      findAuthorizedProduct: async (input) => {
+        lookupArgs = input;
+        return input.catalogProductId === "catalog-1" && input.brandId === "brand-a"
+          ? authorized
+          : null;
+      },
+    };
 
-    const response = await lessonProductsPost(
-      postRequest({ productUrl: "https://competitor.example/products/steal-this", brandId: "brand-a" }),
-      postContext,
-      { getAccess: async () => oneLegacyContextAccess() },
-    );
-
-    assert.equal(response.status, 400);
-    assert.match((await response.json()).error, /selected brand's store/);
-  });
-
-  test("a legacy attach whose URL matches the brand's own myshopify domain is accepted", async () => {
-    prisma.connectedCommerceProduct.findFirst = async () => null;
-    prisma.brandCommerceProduct.findFirst = async () => null; // no catalog match; fine with a single context
-    prisma.lessonProductLink.findFirst = async () => null;
-    prisma.lessonProductLink.create = async (args: unknown) => {
-      const data = (args as { data: Record<string, unknown> }).data;
-      return { id: "link-legacy-1", lessonId: "lesson-1", ...data, createdAt: new Date() };
+    let writtenCreate: Record<string, unknown> | null = null;
+    prisma.campaignLessonProduct.upsert = async (args: unknown) => {
+      writtenCreate = (args as { create: Record<string, unknown> }).create;
+      return {
+        id: "clp-1",
+        lessonId: "lesson-1",
+        displayOrder: 0,
+        createdAt: new Date("2026-08-08T00:00:00Z"),
+      };
     };
 
     const response = await lessonProductsPost(
-      postRequest({ productUrl: "https://brand-a.myshopify.com/products/genuine", brandId: "brand-a" }),
+      postRequest({
+        catalogProductId: "catalog-1",
+        campaignId: "campaign-a",
+        // Every one of these must be inert.
+        productUrl: "https://competitor.example/products/steal-this",
+        title: "Client title",
+        imageUrl: "https://cdn.evil.example/img.jpg",
+        priceText: "$0.01",
+        currency: "XXX",
+        brandId: "brand-b",
+        sourceShopDomain: "competitor.myshopify.com",
+        shopifyProductGid: "gid://shopify/Product/999",
+      }),
       postContext,
-      { getAccess: async () => oneLegacyContextAccess() },
+      { getAccess: async () => twoCampaignAccess(), curationRepository: repo },
     );
 
     assert.equal(response.status, 201);
+
+    // Authorization used the campaign's OWN brand, never the client's brandId.
+    assert.deepEqual(lookupArgs, {
+      campaignId: "campaign-a",
+      brandId: "brand-a",
+      catalogProductId: "catalog-1",
+    });
+
+    // The persisted row carries only server-derived identifiers.
+    const create = writtenCreate as unknown as Record<string, unknown>;
+    assert.equal(create.brandId, "brand-a");
+    assert.equal(create.campaignId, "campaign-a");
+    assert.equal(create.brandCommerceProductId, "bcp-1");
+    assert.deepEqual(
+      Object.keys(create).sort(),
+      ["brandCommerceProductId", "brandId", "campaignId", "isActive", "lessonId"],
+    );
+
+    // The response echoes server-derived display data, not the client's.
+    const body = await response.json();
+    assert.equal(body.data.title, "Synced title");
+    assert.equal(body.data.productUrl, "https://brand-a.myshopify.com/products/synced-title");
+    assert.equal(body.data.priceText, "$12.00");
+    assert.equal(body.data.currency, "USD");
+    assert.equal(body.data.brandId, "brand-a");
+    // No provider or internal catalog identifier is ever echoed back.
+    assert.equal("brandCommerceProductId" in body.data, false);
+    assert.equal("connectedProductId" in body.data, false);
+    assert.equal("catalogProductId" in body.data, false);
+    assert.equal("sourceShopDomain" in body.data, false);
+  });
+
+  test("a client-supplied brandId cannot claim another brand's campaign: the campaign's own brand is used and the cross-brand product resolves to nothing", async () => {
+    const response = await lessonProductsPost(
+      postRequest({ catalogProductId: "catalog-1", campaignId: "campaign-a", brandId: "brand-b" }),
+      postContext,
+      {
+        getAccess: async () => twoCampaignAccess(),
+        curationRepository: {
+          listAuthorizedProducts: async () => [],
+          findAuthorizedProduct: async ({ brandId }) =>
+            brandId === "brand-b" ? product({ brandId: "brand-b" }) : null,
+        },
+      },
+    );
+
+    assert.equal(response.status, 404);
+  });
+
+  test("a request with no catalogProductId is rejected — there is no free-form attach to fall back to", async () => {
+    const response = await lessonProductsPost(
+      postRequest({ campaignId: "campaign-a", productUrl: "https://brand-a.myshopify.com/products/x", title: "T" }),
+      postContext,
+      { getAccess: async () => twoCampaignAccess(), curationRepository: repoFor([]) },
+    );
+
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /catalogProductId is required/);
+  });
+
+  test("an Experience whose only campaign is brandless is never a commerce context", async () => {
+    const response = await lessonProductsPost(
+      postRequest({ catalogProductId: "catalog-1" }),
+      postContext,
+      { getAccess: async () => brandlessAccess(), curationRepository: repoFor([product()]) },
+    );
+
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /no sponsoring campaign/);
   });
 });
 
@@ -428,99 +522,118 @@ describe("creator attach: forged campaign id (item 8)", () => {
     assert.equal(response.status, 404);
     assert.equal((await response.json()).error, "Campaign is not available for this lesson.");
   });
+
+  test("an ambiguous Experience with no campaign chosen requires explicit selection rather than guessing", async () => {
+    const response = await lessonProductsPost(
+      postRequest({ catalogProductId: "catalog-1" }),
+      postContext,
+      { getAccess: async () => twoCampaignAccess(), curationRepository: repoFor([product()]) },
+    );
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.match(body.error, /Select a campaign/);
+    assert.deepEqual(body.campaigns.map((c: { id: string }) => c.id), ["campaign-a", "campaign-b"]);
+  });
 });
 
 // ---------------------------------------------------------------------------
-// Item 10: legacy campaign retains compatibility even with a curated sibling
+// Idempotent re-attach: the unique tuple reactivates rather than duplicating
 // ---------------------------------------------------------------------------
 
-describe("creator attach: legacy sibling stays selectable next to a curated campaign (item 10)", () => {
-  test("selecting the legacy context on a mixed Experience still accepts a client-supplied title/image, subject to the host-match gate", async () => {
-    prisma.connectedCommerceProduct.findFirst = async () => ({ id: "ccp-owned" }); // proves catalog ownership for the domain gate
-    // The Experience is ambiguous (2 eligible contexts), so mandatory scoping
-    // applies: a catalog match is required to supply the CampaignLessonProduct
-    // binding. Modeled by returning a match here (the URL IS in Brand B's
-    // synced catalog), exactly as findBrandCommerceProductIdForProductUrl
-    // would resolve it.
-    prisma.brandCommerceProduct.findFirst = async () => ({ id: "bcp-legacy-match" });
-    prisma.lessonProductLink.findFirst = async () => null;
-    let createdData: Record<string, unknown> | null = null;
-    prisma.lessonProductLink.create = async (args: unknown) => {
-      createdData = (args as { data: Record<string, unknown> }).data;
-      return { id: "link-legacy-mixed", lessonId: "lesson-1", ...createdData, createdAt: new Date() };
+describe("creator attach: reactivate-don't-duplicate", () => {
+  test("re-attaching the same product under the same campaign upserts the same tuple with isActive/deactivatedAt reset", async () => {
+    let upsertArgs: unknown = null;
+    prisma.campaignLessonProduct.upsert = async (args: unknown) => {
+      upsertArgs = args;
+      return {
+        id: "clp-existing",
+        lessonId: "lesson-1",
+        displayOrder: 0,
+        createdAt: new Date("2026-08-08T00:00:00Z"),
+      };
     };
 
     const response = await lessonProductsPost(
-      postRequest({
-        productUrl: "https://shop.brand-b-custom-domain.com/products/x",
-        title: "Client title",
-        imageUrl: "https://cdn.example/img.jpg",
-        campaignId: "campaign-legacy",
-        brandId: "brand-b",
-      }),
+      postRequest({ catalogProductId: "catalog-1", campaignId: "campaign-a" }),
       postContext,
-      { getAccess: async () => twoContextsOneCuratedOneLegacyAccess() },
+      { getAccess: async () => oneCuratedContextAccess(), curationRepository: repoFor([product()]) },
     );
 
     assert.equal(response.status, 201);
-    assert.equal((createdData as unknown as { title: string }).title, "Client title");
+    const args = upsertArgs as {
+      where: { campaignId_lessonId_brandCommerceProductId: Record<string, string> };
+      update: { isActive: boolean; deactivatedAt: unknown };
+    };
+    assert.deepEqual(args.where.campaignId_lessonId_brandCommerceProductId, {
+      campaignId: "campaign-a",
+      lessonId: "lesson-1",
+      brandCommerceProductId: "bcp-1",
+    });
+    assert.equal(args.update.isActive, true);
+    assert.equal(args.update.deactivatedAt, null);
+    assert.equal((await response.json()).data.id, "clp-existing");
   });
 });
 
 // ---------------------------------------------------------------------------
-// Item 13: DELETE still works for pre-Phase-5 and Phase-5-scoped rows.
+// Item 13 / 17: DELETE still works and never re-checks product eligibility.
 //
-// The DELETE handler (unlike POST/PATCH) is not dependency-injected — it
-// calls `getLessonProductManagementContext` directly, which calls next-auth's
+// The DELETE handler (unlike POST/PATCH) is not dependency-injected — it calls
+// `getLessonProductManagementContext` directly, which calls next-auth's
 // `getServerSession`, which calls `next/headers` `cookies()`. That throws
 // "headers was called outside a request scope" when invoked outside a real
 // Next.js request lifecycle (verified: it is NOT a Prisma-only dependency, so
-// mocking the `prisma` singleton alone cannot make DELETE callable here).
-// No test anywhere in this repo drives a route through a direct
-// `getServerSession` call for this reason (see e.g.
-// tests/points-activity-source-checks.test.ts, which uses source inspection
-// for exactly this situation). This suite follows that established
-// precedent: the transactional deactivate-on-delete BEHAVIOR is already
-// fully covered against a fake tx in
-// tests/lesson-product-links-scoping.test.ts ("detachCampaignLessonProductFromLink"),
-// and the assertions below prove the DELETE route actually wires that
-// behavior into its own transaction, in the correct order, exactly once.
+// mocking the `prisma` singleton alone cannot make DELETE callable here). No
+// test anywhere in this repo drives a route through a direct `getServerSession`
+// call for this reason (see e.g. tests/points-activity-source-checks.test.ts,
+// which uses source inspection for exactly this situation). This suite follows
+// that established precedent: the deactivation BEHAVIOR is fully covered
+// against a fake tx in tests/lesson-product-links-scoping.test.ts
+// ("deactivateCampaignLessonProduct"), and the assertions below prove the
+// DELETE route wires that behavior in, inside a transaction, and consults no
+// eligibility state.
 // ---------------------------------------------------------------------------
 
-describe("creator DELETE wiring (item 13, source inspection)", () => {
+describe("creator DELETE wiring (items 13, 17 — source inspection)", () => {
   const deleteRouteSource = readFileSync(
-    join(process.cwd(), "src/app/api/creator/lessons/[lessonId]/products/[productLinkId]/route.ts"),
+    join(process.cwd(), "src/app/api/creator/lessons/[lessonId]/products/[campaignLessonProductId]/route.ts"),
     "utf8",
   );
 
-  test("DELETE calls detachCampaignLessonProductFromLink and lessonProductLink.delete inside the same $transaction", () => {
+  test("DELETE deactivates the CampaignLessonProduct inside a transaction and never deletes a row", () => {
     const deleteFunctionSource = deleteRouteSource.slice(
       deleteRouteSource.indexOf("export async function DELETE("),
     );
-    const transactionBlockMatch = deleteFunctionSource.match(
-      /await prisma\.\$transaction\(async \(tx\) => \{([\s\S]*?)\n {4}\}\);/,
-    );
-    assert.ok(transactionBlockMatch, "DELETE must wrap its writes in prisma.$transaction");
-    const block = transactionBlockMatch![1];
-    assert.match(block, /detachCampaignLessonProductFromLink\(tx, \{/);
-    assert.match(block, /tx\.lessonProductLink\.delete\(/);
-    // Detach must run BEFORE delete so the scoping row is deactivated before
-    // (or atomically with) the snapshot it points at disappears.
-    const detachIndex = block.indexOf("detachCampaignLessonProductFromLink");
-    const deleteIndex = block.indexOf("tx.lessonProductLink.delete");
-    assert.ok(detachIndex >= 0 && deleteIndex >= 0 && detachIndex < deleteIndex);
+    assert.match(deleteFunctionSource, /prisma\.\$transaction\(async \(tx\) =>\s*\n?\s*deactivateCampaignLessonProduct\(tx, \{/);
+    // The lesson scope travels with the id, so a foreign id fails closed.
+    assert.match(deleteFunctionSource, /lessonId,\n\s*campaignLessonProductId,/);
+    assert.equal(/\.delete\(/.test(deleteFunctionSource), false);
+    assert.equal(/lessonProductLink/.test(deleteFunctionSource), false);
   });
 
-  test("DELETE never queries product eligibility (brandCommerceProduct/connectedCommerceProduct) before removing an existing link (item 17)", () => {
-    const deleteFunctionMatch = deleteRouteSource.match(
-      /export async function DELETE\(([\s\S]*?)\n\}\n/,
+  test("DELETE never queries product eligibility before removing an existing attachment (item 17)", () => {
+    const deleteFunctionSource = deleteRouteSource.slice(
+      deleteRouteSource.indexOf("export async function DELETE("),
     );
-    assert.ok(deleteFunctionMatch);
-    const body = deleteFunctionMatch![1];
-    assert.equal(/brandCommerceProduct\./.test(body), false);
-    assert.equal(/connectedCommerceProduct\./.test(body), false);
-    assert.equal(/isCampaignEligible/.test(body), false);
-    assert.equal(/isAvailable/.test(body), false);
+    assert.equal(/brandCommerceProduct\./.test(deleteFunctionSource), false);
+    assert.equal(/connectedCommerceProduct\./.test(deleteFunctionSource), false);
+    assert.equal(/isCampaignEligible/.test(deleteFunctionSource), false);
+    assert.equal(/isAvailable/.test(deleteFunctionSource), false);
+    assert.equal(/findAuthorizedProduct/.test(deleteFunctionSource), false);
+  });
+
+  test("the GET/list projection filters only on isActive, so an already-attached product stays visible after becoming ineligible (item 17)", () => {
+    const curationSource = readFileSync(
+      join(process.cwd(), "src/lib/commerce/campaign-product-curation.ts"),
+      "utf8",
+    );
+    const select = curationSource.slice(
+      curationSource.indexOf("export const CANONICAL_ATTACHMENT_SELECT"),
+      curationSource.indexOf("export function projectCanonicalAttachment"),
+    );
+    assert.ok(select.length > 0);
+    assert.equal(/isCampaignEligible/.test(select), false);
+    assert.equal(/isAvailable/.test(select), false);
   });
 });
 
@@ -566,43 +679,43 @@ describe("creator attach: fail-closed on unavailable products (items 9, 15, 16)"
   });
 });
 
-// Item 17 (an already-attached link survives ineligibility) is covered by the
-// source-inspection assertion above ("DELETE never queries product
-// eligibility...") plus the PATCH-side guarantee that an untouched existing
-// row is never re-validated against current catalog state unless a
-// replacement is explicitly requested (see
-// tests/campaign-product-curation.test.ts's curated-replacement tests, which
-// this file's own PATCH test below extends).
-
 // ---------------------------------------------------------------------------
-// PATCH: curated replacement also carries the authorizing campaign (item 14)
-// and stays cross-brand-safe (item 6 analogue for replacement).
+// PATCH: canonical replacement is campaign-scoped and lesson-scoped
 // ---------------------------------------------------------------------------
 
 describe("creator PATCH replacement is campaign-scoped too", () => {
-  const patchContext = { params: Promise.resolve({ lessonId: "lesson-1", productLinkId: "link-1" }) };
+  const patchContext = { params: Promise.resolve({ lessonId: "lesson-1", campaignLessonProductId: "clp-1" }) };
 
-  test("a successful curated replacement upserts CampaignLessonProduct with the requesting campaign's id", async () => {
+  function patchRequest(body: unknown) {
+    return new NextRequest("https://sqratch.test/api/creator/lessons/lesson-1/products/clp-1", {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  test("a successful replacement upserts CampaignLessonProduct with the requesting campaign's id and retires the replaced row", async () => {
     const newProduct = product({ id: "catalog-campaign-a-2", brandId: "brand-a", brandCommerceProductId: "bcp-a-2" });
     const repo = repoFor([newProduct]);
 
-    prisma.lessonProductLink.findFirst = async () => null; // no duplicate
-    prisma.lessonProductLink.update = async (args: unknown) => {
-      const data = (args as { data: Record<string, unknown> }).data;
-      return { id: "link-1", lessonId: "lesson-1", ...data, createdAt: new Date() };
-    };
     let scopeArgs: unknown = null;
     prisma.campaignLessonProduct.upsert = async (args: unknown) => {
       scopeArgs = args;
-      return { id: "clp-1" };
+      return {
+        id: "clp-2",
+        lessonId: "lesson-1",
+        displayOrder: 0,
+        createdAt: new Date("2026-08-08T00:00:00Z"),
+      };
+    };
+    let deactivateArgs: unknown = null;
+    prisma.campaignLessonProduct.updateMany = async (args: unknown) => {
+      deactivateArgs = args;
+      return { count: 1 };
     };
 
     const response = await lessonProductPatch(
-      new NextRequest("https://sqratch.test/api/creator/lessons/lesson-1/products/link-1", {
-        method: "PATCH",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ catalogProductId: "catalog-campaign-a-2", campaignId: "campaign-a" }),
-      }),
+      patchRequest({ catalogProductId: "catalog-campaign-a-2", campaignId: "campaign-a" }),
       patchContext,
       { getAccess: async () => twoCampaignAccess(), findExisting: async () => true, curationRepository: repo },
     );
@@ -611,5 +724,93 @@ describe("creator PATCH replacement is campaign-scoped too", () => {
     const args = scopeArgs as { create: { campaignId: string; brandCommerceProductId: string } };
     assert.equal(args.create.campaignId, "campaign-a");
     assert.equal(args.create.brandCommerceProductId, "bcp-a-2");
+
+    const retired = deactivateArgs as { where: { id: string; lessonId: string } };
+    assert.equal(retired.where.id, "clp-1");
+    assert.equal(retired.where.lessonId, "lesson-1");
+    assert.equal((await response.json()).data.id, "clp-2");
+  });
+
+  test("replacing a product with itself is a no-op: the reactivated row is the addressed row, so nothing is deactivated", async () => {
+    prisma.campaignLessonProduct.upsert = async () => ({
+      id: "clp-1",
+      lessonId: "lesson-1",
+      displayOrder: 0,
+      createdAt: new Date("2026-08-08T00:00:00Z"),
+    });
+    let deactivateCalled = false;
+    prisma.campaignLessonProduct.updateMany = async () => {
+      deactivateCalled = true;
+      return { count: 1 };
+    };
+
+    const response = await lessonProductPatch(
+      patchRequest({ catalogProductId: "catalog-1", campaignId: "campaign-a" }),
+      patchContext,
+      {
+        getAccess: async () => oneCuratedContextAccess(),
+        findExisting: async () => true,
+        curationRepository: repoFor([product()]),
+      },
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(deactivateCalled, false);
+  });
+
+  test("a foreign or nonexistent attachment id yields the same generic 404 and never reaches a write", async () => {
+    let findExistingArgs: [string, string] | null = null;
+    const response = await lessonProductPatch(
+      patchRequest({ catalogProductId: "catalog-1", campaignId: "campaign-a" }),
+      patchContext,
+      {
+        getAccess: async () => oneCuratedContextAccess(),
+        findExisting: async (lessonId, id) => {
+          findExistingArgs = [lessonId, id];
+          return false;
+        },
+        curationRepository: repoFor([product()]),
+      },
+    );
+
+    assert.equal(response.status, 404);
+    assert.equal((await response.json()).error, "Lesson product link not found.");
+    assert.deepEqual(findExistingArgs, ["lesson-1", "clp-1"]);
+  });
+
+  test("a hostile PATCH payload cannot repoint the attachment at client-supplied data", async () => {
+    let writtenCreate: Record<string, unknown> | null = null;
+    prisma.campaignLessonProduct.upsert = async (args: unknown) => {
+      writtenCreate = (args as { create: Record<string, unknown> }).create;
+      return {
+        id: "clp-1",
+        lessonId: "lesson-1",
+        displayOrder: 0,
+        createdAt: new Date("2026-08-08T00:00:00Z"),
+      };
+    };
+
+    const response = await lessonProductPatch(
+      patchRequest({
+        catalogProductId: "catalog-1",
+        campaignId: "campaign-a",
+        productUrl: "https://competitor.example/products/steal-this",
+        title: "Client title",
+        brandId: "brand-b",
+      }),
+      patchContext,
+      {
+        getAccess: async () => oneCuratedContextAccess(),
+        findExisting: async () => true,
+        curationRepository: repoFor([product()]),
+      },
+    );
+
+    assert.equal(response.status, 200);
+    const create = writtenCreate as unknown as Record<string, unknown>;
+    assert.equal(create.brandId, "brand-a");
+    const body = await response.json();
+    assert.equal(body.data.title, "Synced title");
+    assert.equal(body.data.productUrl, "https://brand-a.myshopify.com/products/synced-title");
   });
 });

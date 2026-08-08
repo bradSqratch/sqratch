@@ -225,8 +225,8 @@ sqratch/
 | GET | `/api/public/experience/[experienceSlug]` | — | Fetch experience data | `Experience`, `Campaign`, `Course` |
 | GET | `/api/public/experience/[slug]/courses/[courseSlug]` | — | Fetch course + lessons | `Course`, `Lesson` |
 | GET | `/api/public/experience/[slug]/lessons/[lessonId]` | — | Fetch lesson | `Lesson`, `LessonProgress` |
-| GET | `/api/public/experience/[slug]/products` | — | Fetch experience shop products | `ExperienceProductLink`, Shopify API |
-| GET | `/api/public/experience/[slug]/lessons/[id]/products` | — | Fetch lesson products | `LessonProductLink`, Shopify API |
+| GET | `/api/public/experience/[slug]/products` | — | Fetch experience shop products (canonical catalog only; no live Shopify fallback) | `CampaignCommerceProduct`, `BrandCommerceProduct`, `ConnectedCommerceProduct` |
+| GET | `/api/public/experience/[slug]/lessons/[id]/products` | — | Fetch lesson products (canonical; gated on `hasPublicStorefrontUrl`) | `CampaignLessonProduct`, `BrandCommerceProduct`, `ConnectedCommerceProduct` |
 | GET | `/api/public/campaign/[campaignSlug]` | — | Fetch campaign data | `Campaign`, `Experience` |
 | GET | `/api/public/get-campaign-name?campaignId=` | — | Resolve campaign name (public) | `Campaign` |
 | GET | `/api/public/viewer-status` | — | Get viewer unlock status | `CampaignUnlock` |
@@ -371,11 +371,9 @@ Brand-scoped requests resolve through `src/lib/brand-context.ts` and the HttpOnl
 | `CreatorRequest` | Request to become a creator | `User` |
 | `Experience` | Top-level content hub (video, courses, posts, QA) | `CreatorProfile`, `Course[]`, `Post[]`, `Question[]`, `CampaignExperience[]` |
 | `Course` | A course within an experience | `Experience`, `Lesson[]`; `access: PUBLIC\|PRIVATE` |
-| `Lesson` | A video lesson within a course | `Course`, `LessonProgress[]`, `LessonProductLink[]` |
+| `Lesson` | A video lesson within a course | `Course`, `LessonProgress[]`, `CampaignLessonProduct[]` |
 | `LessonProgress` | Per-user or per-session lesson progress | `User?`, `UserSession?`, `Lesson`; unique on `(userId, lessonId)` or `(sessionId, lessonId)` |
 | `Post` | Community post on an experience | `Experience`, `PostComment[]` |
-| `ExperienceProductLink` | Shopify product link for experience shop tab | `Experience`, `Brand?` |
-| `LessonProductLink` | Shopify product link for lesson shop tab | `Lesson`, `Brand?` |
 
 ### Rewards Models
 

@@ -20,7 +20,6 @@ export type ExperienceCampaignRow = {
     id: string;
     name: string;
     brandId: string | null;
-    commerceProductCurationEnabled: boolean;
     brand: {
       id: string;
       name: string;
@@ -51,7 +50,6 @@ export async function loadExperienceCampaignRows(
           id: true,
           name: true,
           brandId: true,
-          commerceProductCurationEnabled: true,
           brand: {
             select: {
               id: true,
@@ -75,7 +73,6 @@ export function toCampaignContextSources(
     sortOrder: row.sortOrder,
     brandId: row.campaign.brandId,
     brandName: row.campaign.brand?.name ?? null,
-    curationEnabled: row.campaign.commerceProductCurationEnabled,
   }));
 }
 

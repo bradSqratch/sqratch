@@ -17,39 +17,41 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 
+/**
+ * One CANONICAL lesson product attachment, mirroring
+ * `CreatorLessonProductItem` in
+ * `src/lib/commerce/campaign-product-curation.ts` (declared locally, like every
+ * other response type in this file, rather than imported).
+ *
+ * `id` is the opaque CampaignLessonProduct id — the only identifier the API
+ * returns. There is deliberately no shop domain, provider id, or catalog id
+ * here: display data is derived server-side from the brand's own synced
+ * catalog, so there is also no "stale snapshot" state left to annotate.
+ */
 export type LessonProductLinkItem = {
   id: string;
   lessonId: string;
   productUrl: string;
-  title: string | null;
+  title: string;
+  description: string | null;
   imageUrl: string | null;
   priceText: string | null;
   currency: string | null;
   brandId: string | null;
-  /** The normalized Shopify shop domain this link was authorized against.
-   * Already returned by the lesson products API (see
-   * `src/app/api/creator/lessons/route.ts`); used here only to infer a
-   * provider label ("Shopify") — never rendered as a raw provider id. */
-  sourceShopDomain: string | null;
-  campaignProductLink?: {
-    campaign: {
-      id: string;
-      name: string;
-      brand: { name: string | null } | null;
-    };
+  displayOrder?: number;
+  campaign?: {
+    id: string;
+    name: string;
+    brandName: string | null;
   } | null;
   createdAt: string;
-  /** True when this link's product no longer belongs to the currently
-   * connected Shopify store and needs to be re-linked. */
-  needsRelinking?: boolean;
 };
 
 type AvailableLessonProduct = {
   id: string;
-  /** Present only for campaign-curated results. This is a SQRATCH catalog id,
-   * not a provider product id, and is the only value sent for authorized
-   * attachments. */
-  catalogProductId?: string;
+  /** A SQRATCH catalog id, never a provider product id — and the only product
+   * value ever sent when attaching. */
+  catalogProductId: string;
   title: string;
   handle: string;
   productUrl: string;
@@ -73,13 +75,9 @@ type CampaignSelectorOption = {
   name: string;
   brandId: string;
   brandName: string | null;
-  mode: "CURATED" | "LEGACY";
 };
 
 type CampaignCurationPickerState = {
-  /** Whether the RESOLVED context (if any) is curated. Not always true: a
-   * `selection_required` response reports whether ANY offered option is
-   * curated, since the mix can include legacy-mode siblings. */
   enabled: boolean;
   campaignId?: string;
   requiresCampaignSelection: boolean;
@@ -115,10 +113,8 @@ export function LessonProductLinksSection({
   const [query, setQuery] = useState("");
   const [campaignId, setCampaignId] = useState<string>("");
   /** The campaign the creator explicitly chose from the 2+-context selector.
-   * Needed because a resolved LEGACY context's response carries no curation
-   * field to echo the choice back (see the available-products route's legacy
-   * branch) — this is the only place that choice is remembered client-side,
-   * for the attach payload and for the "Change campaign" affordance. */
+   * Remembered client-side for the attach payload and for the "Change
+   * campaign" affordance. */
   const [selectedCampaign, setSelectedCampaign] =
     useState<CampaignSelectorOption | null>(null);
   /** Best-effort brandId -> brand name cache, accumulated from
@@ -246,33 +242,27 @@ export function LessonProductLinksSection({
       const selectedProducts = available.items.filter((product) =>
         selectedUrls.includes(product.productUrl),
       );
-      const curated = available.curation?.enabled === true;
-      // A resolved curated context always echoes its campaignId back on the
-      // response. A resolved LEGACY context does not (see the
-      // available-products route's legacy branch), so when the Experience
-      // was ambiguous the explicitly-picked `selectedCampaign` is the only
-      // remaining source of truth. Neither is set for an unambiguous (0/1
-      // context) Experience, so `resolvedCampaignId` is correctly omitted
-      // there and the request body stays exactly as it was before Phase 5.
+      // A resolved context echoes its campaignId back on the response; when the
+      // Experience was ambiguous, the explicitly-picked `selectedCampaign` is
+      // the remaining source of truth. Neither is set for an unambiguous (0/1
+      // context) Experience, so `campaignId` is correctly omitted there.
       const resolvedCampaignId =
         available.curation?.campaignId || selectedCampaign?.id || null;
 
+      // The attach payload carries ONLY the internal catalog id (and the
+      // campaign it is being attached under). Product title/URL/price/brand are
+      // never sent: the server re-derives all of them from the authorized
+      // catalog row, and would ignore them anyway.
       for (const product of selectedProducts) {
         await fetchJson(`/api/creator/lessons/${lessonId}/products`, {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(curated
-            ? {
-                catalogProductId: product.catalogProductId,
-                ...(resolvedCampaignId ? { campaignId: resolvedCampaignId } : {}),
-              }
-            : {
-                product,
-                brandId: available.brand?.id || null,
-                ...(resolvedCampaignId ? { campaignId: resolvedCampaignId } : {}),
-              }),
+          body: JSON.stringify({
+            catalogProductId: product.catalogProductId,
+            ...(resolvedCampaignId ? { campaignId: resolvedCampaignId } : {}),
+          }),
         });
       }
 
@@ -339,15 +329,12 @@ export function LessonProductLinksSection({
         ) : (
           <div className="mt-5 grid gap-4 xl:grid-cols-2">
             {linkedProducts.map((product) => {
-              // Best-effort attribution labels from data already on hand.
-              // Provider is inferred (never a raw provider id — just the
-              // literal "Shopify", the only live provider) from the presence
-              // of a resolved source shop domain. Brand name is looked up
-              // from the canonical link scope when available. Legacy links
-              // stay visibly unscoped; no campaign is guessed from ordering.
-              const providerLabel = product.sourceShopDomain ? "Shopify" : null;
-              const campaignLabel = product.campaignProductLink?.campaign.name || null;
-              const brandLabel = product.campaignProductLink?.campaign.brand?.name ||
+              // Attribution labels come from the canonical attachment's own
+              // campaign scope; the brand-name cache is only a fallback for a
+              // brand this dialog has already seen. No campaign is ever
+              // guessed from ordering.
+              const campaignLabel = product.campaign?.name || null;
+              const brandLabel = product.campaign?.brandName ||
                 (product.brandId ? brandNamesById[product.brandId] || null : null);
 
               return (
@@ -375,23 +362,11 @@ export function LessonProductLinksSection({
                         <p className="truncate text-base font-medium">
                           {product.title || "Linked product"}
                         </p>
-                        {product.needsRelinking ? (
-                          <span className="rounded-full border border-amber-300/25 bg-amber-300/10 px-2 py-0.5 text-[11px] uppercase tracking-[0.14em] text-amber-100">
-                            Needs relinking
-                          </span>
-                        ) : null}
                       </div>
-                      {product.needsRelinking ? (
-                        <p className="mt-1 text-xs text-amber-200/80">
-                          This product belongs to a previous or unknown Shopify
-                          store and is hidden from the public lesson page.
-                          Remove it and add a current product to fix.
-                        </p>
-                      ) : null}
                       <p className="mt-1 text-sm text-white/55">
                         {product.priceText || "Price available on Shopify"}
                       </p>
-                      {(campaignLabel || brandLabel || providerLabel) && (
+                      {(campaignLabel || brandLabel) && (
                         <p className="mt-2 flex flex-wrap items-center gap-1.5">
                           {campaignLabel && (
                             <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] uppercase tracking-[0.14em] text-white/50">
@@ -401,11 +376,6 @@ export function LessonProductLinksSection({
                           {brandLabel && (
                             <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] uppercase tracking-[0.14em] text-white/50">
                               {brandLabel}
-                            </span>
-                          )}
-                          {providerLabel && (
-                            <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] uppercase tracking-[0.14em] text-white/50">
-                              {providerLabel}
                             </span>
                           )}
                         </p>
@@ -501,9 +471,6 @@ export function LessonProductLinksSection({
                         {campaign.brandName || "Unknown brand"}
                         {" — Shopify"}
                       </span>
-                      <span className="shrink-0 rounded-full border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-white/50">
-                        {campaign.mode === "CURATED" ? "Curated" : "Legacy"}
-                      </span>
                     </button>
                   ))}
                 </div>
@@ -516,9 +483,7 @@ export function LessonProductLinksSection({
               </div>
             ) : available.items.length === 0 ? (
               <div className="rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/60">
-                {available.curation?.enabled
-                  ? "No approved active products are assigned to this campaign."
-                  : "No Shopify products were returned for the selected brand."}
+                No approved active products are assigned to this campaign.
               </div>
             ) : (
               <div className="space-y-3">

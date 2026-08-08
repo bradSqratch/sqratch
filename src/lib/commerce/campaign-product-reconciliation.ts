@@ -24,7 +24,6 @@ export type CampaignAssignmentRow = {
   campaign: {
     id: string;
     brandId: string | null;
-    commerceProductCurationEnabled: boolean;
   } | null;
   brandCommerceProduct: {
     id: string;
@@ -110,7 +109,7 @@ async function defaultListAssignments(
       isActive: true,
       createdAt: true,
       deactivatedAt: true,
-      campaign: { select: { id: true, brandId: true, commerceProductCurationEnabled: true } },
+      campaign: { select: { id: true, brandId: true } },
       brandCommerceProduct: {
         select: {
           id: true,

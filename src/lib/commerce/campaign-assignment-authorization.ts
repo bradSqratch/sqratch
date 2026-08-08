@@ -12,7 +12,6 @@ export type CampaignAssignmentAuthorizationFacts = {
   campaign: {
     id: string;
     brandId: string | null;
-    commerceProductCurationEnabled: boolean;
   };
   brandCommerceProduct: {
     brandId: string;
@@ -39,7 +38,6 @@ export function isCampaignAssignmentCatalogAuthorized(
     assignment.isActive &&
     assignment.campaignId === campaign.id &&
     assignment.brandId === campaign.brandId &&
-    campaign.commerceProductCurationEnabled &&
     brandCommerceProduct.brandId === assignment.brandId &&
     brandCommerceProduct.isCampaignEligible &&
     brandCommerceProduct.connectedProduct.brandId === assignment.brandId &&

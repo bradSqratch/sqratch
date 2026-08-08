@@ -15,6 +15,7 @@ import type {
   CommerceCapabilities,
   CommerceConnectionResult,
   ProductSyncPageRequest,
+  ProductSyncPreparationRequest,
   ProductSyncPageResult,
   CreateDiscountInput,
   CreateDiscountOptions,
@@ -44,6 +45,16 @@ export interface CommerceAdapter {
    * reconciliation against stored rows.
    */
   syncProducts(connectionId: string): Promise<ProductSyncResult>;
+
+  /**
+   * Optionally prepares opaque provider context for one complete persisted
+   * catalog sync. A preparation failure prevents product writes, which lets
+   * providers avoid replacing known catalog facts with incomplete evidence.
+   */
+  prepareProductSync?(
+    connectionId: string,
+    request: ProductSyncPreparationRequest,
+  ): Promise<unknown>;
 
   /**
    * Fetches one opaque-cursor product page. Optional so existing adapters and

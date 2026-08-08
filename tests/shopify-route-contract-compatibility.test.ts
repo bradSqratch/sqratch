@@ -204,6 +204,8 @@ const canonicalProduct: NormalizedShopifyProduct = {
   title: "Canonical Product",
   handle: "canonical-product",
   productUrl: "https://test-shop.myshopify.com/products/canonical-product",
+  hasProviderStorefrontPublication: true,
+  hasProviderSuppliedStorefrontUrl: true,
   images: ["https://cdn.example.com/1.jpg", "https://cdn.example.com/2.jpg"],
   imageUrl: "https://cdn.example.com/1.jpg",
   priceRange: { min: 19.99, max: 29.99 },
@@ -261,6 +263,9 @@ function fakeAdapterDeps(overrides: Partial<ShopifyCommerceAdapterDeps> = {}): S
     },
     async fetchProducts() {
       throw new Error("fetchProducts should not be called in this test");
+    },
+    async fetchPublishedProductIds() {
+      throw new Error("fetchPublishedProductIds should not be called in this test");
     },
     async createDiscountCode() {
       throw new Error("createDiscountCode should not be called in this test");

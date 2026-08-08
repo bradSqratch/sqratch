@@ -36,7 +36,6 @@ function source(overrides: Partial<CampaignContextSource> = {}): CampaignContext
     sortOrder: 0,
     brandId: "brand-1",
     brandName: "Brand",
-    curationEnabled: false,
     ...overrides,
   };
 }
@@ -76,16 +75,6 @@ describe("buildEligibleCampaignContexts", () => {
     assert.deepEqual(reversed.map((c) => c.campaignId), ["a", "b"]);
   });
 
-  test("mode reflects curationEnabled exactly, CURATED or LEGACY", () => {
-    const result = buildEligibleCampaignContexts([
-      source({ campaignId: "curated", curationEnabled: true }),
-      source({ campaignId: "legacy", curationEnabled: false }),
-    ]);
-    const byId = new Map(result.map((c) => [c.campaignId, c.mode]));
-    assert.equal(byId.get("curated"), "CURATED");
-    assert.equal(byId.get("legacy"), "LEGACY");
-  });
-
   test("empty input yields empty output", () => {
     assert.deepEqual(buildEligibleCampaignContexts([]), []);
   });
@@ -97,8 +86,6 @@ function candidate(overrides: Partial<CampaignContextCandidate> = {}): CampaignC
     campaignName: "Campaign",
     brandId: "brand-1",
     brandName: "Brand",
-    curationEnabled: false,
-    mode: "LEGACY",
     sortOrder: 0,
     ...overrides,
   };
@@ -137,8 +124,8 @@ describe("resolveCampaignSelection", () => {
     assert.deepEqual(result, { kind: "invalid_campaign" });
   });
 
-  test("a requested id is validated even on a single-context Experience (previous bug: legacy path never looked at it)", () => {
-    const only = candidate({ campaignId: "only", mode: "LEGACY" });
+  test("a requested id is validated even on a single-context Experience (previous bug: a legacy resolver path never looked at it)", () => {
+    const only = candidate({ campaignId: "only" });
     const result = resolveCampaignSelection([only], "forged");
     assert.deepEqual(result, { kind: "invalid_campaign" });
   });
@@ -234,8 +221,7 @@ describe("resolveValidatedPublicCampaignContext", () => {
 describe("isPublicCampaignScopedContentVisible", () => {
   const eligibleCampaignIds = ["campaign-a", "campaign-b"];
 
-  test("Campaign A and B entries each see global content plus only their own active scope", () => {
-    const global = { scope: null, eligibleCampaignIds } as const;
+  test("Campaign A and B entries each see ONLY their own active scope", () => {
     const campaignA = {
       entryContext: { kind: "CAMPAIGN" as const, campaignId: "campaign-a" },
       resolvedCampaignId: "campaign-a",
@@ -245,7 +231,6 @@ describe("isPublicCampaignScopedContentVisible", () => {
       resolvedCampaignId: "campaign-b",
     };
 
-    assert.equal(isPublicCampaignScopedContentVisible({ ...global, ...campaignA }), true);
     assert.equal(isPublicCampaignScopedContentVisible({
       scope: { campaignId: "campaign-a", isActive: true },
       eligibleCampaignIds,
@@ -275,7 +260,6 @@ describe("isPublicCampaignScopedContentVisible", () => {
       eligibleCampaignIds,
     };
 
-    assert.equal(isPublicCampaignScopedContentVisible({ scope: null, ...direct }), true);
     assert.equal(isPublicCampaignScopedContentVisible({
       scope: { campaignId: "campaign-a", isActive: true },
       ...direct,

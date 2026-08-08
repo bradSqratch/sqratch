@@ -72,10 +72,10 @@ export async function PATCH(
     const slug = slugifyValue(String(body?.slug || "").trim() || name || existing.slug);
     const description = String(body?.description || "").trim();
     const isActive = Boolean(body?.isActive);
-    const commerceProductCurationEnabled =
-      typeof body?.commerceProductCurationEnabled === "boolean"
-        ? body.commerceProductCurationEnabled
-        : undefined;
+    // A `commerceProductCurationEnabled` field on the request body is
+    // deliberately ignored rather than rejected: the flag no longer means
+    // anything (see src/lib/campaign-context.ts), but an older client that
+    // still sends it must not error.
 
     if (!name || !slug) {
       return NextResponse.json(
@@ -108,9 +108,6 @@ export async function PATCH(
         slug,
         description: description || null,
         isActive,
-        ...(commerceProductCurationEnabled !== undefined
-          ? { commerceProductCurationEnabled }
-          : {}),
       },
       select: {
         id: true,
@@ -118,7 +115,6 @@ export async function PATCH(
         slug: true,
         description: true,
         isActive: true,
-        commerceProductCurationEnabled: true,
       },
     });
 

@@ -23,7 +23,6 @@ function makeRow(overrides: Partial<CampaignAssignmentRow> = {}): CampaignAssign
     campaign: {
       id: "campaign-1",
       brandId: "brand-1",
-      commerceProductCurationEnabled: true,
     },
     brandCommerceProduct: {
       id: "brand-product-1",
@@ -90,7 +89,7 @@ describe("campaign commerce product reconciliation", () => {
       makeRow({
         id: "cross-brand",
         brandCommerceProductId: "bp-3",
-        campaign: { id: "campaign-1", brandId: "brand-2", commerceProductCurationEnabled: true },
+        campaign: { id: "campaign-1", brandId: "brand-2" },
       }),
       makeRow({
         id: "wrong-product-brand",

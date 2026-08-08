@@ -48,12 +48,34 @@ type ShopifyProductsResponse = {
   errors?: Array<{ message?: string }> | string | Record<string, string>;
 };
 
+type ShopifyPublishedProductIdsResponse = {
+  data?: {
+    products?: {
+      nodes?: Array<{ id?: number | string | null }>;
+      pageInfo?: {
+        hasNextPage?: boolean;
+        endCursor?: string | null;
+      };
+    };
+  };
+  errors?: ShopifyProductsResponse["errors"];
+};
+
 export type NormalizedShopifyProduct = {
   id: string;
   shopifyProductGid: string;
   title: string;
   handle: string;
   productUrl: string;
+  /**
+   * Defined only when the caller supplied a complete, provider-confirmed
+   * Online Store publication set. This is intentionally NOT inferred from
+   * `onlineStoreUrl`: password-protected development stores return that URL as
+   * null even for products published to the Online Store.
+   */
+  hasProviderStorefrontPublication?: boolean;
+  /** Whether `productUrl` was supplied by Shopify rather than synthesized. */
+  hasProviderSuppliedStorefrontUrl: boolean;
   images: string[];
   imageUrl: string | null;
   priceRange: {
@@ -141,6 +163,7 @@ function normalizeProduct(
   product: ShopifyProduct,
   shopDomain: string,
   currency = "USD",
+  publishedProductIds?: ReadonlySet<string>,
 ): NormalizedShopifyProduct {
   const variants = product.variants?.nodes || [];
   const imageNodes = product.images?.nodes || [];
@@ -185,14 +208,33 @@ function normalizeProduct(
     variants.map((variant) => variant.sku).find((value) => Boolean(value && value.trim())) ||
     null;
 
+  // Use Shopify's actual URL when it is available. A password-protected
+  // development store legitimately returns null here even for Online
+  // Store-published products, so this URL is navigation data only — never
+  // publication authorization.
+  const providerStorefrontUrl =
+    typeof product.onlineStoreUrl === "string" && product.onlineStoreUrl.trim().length > 0
+      ? product.onlineStoreUrl.trim()
+      : null;
+  const providerStorefrontPublication =
+    publishedProductIds?.has(String(product.id));
+
   return {
     id: String(product.id),
     shopifyProductGid: String(product.id),
     title: product.title,
     handle: product.handle,
+    // Kept as-is for reward code and the brand product picker, which require
+    // a non-null URL. The fallback is NOT evidence that a product is
+    // published; the optional provider publication fact below is the only
+    // public-click authorization signal.
     productUrl:
-      product.onlineStoreUrl ||
+      providerStorefrontUrl ||
       `https://${shopDomain}/products/${product.handle}`,
+    ...(publishedProductIds
+      ? { hasProviderStorefrontPublication: providerStorefrontPublication === true }
+      : {}),
+    hasProviderSuppliedStorefrontUrl: providerStorefrontUrl !== null,
     images,
     imageUrl: images[0] || null,
     priceRange: {
@@ -233,6 +275,13 @@ function formatShopifyErrors(errors: ShopifyProductsResponse["errors"]) {
   return "Failed to fetch Shopify products.";
 }
 
+function boundedPositiveInteger(value: number | undefined, fallback: number, maximum: number): number {
+  if (!Number.isFinite(value) || !value || value < 1) {
+    return fallback;
+  }
+  return Math.min(Math.floor(value), maximum);
+}
+
 // The GraphQL query text is shared by every call (single-page and
 // paginated) so the two code paths can never drift from each other.
 const PRODUCTS_QUERY = `
@@ -271,6 +320,145 @@ const PRODUCTS_QUERY = `
   }
 `;
 
+// This is deliberately a separate, complete scan. Shopify documents
+// `published_status:published` / `visible` as products published to the
+// Online Store, unlike `online_store_channel`, which also includes products
+// merely added to that channel. It requires only the existing read_products
+// capability of the `products` query; it does not enumerate Publication rows.
+const PUBLISHED_PRODUCT_IDS_QUERY = `
+  query SqratchPublishedOnlineStoreProducts($first: Int!, $after: String) {
+    products(first: $first, after: $after, query: "published_status:published") {
+      nodes {
+        id
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
+`;
+
+export type ShopifyPublishedProductIdsResult =
+  | {
+      ok: true;
+      productIds: ReadonlySet<string>;
+      pagesFetched: number;
+      limit: number;
+    }
+  | {
+      ok: false;
+      status: number;
+      tokenReason?: "NOT_CONNECTED" | "NEEDS_RECONNECT";
+      error: string;
+    };
+
+/**
+ * Retrieves the full provider-confirmed set of product IDs published to the
+ * Online Store. Any malformed cursor, loop, page cap, product cap, request
+ * failure, or abort is an error — callers must not treat an incomplete set as
+ * proof that every missing product is unpublished.
+ */
+export async function fetchPublishedShopifyProductIds(options: {
+  shopDomain: string;
+  brandId: string;
+  limit?: number;
+  maxPages?: number;
+  maxProducts?: number;
+  signal?: AbortSignal;
+}): Promise<ShopifyPublishedProductIdsResult> {
+  const tokenResult = await getValidAccessToken(options.brandId);
+  if (!tokenResult.ok) {
+    return {
+      ok: false,
+      status: 401,
+      tokenReason: tokenResult.reason,
+      error:
+        tokenResult.reason === "NEEDS_RECONNECT"
+          ? "Shopify connection requires reconnection."
+          : "Shopify is not connected.",
+    };
+  }
+
+  const limit = boundedPositiveInteger(options.limit, 100, 100);
+  const maxPages = boundedPositiveInteger(options.maxPages, 100, 10_000);
+  const maxProducts = boundedPositiveInteger(options.maxProducts, 10_000, 1_000_000);
+  const productIds = new Set<string>();
+  const seenCursors = new Set<string>();
+  let after: string | null = null;
+  let pagesFetched = 0;
+  let observedProducts = 0;
+
+  while (pagesFetched < maxPages) {
+    let response: Response;
+    try {
+      response = await fetch(
+        `https://${options.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
+        {
+          method: "POST",
+          headers: {
+            "X-Shopify-Access-Token": tokenResult.accessToken,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            query: PUBLISHED_PRODUCT_IDS_QUERY,
+            variables: { first: limit, after },
+          }),
+          cache: "no-store",
+          signal: options.signal,
+        },
+      );
+    } catch {
+      return {
+        ok: false,
+        status: options.signal?.aborted ? 504 : 502,
+        error: options.signal?.aborted
+          ? "Shopify published-product scan timed out."
+          : "Failed to fetch Shopify published-product information.",
+      };
+    }
+
+    const json = (await response.json().catch(() => null)) as ShopifyPublishedProductIdsResponse | null;
+    const products = json?.data?.products?.nodes;
+    if (!response.ok || json?.errors || !products) {
+      return {
+        ok: false,
+        status: response.ok ? 502 : response.status || 500,
+        error: formatShopifyErrors(json?.errors),
+      };
+    }
+
+    for (const product of products) {
+      if (product?.id === null || product?.id === undefined || String(product.id).trim().length === 0) {
+        return { ok: false, status: 502, error: "Shopify published-product scan returned an invalid product ID." };
+      }
+      observedProducts += 1;
+      if (observedProducts > maxProducts) {
+        return { ok: false, status: 502, error: "Shopify published-product scan exceeded its product limit." };
+      }
+      productIds.add(String(product.id));
+    }
+
+    pagesFetched += 1;
+    const hasNextPage = json?.data?.products?.pageInfo?.hasNextPage === true;
+    if (!hasNextPage) {
+      return { ok: true, productIds, pagesFetched, limit };
+    }
+
+    const nextCursor = json?.data?.products?.pageInfo?.endCursor;
+    if (typeof nextCursor !== "string" || nextCursor.trim().length === 0) {
+      return { ok: false, status: 502, error: "Shopify published-product scan returned a missing cursor." };
+    }
+    if (seenCursors.has(nextCursor)) {
+      return { ok: false, status: 502, error: "Shopify published-product scan returned a repeated cursor." };
+    }
+    seenCursors.add(nextCursor);
+    after = nextCursor;
+  }
+
+  return { ok: false, status: 502, error: "Shopify published-product scan exceeded its page limit." };
+}
+
 export async function fetchNormalizedShopifyProducts(options: {
   shopDomain: string;
   brandId: string;
@@ -288,6 +476,12 @@ export async function fetchNormalizedShopifyProducts(options: {
   after?: string;
   /** Optional cancellation signal used by bounded catalog synchronization. */
   signal?: AbortSignal;
+  /**
+   * A complete publication set obtained through
+   * `fetchPublishedShopifyProductIds`. Supplying a partial set is forbidden:
+   * missing members would otherwise be incorrectly treated as unpublished.
+   */
+  publishedProductIds?: ReadonlySet<string>;
   /** @deprecated Pass brandId instead; encryptedToken is kept for callers
    *  that have not yet been migrated. When brandId is provided the token
    *  manager is used and this field is ignored. */
@@ -346,7 +540,12 @@ export async function fetchNormalizedShopifyProducts(options: {
   return {
     ok: true as const,
     items: products.map((product) =>
-      normalizeProduct(product, options.shopDomain, options.currency || "USD"),
+      normalizeProduct(
+        product,
+        options.shopDomain,
+        options.currency || "USD",
+        options.publishedProductIds,
+      ),
     ),
     hasNextPage: Boolean(json?.data?.products?.pageInfo?.hasNextPage),
     limit: options.limit || 100,

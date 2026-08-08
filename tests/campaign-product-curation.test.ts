@@ -2,6 +2,8 @@ import "./env-setup";
 
 import { before, describe, test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { NextRequest } from "next/server";
 
 import {
@@ -12,7 +14,7 @@ import {
 } from "../src/lib/commerce/campaign-product-curation";
 import type { CreatorAvailableProductsDeps } from "../src/app/api/creator/lessons/[lessonId]/available-products/route";
 import type { CreatorLessonProductMutationDeps } from "../src/app/api/creator/lessons/[lessonId]/products/route";
-import type { CreatorLessonProductPatchDeps } from "../src/app/api/creator/lessons/[lessonId]/products/[productLinkId]/route";
+import type { CreatorLessonProductPatchDeps } from "../src/app/api/creator/lessons/[lessonId]/products/[campaignLessonProductId]/route";
 
 let availableProductsGet: (
   request: Request,
@@ -26,7 +28,7 @@ let lessonProductsPost: (
 ) => Promise<Response>;
 let lessonProductPatch: (
   request: NextRequest,
-  context: { params: Promise<{ lessonId: string; productLinkId: string }> },
+  context: { params: Promise<{ lessonId: string; campaignLessonProductId: string }> },
   overrides?: Partial<CreatorLessonProductPatchDeps>,
 ) => Promise<Response>;
 
@@ -38,7 +40,7 @@ before(async () => {
     await import("../src/app/api/creator/lessons/[lessonId]/products/route")
   ).creatorLessonProductsPostImpl;
   lessonProductPatch = (
-    await import("../src/app/api/creator/lessons/[lessonId]/products/[productLinkId]/route")
+    await import("../src/app/api/creator/lessons/[lessonId]/products/[campaignLessonProductId]/route")
   ).creatorLessonProductPatchImpl;
 });
 
@@ -56,6 +58,8 @@ const product: AuthorizedCatalogProduct = {
   priceMinMinor: 1200,
   priceMaxMinor: 1200,
   priceMinorUnitExponent: 2,
+  titleOverride: null,
+  shortDescriptionOverride: null,
 };
 
 // Phase 5's LessonCampaignContext additionally requires `brandName` and
@@ -68,7 +72,6 @@ function campaign(input: {
   id: string;
   name: string;
   brandId: string | null;
-  commerceProductCurationEnabled: boolean;
   sortOrder?: number;
 }) {
   return {
@@ -77,7 +80,6 @@ function campaign(input: {
     brandId: input.brandId,
     brandName: input.brandId ? "Brand one" : null,
     sortOrder: input.sortOrder ?? 0,
-    commerceProductCurationEnabled: input.commerceProductCurationEnabled,
   };
 }
 
@@ -85,7 +87,6 @@ function access(campaigns: Array<{
   id: string;
   name: string;
   brandId: string | null;
-  commerceProductCurationEnabled: boolean;
   sortOrder?: number;
 }>) {
   return {
@@ -134,25 +135,31 @@ function fakeRepository(rows: Array<AuthorizedCatalogProduct & { displayOrder: n
 const context = { params: Promise.resolve({ lessonId: "lesson-1" }) };
 
 describe("campaign curation context", () => {
-  test("legacy-only campaigns retain compatibility mode", () => {
+  // PHASE 8: there is no longer a curated/legacy mode distinction, and
+  // `commerceProductCurationEnabled` is no longer part of `LessonCampaignContext`
+  // at all — a brand-owned campaign resolves the same way regardless of that
+  // historical (never-backfilled, DEFAULT false) flag. See the landmine-fix
+  // test in tests/campaign-assignment-catalog-authorization.test.ts for the
+  // authorization-layer half of this guarantee.
+  test("a single eligible campaign resolves regardless of any historical curation state", () => {
     const result = resolveCampaignCuration([
-      campaign({ id: "legacy", name: "Legacy", brandId: "brand-1", commerceProductCurationEnabled: false }),
+      campaign({ id: "only", name: "Only", brandId: "brand-1" }),
     ], null);
-    assert.equal(result.kind, "legacy");
-    if (result.kind === "legacy") {
-      assert.equal(result.campaign.campaignId, "legacy");
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.campaign.campaignId, "only");
     }
   });
 
-  test("infers exactly one curated campaign but never the first of several", () => {
+  test("infers exactly one eligible campaign but never the first of several", () => {
     const one = resolveCampaignCuration([
-      campaign({ id: "one", name: "One", brandId: "brand-1", commerceProductCurationEnabled: true }),
+      campaign({ id: "one", name: "One", brandId: "brand-1" }),
     ], null);
-    assert.equal(one.kind, "curated");
+    assert.equal(one.kind, "resolved");
 
     const many = resolveCampaignCuration([
-      campaign({ id: "one", name: "One", brandId: "brand-1", commerceProductCurationEnabled: true }),
-      campaign({ id: "two", name: "Two", brandId: "brand-2", commerceProductCurationEnabled: true }),
+      campaign({ id: "one", name: "One", brandId: "brand-1" }),
+      campaign({ id: "two", name: "Two", brandId: "brand-2" }),
     ], null);
     assert.equal(many.kind, "selection_required");
     if (many.kind === "selection_required") assert.deepEqual(many.campaigns.map((x) => x.id), ["one", "two"]);
@@ -160,53 +167,36 @@ describe("campaign curation context", () => {
 
   test("rejects a campaign that is not linked to the lesson experience", () => {
     assert.deepEqual(resolveCampaignCuration([
-      campaign({ id: "one", name: "One", brandId: "brand-1", commerceProductCurationEnabled: true }),
+      campaign({ id: "one", name: "One", brandId: "brand-1" }),
     ], "foreign"), { kind: "invalid_campaign" });
   });
 
-  // BEHAVIOR CHANGE FROM THE PRE-PHASE-5E VERSION OF THIS TEST (flagged per
-  // instructions, not a silent fixture-only edit): this scenario used to
-  // assert `invalid_campaign` under a since-removed "curation-status ratchet"
-  // that made a curated sibling's presence on the Experience block selecting
-  // an explicitly-requested, independently-eligible LEGACY sibling. Phase 5E
-  // deliberately removed that ratchet (see the header comment on
-  // `resolveCampaignCuration` in src/lib/commerce/campaign-product-curation.ts):
-  // every eligible context is selectable on its own terms regardless of a
-  // sibling's curation mode, because authorization is fully self-contained
-  // per context (a legacy context still has to pass
-  // `assertProductUrlMatchesBrandDomain`; a curated context still has to pass
-  // the full CampaignCommerceProduct chain). Selecting the legacy sibling
-  // grants no access to the curated sibling's catalog. The correct current
-  // behavior is therefore `{ kind: "legacy" }`, not `invalid_campaign`.
-  test("a disabled (legacy) sibling remains independently selectable next to an enabled (curated) campaign — no cross-context ratchet", () => {
+  test("every eligible sibling is independently selectable by explicit request — no cross-context ratchet", () => {
     const result = resolveCampaignCuration([
-      campaign({ id: "curated", name: "Curated", brandId: "brand-1", commerceProductCurationEnabled: true }),
-      campaign({ id: "legacy", name: "Legacy sibling", brandId: "brand-1", commerceProductCurationEnabled: false }),
-    ], "legacy");
-    assert.equal(result.kind, "legacy");
-    if (result.kind === "legacy") {
-      assert.equal(result.campaign.campaignId, "legacy");
+      campaign({ id: "campaign-a", name: "Campaign A", brandId: "brand-1" }),
+      campaign({ id: "campaign-b", name: "Campaign B sibling", brandId: "brand-1" }),
+    ], "campaign-b");
+    assert.equal(result.kind, "resolved");
+    if (result.kind === "resolved") {
+      assert.equal(result.campaign.campaignId, "campaign-b");
     }
   });
 });
 
 describe("creator available-products curated path", () => {
   test("returns only active authorized persisted catalog products and never calls Shopify", async () => {
-    let legacyCalls = 0;
     const response = await availableProductsGet(
       new NextRequest("https://sqratch.test/api/creator/lessons/lesson-1/available-products"),
       context,
       {
         getAccess: async () => access([
-          { id: "campaign-1", name: "Campaign", brandId: "brand-1", commerceProductCurationEnabled: true },
+          { id: "campaign-1", name: "Campaign", brandId: "brand-1" },
         ]),
         curationRepository: fakeRepository([{ ...product, displayOrder: 2 }]),
-        fetchLegacyProducts: async () => { legacyCalls += 1; throw new Error("must not fetch provider"); },
       },
     );
     assert.equal(response.status, 200);
     const body = await response.json();
-    assert.equal(legacyCalls, 0);
     assert.equal(body.data.items.length, 1);
     assert.equal(body.data.items[0].catalogProductId, "catalog-1");
     assert.equal(body.data.items[0].title, "Synced title");
@@ -215,21 +205,18 @@ describe("creator available-products curated path", () => {
   });
 
   test("zero valid assignments is an empty successful curated catalog, never legacy fallback", async () => {
-    let legacyCalls = 0;
     const response = await availableProductsGet(
       new NextRequest("https://sqratch.test/api/creator/lessons/lesson-1/available-products"),
       context,
       {
         getAccess: async () => access([
-          { id: "campaign-1", name: "Campaign", brandId: "brand-1", commerceProductCurationEnabled: true },
+          { id: "campaign-1", name: "Campaign", brandId: "brand-1" },
         ]),
         curationRepository: fakeRepository(),
-        fetchLegacyProducts: async () => { legacyCalls += 1; throw new Error("must not fetch provider"); },
       },
     );
     assert.equal(response.status, 200);
     assert.deepEqual((await response.json()).data.items, []);
-    assert.equal(legacyCalls, 0);
   });
 
   test("multiple curated campaigns return an additive selector rather than leaking a catalog", async () => {
@@ -238,11 +225,10 @@ describe("creator available-products curated path", () => {
       context,
       {
         getAccess: async () => access([
-          { id: "one", name: "One", brandId: "brand-1", commerceProductCurationEnabled: true },
-          { id: "two", name: "Two", brandId: "brand-2", commerceProductCurationEnabled: true },
+          { id: "one", name: "One", brandId: "brand-1" },
+          { id: "two", name: "Two", brandId: "brand-2" },
         ]),
         curationRepository: fakeRepository([{ ...product, displayOrder: 0 }]),
-        fetchLegacyProducts: async () => { throw new Error("must not fetch provider"); },
       },
     );
     const body = await response.json();
@@ -279,7 +265,7 @@ test("curated attachment fails closed for an unavailable, cross-brand, or unassi
     context,
     {
       getAccess: async () => access([
-        { id: "campaign-1", name: "Campaign", brandId: "brand-1", commerceProductCurationEnabled: true },
+        { id: "campaign-1", name: "Campaign", brandId: "brand-1" },
       ]),
       curationRepository: {
         listAuthorizedProducts: async () => [],
@@ -307,10 +293,10 @@ test("curated replacement is server-authorized too, not only POST attachments", 
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ catalogProductId: "inactive", campaignId: "campaign-1" }),
     }),
-    { params: Promise.resolve({ lessonId: "lesson-1", productLinkId: "link-1" }) },
+    { params: Promise.resolve({ lessonId: "lesson-1", campaignLessonProductId: "clp-1" }) },
     {
       getAccess: async () => access([
-        { id: "campaign-1", name: "Campaign", brandId: "brand-1", commerceProductCurationEnabled: true },
+        { id: "campaign-1", name: "Campaign", brandId: "brand-1" },
       ]),
       findExisting: async () => true,
       curationRepository: {
@@ -321,4 +307,71 @@ test("curated replacement is server-authorized too, not only POST attachments", 
   );
   assert.equal(response.status, 404);
   assert.equal((await response.json()).error, "Product is not available for this campaign.");
+});
+
+// ---------------------------------------------------------------------------
+// Phase 8: no creator surface may reach live Shopify at all.
+// ---------------------------------------------------------------------------
+
+test("the creator available-products route imports nothing from the live Shopify product client", () => {
+  const source = readFileSync(
+    join(process.cwd(), "src/app/api/creator/lessons/[lessonId]/available-products/route.ts"),
+    "utf8",
+  );
+  // Import statements only — the module's own prose may legitimately mention
+  // the client it deliberately does NOT import.
+  const importLines = source
+    .split("\n")
+    .filter((line) => /^\s*import\b/.test(line) || /\bfrom\s+"/.test(line));
+  assert.equal(importLines.some((line) => /shopify-products/.test(line)), false);
+  assert.equal(/fetchNormalizedShopifyProducts\(/.test(source), false);
+  assert.equal(/fetchLegacyProducts/.test(source), false);
+});
+
+// PHASE 8 LANDMINE FIX: `commerceProductCurationEnabled` is DEFAULT false and
+// was never backfilled on existing campaigns. Before this change, the
+// repository's WHERE clause required it true, so a campaign that never
+// ticked the checkbox authorized ZERO products — a live fail-closed
+// regression for most real campaigns. This test replaces the old assertion
+// (which proved that broken behavior) with the fixed one: a brand-owned
+// campaign's active, eligible assignments ARE returned, with no dependency on
+// that historical flag at all (the fixture below doesn't even have the field
+// any more — see `access()`/`campaign()` above).
+test("a brand-owned campaign returns its active authorized catalog regardless of any historical curation flag", async () => {
+  const response = await availableProductsGet(
+    new NextRequest("https://sqratch.test/api/creator/lessons/lesson-1/available-products"),
+    context,
+    {
+      getAccess: async () => access([
+        { id: "campaign-1", name: "Campaign", brandId: "brand-1" },
+      ]),
+      curationRepository: fakeRepository([{ ...product, displayOrder: 0 }]),
+    },
+  );
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.data.items.length, 1);
+  assert.equal(body.data.items[0].catalogProductId, "catalog-1");
+  assert.equal(body.data.curation.enabled, true);
+  assert.equal(body.data.curation.requiresCampaignSelection, false);
+});
+
+test("an Experience with no brand-owning campaign returns a controlled empty picker", async () => {
+  const response = await availableProductsGet(
+    new NextRequest("https://sqratch.test/api/creator/lessons/lesson-1/available-products"),
+    context,
+    {
+      getAccess: async () => access([
+        { id: "brandless", name: "Brandless", brandId: null },
+      ]),
+      curationRepository: fakeRepository(),
+    },
+  );
+
+  assert.equal(response.status, 200);
+  const body = await response.json();
+  assert.equal(body.data.brand, null);
+  assert.deepEqual(body.data.items, []);
+  assert.equal(body.data.connected, false);
 });

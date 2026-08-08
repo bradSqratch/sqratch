@@ -13,7 +13,7 @@ process.env.COMMERCE_CLICK_TOKEN_PEPPER = "test-pepper-for-commerce-click-attrib
 
 import { test, describe, before, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { NextRequest } from "next/server";
 
@@ -133,32 +133,52 @@ function twoEligibleCampaigns(): ExperienceAccessContext["experience"]["campaign
   ];
 }
 
-function experienceLink(overrides: Partial<Record<string, unknown>> = {}) {
+/**
+ * A resolved canonical click target. Phase 8: EVERY surface resolves through
+ * `BrandCommerceProduct -> ConnectedCommerceProduct -> CommerceConnection`, so
+ * the connection id, connected-product id and provider are always present and
+ * `connectionExternalAccountId` (not a legacy `sourceShopDomain` snapshot) pins
+ * synthesized URLs; provider-supplied Shopify custom-domain URLs carry a
+ * separate server-derived provenance fact.
+ */
+function resolvedLink(overrides: Partial<Record<string, unknown>> = {}) {
   return {
-    id: "link-1",
+    id: "bcp-1",
     productUrl: "https://acme.test/products/widget",
     brandId: "brand-1",
-    sourceShopDomain: "acme.test",
     courseId: null,
     lessonId: null,
-    experienceProductLinkId: "link-1",
-    lessonProductLinkId: null,
     campaignLessonProductId: null,
-    scopedCampaignId: null,
-    // A fixture with a scopedCampaignId represents a current active scope by
-    // default; the inactive-scope regression case overrides this explicitly.
-    scopedCampaignIsActive: true,
-    brandCommerceProductId: null,
+    // Null ONLY for the generic brand-storefront surface. A fixture that sets a
+    // scope represents a current active one unless it says otherwise.
+    scope: null,
+    brandCommerceProductId: "bcp-1",
+    connectedProductId: "connected-1",
+    commerceConnectionId: "connection-1",
+    provider: "SHOPIFY" as const,
+    connectionExternalAccountId: "acme.test",
+    hasProviderSuppliedStorefrontUrl: false,
     ...overrides,
   };
+}
+
+function lessonLink(overrides: Partial<Record<string, unknown>> = {}) {
+  return resolvedLink({
+    id: "clp-1",
+    campaignLessonProductId: "clp-1",
+    lessonId: "lesson-1",
+    courseId: "course-1",
+    scope: { campaignId: "campaign-A", isActive: true },
+    ...overrides,
+  });
 }
 
 function deps(overrides: Partial<CommerceClickDeps> = {}): Partial<CommerceClickDeps> {
   return {
     getAccess: async () => access(),
     ensureSession: async () => "minted-session",
-    findExperienceProductLink: async () => experienceLink(),
-    findLessonProductLink: async () => null,
+    findCampaignCatalogProduct: async () => resolvedLink(),
+    findCampaignLessonProduct: async () => null,
     recordAttribution: async () => {},
     ...overrides,
   };
@@ -172,13 +192,26 @@ async function click(
   return handleCommerceClick(request, { experienceSlug: "exp", surface }, deps(overrides));
 }
 
-const SHOP_SURFACE: CommerceClickSurface = { kind: "EXPERIENCE_SHOP", productLinkId: "link-1" };
+/**
+ * The generic brand-storefront surface, which replaces the deleted
+ * `EXPERIENCE_SHOP` surface as this file's default "unscoped click" case.
+ */
+const SHOP_SURFACE: CommerceClickSurface = {
+  kind: "CAMPAIGN_CATALOG",
+  brandCommerceProductId: "bcp-1",
+};
+
+const LESSON_SURFACE: CommerceClickSurface = {
+  kind: "LESSON",
+  lessonId: "lesson-1",
+  campaignLessonProductId: "clp-1",
+};
 
 describe("cross-brand and cross-campaign integrity", () => {
   test("resolved brandId always comes from the looked-up link row, never a poisoned dependency's echo of client input", async () => {
     const captured: AttributionInput[] = [];
     const response = await click(SHOP_SURFACE, {
-      findExperienceProductLink: async () => experienceLink({ brandId: "brand-real" }),
+      findCampaignCatalogProduct: async () => resolvedLink({ brandId: "brand-real" }),
       recordAttribution: async (input) => {
         captured.push(input);
       },
@@ -192,95 +225,101 @@ describe("cross-brand and cross-campaign integrity", () => {
     // brand" — the value comes from exactly one place, the resolved link.
   });
 
-  test("a link scoped to a different campaign than the visitor's resolved context yields the generic 404, not the destination", async () => {
-    const response = await click(
-      { kind: "LESSON", lessonId: "lesson-1", productLinkId: "link-1" },
-      {
-        getAccess: async () =>
-          access({ entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" } }),
-        findExperienceProductLink: async () => null,
-        findLessonProductLink: async () =>
-          experienceLink({
-            lessonProductLinkId: "link-1",
-            experienceProductLinkId: null,
-            scopedCampaignId: "campaign-OTHER",
-          }),
-      },
-    );
+  test("a lesson attachment scoped to a different campaign than the visitor's resolved context yields the generic 404, not the destination", async () => {
+    const response = await click(LESSON_SURFACE, {
+      getAccess: async () =>
+        access({ entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" } }),
+      findCampaignLessonProduct: async () =>
+        lessonLink({ scope: { campaignId: "campaign-OTHER", isActive: true } }),
+    });
 
     assert.equal(response.status, 404);
   });
 
   test("an inactive lesson scope is denied instead of becoming a global click target", async () => {
-    const response = await click(
-      { kind: "LESSON", lessonId: "lesson-1", productLinkId: "link-1" },
-      {
-        getAccess: async () => access({
-          entryContext: { kind: "DIRECT" },
-          campaigns: twoEligibleCampaigns(),
-        }),
-        findExperienceProductLink: async () => null,
-        findLessonProductLink: async () =>
-          experienceLink({
-            lessonProductLinkId: "link-1",
-            experienceProductLinkId: null,
-            scopedCampaignId: "campaign-A",
-            scopedCampaignIsActive: false,
-          }),
-      },
-    );
+    const response = await click(LESSON_SURFACE, {
+      getAccess: async () => access({
+        entryContext: { kind: "DIRECT" },
+        campaigns: twoEligibleCampaigns(),
+      }),
+      findCampaignLessonProduct: async () =>
+        lessonLink({ scope: { campaignId: "campaign-A", isActive: false } }),
+    });
 
     assert.equal(response.status, 404);
   });
 
   test("direct lesson union rejects a scope whose campaign is no longer linked to the Experience", async () => {
-    const response = await click(
-      { kind: "LESSON", lessonId: "lesson-1", productLinkId: "link-1" },
-      {
-        getAccess: async () => access({
-          entryContext: { kind: "DIRECT" },
-          campaigns: twoEligibleCampaigns(),
-        }),
-        findExperienceProductLink: async () => null,
-        findLessonProductLink: async () =>
-          experienceLink({
-            lessonProductLinkId: "link-1",
-            experienceProductLinkId: null,
-            scopedCampaignId: "campaign-removed",
-          }),
-      },
-    );
+    const response = await click(LESSON_SURFACE, {
+      getAccess: async () => access({
+        entryContext: { kind: "DIRECT" },
+        campaigns: twoEligibleCampaigns(),
+      }),
+      findCampaignLessonProduct: async () =>
+        lessonLink({ scope: { campaignId: "campaign-removed", isActive: true } }),
+    });
 
     assert.equal(response.status, 404);
   });
 
-  test("the resolved campaign always comes from the session-derived resolver: the click route URL has no campaign segment or query param", () => {
-    const shopRoute = readFileSync(
-      join(
-        process.cwd(),
-        "src/app/api/public/experience/[experienceSlug]/products/click/[productLinkId]/route.ts",
-      ),
-      "utf8",
-    );
+  test("the resolved campaign always comes from the session-derived resolver: the lesson click route URL has no campaign segment or query param", () => {
     const lessonRoute = readFileSync(
       join(
         process.cwd(),
-        "src/app/api/public/experience/[experienceSlug]/lessons/[lessonId]/products/click/[productLinkId]/route.ts",
+        "src/app/api/public/experience/[experienceSlug]/lessons/[lessonId]/products/click/[campaignLessonProductId]/route.ts",
       ),
       "utf8",
     );
 
-    for (const source of [shopRoute, lessonRoute]) {
-      assert.doesNotMatch(source, /campaignId/i);
-      assert.doesNotMatch(source, /searchParams/i);
-      // The only path params accepted are experienceSlug / lessonId /
-      // productLinkId — all internal SQRATCH ids resolved server-side, never a
-      // campaign identifier.
-      assert.match(source, /params: Promise<\{[^}]*productLinkId: string[^}]*\}>/);
-    }
+    assert.doesNotMatch(lessonRoute, /searchParams/i);
+    // The only path params accepted are experienceSlug / lessonId /
+    // campaignLessonProductId — all internal SQRATCH ids resolved server-side,
+    // never a campaign identifier, brand, provider, or URL.
+    assert.match(
+      lessonRoute,
+      /params: Promise<\{[\s\S]*?campaignLessonProductId: string;[\s\S]*?\}>/,
+    );
+    // No brand, provider, campaign id, or URL is read anywhere in the executable
+    // body; the only mentions in this file are prose in the header comment.
+    const codeOnly = lessonRoute
+      .split("\n")
+      .filter(
+        (line) =>
+          !line.trim().startsWith("*") &&
+          !line.trim().startsWith("/*") &&
+          !line.trim().startsWith("//"),
+      )
+      .join("\n");
+    assert.doesNotMatch(codeOnly, /brandId|provider|productUrl/);
+    assert.doesNotMatch(codeOnly, /campaignId(?!\w)/);
   });
 
-  test("Campaign A entry records acquisition Campaign A without fabricating product authorization for a global link", async () => {
+  test("the deleted EXPERIENCE_SHOP click route and surface are gone", () => {
+    assert.equal(
+      existsSync(
+        join(
+          process.cwd(),
+          "src/app/api/public/experience/[experienceSlug]/products/click/[productLinkId]/route.ts",
+        ),
+      ),
+      false,
+    );
+    const source = readFileSync(
+      join(process.cwd(), "src/lib/commerce/click-attribution.ts"),
+      "utf8",
+    );
+    const codeOnly = source
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
+      .join("\n");
+    assert.doesNotMatch(codeOnly, /experienceProductLink/i);
+    assert.doesNotMatch(codeOnly, /lessonProductLink/i);
+    assert.doesNotMatch(codeOnly, /EXPERIENCE_SHOP/);
+    assert.doesNotMatch(codeOnly, /sourceShopDomain/);
+    assert.doesNotMatch(codeOnly, /providerHint/);
+  });
+
+  test("Campaign A entry records acquisition Campaign A without fabricating product authorization for an unscoped storefront click", async () => {
     const captured: AttributionInput[] = [];
     const twoCampaigns = twoEligibleCampaigns();
 
@@ -322,31 +361,60 @@ describe("cross-brand and cross-campaign integrity", () => {
 
   test("direct entry keeps a campaign-scoped product authorization without fabricating acquisition credit", async () => {
     const captured: AttributionInput[] = [];
-    const response = await click(
-      { kind: "LESSON", lessonId: "lesson-1", productLinkId: "link-1" },
-      {
-        getAccess: async () =>
-          access({
-            campaigns: twoEligibleCampaigns(),
-            storedCampaignId: "campaign-A", // stale state must not control direct entry
-            entryContext: { kind: "DIRECT" },
-          }),
-        findExperienceProductLink: async () => null,
-        findLessonProductLink: async () =>
-          experienceLink({
-            lessonProductLinkId: "link-1",
-            experienceProductLinkId: null,
-            scopedCampaignId: "campaign-A",
-          }),
-        recordAttribution: async (input) => {
-          captured.push(input);
-        },
+    const response = await click(LESSON_SURFACE, {
+      getAccess: async () =>
+        access({
+          campaigns: twoEligibleCampaigns(),
+          storedCampaignId: "campaign-A", // stale state must not control direct entry
+          entryContext: { kind: "DIRECT" },
+        }),
+      findCampaignLessonProduct: async () => lessonLink(),
+      recordAttribution: async (input) => {
+        captured.push(input);
       },
-    );
+    });
 
     assert.equal(response.status, 302);
     assert.equal(captured[0].entryCampaignId, null);
     assert.equal(captured[0].productCampaignId, "campaign-A");
+  });
+
+  test("all four canonical identity columns are populated on a lesson click, and no legacy link id is ever written", async () => {
+    const captured: AttributionInput[] = [];
+    const response = await click(LESSON_SURFACE, {
+      getAccess: async () =>
+        access({ entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" } }),
+      findCampaignLessonProduct: async () => lessonLink(),
+      recordAttribution: async (input) => {
+        captured.push(input);
+      },
+    });
+
+    assert.equal(response.status, 302);
+    assert.equal(captured[0].campaignLessonProductId, "clp-1");
+    assert.equal(captured[0].brandCommerceProductId, "bcp-1");
+    assert.equal(captured[0].connectedProductId, "connected-1");
+    assert.equal(captured[0].commerceConnectionId, "connection-1");
+    assert.equal(captured[0].provider, "SHOPIFY");
+    // The doomed columns are not even expressible on the mint input.
+    assert.equal("lessonProductLinkId" in captured[0], false);
+    assert.equal("experienceProductLinkId" in captured[0], false);
+  });
+
+  test("the mint writes the canonical identity columns and never the two doomed ones", () => {
+    const source = readFileSync(
+      join(process.cwd(), "src/lib/commerce/click-attribution.ts"),
+      "utf8",
+    );
+    const createStart = source.indexOf("prisma.commerceClickAttribution.create");
+    assert.ok(createStart > 0);
+    const createBody = source.slice(createStart);
+    assert.match(createBody, /campaignLessonProductId: input\.campaignLessonProductId/);
+    assert.match(createBody, /brandCommerceProductId: input\.brandCommerceProductId/);
+    assert.match(createBody, /connectedProductId: input\.connectedProductId/);
+    assert.match(createBody, /commerceConnectionId: input\.commerceConnectionId/);
+    assert.doesNotMatch(createBody, /lessonProductLinkId:/);
+    assert.doesNotMatch(createBody, /experienceProductLinkId:/);
   });
 
   test("direct generic brand catalog click does not invent a product campaign", async () => {
@@ -362,11 +430,7 @@ describe("cross-brand and cross-campaign integrity", () => {
           }),
         findCampaignCatalogProduct: async (options) => {
           assert.equal(options.entryCampaignId, null);
-          return experienceLink({
-            id: "bcp-1",
-            experienceProductLinkId: null,
-            brandCommerceProductId: "bcp-1",
-          });
+          return resolvedLink();
         },
         recordAttribution: async (input) => {
           captured.push(input);
@@ -388,11 +452,9 @@ describe("cross-brand and cross-campaign integrity", () => {
           access({ campaigns: twoEligibleCampaigns(), entryContext: { kind: "DIRECT" } }),
         findCampaignAssignmentCatalogProduct: async (options) => {
           assert.equal(options.campaignAssignmentId, "assignment-a");
-          return experienceLink({
+          return resolvedLink({
             id: "assignment-a",
-            experienceProductLinkId: null,
-            brandCommerceProductId: "bcp-1",
-            scopedCampaignId: "campaign-A",
+            scope: { campaignId: "campaign-A", isActive: true },
           });
         },
         recordAttribution: async (input) => {
@@ -407,10 +469,164 @@ describe("cross-brand and cross-campaign integrity", () => {
   });
 });
 
+describe("Campaign A/B lesson product isolation at the click surface (items 1 & 2)", () => {
+  test("a Campaign A visitor cannot click a Campaign B lesson product", async () => {
+    const response = await click(LESSON_SURFACE, {
+      getAccess: async () =>
+        access({
+          entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" },
+          campaigns: twoEligibleCampaigns(),
+        }),
+      findCampaignLessonProduct: async () =>
+        lessonLink({ scope: { campaignId: "campaign-B", isActive: true } }),
+    });
+
+    assert.equal(response.status, 404);
+  });
+
+  test("a Campaign B visitor cannot click a Campaign A lesson product (symmetric)", async () => {
+    const response = await click(LESSON_SURFACE, {
+      getAccess: async () =>
+        access({
+          entryContext: { kind: "CAMPAIGN", campaignId: "campaign-B" },
+          campaigns: twoEligibleCampaigns(),
+        }),
+      findCampaignLessonProduct: async () =>
+        lessonLink({ scope: { campaignId: "campaign-A", isActive: true } }),
+    });
+
+    assert.equal(response.status, 404);
+  });
+
+  test("control: a Campaign A visitor CAN click Campaign A's own lesson product (proves the denial above is scope-specific, not a blanket failure)", async () => {
+    const response = await click(LESSON_SURFACE, {
+      getAccess: async () =>
+        access({
+          entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" },
+          campaigns: twoEligibleCampaigns(),
+        }),
+      findCampaignLessonProduct: async () =>
+        lessonLink({ scope: { campaignId: "campaign-A", isActive: true } }),
+    });
+
+    assert.equal(response.status, 302);
+  });
+});
+
+describe("public lesson click: foreign ids fail closed against the real containment predicate (items 5 & 6)", () => {
+  // These finders mirror ONLY the id/lessonId/experienceId containment portion
+  // of DEFAULT_DEPS.findCampaignLessonProduct's actual Prisma `where` clause
+  // (`where: { id: campaignLessonProductId, lessonId, lesson: { course: {
+  // experienceId } } }`): a lookup resolves only when all three match a single
+  // known-good row, exactly like `findFirst` returns null on any non-matching
+  // WHERE. This is not a stub of the property under test — the fixture doesn't
+  // know the "right answer" in advance, it re-derives it from the same three
+  // fields the real query filters on.
+  const REAL_ROW = { id: "clp-real", lessonId: "lesson-1", experienceId: "experience-1" };
+
+  function containmentMirroringFinder() {
+    return async (options: {
+      campaignLessonProductId: string;
+      lessonId: string;
+      experienceId: string;
+    }) => {
+      if (
+        options.campaignLessonProductId !== REAL_ROW.id ||
+        options.lessonId !== REAL_ROW.lessonId ||
+        options.experienceId !== REAL_ROW.experienceId
+      ) {
+        return null;
+      }
+      return lessonLink({ id: REAL_ROW.id, campaignLessonProductId: REAL_ROW.id, scope: null });
+    };
+  }
+
+  test("a foreign CampaignLessonProduct id fails closed with the generic 404 (item 5)", async () => {
+    const response = await click(
+      { kind: "LESSON", lessonId: REAL_ROW.lessonId, campaignLessonProductId: "forged-clp-id" },
+      { findCampaignLessonProduct: containmentMirroringFinder() },
+    );
+
+    assert.equal(response.status, 404);
+  });
+
+  test("a foreign Lesson id fails closed the same way, even with the correct product id (item 6)", async () => {
+    const response = await click(
+      { kind: "LESSON", lessonId: "forged-lesson-id", campaignLessonProductId: REAL_ROW.id },
+      { findCampaignLessonProduct: containmentMirroringFinder() },
+    );
+
+    assert.equal(response.status, 404);
+  });
+
+  test("control: the exact matching id+lesson combination succeeds (proves the finder above isn't just always-null)", async () => {
+    const response = await click(
+      { kind: "LESSON", lessonId: REAL_ROW.lessonId, campaignLessonProductId: REAL_ROW.id },
+      { findCampaignLessonProduct: containmentMirroringFinder() },
+    );
+
+    assert.equal(response.status, 302);
+  });
+});
+
+describe("public lesson click: storefront gate fails closed behaviorally (item 17)", () => {
+  // Per the module's own PUBLICLY_CLICKABLE_CONNECTED_PRODUCT documentation,
+  // the gate lives inside the default finder's Prisma `where` predicate, not in
+  // injectable logic reachable independent of a real query. This fake finder
+  // faithfully re-implements ONLY that predicate (isAvailable AND
+  // hasPublicStorefrontUrl, both required) against a fixture's own facts, the
+  // same way `findFirst` would return no row for a WHERE that excludes it — it
+  // does not simply hardcode the expected response.
+  function storefrontGateMirroringFinder(productFacts: {
+    isAvailable: boolean;
+    hasPublicStorefrontUrl: boolean;
+  }) {
+    return async () => {
+      if (!productFacts.isAvailable || !productFacts.hasPublicStorefrontUrl) {
+        return null;
+      }
+      return lessonLink();
+    };
+  }
+
+  test("isAvailable: true but hasPublicStorefrontUrl: false is denied at click time, not redirected", async () => {
+    const response = await click(LESSON_SURFACE, {
+      findCampaignLessonProduct: storefrontGateMirroringFinder({
+        isAvailable: true,
+        hasPublicStorefrontUrl: false,
+      }),
+    });
+
+    assert.equal(response.status, 404);
+  });
+
+  test("hasPublicStorefrontUrl: true but isAvailable: false is denied too (neither condition substitutes for the other)", async () => {
+    const response = await click(LESSON_SURFACE, {
+      findCampaignLessonProduct: storefrontGateMirroringFinder({
+        isAvailable: false,
+        hasPublicStorefrontUrl: true,
+      }),
+    });
+
+    assert.equal(response.status, 404);
+  });
+
+  test("control: both conditions true redirects (proves the fake finder isn't just always-null)", async () => {
+    const response = await click(LESSON_SURFACE, {
+      findCampaignLessonProduct: storefrontGateMirroringFinder({
+        isAvailable: true,
+        hasPublicStorefrontUrl: true,
+      }),
+    });
+
+    assert.equal(response.status, 302);
+  });
+});
+
 describe("forged input handling", () => {
-  test("an unknown productLinkId returns the generic 404, not a 500 and not a redirect", async () => {
+  test("an unknown catalog id returns the generic 404, not a 500 and not a redirect", async () => {
     const response = await click(SHOP_SURFACE, {
-      findExperienceProductLink: async () => null,
+      findCampaignCatalogProduct: async () => null,
     });
 
     assert.equal(response.status, 404);
@@ -421,8 +637,8 @@ describe("forged input handling", () => {
   test("a non-http(s) destination scheme is rejected, not redirected to", async () => {
     let mintCalled = false;
     const response = await click(SHOP_SURFACE, {
-      findExperienceProductLink: async () =>
-        experienceLink({ productUrl: "javascript:alert(1)" }),
+      findCampaignCatalogProduct: async () =>
+        resolvedLink({ productUrl: "javascript:alert(1)" }),
       recordAttribution: async () => {
         mintCalled = true;
       },
@@ -434,8 +650,8 @@ describe("forged input handling", () => {
 
   test("a data: destination scheme is also rejected", async () => {
     const response = await click(SHOP_SURFACE, {
-      findExperienceProductLink: async () =>
-        experienceLink({ productUrl: "data:text/html,<script>alert(1)</script>" }),
+      findCampaignCatalogProduct: async () =>
+        resolvedLink({ productUrl: "data:text/html,<script>alert(1)</script>" }),
     });
 
     assert.equal(response.status, 404);
@@ -453,7 +669,7 @@ describe("forged input handling", () => {
     assert.doesNotMatch(source, /await request\.json\(\)/);
     assert.match(
       source,
-      /validateDestination\(\s*link\.productUrl,\s*link\.sourceShopDomain,?\s*\)/,
+      /validateDestination\(\s*link\.productUrl,\s*link\.connectionExternalAccountId,\s*link\.provider,\s*link\.hasProviderSuppliedStorefrontUrl,?\s*\)/,
     );
   });
 });
@@ -487,6 +703,41 @@ describe("anonymous vs. logged-in clicks", () => {
 });
 
 describe("redirect target and PII", () => {
+  test("a Shopify custom-domain URL redirects only when provider-supplied provenance was persisted", async () => {
+    const response = await click(SHOP_SURFACE, {
+      findCampaignCatalogProduct: async () =>
+        resolvedLink({
+          productUrl: "https://shop.acme.example/products/widget",
+          connectionExternalAccountId: "acme.myshopify.com",
+          hasProviderSuppliedStorefrontUrl: true,
+        }),
+    });
+
+    assert.equal(response.status, 302);
+    assert.match(
+      response.headers.get("location") || "",
+      /^https:\/\/shop\.acme\.example\/products\/widget\?ref=/,
+    );
+  });
+
+  test("a synthesized custom-domain URL is rejected rather than becoming an open redirect", async () => {
+    let mintCalled = false;
+    const response = await click(SHOP_SURFACE, {
+      findCampaignCatalogProduct: async () =>
+        resolvedLink({
+          productUrl: "https://attacker.example/products/widget",
+          connectionExternalAccountId: "acme.myshopify.com",
+          hasProviderSuppliedStorefrontUrl: false,
+        }),
+      recordAttribution: async () => {
+        mintCalled = true;
+      },
+    });
+
+    assert.equal(response.status, 404);
+    assert.equal(mintCalled, false);
+  });
+
   test("the redirect Location carries only the opaque token as ?ref=, never an email or raw internal id", async () => {
     const response = await click(SHOP_SURFACE, {}, req());
     assert.equal(response.status, 302);
@@ -494,7 +745,7 @@ describe("redirect target and PII", () => {
 
     assert.match(location, /^https:\/\/acme\.test\/products\/widget\?ref=[A-Za-z0-9_-]{43}$/);
     assert.doesNotMatch(location, /@/); // no email pattern
-    assert.doesNotMatch(location, /link-1|brand-1|campaign-A|creator-1|experience-1/);
+    assert.doesNotMatch(location, /bcp-1|brand-1|campaign-A|creator-1|experience-1/);
   });
 
   test("Cache-Control and Referrer-Policy are set on the redirect (never cached, never leaked to the merchant's referer logs)", async () => {
@@ -505,8 +756,8 @@ describe("redirect target and PII", () => {
 
   test("an existing ?ref= on the merchant's own URL is left untouched, not clobbered", async () => {
     const response = await click(SHOP_SURFACE, {
-      findExperienceProductLink: async () =>
-        experienceLink({ productUrl: "https://acme.test/products/widget?ref=merchant-own-value" }),
+      findCampaignCatalogProduct: async () =>
+        resolvedLink({ productUrl: "https://acme.test/products/widget?ref=merchant-own-value" }),
     });
 
     const location = response.headers.get("location") || "";
@@ -564,8 +815,9 @@ describe("Phase 6 does not touch points or commissions", () => {
     const files = [
       "src/lib/commerce/click-attribution.ts",
       "src/lib/commerce/click-token.ts",
-      "src/app/api/public/experience/[experienceSlug]/products/click/[productLinkId]/route.ts",
-      "src/app/api/public/experience/[experienceSlug]/lessons/[lessonId]/products/click/[productLinkId]/route.ts",
+      "src/app/api/public/experience/[experienceSlug]/products/click/campaign/[campaignAssignmentId]/route.ts",
+      "src/app/api/public/experience/[experienceSlug]/products/click/catalog/[brandCommerceProductId]/route.ts",
+      "src/app/api/public/experience/[experienceSlug]/lessons/[lessonId]/products/click/[campaignLessonProductId]/route.ts",
     ];
 
     const forbidden = [

@@ -28,8 +28,6 @@ interface MockedPrismaClient {
   campaignUnlock: Record<string, (...args: unknown[]) => unknown>;
   brandRewardOffer: Record<string, (...args: unknown[]) => unknown>;
   shopifyConnectionEvent: Record<string, (...args: unknown[]) => unknown>;
-  experienceProductLink: Record<string, (...args: unknown[]) => unknown>;
-  lessonProductLink: Record<string, (...args: unknown[]) => unknown>;
   userPointAccount: Record<string, (...args: unknown[]) => unknown>;
   lessonProgress: Record<string, (...args: unknown[]) => unknown>;
   userSession: Record<string, (...args: unknown[]) => unknown>;
@@ -207,14 +205,10 @@ before(async () => {
     findFirst: async () => null,
     updateMany: async () => ({ count: 0 }),
   };
-  // Safe defaults for the shop/redact source-domain scrubbing added in
-  // src/app/api/shopify/webhooks/shop/redact/route.ts.
-  prismaModule.experienceProductLink = {
-    updateMany: async () => ({ count: 0 }),
-  };
-  prismaModule.lessonProductLink = {
-    updateMany: async () => ({ count: 0 }),
-  };
+  // PHASE 8: the experienceProductLink / lessonProductLink safe-default mocks
+  // that used to sit here are gone with those Prisma models
+  // (20260808130000_remove_legacy_product_link_snapshots). shop/redact no
+  // longer touches either delegate, and the assertions below prove it.
   prismaModule.lesson = {
     findUnique: async () => null,
     findMany: async () => [],
@@ -457,23 +451,21 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
       return { count: 1 };
     });
 
-    let experienceLinksScrubbed = false;
-    t.mock.method(prisma.experienceProductLink, "updateMany", async (args: unknown) => {
-      const typedArgs = args as { where: { sourceShopDomain: string }; data: { sourceShopDomain: null } };
-      assert.equal(typedArgs.where.sourceShopDomain, "redact-shop.myshopify.com");
-      assert.equal(typedArgs.data.sourceShopDomain, null);
-      experienceLinksScrubbed = true;
-      return { count: 1 };
-    });
-
-    let lessonLinksScrubbed = false;
-    t.mock.method(prisma.lessonProductLink, "updateMany", async (args: unknown) => {
-      const typedArgs = args as { where: { sourceShopDomain: string }; data: { sourceShopDomain: null } };
-      assert.equal(typedArgs.where.sourceShopDomain, "redact-shop.myshopify.com");
-      assert.equal(typedArgs.data.sourceShopDomain, null);
-      lessonLinksScrubbed = true;
-      return { count: 1 };
-    });
+    // PHASE 8: ExperienceProductLink / LessonProductLink no longer exist, so
+    // there is nothing to mock and nothing to scrub. The prisma mock object
+    // deliberately has NO delegate for either model — if the route regressed
+    // and tried to call one, the route would throw on an undefined property
+    // and this test would fail rather than silently passing.
+    assert.equal(
+      (prisma as unknown as Record<string, unknown>).experienceProductLink,
+      undefined,
+      "no experienceProductLink delegate is mocked, because shop/redact must not touch it",
+    );
+    assert.equal(
+      (prisma as unknown as Record<string, unknown>).lessonProductLink,
+      undefined,
+      "no lessonProductLink delegate is mocked, because shop/redact must not touch it",
+    );
 
     let connectionEventScrubCalls = 0;
     t.mock.method(prisma.shopifyConnectionEvent, "updateMany", async (args: unknown) => {
@@ -532,8 +524,6 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     assert.ok(tokensDeleted);
     assert.ok(offersDeactivated, "the redacted Brand's reward offers are deactivated");
     assert.ok(offerSourceDomainScrubbed, "BrandRewardOffer.sourceShopDomain is scrubbed");
-    assert.ok(experienceLinksScrubbed, "ExperienceProductLink.sourceShopDomain is scrubbed");
-    assert.ok(lessonLinksScrubbed, "LessonProductLink.sourceShopDomain is scrubbed");
     assert.equal(connectionEventScrubCalls, 2, "both shopDomain and previousShopDomain are scrubbed independently");
     // Only the matching shop's temp token is deleted; the other shop is preserved.
     assert.deepEqual(deletedServices, ["shopify_oauth_state:nonce-1"]);

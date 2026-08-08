@@ -104,6 +104,9 @@ function makeDeps(overrides: Partial<ShopifyCommerceAdapterDeps> = {}): ShopifyC
     async fetchProducts() {
       throw new Error("fetchProducts should not be called in this test");
     },
+    async fetchPublishedProductIds() {
+      throw new Error("fetchPublishedProductIds should not be called in this test");
+    },
     async createDiscountCode() {
       throw new Error("createDiscountCode should not be called in this test");
     },
@@ -126,6 +129,8 @@ function makeNormalizedProduct(
     title: "Test Product",
     handle: "test-product",
     productUrl: "https://test-shop.myshopify.com/products/test-product",
+    hasProviderStorefrontPublication: true,
+    hasProviderSuppliedStorefrontUrl: true,
     images: ["https://cdn.example.com/img.jpg"],
     imageUrl: "https://cdn.example.com/img.jpg",
     priceRange: { min: 10, max: 10 },
@@ -262,6 +267,34 @@ describe("ShopifyCommerceAdapter", () => {
     assert.deepEqual(await adapter2.getConnection("conn-1"), { ok: false, reason: "NOT_CONNECTED" });
   });
 
+  test("5b. syncProducts maps provider storefront-publication evidence through unchanged", async () => {
+    const deps = makeDeps({
+      async loadConnection() {
+        return makeRow();
+      },
+      async fetchProducts() {
+        return {
+          ok: true,
+          items: [
+            makeNormalizedProduct({
+              status: "ACTIVE",
+              hasProviderStorefrontPublication: false,
+            }),
+          ],
+          hasNextPage: false,
+          limit: 100,
+          endCursor: null,
+        };
+      },
+      async markProductSync() {},
+    });
+
+    const result = await new ShopifyCommerceAdapter(deps).syncProducts("conn-1");
+    const product = result.products[0];
+    assert.equal(product.status, "ACTIVE");
+    assert.equal(product.hasProviderStorefrontPublication, false);
+  });
+
   test("5. syncProducts delegates to the injected fetcher with brandId + shop domain, maps products, stamps lastProductSyncAt", async () => {
     const row = makeRow();
     const normalizedProduct = makeNormalizedProduct();
@@ -333,6 +366,9 @@ describe("ShopifyCommerceAdapter", () => {
     assert.deepEqual(product.providerCreatedAt, new Date("2026-01-01T00:00:00Z"));
     assert.deepEqual(product.providerUpdatedAt, new Date("2026-01-02T00:00:00Z"));
     assert.deepEqual(product.priceRangeRaw, { min: "10.00", max: "10.00" });
+    // The provider storefront-URL fact maps through verbatim and is never
+    // inferred from status or from productUrl.
+    assert.equal(product.hasProviderStorefrontPublication, true);
 
     assert.ok(calls.markProductSync, "markProductSync should have been called");
     assert.equal(calls.markProductSync.connectionId, "conn-1");
@@ -361,10 +397,16 @@ describe("ShopifyCommerceAdapter", () => {
     const row = makeRow();
     const product = makeNormalizedProduct();
     const calls: { captured: Record<string, unknown> | null } = { captured: null };
+    const publishedProductIds = new Set(["123"]);
     let stampCount = 0;
     const adapter = new ShopifyCommerceAdapter(makeDeps({
       async loadConnection() {
         return row;
+      },
+      async fetchPublishedProductIds(input) {
+        assert.equal(input.shopDomain, "test-shop.myshopify.com");
+        assert.equal(input.brandId, "brand-1");
+        return { ok: true, productIds: publishedProductIds, pagesFetched: 1, limit: 25 };
       },
       async fetchProducts(input) {
         calls.captured = input;
@@ -381,13 +423,19 @@ describe("ShopifyCommerceAdapter", () => {
       },
     }));
 
-    const page = await adapter.fetchProductPage("conn-1", { cursor: "opaque-current-cursor", limit: 25 });
+    const syncContext = await adapter.prepareProductSync("conn-1", { limit: 25 });
+    const page = await adapter.fetchProductPage("conn-1", {
+      cursor: "opaque-current-cursor",
+      limit: 25,
+      syncContext,
+    });
 
     assert.ok(calls.captured);
     assert.equal(calls.captured.shopDomain, "test-shop.myshopify.com");
     assert.equal(calls.captured.brandId, "brand-1");
     assert.equal(calls.captured.after, "opaque-current-cursor");
     assert.equal(calls.captured.limit, 25);
+    assert.equal(calls.captured.publishedProductIds, publishedProductIds);
     assert.equal(page.isComplete, false);
     assert.equal(page.nextCursor, "opaque-next-cursor");
     assert.equal(page.products[0]?.externalId, product.shopifyProductGid);
@@ -395,6 +443,19 @@ describe("ShopifyCommerceAdapter", () => {
 
     await adapter.completeProductSync("conn-1", page.fetchedAt);
     assert.equal(stampCount, 1);
+  });
+
+  test("6aa. fetchProductPage fails closed when no complete publication context was prepared", async () => {
+    const adapter = new ShopifyCommerceAdapter(makeDeps({
+      async loadConnection() {
+        return makeRow();
+      },
+    }));
+
+    await assert.rejects(
+      () => adapter.fetchProductPage("conn-1", { limit: 100 }),
+      (error: unknown) => error instanceof CommerceProviderApiError,
+    );
   });
 
   test("6b. fetchProductPage ignores Shopify's final-edge cursor on a complete page", async () => {
@@ -414,7 +475,10 @@ describe("ShopifyCommerceAdapter", () => {
       },
     }));
 
-    const page = await adapter.fetchProductPage("conn-1", { limit: 100 });
+    const page = await adapter.fetchProductPage("conn-1", {
+      limit: 100,
+      syncContext: { publishedProductIds: new Set(["123"]) },
+    });
 
     assert.equal(page.isComplete, true);
     assert.equal(page.nextCursor, null);
@@ -436,12 +500,18 @@ describe("ShopifyCommerceAdapter", () => {
       },
     }));
 
-    const finalPage = await adapter.fetchProductPage("conn-1", { limit: 100 });
+    const finalPage = await adapter.fetchProductPage("conn-1", {
+      limit: 100,
+      syncContext: { publishedProductIds: new Set() },
+    });
     assert.deepEqual(finalPage.products, []);
     assert.equal(finalPage.isComplete, true);
     assert.equal(finalPage.nextCursor, null);
 
-    const incompletePage = await adapter.fetchProductPage("conn-1", { limit: 100 });
+    const incompletePage = await adapter.fetchProductPage("conn-1", {
+      limit: 100,
+      syncContext: { publishedProductIds: new Set() },
+    });
     assert.equal(incompletePage.isComplete, false);
     assert.equal(incompletePage.nextCursor, null);
   });

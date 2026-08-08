@@ -343,33 +343,20 @@ export function ExperienceLessonClient({
 
   function handleOpenProduct(product: LessonProductsResponse["items"][number]) {
     setClickingProductId(product.id);
-    // Every item here comes from `LessonProductLink` (see the GET route this
-    // list is fetched from), so `product.id` is always a `LessonProductLink.id`
-    // and can always be routed through the server-side click-attribution hop.
+    // Every item here is a `CampaignLessonProduct` (see the GET route this list
+    // is fetched from), so `product.id` is always an opaque
+    // `CampaignLessonProduct.id` and always routes through the server-side
+    // click-attribution hop. The raw `product.productUrl` is deliberately never
+    // opened directly: that would bypass the public-storefront gate, the
+    // campaign-scope check, and attribution.
+    //
+    // The server-side click hop is the sole commerce click evidence.
     window.open(
       `/api/public/experience/${experienceSlug}/lessons/${lessonId}/products/click/${product.id}`,
       "_blank",
       "noopener,noreferrer",
     );
-
-    fetch(
-      `/api/public/experience/${experienceSlug}/lessons/${lessonId}/products`,
-      {
-        method: "POST",
-        credentials: "include",
-        keepalive: true,
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          productLinkId: product.id,
-        }),
-      },
-    ).finally(() => {
-      setClickingProductId((current) =>
-        current === product.id ? null : current,
-      );
-    });
+    setClickingProductId((current) => (current === product.id ? null : current));
   }
 
   useEffect(() => {

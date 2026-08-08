@@ -133,6 +133,55 @@ Expected drift: `npx prisma migrate diff` and `npx prisma migrate status` will *
 
 Rollback limitations: drop children before parents — `BrandCommerceProduct`, then `CommerceProductSyncRun`, then `ConnectedCommerceProduct`, then `DROP TYPE "CommerceProductSyncRunStatus"`. Two caveats. (a) Dropping `BrandCommerceProduct` **destroys brand curation that cannot be re-derived from any provider**: visibility, campaign eligibility, ordering, overrides and approval are first-party data entered by brand staff, and no re-sync reconstructs them (`ConnectedCommerceProduct` and `CommerceProductSyncRun`, by contrast, are a re-derivable mirror and log). Export curation rows before dropping if any exist. (b) The `CommerceProductSyncRunStatus` enum type cannot be dropped while any column of that type still exists — including one that merely has a `DEFAULT` of it, as `CommerceProductSyncRun.status` does — so `DROP TYPE` must come strictly after the `DROP TABLE`s; and once shipped, an individual enum value cannot be removed in place, requiring a replacement type and a rewrite of every dependent column.
 
+## Connected product storefront availability
+
+`20260808120000_add_connected_product_storefront_availability`: additive and forward-only. Adds exactly one column, `ConnectedCommerceProduct.hasPublicStorefrontUrl BOOLEAN NOT NULL DEFAULT false`. It contains no `UPDATE`, `DELETE`, `TRUNCATE`, `DROP`, `ALTER COLUMN`, type change, or renamed object; no existing column, index, or constraint is modified, so every existing row keeps every value it already had. No new index is added, on purpose: the existing `ConnectedCommerceProduct_brandId_isAvailable_idx` and `ConnectedCommerceProduct_connectionId_isAvailable_idx` keep serving the render/click gates, since adding this column extends their *predicate* rather than the shape of the rows they select.
+
+Why the column exists: Shopify's `Product.onlineStoreUrl` is null when a product has no publicly reachable storefront URL (unpublished from the Online Store sales channel, or a password-protected storefront). The normalizer collapsed that signal with `productUrl: product.onlineStoreUrl || 'https://<shop>/products/<handle>'`, which **fabricates a URL that 404s**, and the sync then persisted that fabricated URL with `isAvailable: true` (`isAvailable` encodes Shopify `status === ACTIVE`, which is orthogonal to publication). The click route's destination validator cannot catch this either — it checks that the destination hostname equals the brand's expected shop domain, and the fabricated URL uses exactly that host. This column captures the signal that was being destroyed: the fact that the provider handed us a real storefront URL, evaluated *before* the `||` fallback. It is deliberately not named `isPublished` (a password-protected store means a product can be genuinely published and still unreachable) and is deliberately separate from `isAvailable`; neither may be derived from or substituted for the other, and a public clickable destination requires **both**.
+
+Preflight: confirm `to_regclass('public."ConnectedCommerceProduct"') IS NOT NULL`; confirm the column is not already present from a manual partial application (`SELECT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'ConnectedCommerceProduct' AND column_name = 'hasPublicStorefrontUrl'` must return zero rows); and confirm `20260806140000_add_commerce_product_catalog` is applied with a non-null `finished_at` and null `rolled_back_at`.
+
+Locking: PostgreSQL 11+ adds a `NOT NULL` column with a non-volatile `DEFAULT` without rewriting the table, so the `ACCESS EXCLUSIVE` lock is held only briefly for the catalog update. No backfill statement is needed or included.
+
+**Mandatory post-deploy step**: every already-synced row gets `false`, i.e. is treated as having no public storefront destination. The code shipped with *this* migration alone only writes the column, but the read gates land in `20260808130000`'s change set (see below), after which nothing renders or is clickable until each brand re-runs a product sync. Plan the resync for every connected brand before deploying either migration.
+
+Rollback: dropping this column is lossless only in the sense that its values are recomputable by a full product resync — it carries no history that cannot be re-derived from the provider. There is deliberately no automatic rollback SQL, because dropping a column that shipped code reads is a manual, deliberate operation.
+
+## Legacy product-link snapshot removal (DESTRUCTIVE)
+
+`20260808130000_remove_legacy_product_link_snapshots`: **the only destructive migration in this repository, and the only one that drops a table.** Read its file header in full before deploying it. It drops exactly six objects — four `DROP COLUMN` and two `DROP TABLE`:
+
+| Object | Kind |
+|---|---|
+| `CommerceClickAttribution.lessonProductLinkId` | `DROP COLUMN` |
+| `CommerceClickAttribution.experienceProductLinkId` | `DROP COLUMN` |
+| `CampaignLessonProduct.legacyLessonProductLinkId` | `DROP COLUMN` (takes its unique index and `SET NULL` FK) |
+| `LessonProductLink` | `DROP TABLE` |
+| `ExperienceProductLink` | `DROP TABLE` |
+| `Campaign.commerceProductCurationEnabled` | `DROP COLUMN` |
+
+It contains **no** `DELETE`, `TRUNCATE`, `UPDATE`, `ALTER COLUMN`, or `CASCADE`. `ALTER TABLE ... DROP COLUMN` removes a column, never a tuple, so no row is deleted from any surviving table: `Campaign`, `CampaignLessonProduct`, `CommerceClickAttribution`, `Brand`, `Experience`, `Course`, `Lesson`, `User`, `QRCode`, `QRCodeBatch`, `CampaignUnlock`, `PointTransaction`, `UserPointAccount`, `ShopifyRewardRedemption`, `BrandRewardOffer`, `BrandRewardOfferProduct`, `CommerceConnection`, `CommerceConnectionSecret`, `ConnectedCommerceProduct`, `BrandCommerceProduct`, `CampaignCommerceProduct`, `CommerceOrder`, `CommerceOrderLineItem` and `CommerceOrderEvent` all keep every row they had. The points/money path and the entire Phase 7 order set are not referenced by any statement in the file.
+
+Statement order matters and is deliberate: all preflight blocks first, then the three `DROP COLUMN`s that remove foreign keys *referencing* the doomed tables, then the two `DROP TABLE`s, then the curation-flag `DROP COLUMN`. Dropping the referencing columns first is what lets the `DROP TABLE`s succeed **without** `CASCADE`. Both `DROP TABLE`s are plain: if an unanticipated dependency (a view, another FK, a trigger) still exists, the deploy must fail loudly and name it rather than silently dropping it as collateral. Do not add `CASCADE` or `IF EXISTS`.
+
+Fail-closed preflight, executed by the migration itself as three `DO $$ ... RAISE EXCEPTION ... END $$;` blocks, all before any destructive statement (so an abort leaves the schema byte-for-byte unchanged):
+
+1. `ExperienceProductLink` contains any row → abort.
+2. `LessonProductLink` contains any row → abort.
+3. Any **active** `CampaignLessonProduct` whose canonical chain is broken or cross-brand → abort: `brandCommerceProductId` must resolve to a `BrandCommerceProduct`, which must resolve to a `ConnectedCommerceProduct`, and **both** must have `brandId` equal to the attachment's `brandId`.
+
+Gates 1 and 2 deliberately do **not** delete the rows they find. The operator is expected to have manually cleaned both tables; unexpected rows mean the assumption about production was wrong, and the correct response is a loud non-destructive abort, not silent data destruction inside a schema migration. Gate 3 is the load-bearing one: once the bridge column is gone, the canonical chain is the *only* way to resolve an attachment.
+
+Gate 3 deliberately does **not** fail on `isActive = true AND "legacyLessonProductLinkId" IS NULL`. That check reads as the pre-Phase-8 invariant ("an active scoping row bridges to a snapshot") but applying it now would be backwards and would abort the deploy on correct data: the canonical creator path stopped writing the bridge, so every row created since is active with a null bridge, and the operator's deletion of all `LessonProductLink` rows fires the pre-existing `ON DELETE SET NULL` FK, nulling the bridge on survivors. A null bridge on an active row is expected and fine.
+
+Read-only informational queries to run manually before deploying are in the migration header (they are comments, never executed). Query (5) is the one not to skip: it counts `CommerceClickAttribution` rows whose only structured product identity is `lessonProductLinkId`/`experienceProductLinkId` (both product-campaign and brand-product columns null). Those rows are **not deleted** and keep `destinationUrl`/`destinationHost`, so the click stays provable, but they no longer resolve to a product row. That is accepted evidence degradation and must be a recorded number, not a discovery. Query (4) exports the per-campaign `commerceProductCurationEnabled` values before they are gone.
+
+**Mandatory post-deploy step, same as `20260808120000` above**: the code shipped with this migration gates both public rendering and the click/redirect path on `ConnectedCommerceProduct.hasPublicStorefrontUrl`, which currently reads `false` for every already-synced row. Public commerce is effectively down until every connected brand re-runs a product sync. Runbook: operator clears the legacy rows → `migrate deploy` → product sync for every brand → spot-check one public lesson product renders and redirects.
+
+Rollback limitations: **irreversible, deliberately no down migration.** Re-adding `commerceProductCurationEnabled` re-defaults every campaign to `false`, so the per-campaign choice is unrecoverable once dropped (export it with informational query (4) first if it matters). The two dropped tables' row data — creator-typed, provider-unverified `productUrl`/`title`/`imageUrl`/`priceText`/`currency`/`brandId`/`sourceShopDomain` — has no canonical source to re-derive it from and is unrecoverable; in the expected case both tables are already empty, and if they are not, the preflight aborts rather than destroying anything. The dropped attribution and bridge column values are likewise unrecoverable. Restore from a database backup if any of this is needed.
+
+Full rationale, including the canonical target data flow and the storefront-404 bug this fixes, is in `docs/commerce/phase-8-canonical-commerce-legacy-elimination-summary.md`.
+
 ## Deployment procedure
 
 Back up first, pause reward issuance briefly, run reviewed preflight SQL, then run `npx prisma migrate deploy` once from a controlled release job. Immediately after, run `npx prisma migrate status` and `npx prisma migrate diff` to confirm the expected state (do not assume success from the deploy command's exit code alone). Validate schema, token refresh, QR unlock deduplication, redemption/refund, and query plans afterward.

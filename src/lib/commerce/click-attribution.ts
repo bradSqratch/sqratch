@@ -23,6 +23,15 @@
  * is what structurally prevents cross-brand token reuse and cross-campaign
  * confusion here: there is no client-supplied input that could express either.
  *
+ * PHASE 8. Every surface now resolves through the canonical catalog chain
+ * (`CampaignLessonProduct` / `CampaignCommerceProduct` / `BrandCommerceProduct`
+ * -> `ConnectedCommerceProduct` -> `CommerceConnection`). The legacy
+ * `ExperienceProductLink` / `LessonProductLink` snapshot surfaces and the
+ * `sourceShopDomain`-based connection guess they required are gone, so the
+ * connection, provider and destination are all pinned by the same query that
+ * authorized the click. A product with no publicly reachable storefront URL now
+ * fails CLOSED here (see `PUBLICLY_CLICKABLE_CONNECTED_PRODUCT`).
+ *
  * TRANSPORT REALITY. SQRATCH's Shopify app holds only `read_products`,
  * `read_discounts`, `write_discounts` — no `read_orders`, no orders webhook, no
  * checkout/theme/admin extension. The token appended to the destination URL
@@ -48,7 +57,10 @@ import {
   hashClickIp,
   hashClickToken,
 } from "@/lib/commerce/click-token";
-import { isPublicCampaignScopedContentVisible } from "@/lib/campaign-context";
+import {
+  isPublicCampaignScopedContentVisible,
+  type PublicCampaignScopedContent,
+} from "@/lib/campaign-context";
 import { isCampaignAssignmentCatalogAuthorized } from "@/lib/commerce/campaign-assignment-authorization";
 
 /**
@@ -69,30 +81,56 @@ const CLICK_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const MAX_USER_AGENT_LENGTH = 512;
 
 /**
- * Which click surface this request came from. Both carry ONLY an internal
- * SQRATCH id: never a destination URL, never a provider product id, never a
- * campaign id.
+ * Which click surface this request came from. Every one of them carries ONLY an
+ * internal SQRATCH id: never a destination URL, never a provider product id,
+ * never a campaign id, never a brand id, never a provider.
+ *
+ * PHASE 8: the `EXPERIENCE_SHOP` surface is gone with `ExperienceProductLink`.
+ * Every remaining surface resolves through the canonical catalog chain
+ * (`BrandCommerceProduct -> ConnectedCommerceProduct -> CommerceConnection`),
+ * which is what supplies the destination, the provider, and the connection.
  */
 export type CommerceClickSurface =
-  | { kind: "EXPERIENCE_SHOP"; productLinkId: string }
   | { kind: "CAMPAIGN_CATALOG"; brandCommerceProductId: string }
   | { kind: "CAMPAIGN_ASSIGNMENT_CATALOG"; campaignAssignmentId: string }
-  | { kind: "LESSON"; lessonId: string; productLinkId: string };
+  | { kind: "LESSON"; lessonId: string; campaignLessonProductId: string };
 
+/**
+ * One resolved, authorized click target.
+ *
+ * Every field is server-derived from the canonical chain. In particular
+ * `connectedProductId`, `commerceConnectionId` and `provider` are resolved by
+ * the finder query itself rather than guessed later from a shop domain, so the
+ * attribution row is always pinned to the exact connection that owns the
+ * destination.
+ */
 type ResolvedLink = {
   id: string;
   productUrl: string;
   brandId: string | null;
   courseId: string | null;
   lessonId: string | null;
-  experienceProductLinkId: string | null;
-  lessonProductLinkId: string | null;
   campaignLessonProductId: string | null;
-  scopedCampaignId: string | null;
-  /** Meaningful only when scopedCampaignId is non-null. */
-  scopedCampaignIsActive: boolean;
-  brandCommerceProductId: string | null;
-  sourceShopDomain: string | null;
+  /**
+   * The campaign-scoped attachment this click is authorized by, or null for the
+   * generic brand-storefront surface, which has no campaign scope at all: its
+   * authorization is entirely the `isVisibleInShop` + brand-linked-to-this-
+   * Experience predicate inside its own query. Every campaign-scoped surface
+   * populates this, and `isPublicCampaignScopedContentVisible` is applied to it.
+   */
+  scope: PublicCampaignScopedContent | null;
+  brandCommerceProductId: string;
+  connectedProductId: string;
+  commerceConnectionId: string;
+  provider: CommerceProvider;
+  /**
+   * The connection's own `externalAccountId` (for Shopify, the shop domain).
+   * This pins a synthesized Shopify fallback URL to the installed shop. A
+   * provider-supplied Shopify URL may instead use the merchant's custom domain;
+   * its provenance is a server-persisted metadata fact, never client input.
+   */
+  connectionExternalAccountId: string;
+  hasProviderSuppliedStorefrontUrl: boolean;
 };
 
 export type CommerceClickDeps = {
@@ -105,10 +143,6 @@ export type CommerceClickDeps = {
     userId: string | null;
     campaignId: string | null;
   }): Promise<string>;
-  findExperienceProductLink(options: {
-    productLinkId: string;
-    experienceId: string;
-  }): Promise<ResolvedLink | null>;
   findCampaignCatalogProduct(options: {
     brandCommerceProductId: string;
     experienceId: string;
@@ -118,8 +152,8 @@ export type CommerceClickDeps = {
     campaignAssignmentId: string;
     experienceId: string;
   }): Promise<ResolvedLink | null>;
-  findLessonProductLink(options: {
-    productLinkId: string;
+  findCampaignLessonProduct(options: {
+    campaignLessonProductId: string;
     lessonId: string;
     experienceId: string;
     canAccessPrivate: boolean;
@@ -140,18 +174,24 @@ export type AttributionInput = {
   courseId: string | null;
   lessonId: string | null;
   creatorProfileId: string | null;
-  lessonProductLinkId: string | null;
-  experienceProductLinkId: string | null;
+  /**
+   * PHASE 8 IDENTITY COLUMNS. The last three are ALWAYS populated: every click
+   * surface now resolves through the canonical catalog chain, so there is no
+   * "legacy snapshot with no catalog row" case left. `campaignLessonProductId`
+   * is populated for the lesson surface and is genuinely null for the two
+   * storefront/catalog surfaces, which involve no lesson attachment.
+   *
+   * `lessonProductLinkId` / `experienceProductLinkId` are deliberately ABSENT
+   * from this type: those columns still exist on the table until WS5 drops
+   * them, and this module must never write either one again.
+   */
   campaignLessonProductId: string | null;
-  brandCommerceProductId: string | null;
-  sourceShopDomain?: string | null;
+  brandCommerceProductId: string;
+  connectedProductId: string;
+  commerceConnectionId: string;
+  provider: CommerceProvider;
   destinationUrl: string;
   destinationHost: string;
-  /**
-   * Best-effort provider derived from the link row alone. Superseded by the
-   * catalog row's authoritative provider when one is resolvable.
-   */
-  providerHint: CommerceProvider | null;
   userId: string | null;
   sessionId: string | null;
   ipHash: string | null;
@@ -200,15 +240,24 @@ function resolveVisitorCampaign(access: ExperienceAccessContext) {
 /**
  * Defensive re-validation of a stored destination.
  *
- * Phase 5's `assertProductUrlMatchesBrandDomain` already gates new attaches, but
- * rows written before that gate existed are still in the table, so the URL is
- * re-checked here at the moment it would be handed to a browser. Only `http:`
- * and `https:` are accepted: anything else (notably `javascript:`, `data:`) is
- * refused outright rather than redirected to.
+ * The destination now always comes from a synchronized `ConnectedCommerceProduct`
+ * row, but it is still re-checked at the moment it would be handed to a browser:
+ * historical rows predate today's gates, and the scheme check in particular must
+ * survive regardless of provenance. Only `http:` and `https:` are accepted —
+ * anything else (notably `javascript:`, `data:`) is refused outright.
+ *
+ * NOTE ON WHAT THIS CHECK CANNOT DO. A synthesized URL is pinned to the
+ * connection's own `externalAccountId`. A Shopify URL explicitly supplied by
+ * the provider may use the merchant's custom domain and is accepted only over
+ * HTTPS with server-persisted provenance. Neither structural check proves
+ * publication; the `hasPublicStorefrontUrl` predicate in every finder query
+ * below supplies that separate provider-confirmed gate.
  */
 function validateDestination(
   productUrl: string,
-  expectedShopDomain?: string | null,
+  expectedShopDomain: string,
+  provider: CommerceProvider,
+  hasProviderSuppliedStorefrontUrl: boolean,
 ): URL | null {
   let parsed: URL;
 
@@ -222,9 +271,18 @@ function validateDestination(
     return null;
   }
 
+  // Shopify's API can return a merchant's primary custom-domain URL rather
+  // than the connection's immutable *.myshopify.com account host. It is safe
+  // to honor that only when the synchronized row records that Shopify itself
+  // supplied the exact URL; a synthesized fallback remains host-pinned below.
+  if (provider === "SHOPIFY" && hasProviderSuppliedStorefrontUrl) {
+    return parsed.protocol === "https:" && parsed.hostname ? parsed : null;
+  }
+
   if (!parsed.hostname || !expectedShopDomain) {
     return null;
   }
+
   // A click redirect is security-sensitive: without a provider domain we
   // cannot prove a historical snapshot remains a product destination. Fail
   // closed instead of turning the route into a durable open redirect.
@@ -243,117 +301,134 @@ function truncate(value: string | null, max: number): string | null {
 }
 
 /**
- * Only Shopify links carry a `sourceShopDomain` in this schema, so its presence
- * is the one provider signal available from a link row alone. Left null rather
- * than guessed when absent.
+ * THE PUBLIC STOREFRONT GATE.
+ *
+ * A product may be provider-`ACTIVE`, persisted `isAvailable: true`, curated
+ * into SQRATCH, and STILL be unavailable from the merchant's storefront: a
+ * product can be ACTIVE without being published to Shopify's Online Store.
+ * `src/lib/shopify-products.ts` deliberately keeps a canonical fallback URL for
+ * password-protected development stores, so URL shape alone cannot establish
+ * publication; `isAvailable` cannot either, because lifecycle status is
+ * orthogonal to publication.
+ *
+ * So the gate lives HERE, in the query predicate, alongside `isAvailable`. Both
+ * conditions are required and neither substitutes for the other. A row failing
+ * this predicate simply does not resolve, which produces the same generic 404 as
+ * every other "cannot proceed" case: no redirect, and no attribution row minted
+ * against a destination known to 404. The public lesson/shop list routes apply
+ * the identical pair, so a hidden card is never clickable and a rendered card is
+ * never denied.
  */
-function providerFromLink(link: ResolvedLink): CommerceProvider | null {
-  return link.sourceShopDomain ? "SHOPIFY" : null;
+const PUBLICLY_CLICKABLE_CONNECTED_PRODUCT = {
+  isAvailable: true,
+  hasPublicStorefrontUrl: true,
+} as const;
+
+/**
+ * Everything the canonical chain must yield for one click: the destination, the
+ * connection that owns it, and the provider. Shared by every finder so no
+ * surface can accidentally resolve a destination without also pinning its
+ * connection.
+ */
+const CANONICAL_DESTINATION_SELECT = {
+  id: true,
+  productUrl: true,
+  connectionId: true,
+  provider: true,
+  providerMetadata: true,
+  connection: { select: { externalAccountId: true } },
+} as const;
+
+function hasProviderSuppliedStorefrontUrl(providerMetadata: unknown): boolean {
+  if (!providerMetadata || typeof providerMetadata !== "object" || Array.isArray(providerMetadata)) {
+    return false;
+  }
+  return (
+    (providerMetadata as Record<string, unknown>).storefrontUrlSource === "PROVIDER"
+  );
 }
 
 const DEFAULT_DEPS: CommerceClickDeps = {
   getAccess: getExperienceAccessContext,
   ensureSession: ensureViewerSession,
-  async findExperienceProductLink({ productLinkId, experienceId }) {
-    // The `experienceId` predicate is the authorization: a link id belonging to
-    // another Experience resolves to null and yields the uniform 404.
-    const link = await prisma.experienceProductLink.findFirst({
-      where: { id: productLinkId, experienceId },
-      select: {
-        id: true,
-        productUrl: true,
-        brandId: true,
-        sourceShopDomain: true,
-      },
-    });
-
-    if (!link) {
-      return null;
-    }
-
-    return {
-      id: link.id,
-      productUrl: link.productUrl,
-      brandId: link.brandId,
-      sourceShopDomain: link.sourceShopDomain,
-      courseId: null,
-      lessonId: null,
-      experienceProductLinkId: link.id,
-      lessonProductLinkId: null,
-      campaignLessonProductId: null,
-      scopedCampaignId: null,
-      scopedCampaignIsActive: false,
-      brandCommerceProductId: null,
-    };
-  },
-  async findLessonProductLink({
-    productLinkId,
+  async findCampaignLessonProduct({
+    campaignLessonProductId,
     lessonId,
     experienceId,
     canAccessPrivate,
   }) {
-    // Every containment check is in the query: the link must belong to this
-    // Lesson, the Lesson to an active Course, and the Course to THIS Experience.
-    const link = await prisma.lessonProductLink.findFirst({
+    // Every containment check is in the query: the attachment must belong to
+    // this Lesson, the Lesson to an active Course, and the Course to THIS
+    // Experience. An id belonging to another lesson or Experience resolves to
+    // null and yields the uniform 404.
+    //
+    // `isActive` is deliberately NOT filtered here: an inactive attachment must
+    // stay visible to the shared authorization predicate, which denies it. A
+    // query-level filter would make a revoked attachment indistinguishable from
+    // a nonexistent one at the type level and invite a later "no scope means
+    // global" regression.
+    const attachment = await prisma.campaignLessonProduct.findFirst({
       where: {
-        id: productLinkId,
+        id: campaignLessonProductId,
         lessonId,
         lesson: {
           isActive: true,
           course: { experienceId, isActive: true },
         },
+        brandCommerceProduct: {
+          connectedProduct: PUBLICLY_CLICKABLE_CONNECTED_PRODUCT,
+        },
       },
       select: {
         id: true,
-        productUrl: true,
         brandId: true,
-        sourceShopDomain: true,
+        campaignId: true,
+        isActive: true,
         lessonId: true,
+        brandCommerceProductId: true,
         lesson: {
           select: {
             courseId: true,
             course: { select: { access: true } },
           },
         },
-        campaignProductLink: {
+        brandCommerceProduct: {
           select: {
-            id: true,
-            campaignId: true,
-            brandCommerceProductId: true,
-            isActive: true,
+            connectedProduct: { select: CANONICAL_DESTINATION_SELECT },
           },
         },
       },
     });
 
-    if (!link) {
+    if (!attachment) {
       return null;
     }
 
     // Private courses stay private on this path too. A locked lesson is
     // reported through the same uniform 404 as a missing one.
-    if (link.lesson.course.access !== "PUBLIC" && !canAccessPrivate) {
+    if (attachment.lesson.course.access !== "PUBLIC" && !canAccessPrivate) {
       return null;
     }
 
-    // Keep an inactive scope visible to the authorization layer. Treating it
-    // as null would accidentally turn an explicitly revoked attachment into
-    // a global/legacy link.
-    const scope = link.campaignProductLink;
+    const product = attachment.brandCommerceProduct.connectedProduct;
 
     return {
-      id: link.id,
-      productUrl: link.productUrl,
-      brandId: link.brandId,
-      sourceShopDomain: link.sourceShopDomain,
-      courseId: link.lesson.courseId,
-      lessonId: link.lessonId,
-      experienceProductLinkId: null,
-      lessonProductLinkId: link.id,
-      campaignLessonProductId: scope?.id ?? null,
-      scopedCampaignId: scope?.campaignId ?? null,
-      scopedCampaignIsActive: scope?.isActive ?? false,
-      brandCommerceProductId: scope?.brandCommerceProductId ?? null,
+      id: attachment.id,
+      productUrl: product.productUrl,
+      brandId: attachment.brandId,
+      courseId: attachment.lesson.courseId,
+      lessonId: attachment.lessonId,
+      campaignLessonProductId: attachment.id,
+      scope: {
+        campaignId: attachment.campaignId,
+        isActive: attachment.isActive,
+      },
+      brandCommerceProductId: attachment.brandCommerceProductId,
+      connectedProductId: product.id,
+      commerceConnectionId: product.connectionId,
+      provider: product.provider,
+      connectionExternalAccountId: product.connection.externalAccountId,
+      hasProviderSuppliedStorefrontUrl: hasProviderSuppliedStorefrontUrl(product.providerMetadata),
     };
   },
   async findCampaignCatalogProduct({
@@ -365,7 +440,7 @@ const DEFAULT_DEPS: CommerceClickDeps = {
       where: {
         id: brandCommerceProductId,
         isVisibleInShop: true,
-        connectedProduct: { isAvailable: true },
+        connectedProduct: PUBLICLY_CLICKABLE_CONNECTED_PRODUCT,
         brand: {
           campaigns: {
             some: {
@@ -378,30 +453,36 @@ const DEFAULT_DEPS: CommerceClickDeps = {
       select: {
         id: true,
         brandId: true,
-        connectedProduct: {
-          select: {
-            productUrl: true,
-            connection: { select: { externalAccountId: true } },
-          },
-        },
+        connectedProduct: { select: CANONICAL_DESTINATION_SELECT },
       },
     });
-    return row
-      ? {
-          id: row.id,
-          productUrl: row.connectedProduct.productUrl,
-          brandId: row.brandId,
-          sourceShopDomain: row.connectedProduct.connection.externalAccountId,
-          courseId: null,
-          lessonId: null,
-          experienceProductLinkId: null,
-          lessonProductLinkId: null,
-          campaignLessonProductId: null,
-          scopedCampaignId: null,
-          scopedCampaignIsActive: false,
-          brandCommerceProductId: row.id,
-        }
-      : null;
+
+    if (!row) {
+      return null;
+    }
+
+    const product = row.connectedProduct;
+
+    return {
+      id: row.id,
+      productUrl: product.productUrl,
+      brandId: row.brandId,
+      courseId: null,
+      lessonId: null,
+      campaignLessonProductId: null,
+      // The generic brand storefront is unscoped BY CONSTRUCTION: it renders a
+      // brand's visible catalog, not a campaign's selection, so there is no
+      // campaign attachment to authorize against. Its authorization is the
+      // `isVisibleInShop` + "this brand owns a campaign linked to THIS
+      // Experience" predicate above.
+      scope: null,
+      brandCommerceProductId: row.id,
+      connectedProductId: product.id,
+      commerceConnectionId: product.connectionId,
+      provider: product.provider,
+      connectionExternalAccountId: product.connection.externalAccountId,
+      hasProviderSuppliedStorefrontUrl: hasProviderSuppliedStorefrontUrl(product.providerMetadata),
+    };
   },
   async findCampaignAssignmentCatalogProduct({
     campaignAssignmentId,
@@ -412,12 +493,11 @@ const DEFAULT_DEPS: CommerceClickDeps = {
         id: campaignAssignmentId,
         isActive: true,
         campaign: {
-          commerceProductCurationEnabled: true,
           experiences: { some: { experienceId } },
         },
         brandCommerceProduct: {
           isCampaignEligible: true,
-          connectedProduct: { isAvailable: true },
+          connectedProduct: PUBLICLY_CLICKABLE_CONNECTED_PRODUCT,
         },
       },
       select: {
@@ -429,7 +509,6 @@ const DEFAULT_DEPS: CommerceClickDeps = {
           select: {
             id: true,
             brandId: true,
-            commerceProductCurationEnabled: true,
           },
         },
         brandCommerceProductId: true,
@@ -439,10 +518,9 @@ const DEFAULT_DEPS: CommerceClickDeps = {
             isCampaignEligible: true,
             connectedProduct: {
               select: {
-                productUrl: true,
+                ...CANONICAL_DESTINATION_SELECT,
                 brandId: true,
                 isAvailable: true,
-                connection: { select: { externalAccountId: true } },
               },
             },
           },
@@ -450,94 +528,41 @@ const DEFAULT_DEPS: CommerceClickDeps = {
       },
     });
 
-    return assignment &&
-      isCampaignAssignmentCatalogAuthorized({
+    if (
+      !assignment ||
+      !isCampaignAssignmentCatalogAuthorized({
         assignment,
         campaign: assignment.campaign,
         brandCommerceProduct: assignment.brandCommerceProduct,
       })
-      ? {
-          id: assignment.id,
-          productUrl:
-            assignment.brandCommerceProduct.connectedProduct.productUrl,
-          brandId: assignment.brandId,
-          sourceShopDomain:
-            assignment.brandCommerceProduct.connectedProduct.connection
-              .externalAccountId,
-          courseId: null,
-          lessonId: null,
-          experienceProductLinkId: null,
-          lessonProductLinkId: null,
-          campaignLessonProductId: null,
-          scopedCampaignId: assignment.campaignId,
-          scopedCampaignIsActive: true,
-          brandCommerceProductId: assignment.brandCommerceProductId,
-        }
-      : null;
+    ) {
+      return null;
+    }
+
+    const product = assignment.brandCommerceProduct.connectedProduct;
+
+    return {
+      id: assignment.id,
+      productUrl: product.productUrl,
+      brandId: assignment.brandId,
+      courseId: null,
+      lessonId: null,
+      campaignLessonProductId: null,
+      scope: { campaignId: assignment.campaignId, isActive: true },
+      brandCommerceProductId: assignment.brandCommerceProductId,
+      connectedProductId: product.id,
+      commerceConnectionId: product.connectionId,
+      provider: product.provider,
+      connectionExternalAccountId: product.connection.externalAccountId,
+      hasProviderSuppliedStorefrontUrl: hasProviderSuppliedStorefrontUrl(product.providerMetadata),
+    };
   },
   async recordAttribution(input) {
-    // `connectedProductId`/`commerceConnectionId` are only knowable through the
-    // curated catalog row, and only for campaign-scoped lesson attachments.
-    // Resolved here (inside the caller's fail-open boundary) rather than in the
-    // link query so the common, unscoped path pays nothing for it.
-    let connectedProductId: string | null = null;
-    let commerceConnectionId: string | null = null;
-    let provider: CommerceProvider | null = input.providerHint;
-
-    if (input.brandCommerceProductId) {
-      const catalogRow = await prisma.brandCommerceProduct.findUnique({
-        where: { id: input.brandCommerceProductId },
-        select: {
-          connectedProductId: true,
-          connectedProduct: {
-            select: { connectionId: true, provider: true },
-          },
-        },
-      });
-
-      if (catalogRow) {
-        connectedProductId = catalogRow.connectedProductId;
-        commerceConnectionId = catalogRow.connectedProduct.connectionId;
-        provider = catalogRow.connectedProduct.provider;
-      } else {
-        // The catalog row was part of the authorization proof used to resolve
-        // this click. If it disappeared before minting, do not issue an
-        // unpinned token that another same-brand connection could claim.
-        throw new Error(
-          "Catalog product no longer exists for click attribution",
-        );
-      }
-    }
-    if (!commerceConnectionId && input.sourceShopDomain && input.brandId) {
-      const connection = await prisma.commerceConnection.findFirst({
-        where: {
-          brandId: input.brandId,
-          provider: "SHOPIFY",
-          externalAccountId: input.sourceShopDomain,
-        },
-        select: { id: true, provider: true },
-      });
-      if (connection) {
-        commerceConnectionId = connection.id;
-        provider = connection.provider;
-      } else {
-        // A Shopify click with a known source domain is not evidence for an
-        // arbitrary same-brand connection. Fail attribution minting; the
-        // outer handler still performs the already-validated redirect without
-        // issuing a token, preserving revenue-path availability.
-        throw new Error("Commerce connection not found for link source domain");
-      }
-    }
-    if (
-      !commerceConnectionId &&
-      input.brandId &&
-      !input.brandCommerceProductId
-    ) {
-      // Legacy snapshots without a resolvable catalog connection may still be
-      // navigable, but cannot mint order-attribution evidence safely.
-      throw new Error("Commerce connection cannot be pinned for legacy link");
-    }
-
+    // Nothing is resolved here anymore. `connectedProductId`,
+    // `commerceConnectionId` and `provider` all arrive already pinned by the
+    // finder query that authorized this click, so there is no second lookup
+    // that could race the authorization, and no shop-domain guess that could
+    // attach a click to the wrong same-brand connection.
     const qrCodeId = input.sessionId
       ? ((
           await prisma.userSession.findUnique({
@@ -559,15 +584,17 @@ const DEFAULT_DEPS: CommerceClickDeps = {
         courseId: input.courseId,
         lessonId: input.lessonId,
         creatorProfileId: input.creatorProfileId,
-        brandCommerceProductId: input.brandCommerceProductId,
-        connectedProductId,
-        lessonProductLinkId: input.lessonProductLinkId,
-        experienceProductLinkId: input.experienceProductLinkId,
+        // The canonical identity columns. `lessonProductLinkId` and
+        // `experienceProductLinkId` are deliberately NOT written: the columns
+        // still exist until WS5's destructive migration drops them, and nothing
+        // in this module may populate them again.
         campaignLessonProductId: input.campaignLessonProductId,
-        commerceConnectionId,
+        brandCommerceProductId: input.brandCommerceProductId,
+        connectedProductId: input.connectedProductId,
+        commerceConnectionId: input.commerceConnectionId,
         destinationUrl: input.destinationUrl,
         destinationHost: input.destinationHost,
-        provider,
+        provider: input.provider,
         userId: input.userId,
         sessionId: input.sessionId,
         qrCodeId,
@@ -618,28 +645,23 @@ export async function handleCommerceClick(
 
     const visitorCampaign = resolveVisitorCampaign(access);
     const link =
-      options.surface.kind === "EXPERIENCE_SHOP"
-        ? await deps.findExperienceProductLink({
-            productLinkId: options.surface.productLinkId,
+      options.surface.kind === "CAMPAIGN_CATALOG"
+        ? await deps.findCampaignCatalogProduct({
+            brandCommerceProductId: options.surface.brandCommerceProductId,
             experienceId: access.experience.id,
+            entryCampaignId: visitorCampaign?.campaignId ?? null,
           })
-        : options.surface.kind === "CAMPAIGN_CATALOG"
-          ? await deps.findCampaignCatalogProduct({
-              brandCommerceProductId: options.surface.brandCommerceProductId,
+        : options.surface.kind === "CAMPAIGN_ASSIGNMENT_CATALOG"
+          ? await deps.findCampaignAssignmentCatalogProduct({
+              campaignAssignmentId: options.surface.campaignAssignmentId,
               experienceId: access.experience.id,
-              entryCampaignId: visitorCampaign?.campaignId ?? null,
             })
-          : options.surface.kind === "CAMPAIGN_ASSIGNMENT_CATALOG"
-            ? await deps.findCampaignAssignmentCatalogProduct({
-                campaignAssignmentId: options.surface.campaignAssignmentId,
-                experienceId: access.experience.id,
-              })
-            : await deps.findLessonProductLink({
-                productLinkId: options.surface.productLinkId,
-                lessonId: options.surface.lessonId,
-                experienceId: access.experience.id,
-                canAccessPrivate: access.canAccessPrivate,
-              });
+          : await deps.findCampaignLessonProduct({
+              campaignLessonProductId: options.surface.campaignLessonProductId,
+              lessonId: options.surface.lessonId,
+              experienceId: access.experience.id,
+              canAccessPrivate: access.canAccessPrivate,
+            });
 
     if (!link) {
       return genericNotFound();
@@ -655,21 +677,25 @@ export async function handleCommerceClick(
     // In particular, a direct Experience entry may click any active scope
     // whose campaign remains linked to this Experience, but an inactive or
     // detached scope must not become clickable merely because it is direct.
+    //
+    // `link.scope` is non-null for every campaign-scoped surface (the lesson
+    // attachment and the campaign assignment). It is null ONLY for the generic
+    // brand-storefront surface, which has no campaign attachment to authorize
+    // and whose authorization lives entirely in its own query predicate — that
+    // is why the check is conditional here while the predicate itself no longer
+    // accepts a null scope.
     const eligibleCampaignIds = access.experience.campaigns
       .filter((item) => item.campaign.brand !== null)
       .map((item) => item.campaignId);
-    const scope = link.scopedCampaignId
-      ? {
-          campaignId: link.scopedCampaignId,
-          isActive: link.scopedCampaignIsActive,
-        }
-      : null;
-    if (!isPublicCampaignScopedContentVisible({
-      scope,
-      entryContext: access.entryContext,
-      resolvedCampaignId: visitorCampaign?.campaignId ?? null,
-      eligibleCampaignIds,
-    })) {
+    if (
+      link.scope !== null &&
+      !isPublicCampaignScopedContentVisible({
+        scope: link.scope,
+        entryContext: access.entryContext,
+        resolvedCampaignId: visitorCampaign?.campaignId ?? null,
+        eligibleCampaignIds,
+      })
+    ) {
       return genericNotFound();
     }
 
@@ -696,9 +722,14 @@ export async function handleCommerceClick(
     // authorized the product. Never infer either value from a participating
     // brand or accept one from the request.
     const entryCampaignId = visitorCampaign?.campaignId ?? null;
-    const productCampaignId = link.scopedCampaignId;
+    const productCampaignId = link.scope?.campaignId ?? null;
 
-    const destination = validateDestination(link.productUrl, link.sourceShopDomain);
+    const destination = validateDestination(
+      link.productUrl,
+      link.connectionExternalAccountId,
+      link.provider,
+      link.hasProviderSuppliedStorefrontUrl,
+    );
 
     if (!destination) {
       // Sanitized: internal ids only. The offending URL is never logged, and no
@@ -706,7 +737,7 @@ export async function handleCommerceClick(
       console.warn("[commerce/click] Rejected unsafe destination:", {
         surface: options.surface.kind,
         experienceId: access.experience.id,
-        productLinkId: link.id,
+        clickTargetId: link.id,
         brandId,
       });
       // No attribution row, and deliberately NO redirect: a URL that failed
@@ -746,14 +777,13 @@ export async function handleCommerceClick(
         courseId: link.courseId,
         lessonId: link.lessonId,
         creatorProfileId: access.experience.creator.id,
-        lessonProductLinkId: link.lessonProductLinkId,
-        experienceProductLinkId: link.experienceProductLinkId,
         campaignLessonProductId: link.campaignLessonProductId,
         brandCommerceProductId: link.brandCommerceProductId,
-        sourceShopDomain: link.sourceShopDomain,
+        connectedProductId: link.connectedProductId,
+        commerceConnectionId: link.commerceConnectionId,
+        provider: link.provider,
         destinationUrl: destination.toString(),
         destinationHost: destination.hostname,
-        providerHint: providerFromLink(link),
         userId: access.viewer.userId,
         sessionId,
         ipHash: hashClickIp(ip),
@@ -775,7 +805,7 @@ export async function handleCommerceClick(
       console.error("[commerce/click] Attribution mint failed:", {
         surface: options.surface.kind,
         experienceId: access.experience.id,
-        productLinkId: link.id,
+        clickTargetId: link.id,
         brandId,
         errorName: error instanceof Error ? error.name : "UnknownError",
       });

@@ -99,11 +99,10 @@ export async function GET(request: NextRequest) {
           })
         : [],
       campaignIds.length
-        ? prisma.analyticsEvent.groupBy({
-            by: ["campaignId"],
+        ? prisma.commerceClickAttribution.groupBy({
+            by: ["entryCampaignId"],
             where: {
-              campaignId: { in: campaignIds },
-              name: "shop_click",
+              entryCampaignId: { in: campaignIds },
               ...analyticsDateFilter,
             },
             _count: { _all: true },
@@ -136,7 +135,7 @@ export async function GET(request: NextRequest) {
       lessonCompletions.map((row) => [row.campaignId, row._count._all]),
     );
     const shopClickMap = new Map(
-      shopClicks.map((row) => [row.campaignId, row._count._all]),
+      shopClicks.map((row) => [row.entryCampaignId, row._count._all]),
     );
     const unlockMap = new Map(
       unlockGroups.map((row) => [row.campaignId, row._count._all]),

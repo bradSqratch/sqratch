@@ -24,7 +24,6 @@ const migration = readFileSync(
 test("Phase 5 schema has a reversible campaign-scoped lesson-product attachment identity", () => {
   assert.match(schema, /model CampaignLessonProduct \{/);
   assert.match(schema, /brandCommerceProductId\s+String/);
-  assert.match(schema, /legacyLessonProductLinkId\s+String\?\s+@unique/);
   assert.match(schema, /isActive\s+Boolean\s+@default\(true\)/);
   assert.match(schema, /deactivatedAt\s+DateTime\?/);
   assert.match(schema, /@@unique\(\[campaignId, lessonId, brandCommerceProductId\]\)/);
@@ -56,15 +55,32 @@ test("same-brand ownership is enforced by the SAME composite candidate keys Phas
   assert.equal(/CREATE UNIQUE INDEX "BrandCommerceProduct_id_brandId_key"/.test(migration), false);
 });
 
-test("the legacyLessonProductLinkId bridge is a deliberate SET NULL, not CASCADE", () => {
-  assert.match(
-    schema,
-    /legacyLink\s+LessonProductLink\?\s+@relation\(fields: \[legacyLessonProductLinkId\], references: \[id\], onDelete: SetNull\)/,
-  );
+// PHASE 8 INVERSION. This assertion used to read "the legacyLessonProductLinkId
+// bridge is a deliberate SET NULL, not CASCADE" and asserted the bridge EXISTS.
+// Step 6 removed the bridge entirely (Step 2 had already stopped reading and
+// writing it), so the assertion is inverted rather than deleted: it now fails
+// loudly if a future change re-introduces the bridge, which would resurrect the
+// dual-representation ambiguity Phase 8 exists to eliminate.
+test("the legacyLessonProductLinkId bridge is GONE from the current schema (inverted Phase 5 assertion)", () => {
+  assert.doesNotMatch(schema, /legacyLessonProductLinkId/);
+  assert.doesNotMatch(schema, /legacyLink\s+LessonProductLink/);
+  assert.doesNotMatch(schema, /model LessonProductLink \{/);
+  assert.doesNotMatch(schema, /model ExperienceProductLink \{/);
+
+  // The @@unique([campaignId, lessonId, brandCommerceProductId]) tuple is now
+  // the ONLY reversible lifecycle key on this table.
+  assert.match(schema, /@@unique\(\[campaignId, lessonId, brandCommerceProductId\]\)/);
+});
+
+// Phase 5's own migration is applied to production and therefore immutable; its
+// SQL still (correctly) records that the bridge was created with SET NULL. That
+// is history, not current shape — the test above governs current shape.
+test("Phase 5's immutable migration still records the bridge it created with SET NULL", () => {
   assert.match(
     migration,
     /FOREIGN KEY \("legacyLessonProductLinkId"\) REFERENCES "LessonProductLink"\("id"\) ON DELETE SET NULL/,
   );
+  assert.match(migration, /CREATE UNIQUE INDEX "CampaignLessonProduct_legacyLessonProductLinkId_key"/);
 });
 
 test("every other new FK cascades, matching CampaignCommerceProduct's lifecycle", () => {
@@ -101,7 +117,6 @@ test("Phase 5 migration is additive-only: no UPDATE/DELETE/TRUNCATE/DROP, no ALT
 });
 
 test("the new table's own indexes exist for every documented access pattern", () => {
-  assert.match(migration, /CREATE UNIQUE INDEX "CampaignLessonProduct_legacyLessonProductLinkId_key"/);
   assert.match(
     migration,
     /CREATE UNIQUE INDEX "CampaignLessonProduct_campaignId_lessonId_brandCommerceProd_key" ON "CampaignLessonProduct"\("campaignId", "lessonId", "brandCommerceProductId"\)/,

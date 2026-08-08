@@ -13,13 +13,10 @@ import {
   type LessonVideoStorageReference,
 } from "@/lib/lesson-video-reference";
 import { parseRewardPoints } from "@/lib/reward-points-input";
-import { isProductLinkCurrent } from "@/lib/product-link-compatibility";
-import { externalAccountIdFromShopDomain } from "@/lib/commerce/connection-service";
-import { buildEligibleCampaignContexts } from "@/lib/campaign-context";
 import {
-  loadExperienceCampaignRows,
-  toCampaignContextSources,
-} from "@/lib/campaign-context-repository";
+  CANONICAL_ATTACHMENT_SELECT,
+  projectCanonicalAttachment,
+} from "@/lib/commerce/campaign-product-curation";
 
 function normalizeVideoSource(value: unknown) {
   const normalized = String(value || "YOUTUBE")
@@ -152,60 +149,16 @@ export async function GET(request: NextRequest) {
         videoUploadUrl: true,
         videoStorageBucket: true,
         videoStoragePath: true,
-        productLinks: {
-          orderBy: {
-            createdAt: "desc",
-          },
-          select: {
-            id: true,
-            lessonId: true,
-            productUrl: true,
-            title: true,
-            imageUrl: true,
-            priceText: true,
-            currency: true,
-            brandId: true,
-            sourceShopDomain: true,
-            campaignProductLink: {
-              select: {
-                campaign: {
-                  select: {
-                    id: true,
-                    name: true,
-                    brand: { select: { name: true } },
-                  },
-                },
-              },
-            },
-            createdAt: true,
-          },
+        // CANONICAL lesson product attachments. `isActive` is the only filter:
+        // an attachment already made stays visible (and removable) even after
+        // its underlying product becomes ineligible or unavailable — only NEW
+        // attachments fail closed.
+        campaignProducts: {
+          where: { isActive: true },
+          orderBy: [{ displayOrder: "asc" }, { createdAt: "desc" }],
+          select: CANONICAL_ATTACHMENT_SELECT,
         },
       },
-    });
-
-    // Stale/incompatible product links are never hidden from creator
-    // management — they're annotated so the creator can see they need
-    // relinking rather than silently treating them as current.
-    //
-    // Eligible campaign contexts come from the one shared resolver
-    // (src/lib/campaign-context.ts) rather than being re-derived here, so
-    // "which campaigns/brands apply to this Experience" has a single
-    // definition across the whole creator surface.
-    const campaignRows = await loadExperienceCampaignRows(course.experience.id);
-    const eligibleBrandIds = new Set(
-      buildEligibleCampaignContexts(toCampaignContextSources(campaignRows)).map(
-        (context) => context.brandId,
-      ),
-    );
-    const domainByBrandId = new Map<string, string | null>();
-    campaignRows.forEach((row) => {
-      const brand = row.campaign.brand;
-      if (brand && eligibleBrandIds.has(brand.id)) {
-        domainByBrandId.set(
-          brand.id,
-          externalAccountIdFromShopDomain(brand.shopifyShopDomain),
-        );
-      }
     });
 
     const lessonData = await Promise.all(
@@ -230,10 +183,10 @@ export async function GET(request: NextRequest) {
               : null,
           videoStorageBucket: reference?.bucket || null,
           videoStoragePath: reference?.path || null,
-          productLinks: lesson.productLinks.map((link) => ({
-            ...link,
-            needsRelinking: !isProductLinkCurrent(link, domainByBrandId),
-          })),
+          // Canonical attachments carry no "stale snapshot" concept: every
+          // display field is read live from the brand's own synced catalog, so
+          // there is nothing to annotate as needing relinking.
+          productLinks: lesson.campaignProducts.map(projectCanonicalAttachment),
         };
       }),
     );

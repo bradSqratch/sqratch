@@ -38,6 +38,7 @@ import assert from "node:assert/strict";
 import { encryptSecret } from "../src/lib/crypto";
 import {
   fetchNormalizedShopifyProducts,
+  fetchPublishedShopifyProductIds,
   fetchAllNormalizedShopifyProducts,
   type NormalizedShopifyProduct,
 } from "../src/lib/shopify-products";
@@ -96,7 +97,14 @@ type FakePage = {
   endCursor: string | null;
 };
 
+type FakePublishedPage = {
+  nodes: Array<{ id?: string | number | null }>;
+  hasNextPage: boolean;
+  endCursor: string | null;
+};
+
 let pagesByCursor: Map<string | null, FakePage>;
+let publishedPagesByCursor: Map<string | null, FakePublishedPage>;
 let fetchCallCount = 0;
 let lastFetchBody: { variables?: { first?: number; after?: string | null } } | null = null;
 
@@ -114,6 +122,7 @@ beforeEach(() => {
   fetchCallCount = 0;
   lastFetchBody = null;
   pagesByCursor = new Map();
+  publishedPagesByCursor = new Map();
 
   globalThis.fetch = (async (
     _url: string | URL | Request,
@@ -124,7 +133,10 @@ beforeEach(() => {
     lastFetchBody = body;
     const after: string | null = body?.variables?.after ?? null;
 
-    const page = pagesByCursor.get(after);
+    const isPublicationQuery = String(body?.query ?? "").includes("SqratchPublishedOnlineStoreProducts");
+    const page = isPublicationQuery
+      ? publishedPagesByCursor.get(after)
+      : pagesByCursor.get(after);
     if (!page) {
       throw new Error(`No fake page registered for cursor ${String(after)}`);
     }
@@ -202,6 +214,7 @@ describe("fetchNormalizedShopifyProducts — new GraphQL field parsing", () => {
 
     assert.equal(product.descriptionText, "A richly-described product.");
     assert.equal(product.status, "ACTIVE");
+    assert.equal(product.hasProviderSuppliedStorefrontUrl, false);
     assert.deepEqual(product.providerCreatedAt, new Date("2026-01-01T00:00:00Z"));
     assert.deepEqual(product.providerUpdatedAt, new Date("2026-01-15T12:30:00Z"));
     // First non-empty variant sku, in variant order — the second variant's
@@ -246,6 +259,122 @@ describe("fetchNormalizedShopifyProducts — new GraphQL field parsing", () => {
     assert.equal(product.sku, null);
   });
 
+  test("a password-protected development store can have onlineStoreUrl:null while the published-product set authorizes storefront use", async () => {
+    pagesByCursor.set(null, {
+      nodes: [rawProductNode({ onlineStoreUrl: null })],
+      hasNextPage: false,
+      endCursor: null,
+    });
+
+    const result = await fetchNormalizedShopifyProducts({
+      shopDomain: FAKE_SHOP_DOMAIN,
+      brandId: FAKE_BRAND_ID,
+      publishedProductIds: new Set(["gid://shopify/Product/1"]),
+    });
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+
+    const product = result.items[0];
+    // The fallback is navigation data only; the independently-complete
+    // publication set is the authorization evidence.
+    assert.equal(
+      product.productUrl,
+      `https://${FAKE_SHOP_DOMAIN}/products/full-field-product`,
+    );
+    assert.equal(product.hasProviderStorefrontPublication, true);
+    assert.equal(product.hasProviderSuppliedStorefrontUrl, false);
+  });
+
+  test("an ACTIVE Hidden-Snowboard-equivalent remains unpublished when absent from the provider publication set", async () => {
+    pagesByCursor.set(null, {
+      nodes: [rawProductNode({ onlineStoreUrl: "" })],
+      hasNextPage: false,
+      endCursor: null,
+    });
+
+    const result = await fetchNormalizedShopifyProducts({
+      shopDomain: FAKE_SHOP_DOMAIN,
+      brandId: FAKE_BRAND_ID,
+      publishedProductIds: new Set(),
+    });
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.items[0].status, "ACTIVE");
+    assert.equal(result.items[0].hasProviderStorefrontPublication, false);
+  });
+
+  test("a whitespace-only onlineStoreUrl uses the canonical fallback but cannot create publication evidence", async () => {
+    pagesByCursor.set(null, {
+      nodes: [rawProductNode({ onlineStoreUrl: "   " })],
+      hasNextPage: false,
+      endCursor: null,
+    });
+
+    const result = await fetchNormalizedShopifyProducts({
+      shopDomain: FAKE_SHOP_DOMAIN,
+      brandId: FAKE_BRAND_ID,
+      publishedProductIds: new Set(),
+    });
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.items[0].hasProviderStorefrontPublication, false);
+    assert.equal(
+      result.items[0].productUrl,
+      `https://${FAKE_SHOP_DOMAIN}/products/full-field-product`,
+    );
+  });
+
+  test("a production-like published product keeps Shopify's actual onlineStoreUrl", async () => {
+    pagesByCursor.set(null, {
+      nodes: [
+        rawProductNode({
+          onlineStoreUrl: "https://shop.example.com/products/full-field-product",
+        }),
+      ],
+      hasNextPage: false,
+      endCursor: null,
+    });
+
+    const result = await fetchNormalizedShopifyProducts({
+      shopDomain: FAKE_SHOP_DOMAIN,
+      brandId: FAKE_BRAND_ID,
+      publishedProductIds: new Set(["gid://shopify/Product/1"]),
+    });
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+
+    const product = result.items[0];
+    assert.equal(
+      product.productUrl,
+      "https://shop.example.com/products/full-field-product",
+    );
+    assert.equal(product.hasProviderStorefrontPublication, true);
+    assert.equal(product.hasProviderSuppliedStorefrontUrl, true);
+  });
+
+  test("a draft product is never made available by a handle or publication membership", async () => {
+    pagesByCursor.set(null, {
+      nodes: [rawProductNode({ status: "DRAFT", onlineStoreUrl: null })],
+      hasNextPage: false,
+      endCursor: null,
+    });
+
+    const result = await fetchNormalizedShopifyProducts({
+      shopDomain: FAKE_SHOP_DOMAIN,
+      brandId: FAKE_BRAND_ID,
+      publishedProductIds: new Set(["gid://shopify/Product/1"]),
+    });
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.equal(result.items[0].status, "DRAFT");
+    assert.equal(result.items[0].hasProviderStorefrontPublication, true);
+  });
+
   test("the request body's GraphQL query text includes the new fields (description, status, createdAt, updatedAt, variants.sku) and none of the forbidden inventory fields", async () => {
     pagesByCursor.set(null, { nodes: [], hasNextPage: false, endCursor: null });
 
@@ -255,7 +384,14 @@ describe("fetchNormalizedShopifyProducts — new GraphQL field parsing", () => {
     });
 
     const queryText = String((lastFetchBody as unknown as { query?: string })?.query ?? "");
-    for (const field of ["description", "status", "createdAt", "updatedAt", "sku"]) {
+    for (const field of [
+      "onlineStoreUrl",
+      "description",
+      "status",
+      "createdAt",
+      "updatedAt",
+      "sku",
+    ]) {
       assert.ok(queryText.includes(field), `query text should include "${field}"`);
     }
     for (const forbidden of ["inventoryQuantity", "totalInventory", "InventoryItem"]) {
@@ -263,6 +399,99 @@ describe("fetchNormalizedShopifyProducts — new GraphQL field parsing", () => {
         !queryText.includes(forbidden),
         `query text must NOT include forbidden inventory field "${forbidden}"`,
       );
+    }
+  });
+});
+
+describe("fetchPublishedShopifyProductIds — authoritative Online Store publication scan", () => {
+  test("follows multiple publication pages and returns only provider-confirmed product IDs", async () => {
+    publishedPagesByCursor.set(null, {
+      nodes: [{ id: "gid://shopify/Product/1" }, { id: "gid://shopify/Product/2" }],
+      hasNextPage: true,
+      endCursor: "published-cursor-1",
+    });
+    publishedPagesByCursor.set("published-cursor-1", {
+      nodes: [{ id: "gid://shopify/Product/3" }],
+      hasNextPage: false,
+      endCursor: null,
+    });
+
+    const result = await fetchPublishedShopifyProductIds({
+      shopDomain: FAKE_SHOP_DOMAIN,
+      brandId: FAKE_BRAND_ID,
+      limit: 2,
+    });
+
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    assert.deepEqual([...result.productIds], [
+      "gid://shopify/Product/1",
+      "gid://shopify/Product/2",
+      "gid://shopify/Product/3",
+    ]);
+    assert.equal(result.pagesFetched, 2);
+    assert.match(
+      String((lastFetchBody as unknown as { query?: string })?.query ?? ""),
+      /published_status:published/,
+    );
+  });
+
+  test("rejects missing cursors, cursor loops, and page-cap truncation rather than returning a partial set", async () => {
+    publishedPagesByCursor.set(null, {
+      nodes: [{ id: "gid://shopify/Product/1" }],
+      hasNextPage: true,
+      endCursor: null,
+    });
+    const missingCursor = await fetchPublishedShopifyProductIds({
+      shopDomain: FAKE_SHOP_DOMAIN,
+      brandId: FAKE_BRAND_ID,
+    });
+    assert.equal(missingCursor.ok, false);
+
+    publishedPagesByCursor.set(null, {
+      nodes: [{ id: "gid://shopify/Product/1" }],
+      hasNextPage: true,
+      endCursor: "same-cursor",
+    });
+    publishedPagesByCursor.set("same-cursor", {
+      nodes: [{ id: "gid://shopify/Product/2" }],
+      hasNextPage: true,
+      endCursor: "same-cursor",
+    });
+    const cursorLoop = await fetchPublishedShopifyProductIds({
+      shopDomain: FAKE_SHOP_DOMAIN,
+      brandId: FAKE_BRAND_ID,
+    });
+    assert.equal(cursorLoop.ok, false);
+
+    publishedPagesByCursor.set(null, {
+      nodes: [{ id: "gid://shopify/Product/1" }],
+      hasNextPage: true,
+      endCursor: "more-pages",
+    });
+    const capped = await fetchPublishedShopifyProductIds({
+      shopDomain: FAKE_SHOP_DOMAIN,
+      brandId: FAKE_BRAND_ID,
+      maxPages: 1,
+    });
+    assert.equal(capped.ok, false);
+  });
+
+  test("fails closed when the publication query itself fails", async () => {
+    const original = globalThis.fetch;
+    globalThis.fetch = (async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({ errors: [{ message: "simulated publication failure" }] }),
+    }) as Response) as typeof globalThis.fetch;
+    try {
+      const result = await fetchPublishedShopifyProductIds({
+        shopDomain: FAKE_SHOP_DOMAIN,
+        brandId: FAKE_BRAND_ID,
+      });
+      assert.equal(result.ok, false);
+    } finally {
+      globalThis.fetch = original;
     }
   });
 });

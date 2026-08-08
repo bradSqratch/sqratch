@@ -46,6 +46,7 @@ import type {
   CreateDiscountOptions,
   NormalizedWebhookEvent,
   ProductSyncPageRequest,
+  ProductSyncPreparationRequest,
   ProductSyncPageResult,
   ProductSyncResult,
   ProviderDiscount,
@@ -53,6 +54,7 @@ import type {
 } from "../types";
 
 import {
+  fetchPublishedShopifyProductIds,
   fetchNormalizedShopifyProducts,
   type NormalizedShopifyProduct,
 } from "@/lib/shopify-products";
@@ -70,6 +72,8 @@ import { verifyShopifyWebhookHmac } from "@/lib/shopify";
 
 type FetchProductsInput = Parameters<typeof fetchNormalizedShopifyProducts>[0];
 type FetchProductsResult = Awaited<ReturnType<typeof fetchNormalizedShopifyProducts>>;
+type FetchPublishedProductIdsInput = Parameters<typeof fetchPublishedShopifyProductIds>[0];
+type FetchPublishedProductIdsResult = Awaited<ReturnType<typeof fetchPublishedShopifyProductIds>>;
 
 type CreateDiscountCodeInput = Parameters<typeof createShopifyRewardDiscountCode>[0];
 type CreateDiscountCodeResult = Awaited<ReturnType<typeof createShopifyRewardDiscountCode>>;
@@ -103,6 +107,10 @@ export type ShopifyCommerceAdapterDeps = {
   getAccessToken(brandId: string): Promise<GetValidAccessTokenResult>;
   /** Fetches the live product catalog. Defaults to `fetchNormalizedShopifyProducts`. */
   fetchProducts(input: FetchProductsInput): Promise<FetchProductsResult>;
+  /** Fetches the complete provider-confirmed Online Store publication set. */
+  fetchPublishedProductIds(
+    input: FetchPublishedProductIdsInput,
+  ): Promise<FetchPublishedProductIdsResult>;
   /** Creates a discount code on Shopify. Defaults to `createShopifyRewardDiscountCode`. */
   createDiscountCode(input: CreateDiscountCodeInput): Promise<CreateDiscountCodeResult>;
   /** Verifies a webhook HMAC. Defaults to `verifyShopifyWebhookHmac`. */
@@ -153,6 +161,7 @@ const DEFAULT_DEPS: ShopifyCommerceAdapterDeps = {
   loadConnection: defaultLoadConnection,
   getAccessToken: getValidAccessToken,
   fetchProducts: fetchNormalizedShopifyProducts,
+  fetchPublishedProductIds: fetchPublishedShopifyProductIds,
   createDiscountCode: createShopifyRewardDiscountCode,
   verifyWebhookHmac: verifyShopifyWebhookHmac,
   markProductSync: defaultMarkProductSync,
@@ -229,7 +238,25 @@ function toCommerceProduct(product: NormalizedShopifyProduct): CommerceProduct {
     providerCreatedAt: product.providerCreatedAt,
     providerUpdatedAt: product.providerUpdatedAt,
     priceRangeRaw: product.priceRangeRaw,
+    // The provider-confirmed storefront-publication fact is deliberately
+    // separate from the actual/fallback navigation URL above.
+    ...(typeof product.hasProviderStorefrontPublication === "boolean"
+      ? { hasProviderStorefrontPublication: product.hasProviderStorefrontPublication }
+      : {}),
+    hasProviderSuppliedStorefrontUrl: product.hasProviderSuppliedStorefrontUrl,
   };
+}
+
+type ShopifyProductSyncContext = {
+  publishedProductIds: ReadonlySet<string>;
+};
+
+function getShopifyProductSyncContext(value: unknown): ShopifyProductSyncContext | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const productIds = (value as { publishedProductIds?: unknown }).publishedProductIds;
+  return productIds instanceof Set ? { publishedProductIds: productIds } : null;
 }
 
 /** Case-insensitive header lookup — inbound webhook headers may arrive in any case. */
@@ -342,6 +369,41 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
   }
 
   /**
+   * A complete `published_status:published` scan is a prerequisite for
+   * persisted Shopify catalog pages. It runs once per logical sync and its
+   * opaque result is passed back to `fetchProductPage`; a failure means no
+   * catalog row is written with incomplete publication evidence.
+   */
+  async prepareProductSync(
+    connectionId: string,
+    request: ProductSyncPreparationRequest,
+  ): Promise<ShopifyProductSyncContext> {
+    const row = await this.deps.loadConnection(connectionId);
+    if (!row) {
+      throw new CommerceConnectionNotFoundError(connectionId);
+    }
+
+    const publicationScan = await this.deps.fetchPublishedProductIds({
+      shopDomain: row.externalAccountId,
+      brandId: row.brandId,
+      limit: request.limit,
+      maxPages: request.maxPages,
+      maxProducts: request.maxProducts,
+      signal: request.signal,
+    });
+    if (!publicationScan.ok) {
+      throw new CommerceProviderApiError(
+        CommerceProvider.SHOPIFY,
+        publicationScan.error || "Failed to retrieve Shopify Online Store publication information.",
+        undefined,
+        publicationScan.status,
+      );
+    }
+
+    return { publishedProductIds: publicationScan.productIds };
+  }
+
+  /**
    * The persisted-catalog service calls this method repeatedly with opaque
    * cursors. `syncProducts` above intentionally remains a one-page wrapper:
    * dashboard Shopify route responses keep their established contract.
@@ -356,12 +418,21 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
       throw new CommerceConnectionNotFoundError(connectionId);
     }
 
+    const syncContext = getShopifyProductSyncContext(request.syncContext);
+    if (!syncContext) {
+      throw new CommerceProviderApiError(
+        CommerceProvider.SHOPIFY,
+        "Shopify product page requested without complete publication evidence.",
+      );
+    }
+
     const result = await this.deps.fetchProducts({
       shopDomain: row.externalAccountId,
       brandId: row.brandId,
       ...(request.cursor ? { after: request.cursor } : {}),
       ...(request.limit ? { limit: request.limit } : {}),
       ...(request.signal ? { signal: request.signal } : {}),
+      publishedProductIds: syncContext.publishedProductIds,
     });
 
     if (!result.ok) {

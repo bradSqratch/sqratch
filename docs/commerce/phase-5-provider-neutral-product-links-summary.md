@@ -303,8 +303,7 @@ bug this phase exists to eliminate elsewhere.
 ## Phase 6 boundary
 
 Click attribution, opaque attribution tokens, and purchase evidence are
-**not** part of Phase 5. `lesson_product_click` / `shop_click` analytics
-events continue to record best-effort attribution exactly as before
-(omitting `brandId`/`campaignId` when the visitor's context is ambiguous
-rather than guessing); building a durable, tamper-resistant click/purchase
-attribution model is explicitly Phase 6 scope.
+**not** part of Phase 5. Historical `lesson_product_click` / `shop_click`
+AnalyticsEvent rows are disposable legacy telemetry. Current commerce clicks
+use validated Phase 6 `CommerceClickAttribution` redirect hops; learning and
+application telemetry remains on AnalyticsEvent.

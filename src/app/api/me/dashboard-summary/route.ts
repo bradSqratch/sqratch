@@ -226,7 +226,7 @@ async function getUserCardsAndActivity(userId: string) {
       }),
     ]);
 
-  const [recentUnlocks, recentProgress, recentEvents] = await Promise.all([
+  const [recentUnlocks, recentProgress, recentCommerceClicks, recentEvents] = await Promise.all([
     prisma.campaignUnlock.findMany({
       where: {
         userId,
@@ -268,6 +268,24 @@ async function getUserCardsAndActivity(userId: string) {
         },
       },
     }),
+    prisma.commerceClickAttribution.findMany({
+      where: {
+        userId,
+        createdAt: {
+          gte: recentWindow,
+        },
+      },
+      orderBy: {
+        createdAt: "desc",
+      },
+      take: 5,
+      select: {
+        createdAt: true,
+        experience: {
+          select: { title: true },
+        },
+      },
+    }),
     prisma.analyticsEvent.findMany({
       where: {
         userId,
@@ -275,7 +293,7 @@ async function getUserCardsAndActivity(userId: string) {
           gte: recentWindow,
         },
         name: {
-          in: ["shop_click", "lesson_started", "lesson_completed"],
+          in: ["lesson_started", "lesson_completed"],
         },
       },
       orderBy: {
@@ -314,12 +332,9 @@ async function getUserCardsAndActivity(userId: string) {
 
   const eventItems: Array<RecentActivityItem & { ts: Date }> = recentEvents.map(
     (event) => {
-      const label =
-        event.name === "shop_click"
-          ? "Opened shop product"
-          : event.name === "lesson_completed"
-            ? "Completed lesson"
-            : "Started lesson";
+      const label = event.name === "lesson_completed"
+        ? "Completed lesson"
+        : "Started lesson";
 
       return {
         label,
@@ -330,7 +345,20 @@ async function getUserCardsAndActivity(userId: string) {
     },
   );
 
-  const recentActivity = [...progressItems, ...unlockItems, ...eventItems]
+  const commerceClickItems: Array<RecentActivityItem & { ts: Date }> =
+    recentCommerceClicks.map((click) => ({
+      label: "Opened shop product",
+      detail: click.experience.title,
+      at: toRelativeTime(click.createdAt),
+      ts: click.createdAt,
+    }));
+
+  const recentActivity = [
+    ...progressItems,
+    ...unlockItems,
+    ...commerceClickItems,
+    ...eventItems,
+  ]
     .sort((a, b) => b.ts.getTime() - a.ts.getTime())
     .slice(0, 6)
     .map((item) => ({
