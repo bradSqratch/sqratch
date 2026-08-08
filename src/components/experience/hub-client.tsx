@@ -352,7 +352,13 @@ function ExperienceWhyHero({
   const [useRightSheet, setUseRightSheet] = useState(false);
 
   const featuredStory = data?.featuredStory || null;
-  const primaryCampaign = data?.campaigns[0] || null;
+  // Server-resolved context only. `campaigns[0]` would show one sponsor's name
+  // and branding to a co-sponsor's visitor; when the server could not resolve a
+  // context the neutral placeholders below are the correct render.
+  const resolvedCampaignId = data?.resolvedCampaignId || null;
+  const primaryCampaign =
+    data?.campaigns.find((campaign) => campaign.id === resolvedCampaignId) ||
+    null;
   const campaignName = primaryCampaign?.name || "Campaign";
   const brandName = primaryCampaign?.brand?.name || "Brand";
   const description =

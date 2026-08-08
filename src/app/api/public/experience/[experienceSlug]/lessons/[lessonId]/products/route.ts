@@ -2,11 +2,34 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   createAnalyticsEvent,
   getExperienceAccessContext,
+  resolvePublicCampaignId,
+  type ExperienceAccessContext,
 } from "@/lib/experience-access";
 import prisma from "@/lib/prisma";
 import { attachSessionCookie, ensureViewerSession } from "@/lib/session";
 import { isProductLinkCurrent } from "@/lib/product-link-compatibility";
 import { externalAccountIdFromShopDomain } from "@/lib/commerce/connection-service";
+
+/**
+ * The campaign context this visitor is in on this Experience, or null when it
+ * is genuinely ambiguous (two or more eligible sponsors, no trusted session
+ * campaign). Never `campaigns[0]`.
+ */
+function resolveVisitorCampaign(access: ExperienceAccessContext) {
+  const resolvedCampaignId = resolvePublicCampaignId({
+    campaigns: access.experience.campaigns.map((item) => ({
+      campaignId: item.campaignId,
+      brandId: item.campaign.brand?.id ?? null,
+    })),
+    storedCampaignId: access.storedCampaignId,
+  });
+
+  return (
+    access.experience.campaigns.find(
+      (item) => item.campaignId === resolvedCampaignId,
+    ) || null
+  );
+}
 
 export async function GET(
   request: NextRequest,
@@ -51,6 +74,16 @@ export async function GET(
             currency: true,
             brandId: true,
             sourceShopDomain: true,
+            // Campaign scoping only. Deliberately just these two columns: the
+            // scoping row's own id, `brandCommerceProductId`, `brandId` and
+            // `displayOrder` are internal and must never reach a public
+            // response, so they are not even loaded here.
+            campaignProductLink: {
+              select: {
+                campaignId: true,
+                isActive: true,
+              },
+            },
           },
         },
       },
@@ -86,9 +119,45 @@ export async function GET(
       isProductLinkCurrent(link, domainByBrandId),
     );
 
+    // CAMPAIGN-SCOPED VISIBILITY, applied server-side before serialization.
+    //
+    //  - A link with NO CampaignLessonProduct row, or whose row is not active,
+    //    is unscoped: it predates Phase 5 or its campaign attachment was
+    //    detached (deactivation also nulls `legacyLessonProductLinkId`), so it
+    //    carries no campaign claim and renders unconditionally, exactly as
+    //    before. These rows are never filtered by campaign context.
+    //  - A link with an ACTIVE CampaignLessonProduct row belongs to exactly one
+    //    campaign and renders only inside that campaign's context.
+    //  - An ambiguous context (`resolvedCampaignId === null`) fails closed for
+    //    scoped rows: no campaign matches, so none of them render. Unscoped
+    //    rows are unaffected.
+    const visitorCampaign = resolveVisitorCampaign(access);
+    const visibleProductLinks = currentProductLinks.filter((link) => {
+      const scope = link.campaignProductLink;
+
+      if (!scope || !scope.isActive) {
+        return true;
+      }
+
+      return scope.campaignId === visitorCampaign?.campaignId;
+    });
+
     return NextResponse.json({
       data: {
-        items: canAccess ? currentProductLinks : [],
+        // Projected field by field so the scoping row stays server-side. The
+        // shape is byte-identical to the pre-scoping response.
+        items: canAccess
+          ? visibleProductLinks.map((link) => ({
+              id: link.id,
+              productUrl: link.productUrl,
+              title: link.title,
+              imageUrl: link.imageUrl,
+              priceText: link.priceText,
+              currency: link.currency,
+              brandId: link.brandId,
+              sourceShopDomain: link.sourceShopDomain,
+            }))
+          : [],
       },
     });
   } catch (error) {
@@ -122,11 +191,10 @@ export async function POST(
 
     const body = await request.json().catch(() => null);
     const productLinkId = String(body?.productLinkId || "").trim();
-    const productUrl = String(body?.productUrl || "").trim();
 
-    if (!productUrl) {
+    if (!productLinkId) {
       return NextResponse.json(
-        { error: "productUrl is required." },
+        { error: "productLinkId is required." },
         { status: 400 },
       );
     }
@@ -165,39 +233,39 @@ export async function POST(
       );
     }
 
-    const linkedProduct = productLinkId
-      ? await prisma.lessonProductLink.findFirst({
-          where: {
-            id: productLinkId,
-            lessonId: lesson.id,
-          },
-          select: {
-            id: true,
-            brandId: true,
-            productUrl: true,
-            title: true,
-          },
-        })
-      : await prisma.lessonProductLink.findFirst({
-          where: {
-            lessonId: lesson.id,
-            productUrl,
-          },
-          select: {
-            id: true,
-            brandId: true,
-            productUrl: true,
-            title: true,
-          },
-        });
+    // This beacon is supplementary analytics only, but it still must not
+    // accept a client-provided merchant URL. The id is contained to this
+    // lesson and the recorded URL is always re-derived from the stored link.
+    const linkedProduct = await prisma.lessonProductLink.findFirst({
+      where: {
+        id: productLinkId,
+        lessonId: lesson.id,
+      },
+      select: {
+        id: true,
+        brandId: true,
+        productUrl: true,
+        title: true,
+      },
+    });
 
-    const primaryCampaign = access.experience.campaigns[0];
+    if (!linkedProduct) {
+      return NextResponse.json({ error: "Product not found." }, { status: 404 });
+    }
+
+    // Attribution follows the visitor's resolved context. When it is ambiguous
+    // the campaign attribution is omitted (AnalyticsEvent.campaignId and
+    // .brandId are both nullable) rather than credited to an arbitrary
+    // co-sponsor; the click itself is still recorded. The clicked link's OWN
+    // brand still attributes normally — it is a property of the product, not a
+    // guess about the visitor.
+    const visitorCampaign = resolveVisitorCampaign(access);
     const sessionId =
       access.viewer.sessionId ||
       (await ensureViewerSession({
         request,
         userId: access.viewer.userId,
-        campaignId: primaryCampaign?.campaignId || null,
+        campaignId: visitorCampaign?.campaignId || null,
       }));
 
     const viewerSession = await prisma.userSession.findUnique({
@@ -215,8 +283,8 @@ export async function POST(
     await createAnalyticsEvent({
       request,
       name: "lesson_product_click",
-      brandId: linkedProduct?.brandId || primaryCampaign?.campaign.brand?.id || null,
-      campaignId: primaryCampaign?.campaignId || null,
+      brandId: linkedProduct.brandId || visitorCampaign?.campaign.brand?.id || null,
+      campaignId: visitorCampaign?.campaignId || null,
       qrCodeId: viewerSession?.qrCodeId || null,
       experienceId: access.experience.id,
       courseId: lesson.courseId,
@@ -225,9 +293,9 @@ export async function POST(
       sessionId,
       pagePath: `/x/${access.experience.slug}/lessons/${lesson.id}`,
       data: {
-        productLinkId: linkedProduct?.id || productLinkId || null,
-        productTitle: linkedProduct?.title || null,
-        productUrl: linkedProduct?.productUrl || productUrl,
+        productLinkId: linkedProduct.id,
+        productTitle: linkedProduct.title,
+        productUrl: linkedProduct.productUrl,
         batchId: viewerSession?.qrCode?.batchId || null,
       },
     });

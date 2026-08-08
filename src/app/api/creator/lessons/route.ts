@@ -15,6 +15,11 @@ import {
 import { parseRewardPoints } from "@/lib/reward-points-input";
 import { isProductLinkCurrent } from "@/lib/product-link-compatibility";
 import { externalAccountIdFromShopDomain } from "@/lib/commerce/connection-service";
+import { buildEligibleCampaignContexts } from "@/lib/campaign-context";
+import {
+  loadExperienceCampaignRows,
+  toCampaignContextSources,
+} from "@/lib/campaign-context-repository";
 
 function normalizeVideoSource(value: unknown) {
   const normalized = String(value || "YOUTUBE")
@@ -161,6 +166,17 @@ export async function GET(request: NextRequest) {
             currency: true,
             brandId: true,
             sourceShopDomain: true,
+            campaignProductLink: {
+              select: {
+                campaign: {
+                  select: {
+                    id: true,
+                    name: true,
+                    brand: { select: { name: true } },
+                  },
+                },
+              },
+            },
             createdAt: true,
           },
         },
@@ -170,19 +186,25 @@ export async function GET(request: NextRequest) {
     // Stale/incompatible product links are never hidden from creator
     // management — they're annotated so the creator can see they need
     // relinking rather than silently treating them as current.
-    const campaignBrandLinks = await prisma.campaignExperience.findMany({
-      where: { experienceId: course.experience.id },
-      select: {
-        campaign: {
-          select: { brand: { select: { id: true, shopifyShopDomain: true } } },
-        },
-      },
-    });
+    //
+    // Eligible campaign contexts come from the one shared resolver
+    // (src/lib/campaign-context.ts) rather than being re-derived here, so
+    // "which campaigns/brands apply to this Experience" has a single
+    // definition across the whole creator surface.
+    const campaignRows = await loadExperienceCampaignRows(course.experience.id);
+    const eligibleBrandIds = new Set(
+      buildEligibleCampaignContexts(toCampaignContextSources(campaignRows)).map(
+        (context) => context.brandId,
+      ),
+    );
     const domainByBrandId = new Map<string, string | null>();
-    campaignBrandLinks.forEach((item) => {
-      const brand = item.campaign.brand;
-      if (brand) {
-        domainByBrandId.set(brand.id, externalAccountIdFromShopDomain(brand.shopifyShopDomain));
+    campaignRows.forEach((row) => {
+      const brand = row.campaign.brand;
+      if (brand && eligibleBrandIds.has(brand.id)) {
+        domainByBrandId.set(
+          brand.id,
+          externalAccountIdFromShopDomain(brand.shopifyShopDomain),
+        );
       }
     });
 

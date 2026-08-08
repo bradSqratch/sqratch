@@ -3,6 +3,11 @@ import { getServerSession } from "next-auth";
 import type { Session } from "next-auth";
 import type { NextRequest } from "next/server";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
+import {
+  resolvePublicExperienceEntryContext,
+  resolveValidatedPublicCampaignContext,
+  type PublicExperienceEntryContext,
+} from "@/lib/campaign-context";
 import prisma from "@/lib/prisma";
 import {
   getSessionIdFromRequest,
@@ -55,6 +60,27 @@ export type ExperienceAccessContext = {
   viewer: ViewerContext;
   experience: ExperienceAccessBase;
   campaignIds: string[];
+  /**
+   * The visitor's stored `UserSession.campaignId` — the ONLY trusted public
+   * campaign signal. It is cookie-backed (`sqr_session`, httpOnly) and is
+   * stamped server-side by `/api/public/scan` and
+   * `/api/public/campaign/[slug]`, never by a client-supplied parameter.
+   *
+   * Surfaced here (rather than re-queried per route) because
+   * `getExperienceAccessContext` already loads the session record for the
+   * redeemed-QR check; a second `getViewerSessionRecord` call per public route
+   * would duplicate that query. It is deliberately RAW: it has not been
+   * validated against this Experience yet. Never read it directly — always
+   * resolve it through `resolvePublicCampaignId` below.
+   */
+  storedCampaignId: string | null;
+  /**
+   * Trusted public entry semantics.  DIRECT is intentionally distinct from
+   * an unresolved/missing campaign: it means this Experience was entered
+   * without campaign acquisition context and must not invent one from the
+   * Experience's linked campaigns.
+   */
+  entryContext: PublicExperienceEntryContext;
   isLoggedIn: boolean;
   isCreatorOwner: boolean;
   hasUnlockedCampaign: boolean;
@@ -62,6 +88,47 @@ export type ExperienceAccessContext = {
   canAccessPrivate: boolean;
   canInteract: boolean;
 };
+
+/**
+ * The minimum a caller must project out of one Experience-campaign join row for
+ * public campaign-context resolution: the campaign id and the campaign's brand
+ * id. Routes hold different campaign row shapes (some select the whole brand,
+ * some only `brandId`), so the contract is narrowed to what the rule needs.
+ */
+export type PublicCampaignContextSource = {
+  campaignId: string;
+  brandId: string | null;
+};
+
+/**
+ * The single entry point every PUBLIC surface uses to answer "which campaign is
+ * this visitor in on this Experience?".
+ *
+ * It applies two rules that must never drift apart across routes:
+ *
+ *  1. Eligibility: a campaign with no brand is never a context. Brand ownership
+ *    is what lets a campaign authorize a product, stamp a shop domain, or
+ *    receive click attribution (same rule as `buildEligibleCampaignContexts`).
+ *  2. Resolution: `resolveValidatedPublicCampaignContext` — the visitor's
+ *    stored campaign only when it is genuinely linked to this Experience;
+ *    otherwise `null` for explicit direct/unscoped entry.
+ *
+ * `null` means direct/unscoped entry. Callers must never replace it with a
+ * campaign guess. It is never `campaigns[0]`: `CampaignExperience.sortOrder`
+ * is brand-writable, so taking the first row let a co-sponsoring brand elect
+ * itself as the primary sponsor of a shared Experience.
+ */
+export function resolvePublicCampaignId(options: {
+  campaigns: PublicCampaignContextSource[];
+  storedCampaignId: string | null;
+}): string | null {
+  return resolveValidatedPublicCampaignContext({
+    storedCampaignId: options.storedCampaignId,
+    eligibleCampaignIds: options.campaigns
+      .filter((campaign) => campaign.brandId !== null)
+      .map((campaign) => campaign.campaignId),
+  });
+}
 
 export async function getViewerContext(request?: NextRequest): Promise<ViewerContext> {
   const session = await getServerSession(authOptions);
@@ -108,9 +175,11 @@ export async function getExperienceAccessContext(
         },
       },
       campaigns: {
-        orderBy: {
-          sortOrder: "asc",
-        },
+        // `sortOrder` is brand-writable and has no natural uniqueness, so it
+        // alone leaves the row order undefined for ties. The `id` tiebreak
+        // makes this list stable; consumers must still go through
+        // `src/lib/campaign-context.ts` rather than taking `campaigns[0]`.
+        orderBy: [{ sortOrder: "asc" }, { id: "asc" }],
         select: {
           campaignId: true,
           campaign: {
@@ -180,10 +249,19 @@ export async function getExperienceAccessContext(
       allowedCampaignIds: campaignIds,
     });
 
+  const entryContext = resolvePublicExperienceEntryContext({
+    storedCampaignId: viewerSession?.campaignId ?? null,
+    eligibleCampaignIds: experience.campaigns
+      .filter((item) => item.campaign.brand !== null)
+      .map((item) => item.campaignId),
+  });
+
   return {
     viewer,
     experience,
     campaignIds,
+    storedCampaignId: viewerSession?.campaignId ?? null,
+    entryContext,
     isLoggedIn,
     isCreatorOwner,
     hasUnlockedCampaign,

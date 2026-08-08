@@ -3,12 +3,11 @@ import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import {
+  attachSessionCookie,
+  ensureViewerSession,
   getViewerSessionRecord,
   hasRedeemedQrWarning,
 } from "@/lib/session";
-import { isValidSessionId } from "@/lib/session-id";
-
-const COOKIE_NAME = "sqr_session";
 
 export async function GET(
   request: NextRequest,
@@ -56,8 +55,14 @@ export async function GET(
     }
 
     const userId = session?.user?.id || null;
-    const rawSessionId = request.cookies.get(COOKIE_NAME)?.value || null;
-    const sessionId = isValidSessionId(rawSessionId) ? rawSessionId : null;
+    // Campaign entry must establish its trusted acquisition context even for
+    // a first-time anonymous visitor; the page has no separate session-init
+    // round trip before it fetches this route.
+    const sessionId = await ensureViewerSession({
+      request,
+      userId,
+      campaignId: campaign.id,
+    });
     const viewerSession = await getViewerSessionRecord(request);
 
     let isUnlocked = false;
@@ -93,29 +98,18 @@ export async function GET(
         allowedCampaignIds: [campaign.id],
       });
 
-    if (sessionId) {
-      await prisma.userSession.updateMany({
-        where: { id: sessionId },
-        data: {
-          lastSeenAt: new Date(),
-          campaignId: campaign.id,
-          userId: userId || undefined,
-        },
-      });
+    await prisma.analyticsEvent.create({
+      data: {
+        name: "campaign_view",
+        brandId: campaign.brandId,
+        campaignId: campaign.id,
+        userId,
+        sessionId,
+        pagePath: `/c/${campaignSlug}`,
+      },
+    });
 
-      await prisma.analyticsEvent.create({
-        data: {
-          name: "campaign_view",
-          brandId: campaign.brandId,
-          campaignId: campaign.id,
-          userId,
-          sessionId,
-          pagePath: `/c/${campaignSlug}`,
-        },
-      });
-    }
-
-    return NextResponse.json({
+    return attachSessionCookie(NextResponse.json({
       data: {
         id: campaign.id,
         name: campaign.name,
@@ -136,7 +130,7 @@ export async function GET(
         isUnlocked,
         hasRedeemedQrWarning: showRedeemedQrWarning,
       },
-    });
+    }), sessionId);
   } catch (error) {
     console.error("[public/campaign/[campaignSlug]] Error:", error);
     return NextResponse.json(

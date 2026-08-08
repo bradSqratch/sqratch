@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   createAnalyticsEvent,
   getExperienceAccessContext,
+  resolvePublicCampaignId,
 } from "@/lib/experience-access";
 import { loadPublicExperience } from "@/lib/public-experience";
 import { attachSessionCookie, ensureViewerSession } from "@/lib/session";
@@ -81,7 +82,21 @@ export async function POST(
       );
     }
 
-    const primaryCampaign = access.experience.campaigns[0] || null;
+    // Attributed to the visitor's own resolved campaign context, never to
+    // `campaigns[0]`. On a co-sponsored Experience with no trusted signal the
+    // view is recorded with a null brand/campaign (both columns are nullable)
+    // rather than credited to an arbitrary sponsor.
+    const resolvedCampaignId = resolvePublicCampaignId({
+      campaigns: access.experience.campaigns.map((item) => ({
+        campaignId: item.campaignId,
+        brandId: item.campaign.brand?.id ?? null,
+      })),
+      storedCampaignId: access.storedCampaignId,
+    });
+    const primaryCampaign =
+      access.experience.campaigns.find(
+        (item) => item.campaignId === resolvedCampaignId,
+      ) || null;
 
     const sessionId =
       access.viewer.sessionId ||

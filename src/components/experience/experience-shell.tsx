@@ -241,9 +241,12 @@ export function GatePanel({
   const signupHref = `/signup?next=${encodeURIComponent(nextHref)}`;
   const canOfferSignup =
     !experience.isLoggedIn && !experience.hasRedeemedQrWarning;
-  const campaignHref = experience.campaigns[0]
-    ? `/c/${experience.campaigns[0].id}`
-    : `/x/${experience.slug}`;
+  // Co-sponsored Experiences must never send a visitor to an arbitrary
+  // campaign landing page. The server provides a trusted resolution when one
+  // exists; a single campaign is the only safe compatibility fallback.
+  const campaignId = experience.resolvedCampaignId ||
+    (experience.campaigns.length === 1 ? experience.campaigns[0]?.id : null);
+  const campaignHref = campaignId ? `/c/${campaignId}` : `/x/${experience.slug}`;
 
   return (
     <Card className="rounded-[28px] border border-white/15 bg-white/6 text-white backdrop-blur-xl">
@@ -290,7 +293,9 @@ export function GatePanel({
               <Link href={campaignHref}>
                 {experience.hasRedeemedQrWarning
                   ? "View Campaign"
-                  : "Unlock Campaign"}
+                  : campaignId
+                    ? "Unlock Campaign"
+                    : "View Experience"}
               </Link>
             </Button>
           )}

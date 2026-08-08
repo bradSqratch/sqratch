@@ -24,10 +24,27 @@ const DEFAULT_DEPS: CreatorAvailableProductsDeps = {
   fetchLegacyProducts: fetchNormalizedShopifyProducts,
 };
 
-function publicBrand(brand: LessonProductManagementContext["primaryBrand"]) {
+function publicBrand(
+  brand: LessonProductManagementContext["candidateBrands"][number] | null,
+) {
   return brand
     ? { id: brand.id, name: brand.name, slug: brand.slug }
     : null;
+}
+
+/**
+ * The brand of the resolved campaign context. There is deliberately no
+ * "primary brand" fallback: `resolveCampaignCuration` only reaches this point
+ * with a single unambiguous context, so the brand is the resolved context's
+ * brand rather than the first of several.
+ */
+function brandForContext(
+  access: LessonProductManagementContext,
+  brandId: string,
+) {
+  return (
+    access.candidateBrands.find((candidate) => candidate.id === brandId) || null
+  );
 }
 
 export async function GET(
@@ -73,7 +90,12 @@ export async function creatorAvailableProductsGetImpl(
           connected: true,
           items: [],
           curation: {
-            enabled: true,
+            // Selection is now required for legacy-only multi-campaign
+            // Experiences too, so `enabled` must reflect the actual mode of
+            // the offered contexts rather than being hardcoded true.
+            enabled: resolution.campaigns.some(
+              (campaign) => campaign.mode === "CURATED",
+            ),
             requiresCampaignSelection: true,
             campaigns: resolution.campaigns,
           },
@@ -83,12 +105,10 @@ export async function creatorAvailableProductsGetImpl(
 
     if (resolution.kind === "curated") {
       const products = await deps.curationRepository.listAuthorizedProducts({
-        campaignId: resolution.campaign.id,
+        campaignId: resolution.campaign.campaignId,
         brandId: resolution.campaign.brandId,
       });
-      const brand = access.data.candidateBrands.find(
-        (candidate) => candidate.id === resolution.campaign.brandId,
-      ) || null;
+      const brand = brandForContext(access.data, resolution.campaign.brandId);
 
       return NextResponse.json({
         data: {
@@ -101,12 +121,14 @@ export async function creatorAvailableProductsGetImpl(
           items: products.map(toCreatorCatalogProduct),
           curation: {
             enabled: true,
-            campaignId: resolution.campaign.id,
+            campaignId: resolution.campaign.campaignId,
             requiresCampaignSelection: false,
             campaigns: [{
-              id: resolution.campaign.id,
-              name: resolution.campaign.name,
+              id: resolution.campaign.campaignId,
+              name: resolution.campaign.campaignName,
               brandId: resolution.campaign.brandId,
+              brandName: resolution.campaign.brandName,
+              mode: resolution.campaign.mode,
             }],
           },
         },
@@ -114,8 +136,13 @@ export async function creatorAvailableProductsGetImpl(
     }
 
     // Legacy compatibility mode begins here. Do not add curation fields,
-    // alter item ids, or change the current connected-brand behavior.
-    const brand = access.data.primaryBrand;
+    // alter item ids, or change the current connected-brand behavior. The
+    // brand comes from the single resolved context ("legacy"), or is null when
+    // the Experience has no brand-owning campaign at all ("none").
+    const brand =
+      resolution.kind === "legacy"
+        ? brandForContext(access.data, resolution.campaign.brandId)
+        : null;
     if (!brand?.shopifyShopDomain || !isLegacyShopifyBrandConnectionUsable(brand)) {
       return NextResponse.json({
         data: {

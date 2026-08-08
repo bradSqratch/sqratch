@@ -37,6 +37,8 @@ type ShopResponse = {
     id: string;
     productId: string;
     productLinkId: string | null;
+    campaignProductId?: string | null;
+    campaignAssignmentId?: string | null;
     title: string;
     description?: string | null;
     imageUrl: string | null;
@@ -48,6 +50,10 @@ type ShopResponse = {
       slug: string;
     } | null;
     source: "LINKED" | "CAMPAIGN";
+    productCampaign?: {
+      id: string;
+      name: string;
+    } | null;
   }>;
 };
 
@@ -61,7 +67,9 @@ export function ExperienceShopClient({
   const [shopLoading, setShopLoading] = useState(false);
   const [shopError, setShopError] = useState<string | null>(null);
   const [clickingId, setClickingId] = useState<string | null>(null);
-  const [failedImageIds, setFailedImageIds] = useState<Set<string>>(() => new Set());
+  const [failedImageIds, setFailedImageIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const [pageSize, setPageSize] =
     useState<(typeof PAGE_SIZE_OPTIONS)[number]>(25);
   const [currentPage, setCurrentPage] = useState(1);
@@ -98,7 +106,17 @@ export function ExperienceShopClient({
 
   function handleOpenProduct(product: ShopResponse["products"][number]) {
     setClickingId(product.id);
-    window.open(product.productUrl, "_blank", "noopener,noreferrer");
+    // Every persisted product uses a server-side click hop. A campaign-scoped
+    // card uses its opaque assignment id so a direct Experience union never
+    // has to choose a campaign in the browser.
+    const target = product.productLinkId
+      ? `/api/public/experience/${experienceSlug}/products/click/${product.productLinkId}`
+      : product.campaignAssignmentId
+        ? `/api/public/experience/${experienceSlug}/products/click/campaign/${product.campaignAssignmentId}`
+        : product.campaignProductId
+          ? `/api/public/experience/${experienceSlug}/products/click/catalog/${product.campaignProductId}`
+          : product.productUrl;
+    window.open(target, "_blank", "noopener,noreferrer");
 
     fetch(`/api/public/experience/${experienceSlug}/products`, {
       method: "POST",
@@ -110,7 +128,6 @@ export function ExperienceShopClient({
       body: JSON.stringify({
         productId: product.productId,
         productLinkId: product.productLinkId,
-        productUrl: product.productUrl,
       }),
     }).finally(() => {
       setClickingId((current) => (current === product.id ? null : current));
@@ -120,9 +137,7 @@ export function ExperienceShopClient({
   const productCount = shopData?.products.length ?? 0;
   const totalPages = Math.max(1, Math.ceil(productCount / pageSize));
   const safeCurrentPage = Math.min(currentPage, totalPages);
-  const pageStartIndex = productCount
-    ? (safeCurrentPage - 1) * pageSize
-    : 0;
+  const pageStartIndex = productCount ? (safeCurrentPage - 1) * pageSize : 0;
   const pageEndIndex = Math.min(pageStartIndex + pageSize, productCount);
   const visibleProducts = useMemo(
     () => shopData?.products.slice(pageStartIndex, pageEndIndex) ?? [],
@@ -178,8 +193,9 @@ export function ExperienceShopClient({
               <div>
                 <h2 className="text-2xl font-semibold text-[#988dbf]">Shop</h2>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">
-                  These products are linked to this experience or pulled from
-                  the connected campaign brand storefront.
+                  {shopData.campaign
+                    ? "These products are linked to this experience, selected for this campaign, or available from its brand storefront."
+                    : "These products are linked to this experience or available from its linked campaign brands and storefronts."}
                 </p>
               </div>
               {shopData.campaign && (
@@ -222,7 +238,11 @@ export function ExperienceShopClient({
                         className="rounded-full border border-white/10 bg-black/30 px-3 py-2 text-white outline-none transition focus:border-[#988dbf]"
                       >
                         {PAGE_SIZE_OPTIONS.map((option) => (
-                          <option key={option} value={option} className="bg-[#120f1f]">
+                          <option
+                            key={option}
+                            value={option}
+                            className="bg-[#120f1f]"
+                          >
                             {option}
                           </option>
                         ))}
@@ -244,7 +264,9 @@ export function ExperienceShopClient({
                         type="button"
                         variant="outline"
                         onClick={() =>
-                          setCurrentPage((page) => Math.min(totalPages, page + 1))
+                          setCurrentPage((page) =>
+                            Math.min(totalPages, page + 1),
+                          )
                         }
                         disabled={safeCurrentPage === totalPages}
                         className="rounded-full border-white/15 bg-transparent text-white/75 hover:bg-white/10 hover:text-white"
@@ -295,6 +317,11 @@ export function ExperienceShopClient({
                           {product.brand && (
                             <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/60">
                               {product.brand.name}
+                            </span>
+                          )}
+                          {product.productCampaign && (
+                            <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/60">
+                              Campaign: {product.productCampaign.name}
                             </span>
                           )}
                         </div>

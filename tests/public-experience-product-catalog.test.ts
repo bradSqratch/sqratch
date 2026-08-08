@@ -24,9 +24,8 @@ let postProductClick: (
 ) => Promise<Response>;
 
 before(async () => {
-  const route = await import(
-    "../src/app/api/public/experience/[experienceSlug]/products/route"
-  );
+  const route =
+    await import("../src/app/api/public/experience/[experienceSlug]/products/route");
   getProducts = route.publicExperienceProductsGetImpl;
   postProductClick = route.publicExperienceProductsPostImpl;
 });
@@ -36,15 +35,18 @@ const routeContext = {
 };
 
 function request(method = "GET", body?: unknown) {
-  return new NextRequest("https://sqratch.test/api/public/experience/my-experience/products", {
-    method,
-    ...(body === undefined
-      ? {}
-      : {
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-        }),
-  });
+  return new NextRequest(
+    "https://sqratch.test/api/public/experience/my-experience/products",
+    {
+      method,
+      ...(body === undefined
+        ? {}
+        : {
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(body),
+          }),
+    },
+  );
 }
 
 function access() {
@@ -88,7 +90,8 @@ function curated(
     connectedProduct?: Partial<CuratedCampaignProduct["connectedProduct"]>;
   } = {},
 ): CuratedCampaignProduct {
-  const { connectedProduct: connectedOverrides, ...selectionOverrides } = overrides;
+  const { connectedProduct: connectedOverrides, ...selectionOverrides } =
+    overrides;
   return {
     displayOrder: 0,
     titleOverride: null,
@@ -120,6 +123,7 @@ function deps(overrides: Partial<PublicExperienceProductsDeps> = {}) {
     findBrands: async () => [brand()],
     countBrandSelections: async () => 1,
     findCuratedProducts: async () => [],
+    findCampaignProducts: async () => [],
     fetchLegacyCampaignProducts: async () => ({
       ok: true as const,
       items: [
@@ -151,10 +155,14 @@ function deps(overrides: Partial<PublicExperienceProductsDeps> = {}) {
   } satisfies PublicExperienceProductsDeps;
 }
 
-async function productsFrom(overrides: Partial<PublicExperienceProductsDeps> = {}) {
+async function productsFrom(
+  overrides: Partial<PublicExperienceProductsDeps> = {},
+) {
   const response = await getProducts(request(), routeContext, deps(overrides));
   assert.equal(response.status, 200);
-  return (await response.json()).data.products as Array<Record<string, unknown>>;
+  return (await response.json()).data.products as Array<
+    Record<string, unknown>
+  >;
 }
 
 describe("public experience product catalog cutover", () => {
@@ -215,8 +223,12 @@ describe("public experience product catalog cutover", () => {
   test("does not surface unavailable or cross-brand curated products", async () => {
     const products = await productsFrom({
       findCuratedProducts: async () => [
-        curated({ connectedProduct: { id: "wrong-brand", brandId: "brand-2" } }),
-        curated({ connectedProduct: { id: "unavailable", isAvailable: false } }),
+        curated({
+          connectedProduct: { id: "wrong-brand", brandId: "brand-2" },
+        }),
+        curated({
+          connectedProduct: { id: "unavailable", isAvailable: false },
+        }),
       ],
     });
 
@@ -226,13 +238,37 @@ describe("public experience product catalog cutover", () => {
   test("returns curated items in display order with deterministic title/id ties", async () => {
     const products = await productsFrom({
       findCuratedProducts: async () => [
-        curated({ displayOrder: 4, connectedProduct: { id: "connected-z", externalId: "z", title: "Beta" } }),
-        curated({ displayOrder: 0, connectedProduct: { id: "connected-b", externalId: "b", title: "Beta" } }),
-        curated({ displayOrder: 0, connectedProduct: { id: "connected-a", externalId: "a", title: "Alpha" } }),
+        curated({
+          displayOrder: 4,
+          connectedProduct: {
+            id: "connected-z",
+            externalId: "z",
+            title: "Beta",
+          },
+        }),
+        curated({
+          displayOrder: 0,
+          connectedProduct: {
+            id: "connected-b",
+            externalId: "b",
+            title: "Beta",
+          },
+        }),
+        curated({
+          displayOrder: 0,
+          connectedProduct: {
+            id: "connected-a",
+            externalId: "a",
+            title: "Alpha",
+          },
+        }),
       ],
     });
 
-    assert.deepEqual(products.map((product) => product.productId), ["a", "b", "z"]);
+    assert.deepEqual(
+      products.map((product) => product.productId),
+      ["a", "b", "z"],
+    );
   });
 
   test("never serializes metadata or secret-shaped fields from catalog rows", async () => {
@@ -241,7 +277,9 @@ describe("public experience product catalog cutover", () => {
       providerMetadata: { token: "must-not-leak", secret: "must-not-leak" },
     });
 
-    const products = await productsFrom({ findCuratedProducts: async () => [unsafe] });
+    const products = await productsFrom({
+      findCuratedProducts: async () => [unsafe],
+    });
     const serialized = JSON.stringify(products);
     assert.equal(serialized.includes("providerMetadata"), false);
     assert.equal(serialized.includes("must-not-leak"), false);
@@ -262,7 +300,9 @@ describe("public experience product catalog cutover", () => {
 
   test("preserves a null synchronized image for the client-side placeholder", async () => {
     const products = await productsFrom({
-      findCuratedProducts: async () => [curated({ connectedProduct: { imageUrl: null } })],
+      findCuratedProducts: async () => [
+        curated({ connectedProduct: { imageUrl: null } }),
+      ],
     });
 
     assert.equal(products[0].imageUrl, null);
@@ -279,7 +319,7 @@ describe("public experience product catalog cutover", () => {
     assert.equal(products[0].description, "Provider description");
   });
 
-  test("current direct ExperienceProductLinks retain precedence over curation", async () => {
+  test("current direct ExperienceProductLinks remain first while curation stays available", async () => {
     let selectionCountCalls = 0;
     const products = await productsFrom({
       findProductLinks: async () => [
@@ -301,27 +341,34 @@ describe("public experience product catalog cutover", () => {
       findCuratedProducts: async () => [curated()],
     });
 
-    assert.equal(selectionCountCalls, 0);
+    assert.equal(selectionCountCalls, 1);
+    assert.equal(products.length, 2);
     assert.equal(products[0].source, "LINKED");
     assert.equal(products[0].title, "Direct product");
     assert.equal(products[0].description, undefined);
+    assert.equal(products[1].source, "CAMPAIGN");
   });
 
-  test("keeps shop click analytics payloads intact for curated product clicks", async () => {
-    const received: { event: { name: string; data?: Record<string, unknown> } | null } = {
+  test("records shop click analytics without accepting a client-supplied product URL", async () => {
+    const received: {
+      event: { name: string; data?: Record<string, unknown> } | null;
+    } = {
       event: null,
     };
     const response = await postProductClick(
       request("POST", {
         productId: "gid://shopify/Product/1",
         productLinkId: null,
-        productUrl: "https://acme.test/products/provider-title",
+        productUrl: "https://attacker.example/not-a-validated-product",
       }),
       routeContext,
       {
         getAccess: async () => access(),
         ensureSession: async () => "new-session",
-        findViewerSession: async () => ({ qrCodeId: "qr-1", qrCode: { batchId: "batch-1" } }),
+        findViewerSession: async () => ({
+          qrCodeId: "qr-1",
+          qrCode: { batchId: "batch-1" },
+        }),
         createAnalyticsEvent: async (options) => {
           received.event = options;
         },
@@ -333,14 +380,16 @@ describe("public experience product catalog cutover", () => {
     assert.deepEqual(received.event?.data, {
       productId: "gid://shopify/Product/1",
       productLinkId: null,
-      productUrl: "https://acme.test/products/provider-title",
       batchId: "batch-1",
     });
   });
 });
 
 test("Experience Shop renders the optional curated description", () => {
-  const clientPath = path.join(process.cwd(), "src/components/experience/shop-client.tsx");
+  const clientPath = path.join(
+    process.cwd(),
+    "src/components/experience/shop-client.tsx",
+  );
   const source = fs.readFileSync(clientPath, "utf8");
   assert.match(source, /description\?: string \| null/);
   assert.match(source, /product\.description &&/);
@@ -348,7 +397,10 @@ test("Experience Shop renders the optional curated description", () => {
 });
 
 test("Experience Shop replaces a failed synchronized image with the existing placeholder", () => {
-  const clientPath = path.join(process.cwd(), "src/components/experience/shop-client.tsx");
+  const clientPath = path.join(
+    process.cwd(),
+    "src/components/experience/shop-client.tsx",
+  );
   const source = fs.readFileSync(clientPath, "utf8");
   assert.match(source, /failedImageIds/);
   assert.match(source, /onError=/);

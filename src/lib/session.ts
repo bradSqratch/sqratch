@@ -109,6 +109,31 @@ export async function ensureViewerSession(options?: {
   return sessionId;
 }
 
+/**
+ * Makes a direct Experience entry explicitly unscoped without touching the
+ * visitor's historical CampaignUnlock rows.  `updateMany` intentionally
+ * tolerates a stale cookie whose backing session has already been deleted.
+ */
+export async function clearViewerSessionCampaignContext(options?: {
+  request?: NextRequest;
+}) {
+  const sessionId = await getSessionIdFromRequest(options?.request);
+
+  if (!sessionId) {
+    return null;
+  }
+
+  await prisma.userSession.updateMany({
+    where: { id: sessionId },
+    data: {
+      campaignId: null,
+      lastSeenAt: new Date(),
+    },
+  });
+
+  return sessionId;
+}
+
 export function attachSessionCookie(
   response: NextResponse,
   sessionId: string,

@@ -6,6 +6,33 @@ import {
 } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
 
+const MAX_SORT_ORDER = 1_000_000;
+
+/**
+ * Bounds CampaignExperience.sortOrder to the same closed range this repo uses
+ * for every other brand-writable ordering column (see MAX_DISPLAY_ORDER in
+ * src/app/api/brand/campaigns/[id]/commerce-products/route.ts).
+ *
+ * An Experience can be co-sponsored by several brands, and each brand controls
+ * the sortOrder of its OWN join row on that shared Experience. Unbounded, a
+ * co-sponsoring brand could write an extreme negative value to sort itself
+ * first everywhere the campaign list was read, capturing the shared
+ * Experience's primary brand and click attribution. Ordering is no longer a
+ * security boundary — every consumer now goes through
+ * src/lib/campaign-context.ts, which refuses to pick "the first of several"
+ * and applies a code-level campaignId tiebreak — but the value must still not
+ * be unbounded.
+ *
+ * Returns null for a non-integer or out-of-range value, which callers reject
+ * with a 400. `undefined` keeps the historical default of 0.
+ */
+function parseSortOrder(value: unknown): number | null {
+  if (value === undefined || value === null || value === "") return 0;
+  if (typeof value !== "number" || !Number.isInteger(value)) return null;
+  if (value < 0 || value > MAX_SORT_ORDER) return null;
+  return value;
+}
+
 export async function GET(
   request: NextRequest,
   context: { params: Promise<{ id: string }> },
@@ -126,11 +153,18 @@ export async function POST(
     const body = await request.json();
     const experienceId = String(body?.experienceId || "").trim();
     const attach = Boolean(body?.attach);
-    const sortOrder = Number(body?.sortOrder || 0);
+    const sortOrder = parseSortOrder(body?.sortOrder);
 
     if (!experienceId) {
       return NextResponse.json(
         { error: "experienceId is required." },
+        { status: 400 },
+      );
+    }
+
+    if (sortOrder === null) {
+      return NextResponse.json(
+        { error: "sortOrder must be a whole number from 0 to 1000000." },
         { status: 400 },
       );
     }
@@ -163,12 +197,12 @@ export async function POST(
           },
         },
         update: {
-          sortOrder: Number.isFinite(sortOrder) ? sortOrder : 0,
+          sortOrder,
         },
         create: {
           campaignId: campaign.id,
           experienceId,
-          sortOrder: Number.isFinite(sortOrder) ? sortOrder : 0,
+          sortOrder,
         },
       });
     } else {

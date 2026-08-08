@@ -187,7 +187,11 @@ export default function CampaignPage() {
                             asChild
                             className="w-full rounded-full border border-[#c73484] bg-[#c73484] text-[#e5e6ea] hover:bg-[#b72f78] hover:text-[#e5e6ea]"
                           >
-                            <a href={`/x/${exp.slug}`}>Continue</a>
+                            <a
+                              href={`/api/public/campaign/${encodeURIComponent(campaignSlug)}/experience/${encodeURIComponent(exp.slug)}`}
+                            >
+                              Continue
+                            </a>
                           </Button>
                         </CardContent>
                       </Card>

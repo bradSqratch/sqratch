@@ -7,39 +7,40 @@ datasource db {
 }
 
 model User {
-  id                       String                    @id @default(cuid())
-  name                     String?
-  email                    String                    @unique
-  isEmailVerified          Boolean                   @default(false)
-  emailVerifiedAt          DateTime?
-  createdAt                DateTime                  @default(now())
-  updatedAt                DateTime                  @updatedAt
-  password                 String?
-  sessionVersion           Int                       @default(0)
-  role                     Role                      @default(USER)
-  isActive                 Boolean                   @default(true)
-  imageUrl                 String?
-  pointAccount             UserPointAccount?
-  analyticsEvents          AnalyticsEvent[]
-  brandMembers             BrandMember[]
-  reviewedBrandRequests    BrandRequest[]            @relation("BrandRequestReviewer")
-  brandRequests            BrandRequest[]            @relation("BrandRequestOwner")
-  campaigns                Campaign[]                @relation("CampaignCreatedByUser")
-  campaignUnlocks          CampaignUnlock[]
-  creatorProfile           CreatorProfile?
-  reviewedCreatorRequests  CreatorRequest[]          @relation("CreatorRequestReviewer")
-  creatorRequests          CreatorRequest[]          @relation("CreatorRequestOwner")
-  emailQueue               EmailQueue[]
-  emailVerificationTokens  EmailVerificationToken[]
-  lessonProgress           LessonProgress[]
-  pointTransactions        PointTransaction[]
-  postComments             PostComment[]
-  qrCodesCreated           QRCode[]                  @relation("QRCodeCreatedByUser")
-  qrRedemptions            QRCode[]                  @relation("QRCodeRedeemedByUser")
-  questions                Question[]
-  questionAnswers          QuestionAnswer[]
-  shopifyRewardRedemptions ShopifyRewardRedemption[]
-  sessions                 UserSession[]
+  id                        String                     @id @default(cuid())
+  name                      String?
+  email                     String                     @unique
+  isEmailVerified           Boolean                    @default(false)
+  emailVerifiedAt           DateTime?
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  password                  String?
+  sessionVersion            Int                        @default(0)
+  role                      Role                       @default(USER)
+  isActive                  Boolean                    @default(true)
+  imageUrl                  String?
+  pointAccount              UserPointAccount?
+  analyticsEvents           AnalyticsEvent[]
+  brandMembers              BrandMember[]
+  reviewedBrandRequests     BrandRequest[]             @relation("BrandRequestReviewer")
+  brandRequests             BrandRequest[]             @relation("BrandRequestOwner")
+  campaigns                 Campaign[]                 @relation("CampaignCreatedByUser")
+  campaignUnlocks           CampaignUnlock[]
+  creatorProfile            CreatorProfile?
+  reviewedCreatorRequests   CreatorRequest[]           @relation("CreatorRequestReviewer")
+  creatorRequests           CreatorRequest[]           @relation("CreatorRequestOwner")
+  emailQueue                EmailQueue[]
+  emailVerificationTokens   EmailVerificationToken[]
+  lessonProgress            LessonProgress[]
+  pointTransactions         PointTransaction[]
+  postComments              PostComment[]
+  qrCodesCreated            QRCode[]                   @relation("QRCodeCreatedByUser")
+  qrRedemptions             QRCode[]                   @relation("QRCodeRedeemedByUser")
+  questions                 Question[]
+  questionAnswers           QuestionAnswer[]
+  shopifyRewardRedemptions  ShopifyRewardRedemption[]
+  sessions                  UserSession[]
+  commerceClickAttributions CommerceClickAttribution[]
 }
 
 model CreatorRequest {
@@ -79,6 +80,8 @@ model CreatorProfile {
   updatedAt   DateTime     @updatedAt
   user        User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   experiences Experience[]
+
+  commerceClickAttributions CommerceClickAttribution[]
 }
 
 model Brand {
@@ -121,6 +124,10 @@ model Brand {
   commerceProductSyncRuns          CommerceProductSyncRun[]
   brandCommerceProducts            BrandCommerceProduct[]
   campaignCommerceProducts         CampaignCommerceProduct[]
+  campaignLessonProducts           CampaignLessonProduct[]
+  commerceClickAttributions        CommerceClickAttribution[]
+  commerceOrders                   CommerceOrder[]
+  commerceOrderEvents              CommerceOrderEvent[]
 }
 
 model BrandMember {
@@ -138,26 +145,29 @@ model BrandMember {
 }
 
 model Campaign {
-  id                             String                    @id @default(cuid())
-  name                           String                    @unique
-  description                    String?
-  inviteUrl                      String?
-  createdAt                      DateTime                  @default(now())
-  updatedAt                      DateTime                  @updatedAt
-  createdById                    String
-  isActive                       Boolean                   @default(true)
-  commerceProductCurationEnabled Boolean                   @default(false)
-  brandId                        String?
-  slug                           String                    @unique
-  analyticsEvents                AnalyticsEvent[]
-  brand                          Brand?                    @relation(fields: [brandId], references: [id])
-  createdBy                      User                      @relation("CampaignCreatedByUser", fields: [createdById], references: [id])
-  experiences                    CampaignExperience[]
-  unlocks                        CampaignUnlock[]
-  qrCodes                        QRCode[]
-  qrBatches                      QRCodeBatch[]
-  userSessions                   UserSession[]
-  commerceProductAssignments     CampaignCommerceProduct[]
+  id                               String                     @id @default(cuid())
+  name                             String                     @unique
+  description                      String?
+  inviteUrl                        String?
+  createdAt                        DateTime                   @default(now())
+  updatedAt                        DateTime                   @updatedAt
+  createdById                      String
+  isActive                         Boolean                    @default(true)
+  commerceProductCurationEnabled   Boolean                    @default(false)
+  brandId                          String?
+  slug                             String                     @unique
+  analyticsEvents                  AnalyticsEvent[]
+  brand                            Brand?                     @relation(fields: [brandId], references: [id])
+  createdBy                        User                       @relation("CampaignCreatedByUser", fields: [createdById], references: [id])
+  experiences                      CampaignExperience[]
+  unlocks                          CampaignUnlock[]
+  qrCodes                          QRCode[]
+  qrBatches                        QRCodeBatch[]
+  userSessions                     UserSession[]
+  commerceProductAssignments       CampaignCommerceProduct[]
+  lessonProductAssignments         CampaignLessonProduct[]
+  entryCommerceClickAttributions   CommerceClickAttribution[] @relation("CommerceClickAttributionEntryCampaign")
+  productCommerceClickAttributions CommerceClickAttribution[] @relation("CommerceClickAttributionProductCampaign")
 
   // Supports the Phase-4 same-brand composite FK from CampaignCommerceProduct.
   // brandId remains nullable for legacy campaigns; a curated assignment always
@@ -182,28 +192,29 @@ model QRCodeBatch {
 }
 
 model QRCode {
-  id                  String             @id @default(cuid())
-  qrCodeData          String             @unique
-  status              QRStatus           @default(NEW)
-  qrCodeUrl           String?
-  email               String?
-  usedAt              DateTime?
-  createdAt           DateTime           @default(now())
-  updatedAt           DateTime           @updatedAt
-  campaignId          String
-  redeemedById        String?
-  createdById         String
-  isActive            Boolean            @default(true)
-  deletedCampaignName String?
-  batchId             String?
-  analyticsEvents     AnalyticsEvent[]
-  unlocks             CampaignUnlock[]
-  pointTransactions   PointTransaction[]
-  batch               QRCodeBatch?       @relation(fields: [batchId], references: [id])
-  campaign            Campaign           @relation(fields: [campaignId], references: [id])
-  createdBy           User               @relation("QRCodeCreatedByUser", fields: [createdById], references: [id])
-  redeemedBy          User?              @relation("QRCodeRedeemedByUser", fields: [redeemedById], references: [id])
-  userSessions        UserSession[]
+  id                        String                     @id @default(cuid())
+  qrCodeData                String                     @unique
+  status                    QRStatus                   @default(NEW)
+  qrCodeUrl                 String?
+  email                     String?
+  usedAt                    DateTime?
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  campaignId                String
+  redeemedById              String?
+  createdById               String
+  isActive                  Boolean                    @default(true)
+  deletedCampaignName       String?
+  batchId                   String?
+  analyticsEvents           AnalyticsEvent[]
+  unlocks                   CampaignUnlock[]
+  pointTransactions         PointTransaction[]
+  batch                     QRCodeBatch?               @relation(fields: [batchId], references: [id])
+  campaign                  Campaign                   @relation(fields: [campaignId], references: [id])
+  createdBy                 User                       @relation("QRCodeCreatedByUser", fields: [createdById], references: [id])
+  redeemedBy                User?                      @relation("QRCodeRedeemedByUser", fields: [redeemedById], references: [id])
+  userSessions              UserSession[]
+  commerceClickAttributions CommerceClickAttribution[]
 
   @@index([campaignId])
   @@index([batchId])
@@ -221,6 +232,8 @@ model CampaignUnlock {
   qrCode     QRCode?  @relation(fields: [qrCodeId], references: [id])
   user       User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  commerceClickAttributions CommerceClickAttribution[]
+
   @@unique([campaignId, userId])
   @@index([campaignId])
   @@index([userId])
@@ -229,26 +242,27 @@ model CampaignUnlock {
 }
 
 model Experience {
-  id                   String                  @id @default(cuid())
-  title                String
-  slug                 String                  @unique
-  description          String?
-  coverImageUrl        String?
-  whyVideoSource       ExperienceVideoSource?
-  whyYoutubeUrl        String?
-  whyVideoUploadUrl    String?
-  isActive             Boolean                 @default(true)
-  creatorId            String
-  createdAt            DateTime                @default(now())
-  updatedAt            DateTime                @updatedAt
-  qaDailyQuestionLimit Int                     @default(1)
-  analyticsEvents      AnalyticsEvent[]
-  campaigns            CampaignExperience[]
-  courses              Course[]
-  creator              CreatorProfile          @relation(fields: [creatorId], references: [id], onDelete: Cascade)
-  shopLinks            ExperienceProductLink[]
-  posts                Post[]
-  questions            Question[]
+  id                        String                     @id @default(cuid())
+  title                     String
+  slug                      String                     @unique
+  description               String?
+  coverImageUrl             String?
+  whyVideoSource            ExperienceVideoSource?
+  whyYoutubeUrl             String?
+  whyVideoUploadUrl         String?
+  isActive                  Boolean                    @default(true)
+  creatorId                 String
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  qaDailyQuestionLimit      Int                        @default(1)
+  analyticsEvents           AnalyticsEvent[]
+  campaigns                 CampaignExperience[]
+  courses                   Course[]
+  creator                   CreatorProfile             @relation(fields: [creatorId], references: [id], onDelete: Cascade)
+  shopLinks                 ExperienceProductLink[]
+  posts                     Post[]
+  questions                 Question[]
+  commerceClickAttributions CommerceClickAttribution[]
 
   @@index([creatorId])
 }
@@ -269,19 +283,20 @@ model CampaignExperience {
 }
 
 model Course {
-  id                     String           @id @default(cuid())
-  experienceId           String
-  title                  String
-  description            String?
-  access                 CourseAccess     @default(PUBLIC)
-  sortOrder              Int              @default(0)
-  isActive               Boolean          @default(true)
-  completionPointsReward Int              @default(0)
-  createdAt              DateTime         @default(now())
-  updatedAt              DateTime         @updatedAt
-  analyticsEvents        AnalyticsEvent[]
-  experience             Experience       @relation(fields: [experienceId], references: [id], onDelete: Cascade)
-  lessons                Lesson[]
+  id                        String                     @id @default(cuid())
+  experienceId              String
+  title                     String
+  description               String?
+  access                    CourseAccess               @default(PUBLIC)
+  sortOrder                 Int                        @default(0)
+  isActive                  Boolean                    @default(true)
+  completionPointsReward    Int                        @default(0)
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  analyticsEvents           AnalyticsEvent[]
+  experience                Experience                 @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+  lessons                   Lesson[]
+  commerceClickAttributions CommerceClickAttribution[]
 
   @@index([experienceId])
   @@index([access])
@@ -290,24 +305,26 @@ model Course {
 }
 
 model Lesson {
-  id                     String              @id @default(cuid())
-  courseId               String
-  title                  String
-  description            String?
-  sortOrder              Int                 @default(0)
-  isActive               Boolean             @default(true)
-  completionPointsReward Int                 @default(0)
-  videoSource            LessonVideoSource   @default(YOUTUBE)
-  youtubeUrl             String?
-  videoUploadUrl         String?
-  videoStorageBucket     String?
-  videoStoragePath       String?
-  createdAt              DateTime            @default(now())
-  updatedAt              DateTime            @updatedAt
-  analyticsEvents        AnalyticsEvent[]
-  course                 Course              @relation(fields: [courseId], references: [id], onDelete: Cascade)
-  productLinks           LessonProductLink[]
-  progress               LessonProgress[]
+  id                        String                     @id @default(cuid())
+  courseId                  String
+  title                     String
+  description               String?
+  sortOrder                 Int                        @default(0)
+  isActive                  Boolean                    @default(true)
+  completionPointsReward    Int                        @default(0)
+  videoSource               LessonVideoSource          @default(YOUTUBE)
+  youtubeUrl                String?
+  videoUploadUrl            String?
+  videoStorageBucket        String?
+  videoStoragePath          String?
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  analyticsEvents           AnalyticsEvent[]
+  course                    Course                     @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  productLinks              LessonProductLink[]
+  campaignProducts          CampaignLessonProduct[]
+  progress                  LessonProgress[]
+  commerceClickAttributions CommerceClickAttribution[]
 
   @@index([courseId])
   @@index([courseId, isActive, sortOrder, createdAt])
@@ -405,6 +422,8 @@ model ExperienceProductLink {
   brand            Brand?     @relation(fields: [brandId], references: [id])
   experience       Experience @relation(fields: [experienceId], references: [id], onDelete: Cascade)
 
+  commerceClickAttributions CommerceClickAttribution[]
+
   @@index([experienceId])
   @@index([brandId])
   @@index([experienceId, sourceShopDomain])
@@ -424,6 +443,13 @@ model LessonProductLink {
   createdAt        DateTime @default(now())
   brand            Brand?   @relation(fields: [brandId], references: [id])
   lesson           Lesson   @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  /// Reverse of CampaignLessonProduct.legacyLessonProductLinkId. Optional 1:1:
+  /// a snapshot row may predate Phase 5 (no scoping row at all), and deleting
+  /// the snapshot detaches rather than destroys the scoping row.
+  campaignProductLink CampaignLessonProduct?
+
+  commerceClickAttributions CommerceClickAttribution[]
 
   @@index([lessonId])
   @@index([brandId])
@@ -494,26 +520,29 @@ model ShopifyConnectionEvent {
 }
 
 model CommerceConnection {
-  id                String                     @id @default(cuid())
-  brandId           String
-  provider          CommerceProvider
-  status            CommerceConnectionStatus   @default(DISCONNECTED)
-  displayName       String
-  externalAccountId String
-  storefrontUrl     String?
-  providerClientId  String?
-  isPrimary         Boolean                    @default(false)
-  grantedScopes     Json?
-  providerMetadata  Json?
-  installedAt       DateTime?
-  uninstalledAt     DateTime?
-  lastProductSyncAt DateTime?
-  createdAt         DateTime                   @default(now())
-  updatedAt         DateTime                   @updatedAt
-  brand             Brand                      @relation(fields: [brandId], references: [id], onDelete: Cascade)
-  secret            CommerceConnectionSecret?
-  connectedProducts ConnectedCommerceProduct[]
-  productSyncRuns   CommerceProductSyncRun[]
+  id                        String                     @id @default(cuid())
+  brandId                   String
+  provider                  CommerceProvider
+  status                    CommerceConnectionStatus   @default(DISCONNECTED)
+  displayName               String
+  externalAccountId         String
+  storefrontUrl             String?
+  providerClientId          String?
+  isPrimary                 Boolean                    @default(false)
+  grantedScopes             Json?
+  providerMetadata          Json?
+  installedAt               DateTime?
+  uninstalledAt             DateTime?
+  lastProductSyncAt         DateTime?
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  brand                     Brand                      @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  secret                    CommerceConnectionSecret?
+  connectedProducts         ConnectedCommerceProduct[]
+  productSyncRuns           CommerceProductSyncRun[]
+  commerceClickAttributions CommerceClickAttribution[]
+  commerceOrders            CommerceOrder[]
+  commerceOrderEvents       CommerceOrderEvent[]
 
   @@unique([provider, externalAccountId])
   @@index([brandId])
@@ -535,37 +564,39 @@ model CommerceConnectionSecret {
 }
 
 model ConnectedCommerceProduct {
-  id                     String                 @id @default(cuid())
-  connectionId           String
-  brandId                String
-  provider               CommerceProvider
-  externalKey            String
-  externalId             String
-  title                  String
-  handle                 String?
-  productUrl             String
-  imageUrl               String?
-  images                 String[]
-  externalVariantIds     String[]
-  descriptionText        String?
-  sku                    String?
-  currencyCode           String?
-  priceMinMinor          Int?
-  priceMaxMinor          Int?
-  priceMinorUnitExponent Int?
-  isAvailable            Boolean                @default(true)
-  firstSeenAt            DateTime               @default(now())
-  lastSeenAt             DateTime               @default(now())
-  unavailableSince       DateTime?
-  providerCreatedAt      DateTime?
-  providerUpdatedAt      DateTime?
-  providerMetadata       Json?
-  lastSyncRunId          String?
-  createdAt              DateTime               @default(now())
-  updatedAt              DateTime               @updatedAt
-  connection             CommerceConnection     @relation(fields: [connectionId], references: [id], onDelete: Cascade)
-  brand                  Brand                  @relation(fields: [brandId], references: [id], onDelete: Cascade)
-  brandSelections        BrandCommerceProduct[]
+  id                        String                     @id @default(cuid())
+  connectionId              String
+  brandId                   String
+  provider                  CommerceProvider
+  externalKey               String
+  externalId                String
+  title                     String
+  handle                    String?
+  productUrl                String
+  imageUrl                  String?
+  images                    String[]
+  externalVariantIds        String[]
+  descriptionText           String?
+  sku                       String?
+  currencyCode              String?
+  priceMinMinor             Int?
+  priceMaxMinor             Int?
+  priceMinorUnitExponent    Int?
+  isAvailable               Boolean                    @default(true)
+  firstSeenAt               DateTime                   @default(now())
+  lastSeenAt                DateTime                   @default(now())
+  unavailableSince          DateTime?
+  providerCreatedAt         DateTime?
+  providerUpdatedAt         DateTime?
+  providerMetadata          Json?
+  lastSyncRunId             String?
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  connection                CommerceConnection         @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  brand                     Brand                      @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  brandSelections           BrandCommerceProduct[]
+  commerceClickAttributions CommerceClickAttribution[]
+  orderLineItems            CommerceOrderLineItem[]
 
   @@unique([connectionId, externalKey])
   @@index([connectionId])
@@ -603,22 +634,24 @@ model CommerceProductSyncRun {
 }
 
 model BrandCommerceProduct {
-  id                       String                    @id @default(cuid())
-  brandId                  String
-  connectedProductId       String
-  isVisibleInShop          Boolean                   @default(false)
-  isCampaignEligible       Boolean                   @default(false)
-  displayOrder             Int                       @default(0)
-  titleOverride            String?
-  shortDescriptionOverride String?
-  imageUrlOverride         String?
-  approvedByUserId         String?
-  approvedAt               DateTime?
-  createdAt                DateTime                  @default(now())
-  updatedAt                DateTime                  @updatedAt
-  brand                    Brand                     @relation(fields: [brandId], references: [id], onDelete: Cascade)
-  connectedProduct         ConnectedCommerceProduct  @relation(fields: [connectedProductId], references: [id], onDelete: Cascade)
-  campaignAssignments      CampaignCommerceProduct[]
+  id                        String                     @id @default(cuid())
+  brandId                   String
+  connectedProductId        String
+  isVisibleInShop           Boolean                    @default(false)
+  isCampaignEligible        Boolean                    @default(false)
+  displayOrder              Int                        @default(0)
+  titleOverride             String?
+  shortDescriptionOverride  String?
+  imageUrlOverride          String?
+  approvedByUserId          String?
+  approvedAt                DateTime?
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
+  brand                     Brand                      @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  connectedProduct          ConnectedCommerceProduct   @relation(fields: [connectedProductId], references: [id], onDelete: Cascade)
+  campaignAssignments       CampaignCommerceProduct[]
+  campaignLessonAssignments CampaignLessonProduct[]
+  commerceClickAttributions CommerceClickAttribution[]
 
   @@unique([brandId, connectedProductId])
   // Supports the Phase-4 same-brand composite FK from CampaignCommerceProduct.
@@ -653,6 +686,450 @@ model CampaignCommerceProduct {
   @@index([brandId, campaignId, isActive, displayOrder])
   @@index([campaignId, isActive, displayOrder])
   @@index([brandCommerceProductId, isActive])
+}
+
+/// Campaign-scoped attachment of one brand-curated catalog product to one
+/// Lesson.
+///
+/// WHY campaignId is on this row (rather than a campaign-less "canonical
+/// lesson product"): an Experience can be co-sponsored by several campaigns
+/// belonging to several brands. Phase 5E requires that a product attached
+/// under Campaign A never renders under Campaign B's context on that shared
+/// Experience. Canonicalizing the product alone cannot express that; the
+/// scoping has to live on the attachment.
+///
+/// The same product may therefore be attached under two different campaigns as
+/// two independent rows, which is exactly what lets a creator attach Campaign
+/// A's product and Campaign B's product (or the same product under both)
+/// without the two corrupting each other's attribution.
+///
+/// `@@unique([campaignId, lessonId, brandCommerceProductId])` mirrors
+/// CampaignCommerceProduct's "one reversible lifecycle row per tuple,
+/// reactivate rather than duplicate" pattern: toggling isActive reuses the row
+/// so a duplicate active attachment is structurally impossible.
+///
+/// `legacyLessonProductLinkId` bridges to the existing LessonProductLink
+/// snapshot. Display data (title/image/price/url) still lives there exactly as
+/// before — this table only adds a campaign-scoping layer on top of it, and is
+/// deliberately optional so pre-Phase-5 snapshot rows keep working untouched.
+model CampaignLessonProduct {
+  id                        String    @id @default(cuid())
+  brandId                   String
+  campaignId                String
+  lessonId                  String
+  brandCommerceProductId    String
+  legacyLessonProductLinkId String?   @unique
+  isActive                  Boolean   @default(true)
+  displayOrder              Int       @default(0)
+  deactivatedAt             DateTime?
+  createdAt                 DateTime  @default(now())
+  updatedAt                 DateTime  @updatedAt
+
+  brand                Brand                @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  lesson               Lesson               @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  // Both composite FKs include brandId, so PostgreSQL itself rejects a
+  // cross-brand attachment even if a caller bypasses the application service.
+  campaign             Campaign             @relation(fields: [campaignId, brandId], references: [id, brandId], onDelete: Cascade)
+  brandCommerceProduct BrandCommerceProduct @relation(fields: [brandCommerceProductId, brandId], references: [id, brandId], onDelete: Cascade)
+  // SetNull, not Cascade: removing the snapshot must detach this row, not
+  // destroy the campaign-scoped attribution history it carries.
+  legacyLink           LessonProductLink?   @relation(fields: [legacyLessonProductLinkId], references: [id], onDelete: SetNull)
+
+  commerceClickAttributions CommerceClickAttribution[]
+
+  @@unique([campaignId, lessonId, brandCommerceProductId])
+  @@index([lessonId, isActive, displayOrder])
+  @@index([campaignId, isActive, displayOrder])
+  @@index([brandId, campaignId, isActive])
+  @@index([brandCommerceProductId, isActive])
+}
+
+/// Phase 6: evidence of ONE outbound commerce click, minted server-side at the
+/// moment SQRATCH redirects a visitor to a merchant product page.
+///
+/// WHAT THIS TABLE IS
+/// ------------------
+/// A click record, and nothing else. There are deliberately NO money, order,
+/// quantity, or conversion columns: this row proves "SQRATCH sent this visitor
+/// to this destination, in this campaign context, at this time". Whether a
+/// purchase followed is out of scope for Phase 6 and cannot be inferred here.
+///
+/// TOKEN HANDLING
+/// --------------
+/// The plaintext click token is generated per request, handed to the browser
+/// in the redirect URL, and NEVER persisted — here or in any log. Only
+/// `tokenHash` (HMAC-SHA-256, peppered, domain-separated; see
+/// `src/lib/commerce/click-token.ts`) is stored, mirroring
+/// `EmailVerificationToken.codeHash`. `tokenHash` is unique because it is the
+/// only lookup key a future redemption path may use. `tokenPrefix` is a short,
+/// non-secret slice kept purely for operator triage (correlating a support
+/// report to a row) and is never sufficient to reconstruct the token.
+///
+/// TRANSPORT REALITY (do not overstate this table's power)
+/// ------------------------------------------------------
+/// SQRATCH's Shopify app holds only `read_products, read_discounts,
+/// write_discounts` — no `read_orders`, no orders webhook, no checkout or
+/// theme extension. Appending the token to a product URL therefore has NO
+/// guaranteed mechanism today to survive into a merchant order. This table is
+/// the foundation and the forward seam; it is not live order attribution.
+///
+/// CAMPAIGN CONTEXT
+/// ----------------
+/// `entryCampaignId` is only ever the campaign resolved SERVER-SIDE from the
+/// visitor's trusted Experience-entry context. It records acquisition: a
+/// direct Experience entry is deliberately null even when the clicked product
+/// is campaign scoped. A campaign id is never accepted from a request.
+///
+/// `productCampaignId` records the authorization context carried by a
+/// campaign-scoped product attachment. It is deliberately independent of
+/// `entryCampaignId`: direct entry can click a Campaign A product with
+/// `entryCampaignId = null` and `productCampaignId = Campaign A`.
+///
+/// `entryCampaignContextResolved` distinguishes a deliberate direct/unscoped
+/// entry from a trusted campaign entry. It records WHY, not merely whether
+/// `entryCampaignId` happens to be null.
+///
+/// PRODUCT IDENTITY
+/// ----------------
+/// Every product-identity foreign key is optional. A click may originate from
+/// a curated catalog row, a legacy snapshot, a direct Experience link, or a
+/// campaign-scoped attachment, and only some of those are knowable at once.
+/// `destinationUrl`/`destinationHost` are the two columns ALWAYS populated.
+///
+/// FORWARD SEAM
+/// ------------
+/// `consumedAt`/`consumedByOrderRef` exist for Phase 7 and are written by no
+/// Phase 6 code path. `consumedByOrderRef` is a plain String, NOT a foreign
+/// key: no order model exists yet, and inventing one here would prejudge
+/// Phase 7's design.
+model CommerceClickAttribution {
+  id String @id @default(cuid())
+
+  /// HMAC-SHA-256 of the plaintext token. The plaintext is never stored.
+  tokenHash   String @unique
+  /// Non-secret leading slice of the token, for operator triage only.
+  tokenPrefix String
+
+  brandId                      String?
+  entryCampaignId              String?
+  productCampaignId            String?
+  entryCampaignContextResolved Boolean @default(false)
+
+  experienceId     String
+  courseId         String?
+  lessonId         String?
+  creatorProfileId String?
+
+  brandCommerceProductId  String?
+  connectedProductId      String?
+  lessonProductLinkId     String?
+  experienceProductLinkId String?
+  campaignLessonProductId String?
+  commerceConnectionId    String?
+
+  /// Always populated. The exact, scheme-validated URL the visitor was sent to.
+  destinationUrl  String
+  /// Hostname of `destinationUrl`, denormalized so abuse review can group by
+  /// destination without parsing every stored URL.
+  destinationHost String
+  provider        CommerceProvider?
+
+  userId           String?
+  sessionId        String?
+  qrCodeId         String?
+  campaignUnlockId String?
+
+  /// Peppered HMAC of the request IP — never the raw address.
+  ipHash    String?
+  userAgent String?
+  referrer  String?
+
+  createdAt          DateTime  @default(now())
+  /// createdAt + 30 days. Bounds how long a token may be presented as evidence.
+  expiresAt          DateTime
+  /// Set when the redirect is actually issued (Phase 6 writes this).
+  redirectedAt       DateTime?
+  /// Phase 7 seam. Unused by Phase 6.
+  consumedAt         DateTime?
+  consumedByOrderRef String?
+
+  // Every relation below is SetNull on delete: a click is historical evidence
+  // and must survive the deletion of the brand, campaign, product, or session
+  // it referenced. `experience` is the single exception — `experienceId` is
+  // required, so Experience deletion cascades (there is no valid orphan state
+  // for a required column).
+  brand           Brand?          @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  // Entry/acquisition campaign and product authorization campaign are separate
+  // relations. Entry may be a different brand than the clicked product, so it
+  // is intentionally a simple FK. Product campaign keeps the same-brand
+  // composite FK used by campaign-scoped product attachments.
+  entryCampaign   Campaign?       @relation("CommerceClickAttributionEntryCampaign", fields: [entryCampaignId], references: [id], onDelete: SetNull)
+  productCampaign Campaign?       @relation("CommerceClickAttributionProductCampaign", fields: [productCampaignId, brandId], references: [id, brandId], onDelete: SetNull)
+  experience      Experience      @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+  course          Course?         @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  lesson          Lesson?         @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  creator         CreatorProfile? @relation(fields: [creatorProfileId], references: [id], onDelete: SetNull)
+
+  brandCommerceProduct  BrandCommerceProduct?     @relation(fields: [brandCommerceProductId], references: [id], onDelete: SetNull)
+  connectedProduct      ConnectedCommerceProduct? @relation(fields: [connectedProductId], references: [id], onDelete: SetNull)
+  lessonProductLink     LessonProductLink?        @relation(fields: [lessonProductLinkId], references: [id], onDelete: SetNull)
+  experienceProductLink ExperienceProductLink?    @relation(fields: [experienceProductLinkId], references: [id], onDelete: SetNull)
+  campaignLessonProduct CampaignLessonProduct?    @relation(fields: [campaignLessonProductId], references: [id], onDelete: SetNull)
+  commerceConnection    CommerceConnection?       @relation(fields: [commerceConnectionId], references: [id], onDelete: SetNull)
+
+  user           User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  session        UserSession?    @relation(fields: [sessionId], references: [id], onDelete: SetNull)
+  qrCode         QRCode?         @relation(fields: [qrCodeId], references: [id], onDelete: SetNull)
+  campaignUnlock CampaignUnlock? @relation(fields: [campaignUnlockId], references: [id], onDelete: SetNull)
+
+  /// Phase 7 back-relation for the optional 1:1 in `CommerceOrder.attributionId`.
+  /// Optional on both sides: most clicks never become an order, and (per Phase
+  /// 6's transport audit) no production order can currently carry a click
+  /// token at all.
+  order CommerceOrder?
+
+  @@index([brandId, createdAt])
+  @@index([entryCampaignId, createdAt])
+  @@index([productCampaignId, createdAt])
+  @@index([experienceId, createdAt])
+  @@index([sessionId, createdAt])
+  @@index([userId, createdAt])
+  @@index([destinationHost, createdAt])
+  @@index([expiresAt])
+  @@index([consumedAt])
+}
+
+/// PHASE 7 — PROVIDER-NEUTRAL ORDER NORMALIZATION
+/// ==============================================
+/// `CommerceOrder` / `CommerceOrderLineItem` / `CommerceOrderEvent` are the
+/// provider-neutral landing zone for merchant order data. They are written
+/// only by `src/lib/commerce/order-ingestion.ts`, which is fed by a
+/// per-provider pure normalizer (e.g.
+/// `src/lib/commerce/providers/shopify-order-normalizer.ts`).
+///
+/// NOT LIVE. Nothing in production writes to these tables today. SQRATCH's
+/// Shopify app does not hold `read_orders` and neither `shopify.app.toml` nor
+/// `shopify.app.custom.toml` subscribes to any `orders/*` or `refunds/*`
+/// topic, so Shopify never sends an order payload. These models exist so the
+/// normalization is designed, reviewed, and fixture-tested BEFORE any scope is
+/// requested — see `docs/commerce/phase-7-order-normalization-summary.md`.
+///
+/// NO CUSTOMER PII. There is deliberately no email, name, phone, or address
+/// column on any model below, and the Shopify normalizer actively skips the
+/// `customer` / `billing_address` / `shipping_address` / `email` / `phone`
+/// keys. This phase is order/revenue normalization, not customer profiling.
+///
+/// NO POINTS, NO COMMISSION. These models record what a merchant order WAS.
+/// They never award points and never compute a commission — `PointTransaction`,
+/// `UserPointAccount`, and every reward model are untouched by Phase 7.
+///
+/// MONEY IS `BigInt`, NOT `Int` (deliberate divergence from
+/// `ConnectedCommerceProduct.priceMinMinor`/`priceMaxMinor`, which are `Int`)
+/// ------------------------------------------------------------------------
+/// A single product PRICE comfortably fits Postgres `INTEGER` (max
+/// 2,147,483,647 minor units ≈ $21.4M at exponent 2), which is why the catalog
+/// tables use `Int`. An ORDER TOTAL does not have that guarantee: a wholesale
+/// or B2B order, or any 0-exponent currency (JPY, KRW, VND, CLP), can exceed
+/// int4 outright. Overflowing produces a Postgres `22003` at write time and
+/// loses the order. Every money column here is therefore `BigInt`.
+///
+/// KNOWN LIMITATION, stated rather than worked around: the shared converter
+/// `decimalStringToMinorUnits` in `src/lib/commerce/money.ts` still enforces
+/// the int4 range (`INT32_MIN`/`INT32_MAX`) because it was written for the
+/// `Int` catalog columns. So although these COLUMNS accept a 64-bit value, the
+/// current ingestion path rejects any single amount outside int4 with a typed
+/// `OUT_OF_RANGE` result (nulling that one field, never failing the order).
+/// Widening that helper is a separate, deliberately-reviewed change; the wider
+/// column type is what makes that change a code-only change later, with no
+/// second migration.
+///
+/// TOTALS ARE NEVER DERIVED. `totalMinor` is always the provider's own
+/// reported total, persisted verbatim. It is never computed by summing
+/// converted line items: `decimalStringToMinorUnits` truncates rather than
+/// rounds, so a sum of per-line conversions can legitimately disagree with the
+/// provider's total by a few minor units. `netRevenueMinor` is the one derived
+/// column (`totalMinor - totalRefundedMinor`), computed at write time.
+///
+/// IDENTITY IS SCOPED TO THE CONNECTION. `@@unique([connectionId,
+/// externalOrderId])`, never a bare unique on `externalOrderId` — two
+/// different stores can theoretically mint the same provider order id, and the
+/// schema must not assume otherwise (same rule as
+/// `ConnectedCommerceProduct.@@unique([connectionId, externalKey])`).
+///
+/// REDACTION-READY. Every provider-identity string (`externalOrderId`,
+/// `orderNumber`, `externalLineItemId`, `externalProductId`,
+/// `externalVariantId`, `sku`, `externalOrderRef`) is NULLABLE from day one,
+/// so a future `shop/redact` pass can null it without a migration. This is the
+/// explicit fix for the documented `ShopifyRewardRedemption.shopifyShopDomain`
+/// pain point, where a non-nullable provider column cannot be scrubbed.
+///
+/// NO COMPOSITE SAME-BRAND FOREIGN KEY. `CampaignCommerceProduct` /
+/// `CampaignLessonProduct` / `CommerceClickAttribution` use a composite
+/// `(campaignId, brandId) -> Campaign(id, brandId)` key because
+/// `Campaign_id_brandId_key` already exists. There is no equivalent
+/// `CommerceConnection(id, brandId)` unique key, and creating one would modify
+/// a pre-existing table — which this phase's migration deliberately does not
+/// do. Cross-brand integrity is instead enforced in the ingestion service,
+/// which always reads `brandId` FROM the resolved `CommerceConnection` row
+/// rather than accepting it from a caller or a webhook payload.
+model CommerceOrder {
+  id           String           @id @default(cuid())
+  connectionId String
+  brandId      String
+  provider     CommerceProvider
+
+  /// Provider's own order id. Nullable so redaction can scrub it in place.
+  externalOrderId String?
+  /// Human-facing order number (e.g. Shopify `order_number`). Not personal data.
+  orderNumber     String?
+
+  currencyCode      String?
+  /// Minor-unit exponent actually used to convert the amounts below, resolved
+  /// via `getCurrencyExponent`. Stored so a later reader never has to guess
+  /// which exponent a persisted amount was computed at.
+  minorUnitExponent Int?
+
+  subtotalMinor      BigInt?
+  discountsMinor     BigInt?
+  shippingMinor      BigInt?
+  taxMinor           BigInt?
+  /// The provider's own reported total. Never derived by summing line items.
+  totalMinor         BigInt?
+  /// CUMULATIVE refunded amount as of the most recent refund event, not an
+  /// incremental delta — see the REFUND SEMANTICS block in
+  /// `src/lib/commerce/order-ingestion.ts`. Cumulative makes a replayed refund
+  /// webhook idempotent by construction.
+  totalRefundedMinor BigInt  @default(0)
+  /// Derived at write time: `totalMinor - totalRefundedMinor`. Null whenever
+  /// `totalMinor` is null (an unknown total cannot yield a known net).
+  netRevenueMinor    BigInt?
+
+  financialStatus   CommerceOrderFinancialStatus?
+  fulfillmentStatus CommerceOrderFulfillmentStatus?
+  cancelledAt       DateTime?
+  cancelReason      String?
+
+  providerCreatedAt DateTime?
+  /// The ordering key for out-of-order protection. An incoming event whose
+  /// `providerUpdatedAt` is not strictly newer than the stored value never
+  /// overwrites the row (the event is recorded as SKIPPED_STALE instead).
+  providerUpdatedAt DateTime?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  /// Optional 1:1 to the click that produced this order. Populated ONLY when a
+  /// payload genuinely carried a durable, hash-matched, unexpired, unconsumed
+  /// click token. Never inferred from timing, product overlap, or similarity.
+  /// In production today this is always null: Phase 6's audit found no Shopify
+  /// storefront-to-order path that carries the `ref` query parameter into an
+  /// order payload at all.
+  attributionId String? @unique
+
+  connection  CommerceConnection        @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  brand       Brand                     @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  attribution CommerceClickAttribution? @relation(fields: [attributionId], references: [id], onDelete: SetNull)
+
+  lineItems CommerceOrderLineItem[]
+  events    CommerceOrderEvent[]
+
+  @@unique([connectionId, externalOrderId])
+  @@index([brandId, providerCreatedAt])
+  @@index([connectionId, providerUpdatedAt])
+  @@index([financialStatus])
+}
+
+/// One line of a `CommerceOrder`. Replaced wholesale on a non-stale update:
+/// providers report the full line set on every order event, so reconciling
+/// individual lines by provider id would preserve lines the provider has since
+/// removed. `onDelete: Cascade` from the order is therefore correct — a line
+/// item has no meaning without its order.
+model CommerceOrderLineItem {
+  id      String @id @default(cuid())
+  orderId String
+
+  externalLineItemId String?
+  externalProductId  String?
+  externalVariantId  String?
+  /// Best-effort resolution to this brand's synced catalog row. Optional by
+  /// design: a merchant can sell a product SQRATCH never synced, and that must
+  /// not block ingesting the order. SetNull, not Cascade — deleting a catalog
+  /// row must never destroy historical order revenue.
+  connectedProductId String?
+
+  title    String?
+  sku      String?
+  quantity Int
+
+  unitPriceMinor BigInt?
+  /// Signed: a discount or adjustment line can legitimately be negative, which
+  /// is why the ingestion path uses `decimalStringToMinorUnits` (sign-aware)
+  /// and NOT `providerPriceStringToMinorUnits` (rejects negatives by design).
+  discountMinor  BigInt?
+  taxMinor       BigInt?
+  totalMinor     BigInt?
+
+  createdAt DateTime @default(now())
+
+  order            CommerceOrder             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  connectedProduct ConnectedCommerceProduct? @relation(fields: [connectedProductId], references: [id], onDelete: SetNull)
+
+  @@unique([orderId, externalLineItemId])
+  @@index([orderId])
+  @@index([connectedProductId])
+}
+
+/// One received provider order webhook/event. This is the idempotency ledger:
+/// `@@unique([provider, providerEventId])` is what makes a duplicate delivery
+/// (same `X-Shopify-Webhook-Id`) a no-op rather than a double-write. A row is
+/// written for EVERY delivery, including ones that change no order — a skipped
+/// event is still evidence that the event arrived.
+model CommerceOrderEvent {
+  id           String           @id @default(cuid())
+  connectionId String
+  brandId      String
+  provider     CommerceProvider
+
+  /// Provider's own delivery id (`X-Shopify-Webhook-Id`), or a deterministic
+  /// `digest:<sha256>` fallback when the header is absent (fixture-driven
+  /// tests have no real header) — see the route handlers.
+  providerEventId String
+  /// Bound to the ROUTE PATH the delivery arrived on, never to the spoofable
+  /// `x-shopify-topic` header.
+  topic           String
+
+  /// Provider order id this event referred to. Nullable for redaction, and
+  /// deliberately NOT a foreign key: an event can arrive for an order that was
+  /// skipped (disconnected shop) and therefore has no row.
+  externalOrderRef  String?
+  providerUpdatedAt DateTime?
+
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  status CommerceOrderEventStatus @default(RECEIVED)
+
+  /// SHA-256 hex digest of the RAW, HMAC-verified webhook body. The body
+  /// itself is never persisted — this proves which bytes were processed
+  /// without storing any payload content or customer data.
+  payloadDigest  String
+  /// Short, classified, bounded failure tag. Never an error object, response
+  /// body, URL, or payload excerpt.
+  failureSummary String?
+
+  /// Optional link to the order this event resolved to, when it resolved to
+  /// one. SetNull so the event ledger survives order deletion.
+  orderId String?
+  order   CommerceOrder? @relation(fields: [orderId], references: [id], onDelete: SetNull)
+
+  connection CommerceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  brand      Brand              @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerEventId])
+  @@index([connectionId, receivedAt])
+  @@index([brandId, receivedAt])
+  @@index([externalOrderRef, providerUpdatedAt])
+  @@index([status, receivedAt])
+  @@index([orderId])
 }
 
 model ShopifyRewardRedemption {
@@ -699,18 +1176,19 @@ model ShopifyRewardRedemption {
 }
 
 model UserSession {
-  id              String           @id
-  createdAt       DateTime         @default(now())
-  lastSeenAt      DateTime         @default(now())
-  userId          String?
-  anonKey         String?          @unique
-  campaignId      String?
-  qrCodeId        String?
-  analyticsEvents AnalyticsEvent[]
-  lessonProgress  LessonProgress[]
-  campaign        Campaign?        @relation(fields: [campaignId], references: [id])
-  qrCode          QRCode?          @relation(fields: [qrCodeId], references: [id])
-  user            User?            @relation(fields: [userId], references: [id])
+  id                        String                     @id
+  createdAt                 DateTime                   @default(now())
+  lastSeenAt                DateTime                   @default(now())
+  userId                    String?
+  anonKey                   String?                    @unique
+  campaignId                String?
+  qrCodeId                  String?
+  analyticsEvents           AnalyticsEvent[]
+  lessonProgress            LessonProgress[]
+  campaign                  Campaign?                  @relation(fields: [campaignId], references: [id])
+  qrCode                    QRCode?                    @relation(fields: [qrCodeId], references: [id])
+  user                      User?                      @relation(fields: [userId], references: [id])
+  commerceClickAttributions CommerceClickAttribution[]
 
   @@index([userId])
   @@index([anonKey])
@@ -1007,4 +1485,42 @@ enum PointSourceType {
 enum RewardDiscountType {
   FIXED_AMOUNT
   PERCENTAGE
+}
+
+/// Provider-neutral payment state of a `CommerceOrder`. Any provider value
+/// that does not map cleanly onto one of these (e.g. Shopify's `expired`) is
+/// normalized to `null` — never guessed into the nearest-looking member.
+enum CommerceOrderFinancialStatus {
+  PENDING
+  AUTHORIZED
+  PARTIALLY_PAID
+  PAID
+  PARTIALLY_REFUNDED
+  REFUNDED
+  VOIDED
+}
+
+/// Provider-neutral fulfillment state. Shopify reports `null` for an
+/// unfulfilled order rather than the string "unfulfilled"; the normalizer maps
+/// that absence to `UNFULFILLED` only when the payload is otherwise a
+/// well-formed order, and to `null` when the field is genuinely unknown.
+enum CommerceOrderFulfillmentStatus {
+  UNFULFILLED
+  PARTIALLY_FULFILLED
+  FULFILLED
+  RESTOCKED
+}
+
+/// Terminal disposition of one received provider order event.
+/// RECEIVED              — row written, processing not yet finished.
+/// PROCESSED             — the order row was created or updated.
+/// SKIPPED_STALE         — a newer state for this order is already stored.
+/// SKIPPED_DISCONNECTED  — the shop is not in a connected state; recorded, not applied.
+/// FAILED                — processing threw; the event is retained as evidence.
+enum CommerceOrderEventStatus {
+  RECEIVED
+  PROCESSED
+  SKIPPED_STALE
+  SKIPPED_DISCONNECTED
+  FAILED
 }

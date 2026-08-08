@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   createAnalyticsEvent,
   getExperienceAccessContext,
+  resolvePublicCampaignId,
 } from "@/lib/experience-access";
 import prisma from "@/lib/prisma";
 import { attachSessionCookie, ensureViewerSession } from "@/lib/session";
@@ -13,7 +14,7 @@ import {
 } from "@/lib/commerce/connection-service";
 
 type PublicShopProduct = {
-  id: string;
+  id?: string;
   productId: string;
   productLinkId: string | null;
   title: string;
@@ -28,6 +29,17 @@ type PublicShopProduct = {
   source: "LINKED" | "CAMPAIGN";
   /** Present only for curated campaign catalog products. */
   description?: string | null;
+  /**
+   * A campaign-specific product remains identified as such when a direct
+   * Experience entry displays the union of several sponsors' products. This
+   * is presentation context only; the click route revalidates it server-side.
+   */
+  productCampaign?: {
+    id: string;
+    name: string;
+  } | null;
+  /** Opaque CampaignCommerceProduct id for a campaign-scoped click hop. */
+  campaignAssignmentId?: string;
 };
 
 type CampaignFallbackBrand = {
@@ -48,6 +60,13 @@ type PublicShopAccess = {
     sessionId: string | null;
     userId: string | null;
   };
+  /** Compatibility projection for older injected test doubles. */
+  storedCampaignId?: string | null;
+  /**
+   * Explicit server-resolved entry semantics. DIRECT must override any stale
+   * stored campaign; CAMPAIGN is already validated against this Experience.
+   */
+  entryContext?: { kind: "DIRECT" } | { kind: "CAMPAIGN"; campaignId: string };
   experience: {
     id: string;
     slug: string;
@@ -81,6 +100,9 @@ type ExperienceProductLinkRow = {
 
 /** A deliberately narrow, public-safe catalog shape. */
 export type CuratedCampaignProduct = {
+  id?: string;
+  /** Present only for a CampaignCommerceProduct projection. */
+  campaignAssignmentId?: string;
   displayOrder: number;
   titleOverride: string | null;
   shortDescriptionOverride: string | null;
@@ -105,7 +127,10 @@ type LegacyCampaignProductsResult = Awaited<
 >;
 
 export type PublicExperienceProductsDeps = {
-  getAccess(experienceSlug: string, request: NextRequest): Promise<PublicShopAccess | null>;
+  getAccess(
+    experienceSlug: string,
+    request: NextRequest,
+  ): Promise<PublicShopAccess | null>;
   ensureSession(options: {
     request: NextRequest;
     userId: string | null;
@@ -117,6 +142,15 @@ export type PublicExperienceProductsDeps = {
   countBrandSelections(brandId: string): Promise<number>;
   /** Must return only current-brand, visible, available products (see default implementation). */
   findCuratedProducts(brandId: string): Promise<CuratedCampaignProduct[]>;
+  /**
+   * Active, same-brand campaign assignments. Unlike the public brand
+   * storefront, these are explicitly campaign-scoped and must retain that
+   * identity when a direct Experience renders more than one campaign.
+   */
+  findCampaignProducts(options: {
+    campaignId: string;
+    brandId: string;
+  }): Promise<CuratedCampaignProduct[]>;
   fetchLegacyCampaignProducts(options: {
     shopDomain: string;
     brandId: string;
@@ -131,7 +165,7 @@ const DEFAULT_DEPS: PublicExperienceProductsDeps = {
   findProductLinks(experienceId) {
     return prisma.experienceProductLink.findMany({
       where: { experienceId },
-      orderBy: [{ createdAt: "desc" }],
+      orderBy: [{ createdAt: "desc" }, { id: "asc" }],
       select: {
         id: true,
         productUrl: true,
@@ -180,6 +214,7 @@ const DEFAULT_DEPS: PublicExperienceProductsDeps = {
         { connectedProductId: "asc" },
       ],
       select: {
+        id: true,
         displayOrder: true,
         titleOverride: true,
         shortDescriptionOverride: true,
@@ -202,11 +237,76 @@ const DEFAULT_DEPS: PublicExperienceProductsDeps = {
       },
     });
   },
+  findCampaignProducts({ campaignId, brandId }) {
+    return prisma.campaignCommerceProduct
+      .findMany({
+        // Both relations are constrained by brandId in the schema. These
+        // predicates remain deliberate defense in depth for historical rows and
+        // for any future repository replacement.
+        where: {
+          campaignId,
+          brandId,
+          isActive: true,
+          campaign: {
+            id: campaignId,
+            brandId,
+            commerceProductCurationEnabled: true,
+          },
+          brandCommerceProduct: {
+            brandId,
+            isCampaignEligible: true,
+            connectedProduct: { brandId, isAvailable: true },
+          },
+        },
+        orderBy: [
+          { displayOrder: "asc" },
+          { brandCommerceProduct: { connectedProduct: { title: "asc" } } },
+          { brandCommerceProductId: "asc" },
+        ],
+        select: {
+          id: true,
+          displayOrder: true,
+          brandCommerceProduct: {
+            select: {
+              id: true,
+              titleOverride: true,
+              shortDescriptionOverride: true,
+              connectedProduct: {
+                select: {
+                  id: true,
+                  brandId: true,
+                  externalId: true,
+                  title: true,
+                  productUrl: true,
+                  imageUrl: true,
+                  descriptionText: true,
+                  isAvailable: true,
+                  currencyCode: true,
+                  priceMinMinor: true,
+                  priceMaxMinor: true,
+                  priceMinorUnitExponent: true,
+                },
+              },
+            },
+          },
+        },
+      })
+      .then((rows) =>
+        rows.map((row) => ({
+          campaignAssignmentId: row.id,
+          displayOrder: row.displayOrder,
+          ...row.brandCommerceProduct,
+        })),
+      );
+  },
   fetchLegacyCampaignProducts: fetchNormalizedShopifyProducts,
 };
 
 export type PublicExperienceProductsPostDeps = {
-  getAccess(experienceSlug: string, request: NextRequest): Promise<PublicShopAccess | null>;
+  getAccess(
+    experienceSlug: string,
+    request: NextRequest,
+  ): Promise<PublicShopAccess | null>;
   ensureSession(options: {
     request: NextRequest;
     userId: string | null;
@@ -234,8 +334,47 @@ const DEFAULT_POST_DEPS: PublicExperienceProductsPostDeps = {
   createAnalyticsEvent,
 };
 
-function formatPersistedPrice(product: CuratedCampaignProduct["connectedProduct"]): string | null {
-  const { priceMinMinor, priceMaxMinor, priceMinorUnitExponent, currencyCode } = product;
+/**
+ * The campaign acquisition context for this public shop request. Direct entry
+ * is an explicit unscoped state, not an invitation to select a first campaign.
+ * The compatibility branch exists only for isolated older test doubles; live
+ * access contexts always include `entryContext`.
+ */
+function resolvePrimaryCampaign(access: PublicShopAccess) {
+  const entryContext = access.entryContext;
+
+  if (entryContext?.kind === "DIRECT") {
+    return null;
+  }
+
+  if (entryContext?.kind === "CAMPAIGN") {
+    return (
+      access.experience.campaigns.find(
+        (item) => item.campaignId === entryContext.campaignId,
+      ) || null
+    );
+  }
+
+  const resolvedCampaignId = resolvePublicCampaignId({
+    campaigns: access.experience.campaigns.map((item) => ({
+      campaignId: item.campaignId,
+      brandId: item.campaign.brand?.id ?? null,
+    })),
+    storedCampaignId: access.storedCampaignId ?? null,
+  });
+
+  return (
+    access.experience.campaigns.find(
+      (item) => item.campaignId === resolvedCampaignId,
+    ) || null
+  );
+}
+
+function formatPersistedPrice(
+  product: CuratedCampaignProduct["connectedProduct"],
+): string | null {
+  const { priceMinMinor, priceMaxMinor, priceMinorUnitExponent, currencyCode } =
+    product;
   if (
     priceMinMinor === null ||
     priceMaxMinor === null ||
@@ -260,6 +399,71 @@ function formatPersistedPrice(product: CuratedCampaignProduct["connectedProduct"
   } catch {
     return null;
   }
+}
+
+function isSafeCuratedProduct(
+  selection: CuratedCampaignProduct,
+  brandId: string,
+) {
+  return (
+    selection.connectedProduct.brandId === brandId &&
+    selection.connectedProduct.isAvailable
+  );
+}
+
+function sortCuratedProducts(products: CuratedCampaignProduct[]) {
+  return products
+    .filter((product) => Number.isFinite(product.displayOrder))
+    .sort(
+      (a, b) =>
+        a.displayOrder - b.displayOrder ||
+        a.connectedProduct.title.localeCompare(b.connectedProduct.title) ||
+        a.connectedProduct.id.localeCompare(b.connectedProduct.id),
+    );
+}
+
+function serializeCuratedProduct(options: {
+  selection: CuratedCampaignProduct;
+  brand: CampaignFallbackBrand;
+  productCampaign?: { id: string; name: string } | null;
+  /** Keeps pre-union single-brand card ids response-compatible. */
+  directUnion?: boolean;
+}): PublicShopProduct {
+  const product = options.selection.connectedProduct;
+  const selectionId = options.selection.id || product.externalId;
+  const idSuffix = options.productCampaign
+    ? `${options.productCampaign.id}-${selectionId}`
+    : options.directUnion
+      ? `${options.brand.id}-${selectionId}`
+      : product.externalId;
+
+  return {
+    id: `campaign-${idSuffix}`,
+    productId: product.externalId,
+    productLinkId: null,
+    ...(options.selection.id
+      ? { campaignProductId: options.selection.id }
+      : {}),
+    ...(options.selection.campaignAssignmentId
+      ? { campaignAssignmentId: options.selection.campaignAssignmentId }
+      : {}),
+    title: options.selection.titleOverride?.trim() || product.title,
+    description:
+      options.selection.shortDescriptionOverride?.trim() ||
+      product.descriptionText,
+    imageUrl: product.imageUrl,
+    priceText: formatPersistedPrice(product),
+    productUrl: product.productUrl,
+    brand: {
+      id: options.brand.id,
+      name: options.brand.name,
+      slug: options.brand.slug,
+    },
+    source: "CAMPAIGN",
+    ...(options.productCampaign
+      ? { productCampaign: options.productCampaign }
+      : {}),
+  };
 }
 
 function logCampaignFallbackIssue(options: {
@@ -336,7 +540,7 @@ export async function publicExperienceProductsGetImpl(
       );
     }
 
-    const primaryCampaign = access.experience.campaigns[0];
+    const primaryCampaign = resolvePrimaryCampaign(access);
     const sessionId =
       access.viewer.sessionId ||
       (await deps.ensureSession({
@@ -364,148 +568,227 @@ export async function publicExperienceProductsGetImpl(
       : [];
 
     const brandMap = new Map(brands.map((brand) => [brand.id, brand]));
+    // A resolved campaign is an authorization boundary. An unscoped direct
+    // entry is deliberately different: it may show the union of *all* linked
+    // campaign/brand contexts, but never chooses one as the visitor's campaign.
+    // CampaignExperience.sortOrder is presentation data, not authorization.
     const primaryBrand = primaryCampaign?.campaign.brand?.id
       ? brandMap.get(primaryCampaign.campaign.brand.id) || null
       : null;
+    const eligibleCampaigns = access.experience.campaigns
+      .filter((campaignLink) => {
+        const brandId = campaignLink.campaign.brand?.id;
+        return Boolean(brandId && brandMap.has(brandId));
+      })
+      .sort(
+        (a, b) =>
+          a.campaign.name.localeCompare(b.campaign.name) ||
+          a.campaignId.localeCompare(b.campaignId),
+      );
+    const visibleCampaigns = primaryCampaign
+      ? primaryBrand
+        ? [primaryCampaign]
+        : []
+      : eligibleCampaigns;
+    const isDirectUnion = !primaryCampaign && visibleCampaigns.length > 1;
 
     // A stored direct link is current only when its sourceShopDomain matches
     // its brand's current Shopify domain. Stale/unknown-source links are
     // treated as absent here (never deleted) so they don't suppress the
     // campaign-products fallback below.
     const domainByBrandId = new Map(
-      brands.map((brand) => [brand.id, externalAccountIdFromShopDomain(brand.shopifyShopDomain)]),
+      brands.map((brand) => [
+        brand.id,
+        externalAccountIdFromShopDomain(brand.shopifyShopDomain),
+      ]),
     );
     const currentProductLinks = productLinks.filter((link) =>
       isProductLinkCurrent(link, domainByBrandId),
     );
 
-    const linkedProducts: PublicShopProduct[] = currentProductLinks.map((link) => {
-      const linkedBrand =
-        (link.brandId ? brandMap.get(link.brandId) : null) || primaryBrand;
+    const linkedProducts: PublicShopProduct[] = currentProductLinks.map(
+      (link) => {
+        // Every current direct link is still returned, exactly as before. Only
+        // the DISPLAY brand of a link that carries no brand of its own falls back
+        // to the resolved context's brand — and to null (no brand shown) when
+        // that context is ambiguous, rather than labelling the product with an
+        // arbitrary co-sponsor's name.
+        const linkedBrand =
+          (link.brandId ? brandMap.get(link.brandId) : null) || primaryBrand;
 
-      return {
-        id: link.id,
-        productId: link.id,
-        productLinkId: link.id,
-        title: link.title || "Shop product",
-        imageUrl: link.imageUrl,
-        priceText: link.priceText,
-        productUrl: link.productUrl,
-        brand: linkedBrand
-          ? {
-              id: linkedBrand.id,
-              name: linkedBrand.name,
-              slug: linkedBrand.slug,
-            }
-          : null,
-        source: "LINKED",
-      };
+        return {
+          id: link.id,
+          productId: link.id,
+          productLinkId: link.id,
+          title: link.title || "Shop product",
+          imageUrl: link.imageUrl,
+          priceText: link.priceText,
+          productUrl: link.productUrl,
+          brand: linkedBrand
+            ? {
+                id: linkedBrand.id,
+                name: linkedBrand.name,
+                slug: linkedBrand.slug,
+              }
+            : null,
+          source: "LINKED",
+        };
+      },
+    );
+
+    // 1. Direct ExperienceProductLink rows are intentionally global. They are
+    // never filtered by campaign context and no longer suppress the scoped or
+    // brand-storefront rows that follow.
+    //
+    // 2. CampaignCommerceProduct is explicit authorization. On a campaign
+    // entry only that campaign is queried; on a direct entry all valid linked
+    // campaigns are queried and each card retains its own campaign identity.
+    const scopedCandidates = await Promise.all(
+      visibleCampaigns.map(async (campaignLink) => {
+        const brandId = campaignLink.campaign.brand!.id;
+        const brand = brandMap.get(brandId)!;
+        const selections = sortCuratedProducts(
+          (
+            await deps.findCampaignProducts({
+              campaignId: campaignLink.campaignId,
+              brandId,
+            })
+          ).filter((selection) => isSafeCuratedProduct(selection, brandId)),
+        );
+        return selections.map((selection) => ({
+          catalogProductId: selection.id || selection.connectedProduct.id,
+          product: serializeCuratedProduct({
+            selection,
+            brand,
+            productCampaign: {
+              id: campaignLink.campaign.id,
+              name: campaignLink.campaign.name,
+            },
+          }),
+        }));
+      }),
+    );
+    const scopedProducts = scopedCandidates.flat();
+    const campaignScopedCatalogIds = new Set(
+      scopedProducts.map((candidate) => candidate.catalogProductId),
+    );
+
+    // 3. Brand storefront catalog rows are intentionally generic: they may be
+    // shown once for every distinct linked Brand, but never manufactured into
+    // campaign attribution. A campaign-scoped card wins over the same BCP id
+    // so a direct union cannot erase meaningful campaign identity by rendering
+    // a second generic card for it.
+    const distinctVisibleBrandIds = Array.from(
+      new Set(
+        visibleCampaigns
+          .map((campaignLink) => campaignLink.campaign.brand?.id || null)
+          .filter((brandId): brandId is string => Boolean(brandId)),
+      ),
+    ).sort((a, b) => {
+      const brandA = brandMap.get(a)!;
+      const brandB = brandMap.get(b)!;
+      return brandA.name.localeCompare(brandB.name) || a.localeCompare(b);
     });
 
-    let campaignProducts: PublicShopProduct[] = [];
-    let usesCuratedCatalog = false;
-
-    if (linkedProducts.length === 0 && primaryBrand) {
-      // A single selection (even a hidden one) switches the brand to the
-      // persisted catalog. This preserves the legacy live-Shopify path for
-      // unmigrated brands while allowing a brand to intentionally publish an
-      // empty shop by hiding every selected product.
-      const selectionCount = await deps.countBrandSelections(primaryBrand.id);
-
-      if (selectionCount > 0) {
-        usesCuratedCatalog = true;
-        const curatedProducts = (await deps.findCuratedProducts(primaryBrand.id))
-          // The database query above enforces these predicates. Keeping them
-          // at the serialization boundary too makes the public contract safe
-          // if a future query is widened or a repository implementation is
-          // substituted.
-          .filter(
-            (selection) =>
-              selection.connectedProduct.brandId === primaryBrand.id &&
-              selection.connectedProduct.isAvailable,
+    const storefrontCandidates = await Promise.all(
+      distinctVisibleBrandIds.map(async (brandId) => {
+        const brand = brandMap.get(brandId)!;
+        // A selection row (including a hidden one) makes the persisted catalog
+        // authoritative. Zero rows retain the established live-Shopify
+        // compatibility fallback for that one brand.
+        const selectionCount = await deps.countBrandSelections(brand.id);
+        if (selectionCount > 0) {
+          return sortCuratedProducts(
+            (await deps.findCuratedProducts(brand.id)).filter((selection) =>
+              isSafeCuratedProduct(selection, brand.id),
+            ),
           )
-          .sort(
-            (a, b) =>
-              a.displayOrder - b.displayOrder ||
-              a.connectedProduct.title.localeCompare(b.connectedProduct.title) ||
-              a.connectedProduct.id.localeCompare(b.connectedProduct.id),
-          );
-        campaignProducts = curatedProducts.map((selection) => {
-          const product = selection.connectedProduct;
-          return {
-            id: `campaign-${product.externalId}`,
-            productId: product.externalId,
+            .filter(
+              (selection) =>
+                !campaignScopedCatalogIds.has(
+                  selection.id || selection.connectedProduct.id,
+                ),
+            )
+            .map((selection) => ({
+              catalogProductId: selection.id || selection.connectedProduct.id,
+              product: serializeCuratedProduct({
+                selection,
+                brand,
+                directUnion: isDirectUnion,
+              }),
+            }));
+        }
+
+        if (
+          !brand.shopifyShopDomain ||
+          !isLegacyShopifyBrandConnectionUsable(brand)
+        ) {
+          logCampaignFallbackIssue({
+            experienceSlug,
+            experienceId: access.experience.id,
+            directProductCount: linkedProducts.length,
+            fallbackProductCount: 0,
+            primaryBrand: brand,
+            reason: brand.shopifyShopDomain
+              ? "Brand Shopify connection is not connected."
+              : "Brand Shopify shop domain is missing.",
+          });
+          return [];
+        }
+
+        const products = await deps.fetchLegacyCampaignProducts({
+          shopDomain: brand.shopifyShopDomain,
+          brandId: brand.id,
+          limit: 100,
+          currency: brand.shopifyCurrencyCode || "USD",
+        });
+        if (!products.ok) {
+          logCampaignFallbackIssue({
+            experienceSlug,
+            experienceId: access.experience.id,
+            directProductCount: linkedProducts.length,
+            fallbackProductCount: 0,
+            primaryBrand: brand,
+            reason: products.error,
+            tokenReason: products.tokenReason,
+          });
+          return [];
+        }
+
+        return products.items.map((product) => ({
+          catalogProductId: `legacy:${brand.id}:${product.id}`,
+          product: {
+            id: isDirectUnion
+              ? `campaign-${brand.id}-${product.id}`
+              : `campaign-${product.id}`,
+            productId: product.id,
             productLinkId: null,
-            title: selection.titleOverride?.trim() || product.title,
-            description:
-              selection.shortDescriptionOverride?.trim() || product.descriptionText,
-            // The connected provider catalog remains authoritative for the image.
+            title: product.title,
             imageUrl: product.imageUrl,
-            priceText: formatPersistedPrice(product),
+            priceText: product.priceText,
             productUrl: product.productUrl,
-            brand: {
-              id: primaryBrand.id,
-              name: primaryBrand.name,
-              slug: primaryBrand.slug,
-            },
-            source: "CAMPAIGN",
-          };
-        });
-      }
-    }
-
-    if (
-      linkedProducts.length === 0 &&
-      !usesCuratedCatalog &&
-      primaryBrand?.shopifyShopDomain &&
-      isLegacyShopifyBrandConnectionUsable(primaryBrand)
-    ) {
-      const products = await deps.fetchLegacyCampaignProducts({
-        shopDomain: primaryBrand.shopifyShopDomain,
-        brandId: primaryBrand.id,
-        limit: 100,
-        currency: primaryBrand.shopifyCurrencyCode || "USD",
-      });
-
-      if (products.ok) {
-        campaignProducts = products.items.map((product) => ({
-          id: `campaign-${product.id}`,
-          productId: product.id,
-          productLinkId: null,
-          title: product.title,
-          imageUrl: product.imageUrl,
-          priceText: product.priceText,
-          productUrl: product.productUrl,
-          brand: {
-            id: primaryBrand.id,
-            name: primaryBrand.name,
-            slug: primaryBrand.slug,
+            brand: { id: brand.id, name: brand.name, slug: brand.slug },
+            source: "CAMPAIGN" as const,
+            productCampaign: null,
           },
-          source: "CAMPAIGN",
         }));
-      } else {
-        logCampaignFallbackIssue({
-          experienceSlug,
-          experienceId: access.experience.id,
-          directProductCount: linkedProducts.length,
-          fallbackProductCount: campaignProducts.length,
-          primaryBrand,
-          reason: products.error,
-          tokenReason: products.tokenReason,
-        });
-      }
-    } else if (linkedProducts.length === 0 && !usesCuratedCatalog) {
-      logCampaignFallbackIssue({
-        experienceSlug,
-        experienceId: access.experience.id,
-        directProductCount: linkedProducts.length,
-        fallbackProductCount: campaignProducts.length,
-        primaryBrand,
-        reason: primaryBrand?.shopifyShopDomain
-          ? "Primary brand Shopify connection is not connected."
-          : "Primary brand Shopify shop domain is missing.",
-      });
-    }
+      }),
+    );
+    const seenStorefrontCatalogIds = new Set<string>();
+    const storefrontProducts = storefrontCandidates
+      .flat()
+      .filter((candidate) => {
+        if (seenStorefrontCatalogIds.has(candidate.catalogProductId))
+          return false;
+        seenStorefrontCatalogIds.add(candidate.catalogProductId);
+        return true;
+      })
+      .map((candidate) => candidate.product);
+
+    const campaignProducts = [
+      ...scopedProducts.map((candidate) => candidate.product),
+      ...storefrontProducts,
+    ];
 
     logPublicShopProductResult({
       experienceSlug,
@@ -529,7 +812,7 @@ export async function publicExperienceProductsGetImpl(
               brand: primaryCampaign.campaign.brand,
             }
           : null,
-        products: linkedProducts.length > 0 ? linkedProducts : campaignProducts,
+        products: [...linkedProducts, ...campaignProducts],
       },
     });
 
@@ -556,7 +839,10 @@ export async function publicExperienceProductsPostImpl(
   context: { params: Promise<{ experienceSlug: string }> },
   overrides: Partial<PublicExperienceProductsPostDeps> = {},
 ) {
-  const deps: PublicExperienceProductsPostDeps = { ...DEFAULT_POST_DEPS, ...overrides };
+  const deps: PublicExperienceProductsPostDeps = {
+    ...DEFAULT_POST_DEPS,
+    ...overrides,
+  };
 
   try {
     const { experienceSlug } = await context.params;
@@ -572,16 +858,20 @@ export async function publicExperienceProductsPostImpl(
     const body = await request.json().catch(() => null);
     const productId = String(body?.productId || "").trim();
     const productLinkId = String(body?.productLinkId || "").trim() || null;
-    const productUrl = String(body?.productUrl || "").trim();
 
-    if (!productId || !productUrl) {
+    if (!productId) {
       return NextResponse.json(
-        { error: "productId and productUrl are required." },
+        { error: "productId is required." },
         { status: 400 },
       );
     }
 
-    const primaryCampaign = access.experience.campaigns[0];
+    // Attribution follows the same resolved context as the catalog. When it is
+    // ambiguous, `brandId`/`campaignId` are omitted (both columns are nullable
+    // on AnalyticsEvent) so the click is recorded honestly as unattributed
+    // rather than credited to — or charged against — an arbitrary co-sponsor.
+    // The event itself still fires: dropping it would lose the click entirely.
+    const primaryCampaign = resolvePrimaryCampaign(access);
     const sessionId =
       access.viewer.sessionId ||
       (await deps.ensureSession({
@@ -605,7 +895,6 @@ export async function publicExperienceProductsPostImpl(
       data: {
         productId,
         productLinkId,
-        productUrl,
         batchId: viewerSession?.qrCode?.batchId || null,
       },
     });

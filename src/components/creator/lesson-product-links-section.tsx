@@ -26,6 +26,18 @@ export type LessonProductLinkItem = {
   priceText: string | null;
   currency: string | null;
   brandId: string | null;
+  /** The normalized Shopify shop domain this link was authorized against.
+   * Already returned by the lesson products API (see
+   * `src/app/api/creator/lessons/route.ts`); used here only to infer a
+   * provider label ("Shopify") — never rendered as a raw provider id. */
+  sourceShopDomain: string | null;
+  campaignProductLink?: {
+    campaign: {
+      id: string;
+      name: string;
+      brand: { name: string | null } | null;
+    };
+  } | null;
   createdAt: string;
   /** True when this link's product no longer belongs to the currently
    * connected Shopify store and needs to be re-linked. */
@@ -52,11 +64,26 @@ type AvailableLessonProduct = {
   variantIds: string[];
 };
 
+/** One eligible campaign context offered by the explicit selector. Mirrors
+ * `CampaignSelectorOption` in `src/lib/commerce/campaign-product-curation.ts`
+ * (not imported directly — this file consumes only the JSON response shape,
+ * consistent with how the rest of this file's response types are declared). */
+type CampaignSelectorOption = {
+  id: string;
+  name: string;
+  brandId: string;
+  brandName: string | null;
+  mode: "CURATED" | "LEGACY";
+};
+
 type CampaignCurationPickerState = {
-  enabled: true;
+  /** Whether the RESOLVED context (if any) is curated. Not always true: a
+   * `selection_required` response reports whether ANY offered option is
+   * curated, since the mix can include legacy-mode siblings. */
+  enabled: boolean;
   campaignId?: string;
   requiresCampaignSelection: boolean;
-  campaigns: Array<{ id: string; name: string; brandId: string }>;
+  campaigns: CampaignSelectorOption[];
 };
 
 type AvailableLessonProductsResponse = {
@@ -87,6 +114,20 @@ export function LessonProductLinksSection({
   const [pickerError, setPickerError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [campaignId, setCampaignId] = useState<string>("");
+  /** The campaign the creator explicitly chose from the 2+-context selector.
+   * Needed because a resolved LEGACY context's response carries no curation
+   * field to echo the choice back (see the available-products route's legacy
+   * branch) — this is the only place that choice is remembered client-side,
+   * for the attach payload and for the "Change campaign" affordance. */
+  const [selectedCampaign, setSelectedCampaign] =
+    useState<CampaignSelectorOption | null>(null);
+  /** Best-effort brandId -> brand name cache, accumulated from
+   * available-products responses already fetched for this dialog (never a
+   * new API call). Used only to label already-attached products; a brand
+   * that hasn't appeared in a response yet simply renders without a label. */
+  const [brandNamesById, setBrandNamesById] = useState<Record<string, string>>(
+    {},
+  );
   const [selectedUrls, setSelectedUrls] = useState<string[]>([]);
   const [linking, setLinking] = useState(false);
   const [removingId, setRemovingId] = useState<string | null>(null);
@@ -121,6 +162,7 @@ export function LessonProductLinksSection({
       setQuery("");
       setSelectedUrls([]);
       setCampaignId("");
+      setSelectedCampaign(null);
       setPickerError(null);
       return;
     }
@@ -130,13 +172,32 @@ export function LessonProductLinksSection({
       setPickerError(null);
 
       try {
-        const selectedCampaign = campaignId.trim();
+        const requestedCampaignId = campaignId.trim();
         const result = await fetchJson<AvailableLessonProductsResponse>(
           `/api/creator/lessons/${lessonId}/available-products${
-            selectedCampaign ? `?campaignId=${encodeURIComponent(selectedCampaign)}` : ""
+            requestedCampaignId
+              ? `?campaignId=${encodeURIComponent(requestedCampaignId)}`
+              : ""
           }`,
         );
         setAvailable(result);
+        // Opportunistically learn brand names from this response for the
+        // already-attached list's labels — no extra request, just reusing
+        // data this call already returned.
+        setBrandNamesById((current) => {
+          const learned: Record<string, string> = {};
+          if (result.brand) {
+            learned[result.brand.id] = result.brand.name;
+          }
+          for (const campaign of result.curation?.campaigns || []) {
+            if (campaign.brandName) {
+              learned[campaign.brandId] = campaign.brandName;
+            }
+          }
+          return Object.keys(learned).length > 0
+            ? { ...current, ...learned }
+            : current;
+        });
       } catch (error) {
         setPickerError(
           getErrorMessage(error, "Failed to load available Shopify products."),
@@ -148,6 +209,20 @@ export function LessonProductLinksSection({
 
     void loadAvailableProducts();
   }, [campaignId, lessonId, open]);
+
+  function selectCampaignContext(campaign: CampaignSelectorOption) {
+    setSelectedCampaign(campaign);
+    setCampaignId(campaign.id);
+    setSelectedUrls([]);
+    setQuery("");
+  }
+
+  function clearCampaignSelection() {
+    setSelectedCampaign(null);
+    setCampaignId("");
+    setSelectedUrls([]);
+    setPickerError(null);
+  }
 
   function toggleSelection(productUrl: string, checked: boolean) {
     setSelectedUrls((current) => {
@@ -171,9 +246,18 @@ export function LessonProductLinksSection({
       const selectedProducts = available.items.filter((product) =>
         selectedUrls.includes(product.productUrl),
       );
+      const curated = available.curation?.enabled === true;
+      // A resolved curated context always echoes its campaignId back on the
+      // response. A resolved LEGACY context does not (see the
+      // available-products route's legacy branch), so when the Experience
+      // was ambiguous the explicitly-picked `selectedCampaign` is the only
+      // remaining source of truth. Neither is set for an unambiguous (0/1
+      // context) Experience, so `resolvedCampaignId` is correctly omitted
+      // there and the request body stays exactly as it was before Phase 5.
+      const resolvedCampaignId =
+        available.curation?.campaignId || selectedCampaign?.id || null;
 
       for (const product of selectedProducts) {
-        const curated = available.curation?.enabled === true;
         await fetchJson(`/api/creator/lessons/${lessonId}/products`, {
           method: "POST",
           headers: {
@@ -182,11 +266,12 @@ export function LessonProductLinksSection({
           body: JSON.stringify(curated
             ? {
                 catalogProductId: product.catalogProductId,
-                campaignId: available.curation?.campaignId || campaignId,
+                ...(resolvedCampaignId ? { campaignId: resolvedCampaignId } : {}),
               }
             : {
                 product,
                 brandId: available.brand?.id || null,
+                ...(resolvedCampaignId ? { campaignId: resolvedCampaignId } : {}),
               }),
         });
       }
@@ -253,69 +338,101 @@ export function LessonProductLinksSection({
           </div>
         ) : (
           <div className="mt-5 grid gap-4 xl:grid-cols-2">
-            {linkedProducts.map((product) => (
-              <div
-                key={product.id}
-                className="rounded-3xl border border-white/10 bg-[#111528] p-4"
-              >
-                <div className="flex items-start gap-4">
-                  {product.imageUrl ? (
-                    <Image
-                      src={product.imageUrl}
-                      alt={product.title || "Lesson product"}
-                      width={80}
-                      height={80}
-                      className="h-20 w-20 rounded-2xl object-cover"
-                    />
-                  ) : (
-                    <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-white/8 text-xs text-white/45">
-                      No image
-                    </div>
-                  )}
+            {linkedProducts.map((product) => {
+              // Best-effort attribution labels from data already on hand.
+              // Provider is inferred (never a raw provider id — just the
+              // literal "Shopify", the only live provider) from the presence
+              // of a resolved source shop domain. Brand name is looked up
+              // from the canonical link scope when available. Legacy links
+              // stay visibly unscoped; no campaign is guessed from ordering.
+              const providerLabel = product.sourceShopDomain ? "Shopify" : null;
+              const campaignLabel = product.campaignProductLink?.campaign.name || null;
+              const brandLabel = product.campaignProductLink?.campaign.brand?.name ||
+                (product.brandId ? brandNamesById[product.brandId] || null : null);
 
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <p className="truncate text-base font-medium">
-                        {product.title || "Linked product"}
-                      </p>
+              return (
+                <div
+                  key={product.id}
+                  className="rounded-3xl border border-white/10 bg-[#111528] p-4"
+                >
+                  <div className="flex items-start gap-4">
+                    {product.imageUrl ? (
+                      <Image
+                        src={product.imageUrl}
+                        alt={product.title || "Lesson product"}
+                        width={80}
+                        height={80}
+                        className="h-20 w-20 rounded-2xl object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-white/8 text-xs text-white/45">
+                        No image
+                      </div>
+                    )}
+
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="truncate text-base font-medium">
+                          {product.title || "Linked product"}
+                        </p>
+                        {product.needsRelinking ? (
+                          <span className="rounded-full border border-amber-300/25 bg-amber-300/10 px-2 py-0.5 text-[11px] uppercase tracking-[0.14em] text-amber-100">
+                            Needs relinking
+                          </span>
+                        ) : null}
+                      </div>
                       {product.needsRelinking ? (
-                        <span className="rounded-full border border-amber-300/25 bg-amber-300/10 px-2 py-0.5 text-[11px] uppercase tracking-[0.14em] text-amber-100">
-                          Needs relinking
-                        </span>
+                        <p className="mt-1 text-xs text-amber-200/80">
+                          This product belongs to a previous or unknown Shopify
+                          store and is hidden from the public lesson page.
+                          Remove it and add a current product to fix.
+                        </p>
                       ) : null}
-                    </div>
-                    {product.needsRelinking ? (
-                      <p className="mt-1 text-xs text-amber-200/80">
-                        This product belongs to a previous or unknown Shopify
-                        store and is hidden from the public lesson page.
-                        Remove it and add a current product to fix.
+                      <p className="mt-1 text-sm text-white/55">
+                        {product.priceText || "Price available on Shopify"}
                       </p>
-                    ) : null}
-                    <p className="mt-1 text-sm text-white/55">
-                      {product.priceText || "Price available on Shopify"}
-                    </p>
-                    <a
-                      href={product.productUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-3 inline-flex text-sm text-sky-300 underline"
-                    >
-                      Open product
-                    </a>
-                  </div>
+                      {(campaignLabel || brandLabel || providerLabel) && (
+                        <p className="mt-2 flex flex-wrap items-center gap-1.5">
+                          {campaignLabel && (
+                            <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] uppercase tracking-[0.14em] text-white/50">
+                              {campaignLabel}
+                            </span>
+                          )}
+                          {brandLabel && (
+                            <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] uppercase tracking-[0.14em] text-white/50">
+                              {brandLabel}
+                            </span>
+                          )}
+                          {providerLabel && (
+                            <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] uppercase tracking-[0.14em] text-white/50">
+                              {providerLabel}
+                            </span>
+                          )}
+                        </p>
+                      )}
+                      <a
+                        href={product.productUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="mt-3 inline-flex text-sm text-sky-300 underline"
+                      >
+                        Open product
+                      </a>
+                    </div>
 
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={() => void removeProduct(product.id)}
-                    disabled={removingId === product.id}
-                    className="rounded-full border-white/15 bg-transparent text-white hover:bg-white/10"
-                  >
-                    {removingId === product.id ? "Removing..." : "Remove"}
-                  </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => void removeProduct(product.id)}
+                      disabled={removingId === product.id}
+                      className="rounded-full border-white/15 bg-transparent text-white hover:bg-white/10"
+                    >
+                      {removingId === product.id ? "Removing..." : "Remove"}
+                    </Button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
@@ -331,20 +448,65 @@ export function LessonProductLinksSection({
           </DialogHeader>
 
           <div className="space-y-4">
-            <Input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search products"
-              className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
-            />
+            {!available?.curation?.requiresCampaignSelection && (
+              <Input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Search products"
+                className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+              />
+            )}
 
             {loadingAvailable ? (
               <div className="rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/60">
                 Loading Shopify products...
               </div>
             ) : pickerError ? (
-              <div className="rounded-3xl border border-red-400/25 bg-red-500/10 p-6 text-sm text-red-200">
-                {pickerError}
+              <div className="space-y-3 rounded-3xl border border-red-400/25 bg-red-500/10 p-6 text-sm text-red-200">
+                <p>{pickerError}</p>
+                {selectedCampaign && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={clearCampaignSelection}
+                    className="rounded-full border-red-300/30 bg-transparent text-red-100 hover:bg-red-500/10"
+                  >
+                    Choose a different campaign
+                  </Button>
+                )}
+              </div>
+            ) : available?.curation?.requiresCampaignSelection ? (
+              // 2+ eligible campaign contexts and none chosen yet. No product
+              // list or attach UI is shown until the creator picks one — this
+              // is what replaces the removed silent "first connected brand by
+              // campaign order" fallback.
+              <div className="space-y-3 rounded-3xl border border-white/10 bg-black/20 p-6">
+                <p className="text-sm text-white/60">
+                  This lesson is sponsored by multiple campaigns. Select which
+                  one you&apos;re attaching a product for.
+                </p>
+                <div className="space-y-2">
+                  {available.curation.campaigns.map((campaign) => (
+                    <button
+                      key={campaign.id}
+                      type="button"
+                      onClick={() => selectCampaignContext(campaign)}
+                      className="flex w-full items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#111528] px-4 py-3 text-left text-sm transition hover:border-white/25"
+                    >
+                      <span className="text-white/80">
+                        <span className="font-medium text-white">
+                          {campaign.name}
+                        </span>
+                        {" — "}
+                        {campaign.brandName || "Unknown brand"}
+                        {" — Shopify"}
+                      </span>
+                      <span className="shrink-0 rounded-full border border-white/15 px-2 py-0.5 text-[10px] uppercase tracking-[0.14em] text-white/50">
+                        {campaign.mode === "CURATED" ? "Curated" : "Legacy"}
+                      </span>
+                    </button>
+                  ))}
+                </div>
               </div>
             ) : !available?.connected ? (
               <div className="rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/60">
@@ -353,35 +515,43 @@ export function LessonProductLinksSection({
                   : "This lesson does not resolve to a campaign brand with a connected Shopify store yet."}
               </div>
             ) : available.items.length === 0 ? (
-              available.curation?.requiresCampaignSelection ? (
-                <div className="space-y-3 rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/60">
-                  <p>Select the campaign whose approved products you want to attach.</p>
-                  <select
-                    value={campaignId}
-                    onChange={(event) => setCampaignId(event.target.value)}
-                    className="w-full rounded-xl border border-white/15 bg-[#111528] px-3 py-2 text-white"
-                    aria-label="Campaign"
-                  >
-                    <option value="">Select a campaign</option>
-                    {available.curation.campaigns.map((campaign) => (
-                      <option key={campaign.id} value={campaign.id}>{campaign.name}</option>
-                    ))}
-                  </select>
-                </div>
-              ) : (
-                <div className="rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/60">
-                  {available.curation?.enabled
-                    ? "No approved active products are assigned to this campaign."
-                    : "No Shopify products were returned for the selected brand."}
-                </div>
-              )
+              <div className="rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/60">
+                {available.curation?.enabled
+                  ? "No approved active products are assigned to this campaign."
+                  : "No Shopify products were returned for the selected brand."}
+              </div>
             ) : (
               <div className="space-y-3">
                 {available.brand && (
                   <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/60">
-                    Using products from <span className="font-medium text-white">{available.brand.name}</span>.
-                    {available.candidateBrandCount > 1 &&
-                      " This experience is attached to multiple campaign brands, so the picker uses the first connected brand by campaign order."}
+                    {selectedCampaign ? (
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <span>
+                          Attaching under{" "}
+                          <span className="font-medium text-white">
+                            {selectedCampaign.name}
+                          </span>
+                          {" — "}
+                          {selectedCampaign.brandName || available.brand.name}
+                          {" — Shopify"}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={clearCampaignSelection}
+                          className="text-xs text-sky-300 underline"
+                        >
+                          Change campaign
+                        </button>
+                      </div>
+                    ) : (
+                      <>
+                        Using products from{" "}
+                        <span className="font-medium text-white">
+                          {available.brand.name}
+                        </span>
+                        .
+                      </>
+                    )}
                   </div>
                 )}
 

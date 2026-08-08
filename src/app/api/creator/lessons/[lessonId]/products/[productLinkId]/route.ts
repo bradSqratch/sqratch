@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import {
+  assertProductUrlMatchesBrandDomain,
+  detachCampaignLessonProductFromLink,
+  findBrandCommerceProductIdForProductUrl,
   getLessonProductManagementContext,
   parseLessonProductInput,
   resolveSourceShopDomainForBrand,
+  upsertCampaignLessonProductScope,
 } from "@/lib/lesson-product-links";
 import {
   defaultCampaignCurationRepository,
@@ -81,7 +85,10 @@ export async function creatorLessonProductPatchImpl(
     }
     if (curation.kind === "selection_required") {
       return NextResponse.json(
-        { error: "Select a campaign before linking products." },
+        {
+          error: "Select a campaign before linking products.",
+          campaigns: curation.campaigns,
+        },
         { status: 400 },
       );
     }
@@ -94,7 +101,7 @@ export async function creatorLessonProductPatchImpl(
         );
       }
       const product = await deps.curationRepository.findAuthorizedProduct({
-        campaignId: curation.campaign.id,
+        campaignId: curation.campaign.campaignId,
         brandId: curation.campaign.brandId,
         catalogProductId,
       });
@@ -120,29 +127,55 @@ export async function creatorLessonProductPatchImpl(
         access.data.candidateBrands,
         product.brandId,
       );
-      const updated = await prisma.lessonProductLink.update({
-        where: { id: productLinkId },
-        data: {
-          productUrl: product.productUrl,
-          title: product.title,
-          imageUrl: product.imageUrl,
-          priceText: formatCatalogProductPrice(product),
-          currency: product.currencyCode,
-          brandId: product.brandId,
-          sourceShopDomain,
-        },
-        select: {
-          id: true, lessonId: true, productUrl: true, title: true, imageUrl: true,
-          priceText: true, currency: true, brandId: true, sourceShopDomain: true, createdAt: true,
-        },
+      // Replacing the product means the old scoping row no longer describes
+      // this snapshot. Detach/deactivate it and scope the new product, in the
+      // same transaction as the snapshot update.
+      const updated = await prisma.$transaction(async (tx) => {
+        await detachCampaignLessonProductFromLink(tx, {
+          legacyLessonProductLinkId: productLinkId,
+          keep: {
+            campaignId: curation.campaign.campaignId,
+            lessonId,
+            brandCommerceProductId: product.brandCommerceProductId,
+          },
+        });
+
+        const link = await tx.lessonProductLink.update({
+          where: { id: productLinkId },
+          data: {
+            productUrl: product.productUrl,
+            title: product.title,
+            imageUrl: product.imageUrl,
+            priceText: formatCatalogProductPrice(product),
+            currency: product.currencyCode,
+            brandId: product.brandId,
+            sourceShopDomain,
+          },
+          select: {
+            id: true, lessonId: true, productUrl: true, title: true, imageUrl: true,
+            priceText: true, currency: true, brandId: true, sourceShopDomain: true, createdAt: true,
+          },
+        });
+
+        await upsertCampaignLessonProductScope(tx, {
+          campaignId: curation.campaign.campaignId,
+          brandId: curation.campaign.brandId,
+          lessonId,
+          brandCommerceProductId: product.brandCommerceProductId,
+          legacyLessonProductLinkId: link.id,
+        });
+
+        return link;
       });
       return NextResponse.json({ data: updated });
     }
 
     // Legacy compatibility mode below: preserve its request/snapshot contract.
+    // See the POST route for why `none` yields an empty allowed-brand list.
+    const legacyContext = curation.kind === "legacy" ? curation.campaign : null;
     const parsed = parseLessonProductInput(body, {
-      defaultBrandId: access.data.primaryBrand?.id || null,
-      allowedBrandIds: access.data.candidateBrands.map((brand) => brand.id),
+      defaultBrandId: legacyContext?.brandId || null,
+      allowedBrandIds: legacyContext ? [legacyContext.brandId] : [],
     });
 
     if (!parsed.ok) {
@@ -150,6 +183,16 @@ export async function creatorLessonProductPatchImpl(
         { error: parsed.error },
         { status: 400 },
       );
+    }
+
+    const domainCheck = await assertProductUrlMatchesBrandDomain({
+      productUrl: parsed.value.productUrl,
+      brandId: parsed.value.brandId,
+      candidateBrands: access.data.candidateBrands,
+    });
+
+    if (!domainCheck.ok) {
+      return NextResponse.json({ error: domainCheck.error }, { status: 400 });
     }
 
     const duplicate = await prisma.lessonProductLink.findFirst({
@@ -180,31 +223,85 @@ export async function creatorLessonProductPatchImpl(
       parsed.value.brandId,
     );
 
-    const updated = await prisma.lessonProductLink.update({
-      where: {
-        id: productLinkId,
-      },
-      data: {
-        productUrl: parsed.value.productUrl,
-        title: parsed.value.title,
-        imageUrl: parsed.value.imageUrl,
-        priceText: parsed.value.priceText,
-        currency: parsed.value.currency,
-        brandId: parsed.value.brandId,
-        sourceShopDomain,
-      },
-      select: {
-        id: true,
-        lessonId: true,
-        productUrl: true,
-        title: true,
-        imageUrl: true,
-        priceText: true,
-        currency: true,
-        brandId: true,
-        sourceShopDomain: true,
-        createdAt: true,
-      },
+    const legacyBrandCommerceProductId =
+      legacyContext && parsed.value.brandId
+        ? await findBrandCommerceProductIdForProductUrl({
+            brandId: parsed.value.brandId,
+            productUrl: parsed.value.productUrl,
+          })
+        : null;
+
+    // Same rule as the POST attach: without a catalog match the replacement
+    // link ends up unscoped, and an unscoped LessonProductLink renders under
+    // EVERY campaign on the Experience. That is only safe where there is
+    // nothing to leak into — at most one eligible campaign context. Once the
+    // Experience is ambiguous (two or more), scoping is mandatory and a
+    // catalog match is the only thing that can supply it.
+    if (
+      legacyContext &&
+      !legacyBrandCommerceProductId &&
+      access.data.campaignContexts.length >= 2
+    ) {
+      const brandLabel = legacyContext.brandName || "the selected brand";
+      return NextResponse.json(
+        {
+          error: `This product must be synced to ${brandLabel}'s catalog before it can be attached to a lesson with multiple sponsoring campaigns.`,
+        },
+        { status: 400 },
+      );
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      await detachCampaignLessonProductFromLink(tx, {
+        legacyLessonProductLinkId: productLinkId,
+        keep:
+          legacyContext && legacyBrandCommerceProductId
+            ? {
+                campaignId: legacyContext.campaignId,
+                lessonId,
+                brandCommerceProductId: legacyBrandCommerceProductId,
+              }
+            : null,
+      });
+
+      const link = await tx.lessonProductLink.update({
+        where: {
+          id: productLinkId,
+        },
+        data: {
+          productUrl: parsed.value.productUrl,
+          title: parsed.value.title,
+          imageUrl: parsed.value.imageUrl,
+          priceText: parsed.value.priceText,
+          currency: parsed.value.currency,
+          brandId: parsed.value.brandId,
+          sourceShopDomain,
+        },
+        select: {
+          id: true,
+          lessonId: true,
+          productUrl: true,
+          title: true,
+          imageUrl: true,
+          priceText: true,
+          currency: true,
+          brandId: true,
+          sourceShopDomain: true,
+          createdAt: true,
+        },
+      });
+
+      if (legacyContext && legacyBrandCommerceProductId) {
+        await upsertCampaignLessonProductScope(tx, {
+          campaignId: legacyContext.campaignId,
+          brandId: legacyContext.brandId,
+          lessonId,
+          brandCommerceProductId: legacyBrandCommerceProductId,
+          legacyLessonProductLinkId: link.id,
+        });
+      }
+
+      return link;
     });
 
     return NextResponse.json({ data: updated });
@@ -277,10 +374,22 @@ export async function DELETE(
       );
     }
 
-    await prisma.lessonProductLink.delete({
-      where: {
-        id: productLinkId,
-      },
+    // The FK is ON DELETE SET NULL, which detaches but leaves the scoping row
+    // ACTIVE. Per the hand-off documented in migration 20260807140000, the app
+    // layer deactivates it in the SAME transaction so an active attachment
+    // never points at a null legacy link. The row itself is kept: its
+    // campaign-scoped attribution history cannot be re-derived.
+    await prisma.$transaction(async (tx) => {
+      await detachCampaignLessonProductFromLink(tx, {
+        legacyLessonProductLinkId: productLinkId,
+        keep: null,
+      });
+
+      await tx.lessonProductLink.delete({
+        where: {
+          id: productLinkId,
+        },
+      });
     });
 
     return NextResponse.json({

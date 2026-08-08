@@ -1,4 +1,10 @@
 import prisma from "@/lib/prisma";
+import {
+  buildEligibleCampaignContexts,
+  resolveCampaignSelection,
+  type CampaignContextCandidate,
+  type CampaignContextMode,
+} from "@/lib/campaign-context";
 
 /**
  * Server-side campaign product curation for creator lesson attachments.
@@ -10,6 +16,10 @@ export type LessonCampaignContext = {
   id: string;
   name: string;
   brandId: string | null;
+  brandName: string | null;
+  /** Persisted CampaignExperience.sortOrder; presentation only, never trusted
+   * as a tiebreak on its own (see `src/lib/campaign-context.ts`). */
+  sortOrder: number;
   commerceProductCurationEnabled: boolean;
 };
 
@@ -17,10 +27,18 @@ export type CampaignSelectorOption = {
   id: string;
   name: string;
   brandId: string;
+  brandName: string | null;
+  /** Lets one selector render curated and legacy contexts together without
+   * collapsing either into the other. */
+  mode: CampaignContextMode;
 };
 
 export type AuthorizedCatalogProduct = {
   id: string;
+  /** The BrandCommerceProduct id that authorized this product for the
+   * campaign. Required to write the campaign-scoped CampaignLessonProduct row;
+   * deliberately never included in any client-facing response. */
+  brandCommerceProductId: string;
   brandId: string;
   title: string;
   handle: string | null;
@@ -46,52 +64,88 @@ export type CampaignCurationRepository = {
   }): Promise<AuthorizedCatalogProduct | null>;
 };
 
-type ApplicableCampaign = LessonCampaignContext & { brandId: string };
-
 export type CampaignCurationResolution =
-  | { kind: "legacy" }
+  | { kind: "none" }
   | { kind: "selection_required"; campaigns: CampaignSelectorOption[] }
-  | { kind: "curated"; campaign: ApplicableCampaign };
+  | { kind: "legacy"; campaign: CampaignContextCandidate }
+  | { kind: "curated"; campaign: CampaignContextCandidate };
+
+function toSelectorOption(context: CampaignContextCandidate): CampaignSelectorOption {
+  return {
+    id: context.campaignId,
+    name: context.campaignName,
+    brandId: context.brandId,
+    brandName: context.brandName,
+    mode: context.mode,
+  };
+}
 
 /**
- * Resolves the policy from campaigns actually linked to the lesson's
- * Experience. We never select "the first" curated campaign: ambiguity is an
- * explicit UI/API state. Legacy-only experiences retain their exact picker
- * behavior, including their existing primary-brand selection.
+ * Resolves which campaign context a creator product mutation operates in, from
+ * the campaigns actually linked to the lesson's Experience.
+ *
+ * This is now a thin policy layer over the shared resolver in
+ * `src/lib/campaign-context.ts`; the 0/1/N and explicit-selection rules live
+ * there and are identical for curated and legacy contexts. One policy is
+ * applied here on top of the generic resolution:
+ *
+ * NO SILENT FIRST-OF-SEVERAL. Ambiguity is an explicit API state
+ * (`selection_required`), never a guess, and a client-supplied campaign id is
+ * always validated rather than dropped. The previous implementation returned
+ * `{ kind: "legacy" }` before it ever looked at `requestedCampaignId`, so on a
+ * legacy Experience the id was silently ignored.
+ *
+ * EVERY eligible context is selectable, whatever the curation mix on the
+ * Experience is. A curated campaign does not make a curation-disabled sibling
+ * unselectable, because authorization is self-contained per context rather
+ * than per Experience: a curated context still has to satisfy the full strict
+ * chain (`commerceProductCurationEnabled`, an active `CampaignCommerceProduct`,
+ * `isCampaignEligible`, `isAvailable`, same-brand pinning), and a legacy
+ * context still has to satisfy `assertProductUrlMatchesBrandDomain`. Selecting
+ * a legacy sibling therefore grants no access to a curated sibling's catalog or
+ * authorization — it only ever operates under its own campaign's own policy,
+ * which is a per-campaign choice that campaign's own brand made. Cross-context
+ * isolation is enforced downstream by campaign-scoped `CampaignLessonProduct`
+ * rows (rendering and scoping are per-campaign, not per-Experience), never by
+ * hiding sibling campaigns from the selector.
+ *
+ * `{ kind: "none" }` means the Experience has no eligible (brand-owning)
+ * campaign at all. That is the pre-existing free-form case: there is no brand
+ * to authorize against, and callers keep their historical behavior of
+ * accepting a link with a null brandId.
  */
 export function resolveCampaignCuration(
   campaigns: LessonCampaignContext[],
   requestedCampaignId: string | null | undefined,
 ): CampaignCurationResolution | { kind: "invalid_campaign" } {
-  const applicable = campaigns.filter(
-    (campaign): campaign is ApplicableCampaign => Boolean(campaign.brandId),
+  const contexts = buildEligibleCampaignContexts(
+    campaigns.map((campaign) => ({
+      campaignId: campaign.id,
+      campaignName: campaign.name,
+      sortOrder: campaign.sortOrder,
+      brandId: campaign.brandId,
+      brandName: campaign.brandName,
+      curationEnabled: campaign.commerceProductCurationEnabled,
+    })),
   );
 
-  const curated = applicable.filter((campaign) => campaign.commerceProductCurationEnabled);
-  if (curated.length === 0) {
-    return { kind: "legacy" };
-  }
+  const selection = resolveCampaignSelection(contexts, requestedCampaignId);
 
-  if (requestedCampaignId) {
-    // A disabled sibling campaign must never be a curation bypass when this
-    // Experience also has an enabled curated campaign. Only a currently
-    // curated, actually linked campaign is a valid explicit selection.
-    const selected = curated.find((campaign) => campaign.id === requestedCampaignId);
-    return selected ? { kind: "curated", campaign: selected } : { kind: "invalid_campaign" };
+  switch (selection.kind) {
+    case "none":
+      return { kind: "none" };
+    case "invalid_campaign":
+      return { kind: "invalid_campaign" };
+    case "selection_required":
+      return {
+        kind: "selection_required",
+        campaigns: selection.contexts.map(toSelectorOption),
+      };
+    case "resolved":
+      return selection.context.curationEnabled
+        ? { kind: "curated", campaign: selection.context }
+        : { kind: "legacy", campaign: selection.context };
   }
-
-  if (curated.length === 1) {
-    return { kind: "curated", campaign: curated[0] };
-  }
-
-  return {
-    kind: "selection_required",
-    campaigns: curated.map((campaign) => ({
-      id: campaign.id,
-      name: campaign.name,
-      brandId: campaign.brandId,
-    })),
-  };
 }
 
 function formatPersistedPrice(product: AuthorizedCatalogProduct): string | null {
@@ -170,6 +224,7 @@ async function defaultListAuthorizedProducts(input: {
       displayOrder: true,
       brandCommerceProduct: {
         select: {
+          id: true,
           connectedProduct: {
             select: {
               id: true,
@@ -191,6 +246,7 @@ async function defaultListAuthorizedProducts(input: {
     },
   }).then((rows) => rows.map((row) => ({
     displayOrder: row.displayOrder,
+    brandCommerceProductId: row.brandCommerceProduct.id,
     ...row.brandCommerceProduct.connectedProduct,
   })));
 }
@@ -223,6 +279,7 @@ async function defaultFindAuthorizedProduct(input: {
     select: {
       brandCommerceProduct: {
         select: {
+          id: true,
           connectedProduct: {
             select: {
               id: true,
@@ -244,7 +301,14 @@ async function defaultFindAuthorizedProduct(input: {
     },
   });
 
-  return assignment?.brandCommerceProduct.connectedProduct ?? null;
+  if (!assignment) {
+    return null;
+  }
+
+  return {
+    brandCommerceProductId: assignment.brandCommerceProduct.id,
+    ...assignment.brandCommerceProduct.connectedProduct,
+  };
 }
 
 export const defaultCampaignCurationRepository: CampaignCurationRepository = {

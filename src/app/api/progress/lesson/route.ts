@@ -4,8 +4,14 @@ import {
   createAnalyticsEvent,
   getExperienceAccessContext,
   getViewerContext,
+  resolvePublicCampaignId,
 } from "@/lib/experience-access";
-import { attachSessionCookie, ensureViewerSession } from "@/lib/session";
+import {
+  attachSessionCookie,
+  ensureViewerSession,
+  getViewerSessionRecord,
+} from "@/lib/session";
+import { resolveValidatedPublicCampaignContext } from "@/lib/campaign-context";
 import {
   awardLessonCompletionPoints,
   awardCourseCompletionPoints,
@@ -350,10 +356,31 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // `ensureViewerSession`'s update branch writes any NON-NULL campaignId over
+    // whatever is already stored, so passing a guessed campaign here silently
+    // destroyed the visitor's real, cookie-backed UserSession.campaignId (the
+    // one stamped by /api/public/scan or /api/public/campaign/[slug]) on every
+    // progress ping. Two rules now apply:
+    //
+    //  1. If the session already has a stored campaign, pass null — never
+    //     touch it. It is the trusted signal; this route is not its writer.
+    //  2. Otherwise stamp only a genuinely deterministic context. With two or
+    //     more eligible campaigns there is no answer, and campaignIds[0] is a
+    //     guess whose order a co-sponsoring brand could influence.
+    //
+    // The upsert itself stays unconditional: LessonProgress.sessionId is a FK
+    // to UserSession, so the row must exist before progress is written, and
+    // lastSeenAt / userId linking must keep working as before.
+    const storedSession = await getViewerSessionRecord(request);
     const sessionId = await ensureViewerSession({
       request,
       userId: access.viewer.userId,
-      campaignId: access.campaignIds[0] || null,
+      campaignId: storedSession?.campaignId
+        ? null
+        : resolveValidatedPublicCampaignContext({
+            storedCampaignId: null,
+            eligibleCampaignIds: access.campaignIds,
+          }),
     });
 
     const progressWhere = access.viewer.userId
@@ -443,13 +470,29 @@ export async function POST(request: NextRequest) {
       : "";
 
     if (normalizedEventName) {
-      const primaryCampaign = lesson.course.experience.campaigns[0];
+      // Read-only attribution, resolved from the SAME trusted signal the
+      // session write above uses (`storedSession.campaignId`, validated against
+      // this Experience) — never `campaigns[0]`. Reuses the already-loaded
+      // session record and campaign rows; no extra query. When the context is
+      // ambiguous the event is still recorded, with a null brand/campaign
+      // (both columns are nullable) rather than credited to a guessed sponsor.
+      const resolvedCampaignId = resolvePublicCampaignId({
+        campaigns: lesson.course.experience.campaigns.map((item) => ({
+          campaignId: item.campaignId,
+          brandId: item.campaign.brandId,
+        })),
+        storedCampaignId: storedSession?.campaignId ?? null,
+      });
+      const resolvedCampaign =
+        lesson.course.experience.campaigns.find(
+          (item) => item.campaignId === resolvedCampaignId,
+        ) || null;
 
       await createAnalyticsEvent({
         request,
         name: normalizedEventName,
-        brandId: primaryCampaign?.campaign.brandId || null,
-        campaignId: primaryCampaign?.campaignId || null,
+        brandId: resolvedCampaign?.campaign.brandId || null,
+        campaignId: resolvedCampaign?.campaignId || null,
         experienceId: lesson.course.experience.id,
         courseId: lesson.courseId,
         lessonId: lesson.id,

@@ -44,6 +44,7 @@ before(async () => {
 
 const product: AuthorizedCatalogProduct = {
   id: "catalog-1",
+  brandCommerceProductId: "bcp-1",
   brandId: "brand-1",
   title: "Synced title",
   handle: "synced-title",
@@ -57,28 +58,67 @@ const product: AuthorizedCatalogProduct = {
   priceMinorUnitExponent: 2,
 };
 
+// Phase 5's LessonCampaignContext additionally requires `brandName` and
+// `sortOrder` (see src/lib/commerce/campaign-product-curation.ts). `sortOrder`
+// defaults to each campaign's index in the input array, which reproduces this
+// suite's original "declaration order" expectations exactly, since
+// buildEligibleCampaignContexts's secondary tiebreak (campaignId) never
+// activates when sortOrder values are already distinct.
+function campaign(input: {
+  id: string;
+  name: string;
+  brandId: string | null;
+  commerceProductCurationEnabled: boolean;
+  sortOrder?: number;
+}) {
+  return {
+    id: input.id,
+    name: input.name,
+    brandId: input.brandId,
+    brandName: input.brandId ? "Brand one" : null,
+    sortOrder: input.sortOrder ?? 0,
+    commerceProductCurationEnabled: input.commerceProductCurationEnabled,
+  };
+}
+
 function access(campaigns: Array<{
   id: string;
   name: string;
   brandId: string | null;
   commerceProductCurationEnabled: boolean;
+  sortOrder?: number;
 }>) {
   return {
     ok: true as const,
     data: {
+      actor: { userId: "creator-1", role: "CREATOR" as const },
+      lesson: {
+        id: "lesson-1",
+        title: "Lesson",
+        course: {
+          id: "course-1",
+          title: "Course",
+          experience: {
+            id: "experience-1",
+            title: "Experience",
+            slug: "experience-1",
+            creatorUserId: "creator-1",
+          },
+        },
+      },
       candidateBrands: [{
         id: "brand-1", name: "Brand one", slug: "brand-one",
         shopifyShopDomain: "store.example", shopifyConnectionStatus: "CONNECTED",
         shopifyInstalledAt: new Date(), shopifyUninstalledAt: null,
         shopifyLastProductSyncAt: null, shopifyGrantedScopes: "read_products",
       }],
-      primaryBrand: {
-        id: "brand-1", name: "Brand one", slug: "brand-one",
-        shopifyShopDomain: "store.example", shopifyConnectionStatus: "CONNECTED",
-        shopifyInstalledAt: new Date(), shopifyUninstalledAt: null,
-        shopifyLastProductSyncAt: null, shopifyGrantedScopes: "read_products",
-      },
-      campaigns,
+      campaigns: campaigns.map((c, index) => campaign({ ...c, sortOrder: c.sortOrder ?? index })),
+      // campaignContexts is the pre-computed eligible/ordered list — Phase 5
+      // callers (the routes under test) derive their own resolution from
+      // `campaigns` via resolveCampaignCuration, so this field is populated
+      // the same way getLessonProductManagementContext computes it, purely
+      // for shape completeness; no test in this file asserts on it directly.
+      campaignContexts: [],
     },
   } as Awaited<ReturnType<CreatorAvailableProductsDeps["getAccess"]>>;
 }
@@ -95,20 +135,24 @@ const context = { params: Promise.resolve({ lessonId: "lesson-1" }) };
 
 describe("campaign curation context", () => {
   test("legacy-only campaigns retain compatibility mode", () => {
-    assert.deepEqual(resolveCampaignCuration([
-      { id: "legacy", name: "Legacy", brandId: "brand-1", commerceProductCurationEnabled: false },
-    ], null), { kind: "legacy" });
+    const result = resolveCampaignCuration([
+      campaign({ id: "legacy", name: "Legacy", brandId: "brand-1", commerceProductCurationEnabled: false }),
+    ], null);
+    assert.equal(result.kind, "legacy");
+    if (result.kind === "legacy") {
+      assert.equal(result.campaign.campaignId, "legacy");
+    }
   });
 
   test("infers exactly one curated campaign but never the first of several", () => {
     const one = resolveCampaignCuration([
-      { id: "one", name: "One", brandId: "brand-1", commerceProductCurationEnabled: true },
+      campaign({ id: "one", name: "One", brandId: "brand-1", commerceProductCurationEnabled: true }),
     ], null);
     assert.equal(one.kind, "curated");
 
     const many = resolveCampaignCuration([
-      { id: "one", name: "One", brandId: "brand-1", commerceProductCurationEnabled: true },
-      { id: "two", name: "Two", brandId: "brand-2", commerceProductCurationEnabled: true },
+      campaign({ id: "one", name: "One", brandId: "brand-1", commerceProductCurationEnabled: true }),
+      campaign({ id: "two", name: "Two", brandId: "brand-2", commerceProductCurationEnabled: true }),
     ], null);
     assert.equal(many.kind, "selection_required");
     if (many.kind === "selection_required") assert.deepEqual(many.campaigns.map((x) => x.id), ["one", "two"]);
@@ -116,15 +160,33 @@ describe("campaign curation context", () => {
 
   test("rejects a campaign that is not linked to the lesson experience", () => {
     assert.deepEqual(resolveCampaignCuration([
-      { id: "one", name: "One", brandId: "brand-1", commerceProductCurationEnabled: true },
+      campaign({ id: "one", name: "One", brandId: "brand-1", commerceProductCurationEnabled: true }),
     ], "foreign"), { kind: "invalid_campaign" });
   });
 
-  test("a disabled sibling cannot bypass an enabled campaign's curation", () => {
-    assert.deepEqual(resolveCampaignCuration([
-      { id: "curated", name: "Curated", brandId: "brand-1", commerceProductCurationEnabled: true },
-      { id: "legacy", name: "Legacy sibling", brandId: "brand-1", commerceProductCurationEnabled: false },
-    ], "legacy"), { kind: "invalid_campaign" });
+  // BEHAVIOR CHANGE FROM THE PRE-PHASE-5E VERSION OF THIS TEST (flagged per
+  // instructions, not a silent fixture-only edit): this scenario used to
+  // assert `invalid_campaign` under a since-removed "curation-status ratchet"
+  // that made a curated sibling's presence on the Experience block selecting
+  // an explicitly-requested, independently-eligible LEGACY sibling. Phase 5E
+  // deliberately removed that ratchet (see the header comment on
+  // `resolveCampaignCuration` in src/lib/commerce/campaign-product-curation.ts):
+  // every eligible context is selectable on its own terms regardless of a
+  // sibling's curation mode, because authorization is fully self-contained
+  // per context (a legacy context still has to pass
+  // `assertProductUrlMatchesBrandDomain`; a curated context still has to pass
+  // the full CampaignCommerceProduct chain). Selecting the legacy sibling
+  // grants no access to the curated sibling's catalog. The correct current
+  // behavior is therefore `{ kind: "legacy" }`, not `invalid_campaign`.
+  test("a disabled (legacy) sibling remains independently selectable next to an enabled (curated) campaign — no cross-context ratchet", () => {
+    const result = resolveCampaignCuration([
+      campaign({ id: "curated", name: "Curated", brandId: "brand-1", commerceProductCurationEnabled: true }),
+      campaign({ id: "legacy", name: "Legacy sibling", brandId: "brand-1", commerceProductCurationEnabled: false }),
+    ], "legacy");
+    assert.equal(result.kind, "legacy");
+    if (result.kind === "legacy") {
+      assert.equal(result.campaign.campaignId, "legacy");
+    }
   });
 });
 

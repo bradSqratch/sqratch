@@ -3,6 +3,7 @@ import { unstable_noStore as noStore } from "next/cache";
 import type { PublicExperienceData } from "@/components/experience/types";
 import {
   getExperienceAccessContext,
+  resolvePublicCampaignId,
   type ExperienceAccessContext,
 } from "@/lib/experience-access";
 import prisma from "@/lib/prisma";
@@ -60,13 +61,31 @@ export async function loadPublicExperience(
     },
   });
 
-  const primaryCampaign = access.experience.campaigns[0] || null;
+  // The primary campaign/brand of a co-sponsored Experience is resolved from
+  // the visitor's own trusted session context, never from `campaigns[0]`.
+  // When it cannot be resolved (two or more eligible sponsors and no trusted
+  // signal) it stays null and every downstream consumer stays brand-neutral:
+  // `primaryBrandId` is null rather than an arbitrary sponsor's id, and the
+  // campaign list keeps its deterministic persisted order instead of promoting
+  // a guess to the front.
+  const resolvedCampaignId = resolvePublicCampaignId({
+    campaigns: access.experience.campaigns.map((item) => ({
+      campaignId: item.campaignId,
+      brandId: item.campaign.brand?.id ?? null,
+    })),
+    storedCampaignId: access.storedCampaignId,
+  });
 
-  const orderedCampaigns = primaryCampaign
+  const resolvedCampaign =
+    access.experience.campaigns.find(
+      (item) => item.campaignId === resolvedCampaignId,
+    ) || null;
+
+  const orderedCampaigns = resolvedCampaign
     ? [
-        primaryCampaign,
+        resolvedCampaign,
         ...access.experience.campaigns.filter(
-          (item) => item.campaignId !== primaryCampaign.campaignId,
+          (item) => item.campaignId !== resolvedCampaign.campaignId,
         ),
       ]
     : access.experience.campaigns;
@@ -160,8 +179,8 @@ export async function loadPublicExperience(
 
   return {
     access,
-    primaryCampaignId: primaryCampaign?.campaignId || null,
-    primaryBrandId: primaryCampaign?.campaign.brand?.id || null,
+    primaryCampaignId: resolvedCampaign?.campaignId || null,
+    primaryBrandId: resolvedCampaign?.campaign.brand?.id || null,
     data: {
       id: access.experience.id,
       slug: access.experience.slug,
@@ -182,6 +201,10 @@ export async function loadPublicExperience(
         name: item.campaign.name,
         brand: item.campaign.brand,
       })),
+      // Additive: lets the client render the visitor's OWN sponsor rather than
+      // re-deriving `campaigns[0]`, and render a neutral placeholder when the
+      // context is ambiguous. Only an id already present in `campaigns` above.
+      resolvedCampaignId: resolvedCampaign?.campaignId || null,
       featuredStory,
       courses: courses.map((course) => ({
         id: course.id,

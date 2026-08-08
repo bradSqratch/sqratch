@@ -343,7 +343,14 @@ export function ExperienceLessonClient({
 
   function handleOpenProduct(product: LessonProductsResponse["items"][number]) {
     setClickingProductId(product.id);
-    window.open(product.productUrl, "_blank", "noopener,noreferrer");
+    // Every item here comes from `LessonProductLink` (see the GET route this
+    // list is fetched from), so `product.id` is always a `LessonProductLink.id`
+    // and can always be routed through the server-side click-attribution hop.
+    window.open(
+      `/api/public/experience/${experienceSlug}/lessons/${lessonId}/products/click/${product.id}`,
+      "_blank",
+      "noopener,noreferrer",
+    );
 
     fetch(
       `/api/public/experience/${experienceSlug}/lessons/${lessonId}/products`,
@@ -356,7 +363,6 @@ export function ExperienceLessonClient({
         },
         body: JSON.stringify({
           productLinkId: product.id,
-          productUrl: product.productUrl,
         }),
       },
     ).finally(() => {
