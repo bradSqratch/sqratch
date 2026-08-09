@@ -41,7 +41,14 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
-import type { CommerceProvider } from "@prisma/client";
+import type {
+  CommerceProvider,
+  // Aliased because this module already exports its own richer
+  // `CommerceClickSurface` (the per-request discriminated union below). The
+  // Prisma enum is the PERSISTED projection of that union's `kind`, and
+  // importing it keeps the two tied together at compile time.
+  CommerceClickSurface as PersistedClickSurface,
+} from "@prisma/client";
 import {
   getExperienceAccessContext,
   type ExperienceAccessContext,
@@ -190,6 +197,24 @@ export type AttributionInput = {
   connectedProductId: string;
   commerceConnectionId: string;
   provider: CommerceProvider;
+  /**
+   * PHASE 10 DURABILITY COLUMNS. Both are optional here purely so existing
+   * injected test doubles keep compiling; production always supplies both.
+   *
+   * `surface` is the persisted projection of `CommerceClickSurface["kind"]`.
+   * Recording it is what stops analytics from having to INFER the surface from
+   * which optional foreign keys survived, an inference that silently
+   * reclassifies a lesson click as a campaign-product click once the
+   * attachment is deleted.
+   *
+   * `attributedBrandId` is the same value as `brandId`, written to a column
+   * with no foreign key at all. `brandId` is jointly owned by the composite
+   * (productCampaignId, brandId) key, so deleting or administratively
+   * reassigning the product campaign nulls or rewrites it; the durable copy is
+   * immune to both.
+   */
+  surface?: PersistedClickSurface;
+  attributedBrandId?: string | null;
   destinationUrl: string;
   destinationHost: string;
   userId: string | null;
@@ -592,6 +617,10 @@ const DEFAULT_DEPS: CommerceClickDeps = {
         brandCommerceProductId: input.brandCommerceProductId,
         connectedProductId: input.connectedProductId,
         commerceConnectionId: input.commerceConnectionId,
+        // Written once, never updated. `?? null` keeps the fail-open mint path
+        // safe: a caller that omits either value still records the click.
+        surface: input.surface ?? null,
+        attributedBrandId: input.attributedBrandId ?? null,
         destinationUrl: input.destinationUrl,
         destinationHost: input.destinationHost,
         provider: input.provider,
@@ -782,6 +811,12 @@ export async function handleCommerceClick(
         connectedProductId: link.connectedProductId,
         commerceConnectionId: link.commerceConnectionId,
         provider: link.provider,
+        // The surface is known from the dispatch above; `brandId` is the brand
+        // this click was just resolved against. Both are snapshotted here so
+        // neither depends on a foreign key that a later deletion or campaign
+        // reassignment can null out or point at a different tenant.
+        surface: options.surface.kind,
+        attributedBrandId: brandId,
         destinationUrl: destination.toString(),
         destinationHost: destination.hostname,
         userId: access.viewer.userId,

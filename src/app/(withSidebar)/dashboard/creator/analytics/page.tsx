@@ -34,6 +34,48 @@ type AnalyticsResponse = {
   }>;
 };
 
+/**
+ * Phase 11: the CLICK-ONLY commerce shape returned by
+ * `/api/creator/analytics/commerce`.
+ *
+ * Every field here is a click count. SQRATCH cannot observe anything after a
+ * visitor leaves for a merchant page, so this panel reports outbound clicks
+ * only and the server-supplied `note` states plainly what is not measured.
+ *
+ * "Campaign entry" and "Direct entry" describe HOW the visitor arrived. They
+ * are never merged with, or relabelled as, the campaign that authorized a
+ * clicked product — those are two different questions about one click.
+ */
+type CommerceAnalyticsResponse = {
+  range: { start: string; end: string };
+  filters: { experienceId: string | null; limit: number };
+  totals: {
+    clicks: number;
+    uniqueSessions: { value: number; truncated: boolean };
+    uniqueUsers: { value: number; truncated: boolean };
+    campaignEntryClicks: number;
+    directEntryClicks: number;
+  };
+  timeSeries: Array<{ date: string; clicks: number }>;
+  timeSeriesTruncated: boolean;
+  surfaceBreakdown: Record<
+    "BRAND_STOREFRONT" | "CAMPAIGN_PRODUCT" | "LESSON" | "UNKNOWN",
+    number
+  >;
+  providerBreakdown: Array<{ provider: string; clicks: number }>;
+  topProducts: Array<{ id: string; name: string | null; clicks: number }>;
+  topLessons: Array<{ id: string; title: string | null; clicks: number }>;
+  topExperiences?: Array<{ id: string; title: string | null; clicks: number }>;
+  note: string;
+};
+
+const SURFACE_LABELS: Record<string, string> = {
+  BRAND_STOREFRONT: "Brand storefront",
+  CAMPAIGN_PRODUCT: "Campaign product",
+  LESSON: "Lesson",
+  UNKNOWN: "Unknown",
+};
+
 export default function CreatorAnalyticsPage() {
   const [filters, setFilters] = useState({
     experienceId: "",
@@ -42,6 +84,11 @@ export default function CreatorAnalyticsPage() {
   });
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [commerce, setCommerce] = useState<CommerceAnalyticsResponse | null>(
+    null,
+  );
+  const [commerceError, setCommerceError] = useState<string | null>(null);
+  const [commerceLoading, setCommerceLoading] = useState(true);
 
   const load = useCallback(async () => {
     setError(null);
@@ -71,6 +118,44 @@ export default function CreatorAnalyticsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // A parallel effect rather than an extension of `load`: the commerce panel
+  // has its own endpoint, its own failure mode and its own empty state, and a
+  // commerce error must not blank out the experience metrics above it.
+  const loadCommerce = useCallback(async () => {
+    setCommerceError(null);
+    setCommerceLoading(true);
+
+    try {
+      const query = new URLSearchParams();
+
+      if (filters.experienceId) {
+        query.set("experienceId", filters.experienceId);
+      }
+      if (filters.dateFrom) {
+        query.set("dateFrom", filters.dateFrom);
+      }
+      if (filters.dateTo) {
+        query.set("dateTo", filters.dateTo);
+      }
+
+      const result = await fetchJson<CommerceAnalyticsResponse>(
+        `/api/creator/analytics/commerce?${query.toString()}`,
+      );
+      setCommerce(result);
+    } catch (loadError) {
+      setCommerce(null);
+      setCommerceError(
+        getErrorMessage(loadError, "Failed to load product click analytics."),
+      );
+    } finally {
+      setCommerceLoading(false);
+    }
+  }, [filters]);
+
+  useEffect(() => {
+    void loadCommerce();
+  }, [loadCommerce]);
 
   return (
     <CreatorPageShell
@@ -183,21 +268,263 @@ export default function CreatorAnalyticsPage() {
           </PageCard>
         </>
       )}
+
+      <CommerceClickSection
+        data={commerce}
+        error={commerceError}
+        isLoading={commerceLoading}
+      />
     </CreatorPageShell>
+  );
+}
+
+/**
+ * Outbound product clicks for the Experiences this creator owns.
+ *
+ * Every number below is a CLICK COUNT, because SQRATCH has no visibility past
+ * the merchant handoff. The one-line note rendered at the bottom comes from the
+ * API and is the single place that spells out what is not measured.
+ */
+function CommerceClickSection({
+  data,
+  error,
+  isLoading,
+}: {
+  data: CommerceAnalyticsResponse | null;
+  error: string | null;
+  isLoading: boolean;
+}) {
+  if (error) {
+    return (
+      <PageCard>
+        <h2 className="text-xl font-semibold">Product clicks</h2>
+        <p className="mt-3 text-sm text-red-300">{error}</p>
+      </PageCard>
+    );
+  }
+
+  if (isLoading || !data) {
+    return (
+      <PageCard>
+        <h2 className="text-xl font-semibold">Product clicks</h2>
+        <p className="mt-3 text-sm text-white/65">
+          Loading product click analytics...
+        </p>
+      </PageCard>
+    );
+  }
+
+  const surfaceRows = (
+    ["BRAND_STOREFRONT", "CAMPAIGN_PRODUCT", "LESSON", "UNKNOWN"] as const
+  ).map((bucket) => ({
+    bucket,
+    label: SURFACE_LABELS[bucket] ?? bucket,
+    clicks: data.surfaceBreakdown[bucket],
+  }));
+
+  const peakClicks = data.timeSeries.reduce(
+    (peak, point) => Math.max(peak, point.clicks),
+    0,
+  );
+
+  return (
+    <>
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
+        <MetricCard label="Total product clicks" value={data.totals.clicks} />
+        <MetricCard
+          label="Unique clicking sessions"
+          value={data.totals.uniqueSessions.value}
+          hint={data.totals.uniqueSessions.truncated ? "at least" : undefined}
+        />
+        <MetricCard
+          label="Logged-in users who clicked"
+          value={data.totals.uniqueUsers.value}
+          hint={data.totals.uniqueUsers.truncated ? "at least" : undefined}
+        />
+        {/* "Entry" is how the visitor ARRIVED. It is never the campaign that
+            authorized the product they clicked, so it is never labelled with a
+            bare "Campaign". */}
+        <MetricCard
+          label="Campaign-entry clicks"
+          value={data.totals.campaignEntryClicks}
+        />
+        <MetricCard
+          label="Direct-entry clicks"
+          value={data.totals.directEntryClicks}
+        />
+      </div>
+
+      <PageCard>
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <h2 className="text-xl font-semibold">Product clicks per day</h2>
+          <p className="text-xs text-white/45">
+            {data.range.start.slice(0, 10)} to {data.range.end.slice(0, 10)} (UTC)
+          </p>
+        </div>
+
+        {/* The timestamp sample is read OLDEST-FIRST, so truncation drops the
+            LATEST days rather than thinning every day evenly. Saying only "at
+            least" would let a creator read the trailing zeroes as a collapse in
+            traffic, so the shape of the gap is named explicitly. */}
+        {data.timeSeriesTruncated && (
+          <p className="mt-3 text-xs text-amber-300">
+            This series is incomplete: the click sample hit its ceiling, so only
+            the earliest clicks in this range are charted. Later days can show 0
+            here while still being counted in the total above.
+          </p>
+        )}
+
+        {peakClicks === 0 ? (
+          <p className="mt-4 text-sm text-white/65">
+            No product clicks recorded in this range.
+          </p>
+        ) : (
+          <div className="mt-5 flex h-32 items-end gap-1 overflow-x-auto">
+            {data.timeSeries.map((point) => (
+              <div
+                key={point.date}
+                title={`${point.date}: ${point.clicks} clicks`}
+                className="flex min-w-[6px] flex-1 flex-col justify-end"
+              >
+                <div
+                  className="rounded-t bg-white/45"
+                  style={{
+                    height: `${Math.round((point.clicks / peakClicks) * 100)}%`,
+                  }}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+      </PageCard>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <PageCard>
+          <h2 className="text-xl font-semibold">Clicks by surface</h2>
+          <p className="mt-1 text-xs text-white/45">
+            &quot;Unknown&quot; covers clicks recorded before the surface was
+            captured; it is never guessed.
+          </p>
+          <ul className="mt-4 space-y-2 text-sm">
+            {surfaceRows.map((row) => (
+              <li key={row.bucket} className="flex justify-between gap-4">
+                <span className="text-white/70">{row.label}</span>
+                <span className="font-medium">{row.clicks}</span>
+              </li>
+            ))}
+          </ul>
+        </PageCard>
+
+        <PageCard>
+          <h2 className="text-xl font-semibold">Clicks by provider</h2>
+          {data.providerBreakdown.length === 0 ? (
+            <p className="mt-4 text-sm text-white/65">No clicks in this range.</p>
+          ) : (
+            <ul className="mt-4 space-y-2 text-sm">
+              {data.providerBreakdown.map((row) => (
+                <li key={row.provider} className="flex justify-between gap-4">
+                  <span className="text-white/70">{row.provider}</span>
+                  <span className="font-medium">{row.clicks}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </PageCard>
+      </div>
+
+      <ClickRankCard
+        title="Top products by clicks"
+        rows={data.topProducts.map((row) => ({
+          id: row.id,
+          label: row.name,
+          clicks: row.clicks,
+        }))}
+      />
+
+      <ClickRankCard
+        title="Top lessons by clicks"
+        rows={data.topLessons.map((row) => ({
+          id: row.id,
+          label: row.title,
+          clicks: row.clicks,
+        }))}
+      />
+
+      {data.topExperiences && (
+        <ClickRankCard
+          title="Clicks by experience"
+          rows={data.topExperiences.map((row) => ({
+            id: row.id,
+            label: row.title,
+            clicks: row.clicks,
+          }))}
+        />
+      )}
+
+      <PageCard>
+        <p className="text-xs text-white/45">{data.note}</p>
+      </PageCard>
+    </>
+  );
+}
+
+function ClickRankCard({
+  title,
+  rows,
+}: {
+  title: string;
+  rows: Array<{ id: string; label: string | null; clicks: number }>;
+}) {
+  return (
+    <PageCard>
+      <h2 className="text-xl font-semibold">{title}</h2>
+      {rows.length === 0 ? (
+        <p className="mt-4 text-sm text-white/65">No clicks in this range.</p>
+      ) : (
+        <div className="mt-5 overflow-x-auto">
+          <table className="w-full min-w-[480px] text-left text-sm">
+            <thead className="text-white/55">
+              <tr>
+                <th className="pb-3">Name</th>
+                <th className="pb-3">Clicks</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/10">
+              {rows.map((row) => (
+                <tr key={row.id}>
+                  <td className="py-3">{row.label ?? "Unavailable"}</td>
+                  <td className="py-3">{row.clicks}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </PageCard>
   );
 }
 
 function MetricCard({
   label,
   value,
+  hint,
 }: {
   label: string;
   value: number;
+  /**
+   * Optional qualifier rendered before the number. Used for bounded counts,
+   * where the value is a LOWER bound ("at least 100000") because the distinct
+   * sample hit its ceiling and must not be shown as an exact figure.
+   */
+  hint?: string;
 }) {
   return (
     <PageCard>
       <p className="text-sm text-white/55">{label}</p>
-      <p className="mt-2 text-4xl font-semibold">{value}</p>
+      <p className="mt-2 text-4xl font-semibold">
+        {hint && <span className="mr-1 text-base text-white/55">{hint}</span>}
+        {value}
+      </p>
     </PageCard>
   );
 }

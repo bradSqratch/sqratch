@@ -1,0 +1,296 @@
+-- Migration: 20260808150000_add_commerce_click_analytics_durability
+--
+-- Phase 10's durable click-only analytics foundation. This migration is
+-- ADDITIVE AND FORWARD-ONLY. It contains exactly three statement forms:
+--
+--   * one CREATE TYPE   ("CommerceClickSurface")
+--   * one ALTER TABLE ... ADD COLUMN (two nullable columns on
+--     "CommerceClickAttribution")
+--   * eight CREATE INDEX
+--
+-- It contains NO UPDATE, NO DELETE, NO TRUNCATE, NO DROP of any kind, NO
+-- ALTER COLUMN, NO type conversion, and no change to any pre-existing column,
+-- constraint, index, or foreign key. No existing row in any table is read,
+-- rewritten, or removed. Every one of the nine indexes and seventeen foreign
+-- keys already on "CommerceClickAttribution" survives byte-for-byte.
+--
+-- IT ADDS NO MONEY, ORDER, CONVERSION, REVENUE, OR QUANTITY COLUMN. A click
+-- remains evidence that a visitor was sent to a merchant page, and nothing
+-- more. Nothing here may be read as purchase or conversion attribution.
+--
+--
+-- WHY THESE TWO COLUMNS EXIST
+-- ---------------------------
+-- Until this migration, "CommerceClickAttribution" had NO persisted surface
+-- classification at all. The surface (brand storefront / campaign product /
+-- lesson) was constructed per-request by the calling route, used transiently to
+-- dispatch the correct finder, and then discarded. Analytics could therefore
+-- only *infer* the surface after the fact, from which optional foreign keys
+-- happened to still be non-null. That inference is provably lossy, by two
+-- independent paths:
+--
+--   (a) Deleting a "CampaignLessonProduct" fires ON DELETE SET NULL on
+--       "campaignLessonProductId" but leaves "lessonId", "courseId" and
+--       "productCampaignId" intact. A LESSON click then reads as a
+--       CAMPAIGN_PRODUCT click.
+--   (b) Deleting the Campaign referenced by "productCampaignId" fires the
+--       COMPOSITE foreign key ("productCampaignId", "brandId") ->
+--       Campaign("id", "brandId"), which is ON DELETE SET NULL. PostgreSQL
+--       nulls ALL columns of a multi-column foreign key, so this nulls
+--       "productCampaignId" AND "brandId" together. A CAMPAIGN_PRODUCT click
+--       then reads as BRAND_STOREFRONT *and* loses its brand association.
+--
+-- Path (b) was already recorded as a KNOWN LIMITATION by
+-- 20260807160000_add_commerce_click_attribution, which closed with: "Anything
+-- that needs brand-durable click history across campaign deletion must
+-- denormalize the brand into a non-foreign-key column in a later, deliberately
+-- reviewed change." This is that change.
+--
+-- A THIRD HAZARD, NOT PREVIOUSLY RECORDED, ON THE SAME COMPOSITE KEY
+-- ------------------------------------------------------------------
+-- That composite foreign key is also ON UPDATE CASCADE. A global ADMIN can
+-- reassign "Campaign"."brandId" to a different Brand through the existing admin
+-- campaign route, which validates only that the new brand exists. When that
+-- happens, ON UPDATE CASCADE REWRITES ("productCampaignId", "brandId") on every
+-- historical click row from the old brand to the new one.
+--
+-- So "brandId" — today the only foreign-key-backed brand association on this
+-- table — is not merely nullable by an unrelated deletion; it is silently
+-- REASSIGNABLE TO A DIFFERENT TENANT by an unrelated administrative action.
+-- This migration does NOT change that cascade and does NOT change the admin
+-- route: altering a live cascade on an evidence table is a separate, riskier
+-- decision, and the pre-existing behavior is deliberately left exactly as it
+-- is. What this migration does is give Brand analytics a column that action
+-- cannot reach.
+--
+--
+-- CASCADE REASONING
+-- -----------------
+-- "attributedBrandId" IS DELIBERATELY NOT A FOREIGN KEY. That is the entire
+-- point of the column, not an oversight:
+--
+--   * It has no ON DELETE behavior, so no Brand or Campaign deletion can null
+--     it.
+--   * It has no ON UPDATE behavior, so no Campaign-to-Brand reassignment can
+--     rewrite it.
+--   * It is written exactly once, by the click mint path, and is never updated
+--     afterwards by any code path.
+--
+-- The cost is stated plainly: PostgreSQL will not enforce that
+-- "attributedBrandId" references a live "Brand" row, and after a Brand is
+-- deleted the value becomes a dangling id. That is the CORRECT trade for an
+-- immutable historical snapshot — the whole reason the column exists is to
+-- outlive the rows it points at. Consumers must treat it as an opaque
+-- historical brand identity, not as a join key guaranteed to resolve.
+--
+-- "surface" IS DELIBERATELY NULLABLE, AND SO IS "attributedBrandId".
+-- Attribution minting is fail-open by explicit design (see
+-- src/lib/commerce/click-attribution.ts: the whole record path is wrapped in a
+-- try/catch that swallows every error and redirects anyway, because "losing one
+-- attribution row is a reporting gap; blocking the redirect is an outage on the
+-- revenue path"). A NOT NULL column here would convert any future gap in
+-- surface resolution into a constraint violation INSIDE that catch — which
+-- would silently stop recording clicks entirely while redirects kept working,
+-- i.e. exactly the failure mode hardest to notice. Both columns are therefore
+-- nullable with no default and no backfill.
+--
+--
+-- NO BACKFILL, ON PURPOSE
+-- -----------------------
+-- Every pre-existing row gets "surface" = NULL and "attributedBrandId" = NULL,
+-- and this migration makes no attempt to reconstruct either.
+--
+-- This is the deliberately honest state, not laziness. Per paths (a) and (b)
+-- above, a historical row's true surface may be genuinely unrecoverable, and a
+-- migration-time inference query would write a CONFIDENT-LOOKING but WRONG
+-- classification into a column whose entire purpose is to be trustworthy.
+-- Analytics must report these rows in an explicit "unknown" bucket and must
+-- never re-derive them from which optional foreign keys survived.
+--
+-- The same reasoning applies to "attributedBrandId": for any row whose
+-- "brandId" was already nulled by a Campaign deletion, or already rewritten by
+-- a Campaign reassignment, the original brand is not recoverable from this
+-- database. Copying today's possibly-corrupted "brandId" into the durable
+-- column would launder that corruption into the very column meant to be immune
+-- to it.
+--
+--
+-- INDEXES ADDED (eight)
+-- ---------------------
+-- Three serve the new durable analytics path:
+--
+--   ("attributedBrandId", "createdAt")              brand-scoped range reads
+--   ("attributedBrandId", "surface", "createdAt")   brand-scoped surface split
+--   ("surface", "createdAt")                        platform-wide surface split
+--
+-- The middle index carries an explicit name. Its Prisma-generated default would
+-- have been 64 characters, one over PostgreSQL's 63-byte identifier limit, and
+-- would have been silently truncated; naming it in the schema keeps the SQL and
+-- the schema in exact agreement.
+--
+-- Five index foreign-key columns that had NO index whatsoever before this
+-- migration:
+--
+--   ("creatorProfileId", "createdAt")
+--   ("lessonId", "createdAt")
+--   ("brandCommerceProductId", "createdAt")
+--   ("connectedProductId", "createdAt")
+--   ("qrCodeId", "createdAt")
+--
+-- These are needed by the Phase 10 group-bys (per-creator, per-lesson,
+-- per-product), and they fix a second, pre-existing problem: each of those
+-- columns is the target of an ON DELETE SET NULL cascade, and PostgreSQL does
+-- not index referencing columns automatically, so deleting one CreatorProfile,
+-- Lesson, BrandCommerceProduct, ConnectedCommerceProduct or QRCode currently
+-- forces a sequential scan of this entire table.
+--
+-- Index creation is NOT declared CONCURRENTLY, matching every other migration
+-- in this repository and Prisma Migrate's transactional application model. Each
+-- Each plain CREATE INDEX acquires a SHARE lock on
+-- "CommerceClickAttribution" while the index is built. SELECTs may continue,
+-- but INSERT/UPDATE/DELETE operations on that table wait until the index build
+-- completes.
+--
+-- If an operator on a very large table cannot accept that window, note that
+-- pre-building these indexes manually with CREATE INDEX CONCURRENTLY is NOT a
+-- transparent substitute: the statements below are plain CREATE INDEX without
+-- IF NOT EXISTS, so they will ERROR with "already exists" rather than no-op,
+-- and this migration would then have to be resolved as already-applied by hand.
+-- Verify current index presence with informational query (2) before attempting
+-- that; do not assume.
+--
+--
+-- PREFLIGHT — INFORMATIONAL ONLY. THIS MIGRATION NEEDS NO PREFLIGHT GATE.
+-- -----------------------------------------------------------------------
+-- Unlike 20260808130000_remove_legacy_product_link_snapshots, this migration
+-- contains NO destructive statement and has NO data dependency, so there is
+-- nothing for a gate to protect. Concretely:
+--
+--   * It cannot destroy data: there is no DROP, DELETE, TRUNCATE or UPDATE.
+--   * It cannot fail on unexpected row contents: the two new columns are
+--     nullable with no default, so no existing row must satisfy anything.
+--   * It cannot fail on unexpected referential state: "attributedBrandId" is
+--     deliberately not a foreign key, so no referenced row must exist.
+--   * Its only real precondition is that the table itself exists, which is a
+--     schema fact guaranteed by the migration history, not a data fact.
+--
+-- A DO $$ ... RAISE EXCEPTION gate would therefore only add a way for a
+-- harmless migration to abort. There is deliberately none.
+--
+-- The following queries are READ-ONLY and are NOT executed by this migration.
+-- Run them manually, as a human, if you want a before/after record. Do NOT run
+-- them from application code or from a dev shell pointed at production.
+--
+-- (1) Confirm the migration that created this table is applied and not rolled
+--     back:
+--
+--     SELECT migration_name, finished_at, rolled_back_at
+--     FROM _prisma_migrations
+--     WHERE migration_name = '20260807160000_add_commerce_click_attribution';
+--
+--     One row, non-null finished_at, null rolled_back_at.
+--
+-- (2) Confirm none of the nine objects this migration creates already exists
+--     from a manual partial application (all should return zero rows):
+--
+--     SELECT typname FROM pg_type WHERE typname = 'CommerceClickSurface';
+--
+--     SELECT indexname FROM pg_indexes
+--     WHERE schemaname = 'public'
+--       AND tablename  = 'CommerceClickAttribution'
+--       AND indexname IN (
+--         'CommerceClickAttribution_attributedBrandId_createdAt_idx',
+--         'CommerceClickAttribution_attributedBrand_surface_createdAt_idx',
+--         'CommerceClickAttribution_surface_createdAt_idx',
+--         'CommerceClickAttribution_creatorProfileId_createdAt_idx',
+--         'CommerceClickAttribution_lessonId_createdAt_idx',
+--         'CommerceClickAttribution_brandCommerceProductId_createdAt_idx',
+--         'CommerceClickAttribution_connectedProductId_createdAt_idx',
+--         'CommerceClickAttribution_qrCodeId_createdAt_idx'
+--       );
+--
+-- (3) Size the index build and record the honest "unknown surface" population
+--     you are about to create. Every existing row is in it, by construction:
+--
+--     SELECT count(*) AS rows_that_will_have_null_surface
+--     FROM "CommerceClickAttribution";
+--
+-- (4) Quantify how much brand attribution has ALREADY been lost to the
+--     composite-foreign-key SET NULL described above. These rows can never
+--     receive a meaningful "attributedBrandId", which is exactly why this
+--     migration does not try to invent one:
+--
+--     SELECT count(*) AS clicks_with_no_brand_association
+--     FROM "CommerceClickAttribution"
+--     WHERE "brandId" IS NULL;
+--
+--
+-- ROLLBACK LIMITATION — AND WHY THIS ONE IS ACTUALLY SAFE
+-- -------------------------------------------------------
+-- There is no automatic down migration, per repository convention. But unlike
+-- the prior destructive migrations in this repository, ROLLING THIS ONE BACK IS
+-- LOSSLESS FOR ALL PRE-EXISTING DATA, and it is worth recording that plainly.
+--
+-- Dropping "surface", "attributedBrandId", the eight indexes and the
+-- "CommerceClickSurface" type restores the table to precisely its previous
+-- shape. No pre-existing column, row, index or foreign key is touched by this
+-- migration, so none can be damaged by reversing it.
+--
+-- The ONLY thing a rollback loses is the surface/brand classification of clicks
+-- minted BETWEEN the deploy and the rollback. That data is a pure forward-only
+-- denormalization: it is captured at click time and, once discarded, cannot be
+-- re-derived (that irrecoverability is the whole justification for the columns).
+-- Losing it is a reporting gap for that window only — no click row is deleted,
+-- and every such row keeps its id, timestamps, destination and remaining
+-- identity columns, so the clicks themselves stay fully provable.
+--
+-- Rollback order, if ever needed (drop indexes and columns before the type;
+-- dropping the two columns removes their index dependencies automatically):
+--   1. ALTER TABLE "CommerceClickAttribution" DROP COLUMN "attributedBrandId";
+--   2. ALTER TABLE "CommerceClickAttribution" DROP COLUMN "surface";
+--   3. DROP the five remaining pre-existing-column indexes if unwanted.
+--   4. DROP TYPE "CommerceClickSurface";
+-- No application code path breaks: reads of both columns are null-tolerant by
+-- construction, and the mint path is fail-open.
+
+
+-- CreateEnum
+CREATE TYPE "CommerceClickSurface" AS ENUM ('BRAND_STOREFRONT', 'CAMPAIGN_PRODUCT', 'LESSON');
+
+-- Two nullable columns, no default, no backfill. See CASCADE REASONING and NO
+-- BACKFILL above: "attributedBrandId" is intentionally a plain TEXT column with
+-- no foreign key, and neither column may be NOT NULL because the mint path is
+-- fail-open.
+-- AlterTable
+ALTER TABLE "CommerceClickAttribution" ADD COLUMN     "attributedBrandId" TEXT,
+ADD COLUMN     "surface" "CommerceClickSurface";
+
+-- The durable brand analytics key. Every Brand-side aggregate reads this
+-- column, never "brandId".
+-- CreateIndex
+CREATE INDEX "CommerceClickAttribution_attributedBrandId_createdAt_idx" ON "CommerceClickAttribution"("attributedBrandId", "createdAt");
+
+-- Explicitly named: the Prisma default would be 64 characters and silently
+-- truncated to PostgreSQL's 63-byte limit.
+-- CreateIndex
+CREATE INDEX "CommerceClickAttribution_attributedBrand_surface_createdAt_idx" ON "CommerceClickAttribution"("attributedBrandId", "surface", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "CommerceClickAttribution_surface_createdAt_idx" ON "CommerceClickAttribution"("surface", "createdAt");
+
+-- The five below index foreign-key columns that had no index at all, which also
+-- removes a sequential scan from each of their ON DELETE SET NULL cascades.
+-- CreateIndex
+CREATE INDEX "CommerceClickAttribution_creatorProfileId_createdAt_idx" ON "CommerceClickAttribution"("creatorProfileId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "CommerceClickAttribution_lessonId_createdAt_idx" ON "CommerceClickAttribution"("lessonId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "CommerceClickAttribution_brandCommerceProductId_createdAt_idx" ON "CommerceClickAttribution"("brandCommerceProductId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "CommerceClickAttribution_connectedProductId_createdAt_idx" ON "CommerceClickAttribution"("connectedProductId", "createdAt");
+
+-- CreateIndex
+CREATE INDEX "CommerceClickAttribution_qrCodeId_createdAt_idx" ON "CommerceClickAttribution"("qrCodeId", "createdAt");

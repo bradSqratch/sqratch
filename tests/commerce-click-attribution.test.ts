@@ -6,14 +6,21 @@ process.env.COMMERCE_CLICK_TOKEN_PEPPER = "test-pepper-for-commerce-click-attrib
  *
  * Coverage for src/lib/commerce/click-attribution.ts (`handleCommerceClick`)
  * using its injectable `CommerceClickDeps` overrides — no real DB, no network.
- * Also includes a migration-shape test for
- * prisma/migrations/20260807160000_add_commerce_click_attribution, mirroring
- * tests/campaign-lesson-product-schema.test.ts's style.
+ * Also includes permanent migration-shape tests — one per migration that
+ * touches `CommerceClickAttribution` — mirroring
+ * tests/campaign-lesson-product-schema.test.ts's style:
+ *
+ *   * 20260807160000_add_commerce_click_attribution   (creates the table)
+ *   * 20260808150000_add_commerce_click_analytics_durability
+ *     (Phase 10: adds `surface` + `attributedBrandId` and eight indexes)
+ *
+ * House convention: EVERY migration touching this table gets a committed shape
+ * test here, not an ad-hoc one-time check by whoever wrote it.
  */
 
 import { test, describe, before, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { NextRequest } from "next/server";
 
@@ -996,6 +1003,580 @@ describe("Phase 8.3 commerce click attribution matrix", () => {
   });
 });
 
+/**
+ * A multi-brand Experience: two eligible campaigns owned by DIFFERENT brands.
+ *
+ * `twoEligibleCampaigns()` above deliberately puts both campaigns under
+ * `brand-1`, which is the right fixture for campaign-isolation tests but cannot
+ * distinguish "the entry campaign's brand" from "the clicked product's brand".
+ * The Phase 10 durability tests need exactly that distinction, so they use this.
+ */
+function twoBrandCampaigns(): ExperienceAccessContext["experience"]["campaigns"] {
+  return [
+    {
+      campaignId: "campaign-A",
+      campaign: {
+        id: "campaign-A",
+        name: "A",
+        brand: { id: "brand-1", name: "Acme", slug: "acme", logoUrl: null },
+      },
+    },
+    {
+      campaignId: "campaign-B",
+      campaign: {
+        id: "campaign-B",
+        name: "B",
+        brand: { id: "brand-2", name: "Globex", slug: "globex", logoUrl: null },
+      },
+    },
+  ];
+}
+
+/**
+ * PHASE 10 — the two durable analytics columns are actually WRITTEN, per surface.
+ *
+ * Before this block nothing asserted that a real `handleCommerceClick()` call
+ * persists `surface` or `attributedBrandId` at all. Every combination below is
+ * consistent with the "Phase 8.3 commerce click attribution matrix" block above,
+ * which remains the de facto spec for `entryCampaignId` / `productCampaignId` /
+ * `campaignLessonProductId`; these tests add the two new columns to that same
+ * matrix rather than restating a second, divergent rule.
+ *
+ * No database: the same injected `CommerceClickDeps` doubles the other 48 tests
+ * in this file use. `recordAttribution` captures the exact `AttributionInput`
+ * the module built, which is the boundary at which the two values are decided.
+ */
+describe("Phase 10 durable capture: surface and attributedBrandId per surface kind", () => {
+  test("a BRAND_STOREFRONT click records surface=BRAND_STOREFRONT and the resolved brand id", async () => {
+    const captured: AttributionInput[] = [];
+    const response = await click(SHOP_SURFACE, {
+      getAccess: async () => access({ entryContext: { kind: "DIRECT" } }),
+      findBrandStorefrontProduct: async () =>
+        resolvedLink({ brandId: "brand-1", scope: null }),
+      recordAttribution: async (input) => {
+        captured.push(input);
+      },
+    });
+
+    assert.equal(response.status, 302);
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].surface, "BRAND_STOREFRONT");
+    assert.equal(captured[0].attributedBrandId, "brand-1");
+    // The durable copy is the SAME value the module resolved as `brandId`; it is
+    // a snapshot of that decision, never an independent second derivation.
+    assert.equal(captured[0].attributedBrandId, captured[0].brandId);
+    // Matrix agreement (unscoped storefront surface).
+    assert.equal(captured[0].productCampaignId, null);
+    assert.equal(captured[0].campaignLessonProductId, null);
+  });
+
+  test("a CAMPAIGN_PRODUCT click records surface=CAMPAIGN_PRODUCT and the resolved brand id", async () => {
+    const captured: AttributionInput[] = [];
+    const response = await click(
+      { kind: "CAMPAIGN_PRODUCT", campaignAssignmentId: "assignment-a" },
+      {
+        getAccess: async () =>
+          access({
+            campaigns: twoEligibleCampaigns(),
+            entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" },
+          }),
+        findCampaignProduct: async () =>
+          resolvedLink({
+            id: "assignment-a",
+            brandId: "brand-1",
+            scope: { campaignId: "campaign-A", isActive: true },
+          }),
+        recordAttribution: async (input) => {
+          captured.push(input);
+        },
+      },
+    );
+
+    assert.equal(response.status, 302);
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].surface, "CAMPAIGN_PRODUCT");
+    assert.equal(captured[0].attributedBrandId, "brand-1");
+    assert.equal(captured[0].attributedBrandId, captured[0].brandId);
+    // Matrix 7 agreement.
+    assert.equal(captured[0].entryCampaignId, "campaign-A");
+    assert.equal(captured[0].productCampaignId, "campaign-A");
+    assert.equal(captured[0].campaignLessonProductId, null);
+  });
+
+  test("a LESSON click records surface=LESSON and the resolved brand id", async () => {
+    const captured: AttributionInput[] = [];
+    const response = await click(LESSON_SURFACE, {
+      getAccess: async () =>
+        access({
+          campaigns: twoEligibleCampaigns(),
+          entryContext: { kind: "DIRECT" },
+        }),
+      findCampaignLessonProduct: async () => lessonLink({ brandId: "brand-1" }),
+      recordAttribution: async (input) => {
+        captured.push(input);
+      },
+    });
+
+    assert.equal(response.status, 302);
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].surface, "LESSON");
+    assert.equal(captured[0].attributedBrandId, "brand-1");
+    assert.equal(captured[0].attributedBrandId, captured[0].brandId);
+    // Matrix 9 agreement. This combination is precisely the one that becomes
+    // unrecoverable without the durable column: deleting the
+    // `CampaignLessonProduct` nulls `campaignLessonProductId` while leaving
+    // `lessonId` and `productCampaignId`, so an inferring reader would then
+    // reclassify this exact row as CAMPAIGN_PRODUCT.
+    assert.equal(captured[0].entryCampaignId, null);
+    assert.equal(captured[0].productCampaignId, "campaign-A");
+    assert.equal(captured[0].campaignLessonProductId, "clp-1");
+  });
+
+  test("attributedBrandId tracks the PRODUCT's resolved brand, not the entry campaign's brand, when they differ", async () => {
+    // Case-3-shaped cross-campaign fixture: the visitor was acquired by
+    // campaign-A (owned by brand-1) but clicks a storefront product that
+    // resolves to brand-2. Entry campaign and attributed brand genuinely differ,
+    // which is the only fixture in which "which source wins" is observable — the
+    // same technique the "resolved brandId always comes from the looked-up link
+    // row" test at the top of this file uses.
+    const captured: AttributionInput[] = [];
+    const response = await click(SHOP_SURFACE, {
+      getAccess: async () =>
+        access({
+          campaigns: twoBrandCampaigns(),
+          entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" },
+        }),
+      findBrandStorefrontProduct: async () =>
+        resolvedLink({ brandId: "brand-2", scope: null }),
+      recordAttribution: async (input) => {
+        captured.push(input);
+      },
+    });
+
+    assert.equal(response.status, 302);
+    assert.equal(captured.length, 1);
+    assert.equal(captured[0].entryCampaignId, "campaign-A");
+    assert.equal(captured[0].productCampaignId, null);
+    assert.equal(captured[0].surface, "BRAND_STOREFRONT");
+    // The product's brand, NOT campaign-A's brand-1.
+    assert.equal(captured[0].attributedBrandId, "brand-2");
+    assert.notEqual(captured[0].attributedBrandId, "brand-1");
+    assert.equal(captured[0].attributedBrandId, captured[0].brandId);
+  });
+
+  test("when the link carries no brand, attributedBrandId snapshots the same context-brand fallback brandId uses (never null-by-omission)", async () => {
+    // `brandId = link.brandId ?? resolvedCampaignBrandId`. The durable column
+    // must follow the module's RESULT, including this fallback branch —
+    // otherwise brand analytics would silently lose every fallback-resolved
+    // click while `brandId` still had one.
+    const captured: AttributionInput[] = [];
+    const response = await click(SHOP_SURFACE, {
+      getAccess: async () =>
+        access({
+          campaigns: twoBrandCampaigns(),
+          entryContext: { kind: "CAMPAIGN", campaignId: "campaign-B" },
+        }),
+      findBrandStorefrontProduct: async () =>
+        resolvedLink({ brandId: null, scope: null }),
+      recordAttribution: async (input) => {
+        captured.push(input);
+      },
+    });
+
+    assert.equal(response.status, 302);
+    assert.equal(captured[0].brandId, "brand-2");
+    assert.equal(captured[0].attributedBrandId, "brand-2");
+    assert.equal(captured[0].attributedBrandId, captured[0].brandId);
+  });
+
+  test("the three surface kinds the union can dispatch are exactly the three values the persisted enum accepts", async () => {
+    // Exhaustiveness tripwire. Adding a fourth variant to the
+    // `CommerceClickSurface` discriminated union without adding it to the Prisma
+    // enum (or vice versa) breaks the one-to-one relationship the schema's own
+    // doc comment requires, and would make `surface` unwritable for that
+    // variant. This asserts the set actually OBSERVED being recorded, not a
+    // hand-maintained list.
+    const recorded = new Set<string>();
+    const surfaces: CommerceClickSurface[] = [
+      SHOP_SURFACE,
+      { kind: "CAMPAIGN_PRODUCT", campaignAssignmentId: "assignment-a" },
+      LESSON_SURFACE,
+    ];
+
+    for (const surface of surfaces) {
+      const response = await click(surface, {
+        getAccess: async () =>
+          access({ entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" } }),
+        findBrandStorefrontProduct: async () => resolvedLink({ scope: null }),
+        findCampaignProduct: async () =>
+          resolvedLink({
+            id: "assignment-a",
+            scope: { campaignId: "campaign-A", isActive: true },
+          }),
+        findCampaignLessonProduct: async () => lessonLink(),
+        recordAttribution: async (input) => {
+          assert.ok(input.surface, "surface must never be recorded as undefined");
+          recorded.add(input.surface);
+        },
+      });
+      assert.equal(response.status, 302);
+    }
+
+    const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
+    const enumBody = /enum CommerceClickSurface \{([\s\S]*?)\n\}/.exec(schema);
+    assert.ok(enumBody, "prisma/schema.prisma must declare enum CommerceClickSurface");
+    const enumValues = new Set(
+      enumBody[1]
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0 && !line.startsWith("///"))
+    );
+
+    assert.deepEqual(
+      [...recorded].sort(),
+      ["BRAND_STOREFRONT", "CAMPAIGN_PRODUCT", "LESSON"],
+    );
+    assert.deepEqual([...recorded].sort(), [...enumValues].sort());
+  });
+
+  test("AttributionInput leaves both durability columns OPTIONAL, so the fail-open mint path cannot NOT-NULL-violate on a caller that omits them", async () => {
+    // THE LOAD-BEARING HALF OF THIS TEST IS CHECKED BY `tsc`, NOT AT RUNTIME.
+    // This literal deliberately omits `surface` and `attributedBrandId`. If
+    // either were promoted to a required property of `AttributionInput`, this
+    // annotation stops compiling and `npm run typecheck` fails — which is the
+    // assertion. Every pre-Phase-10 injected double in this repository omits
+    // both, and the migration header's stated reason for both columns being
+    // nullable is exactly this: a NOT NULL surprise would land INSIDE the mint
+    // path's catch and silently stop recording clicks while redirects kept
+    // working.
+    const withoutDurabilityColumns: AttributionInput = {
+      tokenHash: "hash",
+      tokenPrefix: "prefix",
+      brandId: "brand-1",
+      entryCampaignId: null,
+      productCampaignId: null,
+      entryCampaignContextResolved: false,
+      experienceId: "experience-1",
+      courseId: null,
+      lessonId: null,
+      creatorProfileId: "creator-1",
+      campaignLessonProductId: null,
+      brandCommerceProductId: "bcp-1",
+      connectedProductId: "connected-1",
+      commerceConnectionId: "connection-1",
+      provider: "SHOPIFY",
+      destinationUrl: "https://acme.test/products/widget",
+      destinationHost: "acme.test",
+      userId: null,
+      sessionId: "session-1",
+      ipHash: null,
+      userAgent: null,
+      referrer: null,
+      expiresAt: new Date("2026-09-07T00:00:00.000Z"),
+      redirectedAt: new Date("2026-08-08T00:00:00.000Z"),
+    };
+
+    assert.equal("surface" in withoutDurabilityColumns, false);
+    assert.equal("attributedBrandId" in withoutDurabilityColumns, false);
+
+    // And a `recordAttribution`-shaped consumer accepts it without throwing.
+    const consume: CommerceClickDeps["recordAttribution"] = async () => {};
+    await assert.doesNotReject(() => consume(withoutDurabilityColumns));
+
+    // The persisted projection turns an omitted value into an EXPLICIT SQL NULL
+    // rather than leaving the key absent. Asserted against the real source so it
+    // cannot drift into `surface: input.surface` (which would send `undefined`).
+    const source = readFileSync(
+      join(process.cwd(), "src/lib/commerce/click-attribution.ts"),
+      "utf8",
+    );
+    assert.match(source, /surface\?: PersistedClickSurface;/);
+    assert.match(source, /attributedBrandId\?: string \| null;/);
+    const createStart = source.indexOf("prisma.commerceClickAttribution.create");
+    assert.ok(createStart > 0);
+    const createBody = source.slice(createStart);
+    assert.match(createBody, /surface: input\.surface \?\? null,/);
+    assert.match(createBody, /attributedBrandId: input\.attributedBrandId \?\? null,/);
+  });
+
+  test("a NOT NULL-style mint failure on the durability columns still redirects the visitor (fail-open, per the migration's stated rationale)", async () => {
+    // The generic fail-open case is already covered above; this asserts it for
+    // the specific hazard these two nullable columns exist to avoid, because a
+    // future NOT NULL on either would surface here and nowhere else.
+    const response = await click(LESSON_SURFACE, {
+      findCampaignLessonProduct: async () => lessonLink(),
+      recordAttribution: async () => {
+        const error = new Error(
+          'null value in column "surface" violates not-null constraint',
+        );
+        error.name = "PrismaClientKnownRequestError";
+        throw error;
+      },
+    });
+
+    assert.equal(response.status, 302);
+    // No token appended, because nothing was recorded — a reporting gap, not an
+    // outage on the commerce path.
+    assert.equal(
+      response.headers.get("location"),
+      "https://acme.test/products/widget",
+    );
+  });
+});
+
+/**
+ * PHASE 10 — the actual durability property: WRITE-ONCE-AT-INSERT.
+ *
+ * The behavioral tests above prove the two columns are written correctly. This
+ * block proves the stronger, structural claim the phase rests on: nothing
+ * anywhere in `src/` can later rewrite them, and nothing re-derives them from
+ * live relation state. That is what operationalizes the spec's "analytics must
+ * not silently rewrite history merely because a related object was later
+ * deleted" — a per-call-site behavioral test could never establish it, because
+ * the risk is a call site that does not exist yet.
+ */
+describe("Phase 10 write-once durability: no code path rewrites surface or attributedBrandId", () => {
+  const SRC_ROOT = join(process.cwd(), "src");
+
+  function collectSourceFiles(dir: string, out: string[] = []): string[] {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        collectSourceFiles(full, out);
+      } else if (/\.tsx?$/.test(entry.name)) {
+        out.push(full);
+      }
+    }
+    return out;
+  }
+
+  /** Drops line comments and JSDoc continuation lines, keeping executable text. */
+  function stripComments(source: string): string {
+    return source
+      .split("\n")
+      .filter((line) => {
+        const trimmed = line.trim();
+        return (
+          !trimmed.startsWith("//") &&
+          !trimmed.startsWith("*") &&
+          !trimmed.startsWith("/*")
+        );
+      })
+      .join("\n");
+  }
+
+  /** The call's own argument text, up to and including its closing `});`. */
+  function callPayload(source: string, startIndex: number): string {
+    const end = source.indexOf("});", startIndex);
+    return end === -1 ? source.slice(startIndex) : source.slice(startIndex, end + 3);
+  }
+
+  const sources = collectSourceFiles(SRC_ROOT).map((file) => ({
+    file,
+    relative: file.slice(process.cwd().length + 1),
+    code: stripComments(readFileSync(file, "utf8")),
+  }));
+
+  test("the walk sees the whole src tree, including the modules under test (guards against a vacuously-passing sweep)", () => {
+    assert.ok(sources.length > 100, `expected a real tree, saw ${sources.length} files`);
+    const relatives = sources.map((entry) => entry.relative);
+    assert.ok(relatives.includes("src/lib/commerce/click-attribution.ts"));
+    assert.ok(relatives.includes("src/lib/commerce/commerce-click-analytics.ts"));
+    assert.ok(
+      relatives.includes("src/lib/commerce/commerce-click-analytics-repository.ts"),
+    );
+    assert.ok(relatives.includes("src/lib/commerce/order-ingestion.ts"));
+  });
+
+  test("the only MUTATING Prisma methods used against CommerceClickAttribution anywhere in src/ are create and updateMany", () => {
+    const mutating = new Set<string>();
+    for (const { code } of sources) {
+      const pattern =
+        /commerceClickAttribution\s*\.\s*(create|createMany|update|updateMany|upsert|delete|deleteMany)\b/g;
+      for (const match of code.matchAll(pattern)) {
+        mutating.add(match[1]);
+      }
+    }
+
+    // A tripwire, deliberately exact: a new mutation method appearing on this
+    // table must be reviewed against the write-once property below, not slip in.
+    assert.deepEqual([...mutating].sort(), ["create", "updateMany"]);
+  });
+
+  test("no update/updateMany/upsert against CommerceClickAttribution touches surface or attributedBrandId", () => {
+    let inspected = 0;
+
+    for (const { relative, code } of sources) {
+      const pattern =
+        /commerceClickAttribution\s*\.\s*(update|updateMany|upsert)\s*\(/g;
+      for (const match of code.matchAll(pattern)) {
+        inspected += 1;
+        const payload = callPayload(code, match.index);
+        assert.doesNotMatch(
+          payload,
+          /\bsurface\b/,
+          `${relative}: ${match[1]}() must never write surface`,
+        );
+        assert.doesNotMatch(
+          payload,
+          /\battributedBrandId\b/,
+          `${relative}: ${match[1]}() must never write attributedBrandId`,
+        );
+        // Positive control: the one existing conditional update in this
+        // repository is the order-ingestion click CLAIM, which writes only the
+        // pre-existing idempotency seam. If that ever stops being true the
+        // assertion above is no longer the whole story.
+        assert.match(payload, /consumedAt/);
+      }
+    }
+
+    // The sweep must not pass because it found nothing to look at.
+    assert.equal(
+      inspected,
+      1,
+      `expected exactly one conditional update on this table, saw ${inspected}`,
+    );
+  });
+
+  test("exactly one INSERT into this table exists in src/, it is the mint path, and it is the only place the two columns are written", () => {
+    // Scoped to actual Prisma write payloads on purpose. A bare `surface:` key
+    // is NOT evidence of a write: the click routes construct the per-request
+    // `CommerceClickSurface` union with `surface: { kind: ... }`, and the
+    // analytics layer uses `surface:` as a type/breakdown/filter key. The claim
+    // under test is narrower and stronger — the persisted columns are written by
+    // exactly one INSERT and by nothing else.
+    const inserts: Array<{ relative: string; payload: string }> = [];
+
+    for (const { relative, code } of sources) {
+      for (const match of code.matchAll(
+        /commerceClickAttribution\s*\.\s*create(?:Many)?\s*\(/g,
+      )) {
+        inserts.push({ relative, payload: callPayload(code, match.index) });
+      }
+    }
+
+    assert.equal(inserts.length, 1, `expected exactly one INSERT, saw ${inserts.length}`);
+    assert.equal(inserts[0].relative, "src/lib/commerce/click-attribution.ts");
+    assert.match(inserts[0].payload, /surface: input\.surface \?\? null,/);
+    assert.match(
+      inserts[0].payload,
+      /attributedBrandId: input\.attributedBrandId \?\? null,/,
+    );
+
+    // And nothing anywhere in src/ ever ASSIGNS to either persisted column on a
+    // fetched row, which is the only remaining shape a post-insert rewrite could
+    // take now that the update/insert sweeps are pinned.
+    for (const { relative, code } of sources) {
+      assert.doesNotMatch(
+        code,
+        /\.\s*attributedBrandId\s*=[^=]/,
+        `${relative} assigns to a row's attributedBrandId`,
+      );
+      assert.doesNotMatch(
+        code,
+        /\.\s*surface\s*=[^=]/,
+        `${relative} assigns to a row's surface`,
+      );
+    }
+  });
+
+  test("no raw SQL exists anywhere in src/, so no UPDATE can bypass the Prisma-level sweep above", () => {
+    for (const { relative, code } of sources) {
+      assert.doesNotMatch(code, /\$executeRaw/, `${relative} uses $executeRaw`);
+      assert.doesNotMatch(code, /\$queryRaw/, `${relative} uses $queryRaw`);
+      assert.doesNotMatch(code, /Prisma\.sql/, `${relative} builds raw SQL`);
+    }
+  });
+
+  test("the analytics layer reads the durable surface column and never re-derives it from surviving foreign keys", () => {
+    const analytics = sources.filter((entry) =>
+      [
+        "src/lib/commerce/commerce-click-analytics.ts",
+        "src/lib/commerce/commerce-click-analytics-repository.ts",
+      ].includes(entry.relative),
+    );
+    assert.equal(analytics.length, 2);
+
+    for (const { relative, code } of analytics) {
+      // The lossy inference inputs named by the migration header. None of them
+      // may appear in executable analytics code at all: the moment one does,
+      // "surface" stops being a persisted fact and becomes a guess.
+      assert.doesNotMatch(
+        code,
+        /campaignLessonProductId/,
+        `${relative} must not infer a surface from campaignLessonProductId`,
+      );
+      // No assignment to either durable column, in any form.
+      assert.doesNotMatch(code, /surface\s*=[^=]/, `${relative} assigns to surface`);
+      assert.doesNotMatch(
+        code,
+        /attributedBrandId\s*=[^=]/,
+        `${relative} assigns to attributedBrandId`,
+      );
+    }
+
+    const repository = analytics.find((entry) =>
+      entry.relative.endsWith("commerce-click-analytics-repository.ts"),
+    );
+    assert.ok(repository);
+    // The surface split is a groupBy on the persisted column, and brand scoping
+    // filters `attributedBrandId`, never the cascade-exposed `brandId`.
+    assert.match(repository.code, /by: \["surface"\]/);
+    assert.match(repository.code, /attributedBrandId: \{ in: ids \}/);
+    assert.doesNotMatch(repository.code, /\bbrandId: \{ in: ids \}/);
+  });
+});
+
+/**
+ * Cross-check additions for the Phase 11 "provider-neutral" claim and the
+ * click-only boundary, at the LIBRARY layer.
+ *
+ * tests/brand-commerce-analytics.test.ts and
+ * tests/creator-commerce-analytics.test.ts already run vocabulary tripwires, but
+ * both read only their own route file and dashboard page. The pure core and the
+ * repository — the two files every route delegates to — were unguarded.
+ */
+describe("Phase 11 provider neutrality and click-only boundary in the analytics library", () => {
+  const ANALYTICS_FILES = [
+    "src/lib/commerce/commerce-click-analytics.ts",
+    "src/lib/commerce/commerce-click-analytics-repository.ts",
+  ];
+
+  test("provider is a groupBy DIMENSION only: neither file branches on a provider value", () => {
+    for (const file of ANALYTICS_FILES) {
+      const source = readFileSync(join(process.cwd(), file), "utf8");
+      // A `provider === "SHOPIFY"` test, a switch case on one, or any
+      // provider-specific helper would make the analytics Shopify-shaped rather
+      // than provider-neutral. `provider` may only ever be grouped by.
+      assert.doesNotMatch(source, /provider\s*[=!]==?\s*["']SHOPIFY["']/i, file);
+      assert.doesNotMatch(source, /["']SHOPIFY["']\s*[=!]==?\s*/i, file);
+      assert.doesNotMatch(source, /case\s+["']SHOPIFY["']/i, file);
+      assert.doesNotMatch(source, /isShopify|shopifyOnly|SHOPIFY_/i, file);
+    }
+
+    // Positive control: `provider` IS present, purely as a group-by dimension.
+    const repository = readFileSync(
+      join(process.cwd(), ANALYTICS_FILES[1]),
+      "utf8",
+    );
+    assert.match(repository, /by: \["provider"\]/);
+  });
+
+  test("neither file references any CommerceOrder model or the .order relation", () => {
+    for (const file of ANALYTICS_FILES) {
+      const source = readFileSync(join(process.cwd(), file), "utf8");
+      // Covers CommerceOrder, CommerceOrderLineItem, CommerceOrderEvent and the
+      // `commerceOrder*` Prisma delegates in one case-insensitive token.
+      assert.doesNotMatch(source, /commerceOrder/i, file);
+      // `\b` keeps this from matching `orderBy`, which the repository uses
+      // legitimately for deterministic bounded reads.
+      assert.doesNotMatch(source, /\.order\b/, file);
+      assert.doesNotMatch(source, /attributionId/i, file);
+      assert.doesNotMatch(source, /consumedAt|consumedByOrderRef/, file);
+    }
+  });
+});
+
 describe("production DB inaccessible in these tests", () => {
   test("DATABASE_URL is pinned to the blocked loopback sentinel", () => {
     assert.equal(
@@ -1059,5 +1640,167 @@ describe("migration shape: 20260807160000_add_commerce_click_attribution", () =>
     assert.match(schema, /entryCampaignId\s+String\?/);
     assert.match(schema, /productCampaignId\s+String\?/);
     assert.match(schema, /entryCampaignContextResolved\s+Boolean\s+@default\(false\)/);
+  });
+});
+
+/**
+ * The permanent shape test for the Phase 10 migration, kept beside the
+ * 20260807160000 block above per this file's convention: every migration that
+ * touches `CommerceClickAttribution` gets a committed shape test.
+ */
+describe("migration shape: 20260808150000_add_commerce_click_analytics_durability", () => {
+  const migration = readFileSync(
+    join(
+      process.cwd(),
+      "prisma/migrations/20260808150000_add_commerce_click_analytics_durability/migration.sql",
+    ),
+    "utf8",
+  );
+  const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
+
+  /**
+   * Executable SQL only, stripped the same way the 20260807160000 block above
+   * strips it. This distinction MATTERS more here than there: this migration's
+   * header deliberately NAMES the vocabulary it refuses to introduce ("IT ADDS
+   * NO MONEY, ORDER, CONVERSION, REVENUE, OR QUANTITY COLUMN"), so a
+   * whole-file substring check for those words would fail on the very sentence
+   * that promises their absence. Every "must not appear" assertion below is
+   * therefore run against `codeOnly`, except where the whole file is genuinely
+   * expected to be clean and is asserted as such explicitly.
+   */
+  const codeOnly = migration
+    .split("\n")
+    .filter((line) => !line.trim().startsWith("--"))
+    .join("\n");
+
+  function countMatches(source: string, pattern: RegExp): number {
+    return source.match(pattern)?.length ?? 0;
+  }
+
+  test("is additive-only: no UPDATE/DELETE/TRUNCATE/DROP, no ALTER ... DROP, no ALTER COLUMN, outside comments", () => {
+    assert.equal(/^\s*(?:UPDATE|DELETE|TRUNCATE|DROP)\b/im.test(codeOnly), false);
+    assert.equal(/^\s*ALTER TABLE .*\s+DROP\b/im.test(codeOnly), false);
+    assert.equal(/\bALTER COLUMN\b/i.test(codeOnly), false);
+    assert.equal(/\bDROP\b/i.test(codeOnly), false);
+    // No pre-existing constraint, index or foreign key is redefined either.
+    assert.equal(/\bADD CONSTRAINT\b/i.test(codeOnly), false);
+    assert.equal(/\bALTER INDEX\b/i.test(codeOnly), false);
+    // Positive control: the file really does contain executable SQL, so the
+    // negatives above are not passing over an empty string.
+    assert.match(codeOnly, /CREATE TYPE "CommerceClickSurface"/);
+  });
+
+  test("carries the PREFLIGHT, CASCADE REASONING and ROLLBACK LIMITATION header sections", () => {
+    assert.match(migration, /^--\s*PREFLIGHT\b/m);
+    assert.match(migration, /^--\s*CASCADE REASONING\s*$/m);
+    assert.match(migration, /^--\s*ROLLBACK LIMITATION\b/m);
+    // The two facts those sections exist to record, so a future edit cannot keep
+    // the headings while dropping the reasoning that makes them load-bearing.
+    assert.match(migration, /"attributedBrandId" IS DELIBERATELY NOT A FOREIGN KEY/);
+    assert.match(migration, /NO BACKFILL, ON PURPOSE/);
+  });
+
+  test("introduces no money, order, conversion, revenue or quantity vocabulary", () => {
+    // Substring, case-insensitive, over executable SQL (see `codeOnly` above).
+    for (const word of [
+      "amount",
+      "price",
+      "orderid",
+      "quantity",
+      "revenue",
+      "conversion",
+    ]) {
+      assert.equal(
+        codeOnly.toLowerCase().includes(word),
+        false,
+        `executable SQL unexpectedly mentions "${word}"`,
+      );
+    }
+    // And the quoted-identifier form is absent from the WHOLE file, mirroring
+    // the 20260807160000 block's own money-vocabulary assertion.
+    assert.doesNotMatch(
+      migration,
+      /"amount"|"price"|"orderId"|"quantity"|"revenue"|"conversion"/i,
+    );
+  });
+
+  test("does not touch or mention the order-side idempotency seam anywhere in the file", () => {
+    // Whole file, not just executable SQL: this migration has no business even
+    // discussing order consumption, and none of these appear today.
+    assert.doesNotMatch(migration, /consumedAt/);
+    assert.doesNotMatch(migration, /consumedByOrderRef/);
+    assert.doesNotMatch(migration, /CommerceOrder/);
+  });
+
+  test("is exactly one CREATE TYPE, one ALTER TABLE ADD COLUMN adding two columns, and eight CREATE INDEX", () => {
+    assert.equal(countMatches(codeOnly, /^CREATE TYPE\b/gim), 1);
+    assert.equal(countMatches(codeOnly, /^ALTER TABLE\b/gim), 1);
+    assert.equal(countMatches(codeOnly, /\bADD COLUMN\b/gi), 2);
+    assert.equal(countMatches(codeOnly, /^CREATE INDEX\b/gim), 8);
+    assert.equal(countMatches(codeOnly, /CREATE UNIQUE INDEX/gi), 0);
+
+    // Ten statements total and nothing else: 1 + 1 + 8, counted independently of
+    // the per-form regexes above so an unnoticed eleventh statement cannot hide.
+    assert.equal(
+      codeOnly.split(";").filter((statement) => statement.trim().length > 0).length,
+      10,
+    );
+
+    assert.match(
+      codeOnly,
+      /CREATE TYPE "CommerceClickSurface" AS ENUM \('BRAND_STOREFRONT', 'CAMPAIGN_PRODUCT', 'LESSON'\);/,
+    );
+    // The single ALTER TABLE adds precisely the two Phase 10 columns and only
+    // ever touches CommerceClickAttribution.
+    assert.match(codeOnly, /ALTER TABLE "CommerceClickAttribution" ADD COLUMN\s+"attributedBrandId" TEXT,/);
+    assert.match(codeOnly, /ADD COLUMN\s+"surface" "CommerceClickSurface";/);
+    assert.equal(
+      /ALTER TABLE (?!"CommerceClickAttribution")/.test(codeOnly),
+      false,
+      "no other table may be altered",
+    );
+
+    for (const index of [
+      "CommerceClickAttribution_attributedBrandId_createdAt_idx",
+      "CommerceClickAttribution_attributedBrand_surface_createdAt_idx",
+      "CommerceClickAttribution_surface_createdAt_idx",
+      "CommerceClickAttribution_creatorProfileId_createdAt_idx",
+      "CommerceClickAttribution_lessonId_createdAt_idx",
+      "CommerceClickAttribution_brandCommerceProductId_createdAt_idx",
+      "CommerceClickAttribution_connectedProductId_createdAt_idx",
+      "CommerceClickAttribution_qrCodeId_createdAt_idx",
+    ]) {
+      assert.ok(
+        codeOnly.includes(`CREATE INDEX "${index}"`),
+        `missing CREATE INDEX "${index}"`,
+      );
+      // Every index name is inside PostgreSQL's 63-byte identifier limit, so
+      // none is silently truncated (the reason the middle one is named
+      // explicitly in the schema rather than left to Prisma's default).
+      assert.ok(index.length <= 63, `${index} is ${index.length} bytes`);
+    }
+  });
+
+  test("attributedBrandId is created with NO foreign key — the property that makes it immune to the cascade hazard", () => {
+    // Zero REFERENCES clauses in executable SQL at all, so a fortiori none on
+    // `attributedBrandId`. (The word appears once in the header prose, as
+    // "references a live Brand row", explaining the deliberate cost.)
+    assert.equal(/\bREFERENCES\b/i.test(codeOnly), false);
+    assert.equal(/\bFOREIGN KEY\b/i.test(codeOnly), false);
+    assert.equal(/\bON DELETE\b/i.test(codeOnly), false);
+    assert.equal(/\bON UPDATE\b/i.test(codeOnly), false);
+
+    // Declared as a plain nullable TEXT column: no NOT NULL, no DEFAULT, no
+    // backfill. Both columns must stay nullable because the mint path is
+    // fail-open (see the durability describe block above).
+    assert.match(codeOnly, /"attributedBrandId" TEXT,/);
+    assert.equal(/"attributedBrandId" TEXT NOT NULL/i.test(codeOnly), false);
+    assert.equal(/"surface" "CommerceClickSurface" NOT NULL/i.test(codeOnly), false);
+    assert.equal(/\bDEFAULT\b/i.test(codeOnly), false);
+
+    // The schema agrees: a plain optional scalar, not a relation field.
+    assert.match(schema, /attributedBrandId String\?/);
+    assert.equal(/attributedBrandId String\?[^\n]*@relation/.test(schema), false);
+    assert.match(schema, /surface CommerceClickSurface\?/);
   });
 });

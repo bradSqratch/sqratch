@@ -801,6 +801,28 @@ model CommerceClickAttribution {
   productCampaignId            String?
   entryCampaignContextResolved Boolean @default(false)
 
+  /// Durable, provider-neutral surface classification, captured once at click
+  /// time. Nullable: rows recorded before this column existed have no durable
+  /// classification and must be treated as "unknown", never inferred from
+  /// which optional FKs happen to still be non-null (that inference is lossy
+  /// under CampaignLessonProduct/Campaign deletion — see the migration header).
+  /// Never updated after insert.
+  surface CommerceClickSurface?
+
+  /// Immutable snapshot of the click's attributed brand, captured once at
+  /// click time from the same resolution that set `brandId`/`productCampaignId`.
+  /// Deliberately NOT a foreign key: `brandId` is jointly owned by two FKs
+  /// (a plain FK to Brand, and the composite (productCampaignId, brandId) FK
+  /// to Campaign with onDelete/onUpdate: Cascade+SetNull), so `brandId` can be
+  /// nulled by a Campaign deletion OR SILENTLY REWRITTEN to a different brand
+  /// if an admin reassigns a Campaign to a different Brand (the composite FK's
+  /// ON UPDATE CASCADE follows that reassignment onto every historical click
+  /// row). `attributedBrandId` is written once and never touched by any
+  /// cascade, so Brand analytics keyed on it cannot be corrupted by a later,
+  /// unrelated administrative action. It intentionally has no onDelete/onUpdate
+  /// behavior at all (it is a plain string, not a relation).
+  attributedBrandId String?
+
   experienceId     String
   courseId         String?
   lessonId         String?
@@ -879,6 +901,29 @@ model CommerceClickAttribution {
   @@index([destinationHost, createdAt])
   @@index([expiresAt])
   @@index([consumedAt])
+  // PHASE 10 ANALYTICS INDEXES.
+  //
+  // The first three serve the durable-brand analytics path: every Brand-side
+  // aggregate is keyed on `attributedBrandId` (never `brandId`, which a
+  // Campaign delete/reassign can null or rewrite), and the brand-scoped
+  // surface breakdown is the flagship query, so it gets its own covering
+  // composite. `[surface, createdAt]` serves the operator-level "how are
+  // clicks distributed across surfaces platform-wide" read.
+  //
+  // The remaining five index FK columns that had NO index at all. Beyond the
+  // analytics group-bys that need them (top creators / top lessons / top
+  // products / QR-sourced clicks), every one of those columns is the target
+  // of an ON DELETE SET NULL cascade, each of which currently forces a
+  // sequential scan over the whole table whenever the referenced row is
+  // deleted.
+  @@index([attributedBrandId, createdAt])
+  @@index([attributedBrandId, surface, createdAt], map: "CommerceClickAttribution_attributedBrand_surface_createdAt_idx")
+  @@index([surface, createdAt])
+  @@index([creatorProfileId, createdAt])
+  @@index([lessonId, createdAt])
+  @@index([brandCommerceProductId, createdAt])
+  @@index([connectedProductId, createdAt])
+  @@index([qrCodeId, createdAt])
 }
 
 /// PHASE 7 — PROVIDER-NEUTRAL ORDER NORMALIZATION
@@ -1385,6 +1430,23 @@ enum ShopifyAuthMode {
 enum CommerceProvider {
   SHOPIFY
   COMMERCE7
+}
+
+/// The SQRATCH surface a commerce click physically originated from, persisted on
+/// `CommerceClickAttribution.surface` so the classification survives the later
+/// deletion of the rows it was derived from.
+///
+/// These are exactly the three variants of the `CommerceClickSurface`
+/// discriminated union in `src/lib/commerce/click-attribution.ts`, which is the
+/// single place a surface is constructed. Adding a value here without adding it
+/// there (or vice versa) is a bug: the two must stay one-to-one.
+enum CommerceClickSurface {
+  /// A brand's generic Experience storefront listing. Carries no campaign scope.
+  BRAND_STOREFRONT
+  /// A campaign-curated product (`CampaignCommerceProduct` assignment).
+  CAMPAIGN_PRODUCT
+  /// A product attached to a lesson (`CampaignLessonProduct`).
+  LESSON
 }
 
 enum CommerceConnectionStatus {
