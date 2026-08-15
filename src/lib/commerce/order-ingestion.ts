@@ -650,7 +650,7 @@ async function associateAttribution(
     where: { tokenHash },
     select: {
       id: true,
-      brandId: true,
+      attributedBrandId: true,
       commerceConnectionId: true,
       expiresAt: true,
       consumedAt: true,
@@ -662,12 +662,12 @@ async function associateAttribution(
     return null;
   }
 
-  // A bearer token is evidence only for the brand that minted the click. A
+  // A bearer token is evidence only for its immutable attributed Brand. A
   // non-null connection narrows that proof to one merchant connection too.
   // Never let a token observed in a different shop's payload cross that
   // boundary, even if a future transport accidentally propagates it.
   if (
-    attribution.brandId !== params.brandId ||
+    attribution.attributedBrandId !== params.brandId ||
     (attribution.commerceConnectionId !== null &&
       attribution.commerceConnectionId !== params.connectionId)
   ) {

@@ -65,13 +65,10 @@ import type {
  * An already-authorized query scope.
  *
  * `ATTRIBUTED_BRAND` is the Phase 10 default for every Brand-side read. It
- * filters on `attributedBrandId`, the durable non-foreign-key snapshot written
- * at click time — NOT on `brandId`. `brandId` participates in the composite
- * `(productCampaignId, brandId) -> Campaign(id, brandId)` foreign key, so
- * deleting a product campaign NULLS it and an admin reassigning that campaign
- * to another Brand REWRITES it (ON UPDATE CASCADE) on every historical row.
- * A brand's own click history must not be silently deletable or transferable by
- * an unrelated administrative action, so brand analytics never key on it.
+ * filters on `attributedBrandId`, the sole durable non-foreign-key snapshot
+ * written at click time. Campaign ownership is immutable and the optional
+ * product-authorization campaign may be deleted, so neither relationship is a
+ * substitute for the historical Brand attribution snapshot.
  *
  * `ENTRY_CAMPAIGN` and `PRODUCT_CAMPAIGN` are deliberately separate variants of
  * the same shape. Entry = how the visitor arrived; product = what authorized

@@ -227,7 +227,7 @@ describe("cross-brand and cross-campaign integrity", () => {
 
     assert.equal(response.status, 302);
     assert.equal(captured.length, 1);
-    assert.equal(captured[0].brandId, "brand-real");
+    assert.equal(captured[0].attributedBrandId, "brand-real");
     // A link belonging to Brand A can never surface as Brand B: there is no
     // input to this function shaped like "attribute this to a different
     // brand" — the value comes from exactly one place, the resolved link.
@@ -1062,9 +1062,6 @@ describe("Phase 10 durable capture: surface and attributedBrandId per surface ki
     assert.equal(captured.length, 1);
     assert.equal(captured[0].surface, "BRAND_STOREFRONT");
     assert.equal(captured[0].attributedBrandId, "brand-1");
-    // The durable copy is the SAME value the module resolved as `brandId`; it is
-    // a snapshot of that decision, never an independent second derivation.
-    assert.equal(captured[0].attributedBrandId, captured[0].brandId);
     // Matrix agreement (unscoped storefront surface).
     assert.equal(captured[0].productCampaignId, null);
     assert.equal(captured[0].campaignLessonProductId, null);
@@ -1096,7 +1093,6 @@ describe("Phase 10 durable capture: surface and attributedBrandId per surface ki
     assert.equal(captured.length, 1);
     assert.equal(captured[0].surface, "CAMPAIGN_PRODUCT");
     assert.equal(captured[0].attributedBrandId, "brand-1");
-    assert.equal(captured[0].attributedBrandId, captured[0].brandId);
     // Matrix 7 agreement.
     assert.equal(captured[0].entryCampaignId, "campaign-A");
     assert.equal(captured[0].productCampaignId, "campaign-A");
@@ -1121,7 +1117,6 @@ describe("Phase 10 durable capture: surface and attributedBrandId per surface ki
     assert.equal(captured.length, 1);
     assert.equal(captured[0].surface, "LESSON");
     assert.equal(captured[0].attributedBrandId, "brand-1");
-    assert.equal(captured[0].attributedBrandId, captured[0].brandId);
     // Matrix 9 agreement. This combination is precisely the one that becomes
     // unrecoverable without the durable column: deleting the
     // `CampaignLessonProduct` nulls `campaignLessonProductId` while leaving
@@ -1161,14 +1156,13 @@ describe("Phase 10 durable capture: surface and attributedBrandId per surface ki
     // The product's brand, NOT campaign-A's brand-1.
     assert.equal(captured[0].attributedBrandId, "brand-2");
     assert.notEqual(captured[0].attributedBrandId, "brand-1");
-    assert.equal(captured[0].attributedBrandId, captured[0].brandId);
   });
 
-  test("when the link carries no brand, attributedBrandId snapshots the same context-brand fallback brandId uses (never null-by-omission)", async () => {
+  test("when the link carries no brand, attributedBrandId snapshots the resolved context-brand fallback", async () => {
     // `brandId = link.brandId ?? resolvedCampaignBrandId`. The durable column
     // must follow the module's RESULT, including this fallback branch —
     // otherwise brand analytics would silently lose every fallback-resolved
-    // click while `brandId` still had one.
+    // click without omitting durable attribution.
     const captured: AttributionInput[] = [];
     const response = await click(SHOP_SURFACE, {
       getAccess: async () =>
@@ -1184,9 +1178,7 @@ describe("Phase 10 durable capture: surface and attributedBrandId per surface ki
     });
 
     assert.equal(response.status, 302);
-    assert.equal(captured[0].brandId, "brand-2");
     assert.equal(captured[0].attributedBrandId, "brand-2");
-    assert.equal(captured[0].attributedBrandId, captured[0].brandId);
   });
 
   test("the three surface kinds the union can dispatch are exactly the three values the persisted enum accepts", async () => {
@@ -1252,7 +1244,6 @@ describe("Phase 10 durable capture: surface and attributedBrandId per surface ki
     const withoutDurabilityColumns: AttributionInput = {
       tokenHash: "hash",
       tokenPrefix: "prefix",
-      brandId: "brand-1",
       entryCampaignId: null,
       productCampaignId: null,
       entryCampaignContextResolved: false,

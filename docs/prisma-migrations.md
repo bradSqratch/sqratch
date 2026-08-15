@@ -182,6 +182,38 @@ Rollback limitations: **irreversible, deliberately no down migration.** Re-addin
 
 Full rationale, including the canonical target data flow and the storefront-404 bug this fixes, is in `docs/commerce/phase-8-canonical-commerce-legacy-elimination-summary.md`.
 
+## Phase 11.1 Campaign ownership and click attribution cleanup
+
+`20260815120000_harden_campaign_brand_ownership_and_click_attribution` is a
+forward-only migration that has not been applied by this repository. It first
+fails closed if any `Campaign.brandId` is null, then makes that column required
+and installs a trigger that rejects a change to a Campaign's Brand while
+allowing metadata updates and no-op same-Brand writes. It performs no Campaign
+backfill, update, or deletion.
+
+It then removes the redundant `CommerceClickAttribution.brandId` relation and
+column. `CommerceClickAttribution.attributedBrandId` is retained as the sole
+durable historical Brand-attribution scalar (intentionally non-FK); rows with a
+null historical value remain unknown. The `productCampaignId` foreign key is
+replaced with `FOREIGN KEY ("productCampaignId") REFERENCES "Campaign"("id")
+ON DELETE SET NULL`. No `CommerceClickAttribution` row is updated or deleted.
+
+Before deploying, run these read-only checks in the controlled deployment
+environment (never from application tests):
+
+```sql
+SELECT id, name, slug FROM "Campaign" WHERE "brandId" IS NULL;
+SELECT conname FROM pg_constraint
+WHERE conrelid = '"CommerceClickAttribution"'::regclass
+  AND conname IN ('CommerceClickAttribution_brandId_fkey', 'CommerceClickAttribution_productCampaignId_brandId_fkey');
+```
+
+The first query must return zero rows. After deployment, verify the trigger and
+the new foreign key with `pg_trigger`/`pg_constraint`, and confirm
+`information_schema.columns` has no `CommerceClickAttribution.brandId` column.
+There is no automatic rollback for the removed redundant column: restoring it
+would require inventing historical attribution data.
+
 ## Deployment procedure
 
 Back up first, pause reward issuance briefly, run reviewed preflight SQL, then run `npx prisma migrate deploy` once from a controlled release job. Immediately after, run `npx prisma migrate status` and `npx prisma migrate diff` to confirm the expected state (do not assume success from the deploy command's exit code alone). Validate schema, token refresh, QR unlock deduplication, redemption/refund, and query plans afterward.

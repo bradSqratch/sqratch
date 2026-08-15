@@ -114,7 +114,7 @@ type AttributionRow = {
   expiresAt: Date;
   consumedAt: Date | null;
   consumedByOrderRef: string | null;
-  brandId: string | null;
+  attributedBrandId: string | null;
   commerceConnectionId: string | null;
 };
 
@@ -133,8 +133,8 @@ class FakeOrderStore {
     this.connections.set(conn.id, conn);
   }
 
-  seedAttribution(row: Omit<AttributionRow, "brandId" | "commerceConnectionId"> & Partial<Pick<AttributionRow, "brandId" | "commerceConnectionId">>): void {
-    const complete: AttributionRow = { brandId: "brand-1", commerceConnectionId: "conn-1", ...row };
+  seedAttribution(row: Omit<AttributionRow, "attributedBrandId" | "commerceConnectionId"> & Partial<Pick<AttributionRow, "attributedBrandId" | "commerceConnectionId">>): void {
+    const complete: AttributionRow = { attributedBrandId: "brand-1", commerceConnectionId: "conn-1", ...row };
     this.attributions.set(complete.id, complete);
     this.attributionsByHash.set(complete.tokenHash, complete.id);
   }
@@ -813,7 +813,29 @@ describe("22, 23, 24. attribution association is evidence-based only", () => {
     assert.equal(store.attributions.get("click-expired")!.consumedAt, null);
   });
 
-  test("24c. a token already consumed by a DIFFERENT order -> unattributed, never stolen", async () => {
+  test("24c. a historical click without attributedBrandId remains unknown and is never claimed", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    store.seedAttribution({
+      id: "click-unknown-brand",
+      tokenHash: "hash:UNKNOWN-BRAND-TOKEN",
+      expiresAt: new Date("2026-09-01T00:00:00.000Z"),
+      consumedAt: null,
+      consumedByOrderRef: null,
+      attributedBrandId: null,
+    });
+    const outcome = await ingestNormalizedOrder(
+      makeEvent(),
+      makeOrder({ attributionToken: "UNKNOWN-BRAND-TOKEN" }),
+      makeDeps(store),
+    );
+
+    assert.equal(outcome.attributionLinked, false);
+    assert.equal(store.orders.get(outcome.orderId!)!.attributionId, null);
+    assert.equal(store.attributions.get("click-unknown-brand")!.consumedAt, null);
+  });
+
+  test("24d. a token already consumed by a DIFFERENT order -> unattributed, never stolen", async () => {
     const store = new FakeOrderStore();
     store.seedConnection(makeConnection());
     store.seedAttribution({

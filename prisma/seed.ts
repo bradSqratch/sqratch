@@ -41,7 +41,17 @@ async function main() {
   });
   console.log("✅ Admin user created:", admin.email);
 
-  // 2. Create a Campaign
+  // 2. Create a Brand and its immutable Campaign owner.
+  const seedBrand = await prisma.brand.upsert({
+    where: { slug: "seed-brand" },
+    update: {},
+    create: {
+      name: "Seed Brand",
+      slug: "seed-brand",
+    },
+  });
+
+  // 3. Create a Campaign
   const campaign = await prisma.campaign.create({
     data: {
       name: "launch2024",
@@ -49,11 +59,12 @@ async function main() {
       description: "Early Access Launch Campaign",
       inviteUrl: "https://minds.com/invite/launch2024",
       createdById: admin.id,
+      brandId: seedBrand.id,
     },
   });
   console.log("✅ Campaign created:", campaign.name);
 
-  // 3. Create QR Codes for the Campaign
+  // 4. Create QR Codes for the Campaign
   const qr1 = await prisma.qRCode.create({
     data: {
       qrCodeData: "abc123xyz",

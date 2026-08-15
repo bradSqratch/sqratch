@@ -121,10 +121,9 @@ single decision point, and it fails closed:
   old `!scope -> visible` branch is deleted. Previously, a product whose scoping
   row was missing became visible to *everyone* — the failure mode was
   fail-**open**, on the exact code path that decides cross-brand exposure.
-- **A brandless campaign (`Campaign.brandId IS NULL`) is never an eligible
-  context**, so it can carry no commerce at all. Brand ownership is what makes a
-  campaign able to authorize a product or receive attribution; a brandless
-  campaign has nothing to authorize against.
+- **Campaign ownership is now required and immutable.** The Phase 11.1
+  migration fails closed when a legacy `Campaign.brandId IS NULL` row remains;
+  malformed historical input is still denied defensively by public resolvers.
 
 ## The storefront-availability fix
 

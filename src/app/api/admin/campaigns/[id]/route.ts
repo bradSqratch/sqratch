@@ -1,5 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createUniqueSlug, getAdminContext } from "@/lib/admin-auth";
+import {
+  buildCampaignMetadataUpdate,
+  CAMPAIGN_BRAND_IMMUTABLE,
+  isCampaignBrandMutationAllowed,
+} from "@/lib/campaign-ownership";
 import prisma from "@/lib/prisma";
 
 export async function PATCH(
@@ -18,20 +23,21 @@ export async function PATCH(
     const name = String(body?.name || "").trim();
     const providedSlug = String(body?.slug || "").trim();
     const description = String(body?.description || "").trim() || null;
-    const brandId = String(body?.brandId || "").trim();
+    const providedBrandId =
+      typeof body?.brandId === "string" ? body.brandId.trim() : null;
     const isActive =
       typeof body?.isActive === "boolean" ? body.isActive : undefined;
 
-    if (!name || !brandId || isActive === undefined) {
+    if (!name || isActive === undefined) {
       return NextResponse.json(
-        { error: "Name, brand, and active state are required." },
+        { error: "Name and active state are required." },
         { status: 400 },
       );
     }
 
     const existingCampaign = await prisma.campaign.findUnique({
       where: { id },
-      select: { id: true },
+      select: { id: true, brandId: true },
     });
 
     if (!existingCampaign) {
@@ -41,13 +47,17 @@ export async function PATCH(
       );
     }
 
-    const brand = await prisma.brand.findUnique({
-      where: { id: brandId },
-      select: { id: true },
-    });
-
-    if (!brand) {
-      return NextResponse.json({ error: "Brand not found." }, { status: 404 });
+    // Older clients may echo the current owner. That remains compatible, but
+    // ownership is never included in update data. Any distinct value is a
+    // deliberate reassignment attempt and fails before Prisma/the DB trigger.
+    if (!isCampaignBrandMutationAllowed(existingCampaign.brandId, providedBrandId)) {
+      return NextResponse.json(
+        {
+          error: "Campaign brand ownership is immutable.",
+          code: CAMPAIGN_BRAND_IMMUTABLE,
+        },
+        { status: 409 },
+      );
     }
 
     const existingName = await prisma.campaign.findFirst({
@@ -82,13 +92,12 @@ export async function PATCH(
 
     const campaign = await prisma.campaign.update({
       where: { id },
-      data: {
+      data: buildCampaignMetadataUpdate({
         name,
         slug,
         description,
-        brandId,
         isActive,
-      },
+      }),
       select: {
         id: true,
         name: true,

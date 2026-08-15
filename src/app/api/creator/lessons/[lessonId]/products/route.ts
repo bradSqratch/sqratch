@@ -175,9 +175,8 @@ export async function creatorLessonProductsPostImpl(
     }
 
     if (curation.kind === "none") {
-      // No brand-owning campaign is linked to this Experience, so there is no
-      // commerce context at all: a brandless campaign can never authorize a
-      // product, and there is no longer a free-form attach to fall back to.
+      // No eligible campaign is linked to this Experience, so there is no
+      // commerce context and no free-form attach to fall back to.
       return NextResponse.json(
         { error: "This lesson has no sponsoring campaign that can provide products." },
         { status: 400 },

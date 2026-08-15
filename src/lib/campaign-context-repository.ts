@@ -12,7 +12,7 @@ import {
  *
  * Any surface that needs eligible campaign contexts for an Experience should
  * go through here rather than re-deriving the query, so the ordering and the
- * brandless-campaign exclusion have exactly one definition.
+ * malformed-input exclusion have exactly one definition.
  */
 export type ExperienceCampaignRow = {
   sortOrder: number;

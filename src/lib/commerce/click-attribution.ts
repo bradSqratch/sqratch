@@ -171,7 +171,6 @@ export type CommerceClickDeps = {
 export type AttributionInput = {
   tokenHash: string;
   tokenPrefix: string;
-  brandId: string | null;
   /** Trusted acquisition context. Null for an explicit direct Experience entry. */
   entryCampaignId: string | null;
   /** Server-derived campaign that authorized this specific product, if scoped. */
@@ -207,11 +206,8 @@ export type AttributionInput = {
    * reclassifies a lesson click as a campaign-product click once the
    * attachment is deleted.
    *
-   * `attributedBrandId` is the same value as `brandId`, written to a column
-   * with no foreign key at all. `brandId` is jointly owned by the composite
-   * (productCampaignId, brandId) key, so deleting or administratively
-   * reassigning the product campaign nulls or rewrites it; the durable copy is
-   * immune to both.
+   * `attributedBrandId` is the durable Brand snapshot written once, with no
+   * foreign key. It is the only persisted Brand attribution on a click.
    */
   surface?: PersistedClickSurface;
   attributedBrandId?: string | null;
@@ -601,7 +597,6 @@ const DEFAULT_DEPS: CommerceClickDeps = {
       data: {
         tokenHash: input.tokenHash,
         tokenPrefix: input.tokenPrefix,
-        brandId: input.brandId,
         entryCampaignId: input.entryCampaignId,
         productCampaignId: input.productCampaignId,
         entryCampaignContextResolved: input.entryCampaignContextResolved,
@@ -798,7 +793,6 @@ export async function handleCommerceClick(
       await deps.recordAttribution({
         tokenHash: hashClickToken(mintedToken),
         tokenPrefix: clickTokenPrefix(mintedToken),
-        brandId,
         entryCampaignId,
         productCampaignId,
         entryCampaignContextResolved,
@@ -811,10 +805,8 @@ export async function handleCommerceClick(
         connectedProductId: link.connectedProductId,
         commerceConnectionId: link.commerceConnectionId,
         provider: link.provider,
-        // The surface is known from the dispatch above; `brandId` is the brand
-        // this click was just resolved against. Both are snapshotted here so
-        // neither depends on a foreign key that a later deletion or campaign
-        // reassignment can null out or point at a different tenant.
+        // The surface and resolved Brand are both snapshotted here. Neither
+        // depends on a foreign key that a later deletion can rewrite or null.
         surface: options.surface.kind,
         attributedBrandId: brandId,
         destinationUrl: destination.toString(),

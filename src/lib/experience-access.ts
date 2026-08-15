@@ -106,9 +106,9 @@ export type PublicCampaignContextSource = {
  *
  * It applies two rules that must never drift apart across routes:
  *
- *  1. Eligibility: a campaign with no brand is never a context. Brand ownership
- *    is what lets a campaign authorize a product, stamp a shop domain, or
- *    receive click attribution (same rule as `buildEligibleCampaignContexts`).
+ *  1. Eligibility: malformed source input without a Brand is never a context.
+ *    Persisted Campaign ownership is required and immutable (same defensive
+ *    rule as `buildEligibleCampaignContexts`).
  *  2. Resolution: `resolveValidatedPublicCampaignContext` — the visitor's
  *    stored campaign only when it is genuinely linked to this Experience;
  *    otherwise `null` for explicit direct/unscoped entry.

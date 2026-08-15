@@ -123,7 +123,6 @@ model Brand {
   brandCommerceProducts            BrandCommerceProduct[]
   campaignCommerceProducts         CampaignCommerceProduct[]
   campaignLessonProducts           CampaignLessonProduct[]
-  commerceClickAttributions        CommerceClickAttribution[]
   commerceOrders                   CommerceOrder[]
   commerceOrderEvents              CommerceOrderEvent[]
 }
@@ -151,10 +150,12 @@ model Campaign {
   updatedAt                        DateTime                   @updatedAt
   createdById                      String
   isActive                         Boolean                    @default(true)
-  brandId                          String?
+  /// Canonical immutable Campaign owner. A database trigger rejects any
+  /// reassignment after insert; application routes enforce the same rule.
+  brandId                          String
   slug                             String                     @unique
   analyticsEvents                  AnalyticsEvent[]
-  brand                            Brand?                     @relation(fields: [brandId], references: [id])
+  brand                            Brand                      @relation(fields: [brandId], references: [id])
   createdBy                        User                       @relation("CampaignCreatedByUser", fields: [createdById], references: [id])
   experiences                      CampaignExperience[]
   unlocks                          CampaignUnlock[]
@@ -166,9 +167,9 @@ model Campaign {
   entryCommerceClickAttributions   CommerceClickAttribution[] @relation("CommerceClickAttributionEntryCampaign")
   productCommerceClickAttributions CommerceClickAttribution[] @relation("CommerceClickAttributionProductCampaign")
 
-  // Supports the Phase-4 same-brand composite FK from CampaignCommerceProduct.
-  // brandId remains nullable for legacy campaigns; a curated assignment always
-  // carries a non-null brandId and therefore can only target a branded campaign.
+  // Supports the Phase-4 same-brand composite FKs from CampaignCommerceProduct
+  // and CampaignLessonProduct. Keep this key: those assignments use it to
+  // enforce same-Brand tenant integrity.
   @@unique([id, brandId])
   @@index([brandId])
 }
@@ -796,7 +797,6 @@ model CommerceClickAttribution {
   /// Non-secret leading slice of the token, for operator triage only.
   tokenPrefix String
 
-  brandId                      String?
   entryCampaignId              String?
   productCampaignId            String?
   entryCampaignContextResolved Boolean @default(false)
@@ -809,18 +809,9 @@ model CommerceClickAttribution {
   /// Never updated after insert.
   surface CommerceClickSurface?
 
-  /// Immutable snapshot of the click's attributed brand, captured once at
-  /// click time from the same resolution that set `brandId`/`productCampaignId`.
-  /// Deliberately NOT a foreign key: `brandId` is jointly owned by two FKs
-  /// (a plain FK to Brand, and the composite (productCampaignId, brandId) FK
-  /// to Campaign with onDelete/onUpdate: Cascade+SetNull), so `brandId` can be
-  /// nulled by a Campaign deletion OR SILENTLY REWRITTEN to a different brand
-  /// if an admin reassigns a Campaign to a different Brand (the composite FK's
-  /// ON UPDATE CASCADE follows that reassignment onto every historical click
-  /// row). `attributedBrandId` is written once and never touched by any
-  /// cascade, so Brand analytics keyed on it cannot be corrupted by a later,
-  /// unrelated administrative action. It intentionally has no onDelete/onUpdate
-  /// behavior at all (it is a plain string, not a relation).
+  /// Immutable historical attribution snapshot, captured once at click time.
+  /// Deliberately NOT a foreign key: it survives Brand/Campaign deletion and
+  /// is never cascaded or reassigned. Brand analytics keys only on this scalar.
   attributedBrandId String?
 
   experienceId     String
@@ -860,17 +851,16 @@ model CommerceClickAttribution {
   consumedByOrderRef String?
 
   // Every relation below is SetNull on delete: a click is historical evidence
-  // and must survive the deletion of the brand, campaign, product, or session
+  // and must survive the deletion of a campaign, product, or session
   // it referenced. `experience` is the single exception — `experienceId` is
   // required, so Experience deletion cascades (there is no valid orphan state
   // for a required column).
-  brand           Brand?          @relation(fields: [brandId], references: [id], onDelete: SetNull)
   // Entry/acquisition campaign and product authorization campaign are separate
   // relations. Entry may be a different brand than the clicked product, so it
-  // is intentionally a simple FK. Product campaign keeps the same-brand
-  // composite FK used by campaign-scoped product attachments.
+  // is intentionally a simple FK. Product authorization is separately
+  // constrained by canonical assignment tables before a click is minted.
   entryCampaign   Campaign?       @relation("CommerceClickAttributionEntryCampaign", fields: [entryCampaignId], references: [id], onDelete: SetNull)
-  productCampaign Campaign?       @relation("CommerceClickAttributionProductCampaign", fields: [productCampaignId, brandId], references: [id, brandId], onDelete: SetNull)
+  productCampaign Campaign?       @relation("CommerceClickAttributionProductCampaign", fields: [productCampaignId], references: [id], onDelete: SetNull)
   experience      Experience      @relation(fields: [experienceId], references: [id], onDelete: Cascade)
   course          Course?         @relation(fields: [courseId], references: [id], onDelete: SetNull)
   lesson          Lesson?         @relation(fields: [lessonId], references: [id], onDelete: SetNull)
@@ -892,7 +882,6 @@ model CommerceClickAttribution {
   /// token at all.
   order CommerceOrder?
 
-  @@index([brandId, createdAt])
   @@index([entryCampaignId, createdAt])
   @@index([productCampaignId, createdAt])
   @@index([experienceId, createdAt])
@@ -904,8 +893,7 @@ model CommerceClickAttribution {
   // PHASE 10 ANALYTICS INDEXES.
   //
   // The first three serve the durable-brand analytics path: every Brand-side
-  // aggregate is keyed on `attributedBrandId` (never `brandId`, which a
-  // Campaign delete/reassign can null or rewrite), and the brand-scoped
+  // aggregate is keyed on `attributedBrandId`, and the brand-scoped
   // surface breakdown is the flagship query, so it gets its own covering
   // composite. `[surface, createdAt]` serves the operator-level "how are
   // clicks distributed across surfaces platform-wide" read.

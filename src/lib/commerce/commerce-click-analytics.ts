@@ -59,8 +59,8 @@ export type CommerceClickSurfaceValue =
  * Every click recorded before Phase 10 has no persisted surface. Its true
  * surface is frequently UNRECOVERABLE — deleting a `CampaignLessonProduct`
  * nulls `campaignLessonProductId` while leaving `lessonId`/`productCampaignId`
- * intact, and deleting a product campaign nulls `productCampaignId` AND
- * `brandId` together via the composite foreign key. So a null surface must be
+ * intact, and deleting a product campaign nulls `productCampaignId`. So a null
+ * surface must be
  * REPORTED as unknown and must never be inferred from which optional foreign
  * keys happen to have survived.
  */
@@ -626,7 +626,7 @@ export function buildDailyTimeSeries(
  * panel.
  *
  *   "NONE"           no entry campaign to disclose (direct entry, or a
- *                    brandless campaign that can own nothing).
+ *                    malformed historical campaign context).
  *   "OWN"            the entry campaign belongs to the authorized brand; the
  *                    real id and name may be shown.
  *   "OTHER_CAMPAIGN" a different tenant's campaign; show the generic bucket

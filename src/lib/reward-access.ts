@@ -4,14 +4,7 @@ import prisma from "@/lib/prisma";
 
 export async function getUnlockedRewardBrandIds(userId: string) {
   const unlocks = await prisma.campaignUnlock.findMany({
-    where: {
-      userId,
-      campaign: {
-        brandId: {
-          not: null,
-        },
-      },
-    },
+    where: { userId },
     select: {
       campaign: {
         select: {
@@ -23,9 +16,7 @@ export async function getUnlockedRewardBrandIds(userId: string) {
 
   return Array.from(
     new Set(
-      unlocks
-        .map((unlock) => unlock.campaign.brandId)
-        .filter((brandId): brandId is string => Boolean(brandId)),
+      unlocks.map((unlock) => unlock.campaign.brandId),
     ),
   );
 }
@@ -83,9 +74,7 @@ export async function getRewardClaimContext(options: {
       };
     }
 
-    const brandIds = unlockedCampaigns
-      .map((item) => item.campaign.brandId)
-      .filter((brandId): brandId is string => Boolean(brandId));
+    const brandIds = unlockedCampaigns.map((item) => item.campaign.brandId);
 
     if (brandIds.length === 0) {
       return {
@@ -135,14 +124,6 @@ export async function getRewardClaimContext(options: {
         ok: false as const,
         status: 403,
         error: "Unlock this experience before claiming rewards.",
-      };
-    }
-
-    if (!campaign.brandId) {
-      return {
-        ok: false as const,
-        status: 404,
-        error: "No reward brand is linked to this campaign.",
       };
     }
 

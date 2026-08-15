@@ -163,7 +163,7 @@ export default function AdminCampaignsPage() {
   return (
     <AdminPageShell
       title="Campaigns"
-      description="Create campaigns on behalf of any brand, reassign ownership, and inspect QR, unlock, and experience counts from one admin control plane."
+      description="Create campaigns on behalf of any brand and inspect QR, unlock, and experience counts. Campaign ownership is permanent after creation."
     >
       {error && (
         <PageCard>
@@ -323,30 +323,11 @@ export default function AdminCampaignsPage() {
 
                   <div className="grid gap-4 lg:grid-cols-3">
                     <div className="space-y-2">
-                      <label className="text-sm text-white/70">Brand</label>
-                      <select
-                        value={draft.brandId}
-                        onChange={(event) =>
-                          setDrafts((current) => ({
-                            ...current,
-                            [campaign.id]: {
-                              ...draft,
-                              brandId: event.target.value,
-                            },
-                          }))
-                        }
-                        className="h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white outline-none"
-                      >
-                        {data.brands.map((brand) => (
-                          <option
-                            key={brand.id}
-                            value={brand.id}
-                            className="text-black"
-                          >
-                            {brand.name}
-                          </option>
-                        ))}
-                      </select>
+                      <label className="text-sm text-white/70">Owning brand</label>
+                      <div className="flex h-10 items-center rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white/75">
+                        {campaign.brand?.name ?? "Unavailable"}
+                        <span className="ml-2 text-xs text-white/45">Permanent</span>
+                      </div>
                     </div>
                     <div className="space-y-2">
                       <label className="text-sm text-white/70">Name</label>

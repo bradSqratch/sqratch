@@ -14,9 +14,9 @@
  * ("deterministic only when an experience has exactly one. Never 'the first of
  * several.'") to any number of contexts and to explicit client selection.
  *
- * PHASE 8: there is no longer a curated/legacy mode distinction. Every
- * brand-owned campaign (`Campaign.brandId != null`) is a single canonical
- * commerce context; a brandless campaign is never eligible at all.
+ * PHASE 11.1: every Campaign has one required, immutable Brand owner. The
+ * defensive null handling below exists only for malformed pre-migration input,
+ * never as a supported persisted Campaign state.
  *
  * It is deliberately PURE: no Prisma import, no I/O, no `Date.now()`. Callers
  * load their own rows and map them into `CampaignContextSource`. That keeps it
@@ -40,7 +40,7 @@ export type CampaignContextSource = {
   campaignId: string;
   campaignName: string;
   sortOrder: number;
-  /** Null for a brandless campaign; such a campaign is never eligible. */
+  /** Nullable only to fail closed for malformed pre-migration caller input. */
   brandId: string | null;
   /** Null only when the caller did not load the brand relation. */
   brandName: string | null;
@@ -48,7 +48,7 @@ export type CampaignContextSource = {
 
 /**
  * An eligible campaign context: a campaign that is linked to the Experience
- * AND owns a brand. `brandId` is non-null by construction.
+ * and has its required Brand owner. `brandId` is non-null by construction.
  */
 export type CampaignContextCandidate = {
   campaignId: string;
@@ -97,7 +97,7 @@ export type PublicCampaignScopedContent = {
  * The list route and its outbound click route must apply the exact same rule:
  * a visible card must be clickable, and a hidden card must never be
  * redirectable. `eligibleCampaignIds` is derived from CampaignExperience
- * rows for the current Experience (and filters out brandless campaigns), so
+ * rows for the current Experience, so
  * a stale CampaignLessonProduct remains denied after its campaign is removed
  * from the Experience.
  *
@@ -147,11 +147,9 @@ export function isPublicCampaignScopedContentVisible(options: {
 /**
  * Filters to eligible contexts and orders them deterministically.
  *
- * A campaign with a null `brandId` is NEVER an eligible context: brand
- * ownership is what makes a campaign able to authorize a product, stamp a
- * source shop domain, or receive click attribution. A brandless campaign has
- * nothing to authorize against, so including it would create a context that
- * every downstream authorization check would have to special-case away.
+ * A malformed source with a null `brandId` is NEVER an eligible context. The
+ * persisted schema requires Campaign ownership; this defensive guard prevents
+ * bad historical/test input from becoming a public commerce context.
  *
  * Ordering is `sortOrder` ascending, then `campaignId` ascending. The
  * `campaignId` tiebreak is applied here, in code, and never left to the

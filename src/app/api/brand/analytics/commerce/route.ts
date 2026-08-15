@@ -47,13 +47,10 @@ import {
  * response would put two different denominators behind one word ("clicks") and
  * silently redefine an existing, pinned field. The old metric is untouched.
  *
- * SCOPED ON `attributedBrandId`, NEVER `brandId`. `brandId` participates in the
- * composite `(productCampaignId, brandId) -> Campaign(id, brandId)` foreign key,
- * so deleting a product campaign NULLS it and reassigning that campaign to
- * another Brand REWRITES it on every historical row (ON UPDATE CASCADE). A
- * brand's own click history must not be deletable or transferable by an
- * unrelated administrative action. `attributedBrandId` is the durable non-FK
- * snapshot written once at click time, so it is the only correct scope column.
+ * SCOPED ON `attributedBrandId`, the sole durable non-FK Brand snapshot written
+ * once at click time. Campaign ownership is immutable and a product campaign
+ * may be deleted, so neither current ownership nor product authorization is a
+ * safe replacement for that historical scope.
  *
  * CLICKS ONLY. A click is evidence that a visitor was sent to a merchant page.
  * SQRATCH has no mechanism today to learn what happened after that, so this file
@@ -130,8 +127,8 @@ export type BrandCommerceEntryCampaignRow = DisclosedEntryCampaign & {
  *
  * Under normal operation the composite foreign key guarantees these campaigns
  * belong to the authorized brand. The "OTHER_CAMPAIGN" arm exists as
- * defense-in-depth for the documented admin-reassignment edge case: if a
- * campaign's CURRENT `brandId` no longer matches the viewer, showing its name
+ * defense-in-depth for malformed or historically inconsistent data: if a
+ * campaign's CURRENT `brandId` does not match the viewer, showing its name
  * would be both wrong and a disclosure, so the generic bucket is used instead.
  */
 export type BrandCommerceProductCampaignRow =
@@ -550,9 +547,7 @@ async function buildDisclosedEntryCampaignBreakdown(input: {
  * These campaigns are same-brand by construction: the composite
  * `(campaignId, brandId)` foreign key on `CampaignCommerceProduct` cannot
  * express a cross-brand assignment. The re-verification exists only for the
- * documented drift case where an administrator reassigns a Campaign to another
- * Brand after the clicks were recorded, at which point the stored name is both
- * stale and no longer the viewer's to see.
+ * malformed or historically inconsistent data before disclosing a name.
  */
 async function buildVerifiedProductCampaignBreakdown(input: {
   rows: ReadonlyArray<{ campaignId: string; clicks: number }>;
