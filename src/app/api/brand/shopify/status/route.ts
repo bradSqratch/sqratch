@@ -11,8 +11,10 @@ import { mapLegacyShopifyStatusToCommerceStatus } from "@/lib/commerce/connectio
 import {
   SQRATCH_ATTRIBUTION_EMBED_BLOCK_HANDLE,
   buildThemeEditorAppEmbedDeepLink,
+  buildShopifyAdminAppHomeDeepLink,
 } from "@/lib/commerce/shopify-app-embed";
 import { getShopifyThemeTrackingReadiness } from "@/lib/commerce/providers/shopify-theme-readiness";
+import { reconcileShopifyConnectionScopes } from "@/lib/shopify-token-manager";
 import type {
   CommerceConnectionSummary,
   CommerceThemeTrackingReadiness,
@@ -40,6 +42,17 @@ export type BrandShopifyStatusDeps = {
     apiKey: string;
     grantedScopes: string[];
   }): Promise<CommerceThemeTrackingReadiness>;
+  /**
+   * Attempts to heal a false, scope-drift-caused `REQUIRES_RECONNECT` by
+   * proving the stored credential still works against Shopify and
+   * reconciling `CommerceConnection.grantedScopes` to Shopify's authoritative
+   * set. Only ever called when the stored status is `REQUIRES_RECONNECT`.
+   * Optional so a test can omit it entirely when reconciliation isn't the
+   * behavior under test. Defaults to `reconcileShopifyConnectionScopes`.
+   */
+  reconcileScopes?(
+    brandId: string,
+  ): Promise<{ healedConnection: boolean; grantedScopes: string[] } | null>;
 };
 
 async function defaultFindTokenExtra(brandId: string): Promise<BrandTokenExtra | null> {
@@ -54,12 +67,22 @@ async function defaultFindTokenExtra(brandId: string): Promise<BrandTokenExtra |
   });
 }
 
+async function defaultReconcileScopes(
+  brandId: string,
+): Promise<{ healedConnection: boolean; grantedScopes: string[] } | null> {
+  const result = await reconcileShopifyConnectionScopes(brandId);
+  return result.outcome === "RECONCILED"
+    ? { healedConnection: result.healedConnection, grantedScopes: result.grantedScopes }
+    : null;
+}
+
 const DEFAULT_DEPS: BrandShopifyStatusDeps = {
   getContext: getBrandManagementContext,
   findTokenExtra: defaultFindTokenExtra,
     getConnectionSummary: (brandId) =>
     getActiveCommerceConnection(brandId, CommerceProvider.SHOPIFY),
   getThemeReadiness: (input) => getShopifyThemeTrackingReadiness(input),
+  reconcileScopes: defaultReconcileScopes,
 };
 
 /** `Date | null` equality by timestamp — `null` only equals `null`. */
@@ -97,8 +120,31 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
     // route never reads CommerceConnectionSecret.
     const brandExtra = await deps.findTokenExtra(brand.id);
 
-    const requiresReconnect =
-      brand.shopifyConnectionStatus === "REQUIRES_RECONNECT";
+    // Mutable local views of legacy connection status: `brand` itself (from
+    // `getContext()`, already fetched above) is never re-read, so a
+    // successful healing attempt below is reflected by reassigning these
+    // rather than re-running full context/session resolution a second time.
+    let legacyConnectionStatus: string = brand.shopifyConnectionStatus;
+    let requiresReconnect = legacyConnectionStatus === "REQUIRES_RECONNECT";
+
+    // SAFETY NET against a missed/delayed `app/scopes_update` delivery (see
+    // that route's file header), and the HEALING PATH for a connection that
+    // was ALREADY stuck in a false, scope-drift-caused `REQUIRES_RECONNECT`
+    // before that root cause was fixed (see
+    // `reconcileShopifyConnectionScopes`'s doc comment in
+    // `shopify-token-manager.ts`). Only ever attempted when the stored status
+    // is currently `REQUIRES_RECONNECT` — a normal `CONNECTED` load never
+    // pays for the extra live Shopify API call this can make. Never throws:
+    // a failed reconciliation attempt (genuine credential failure, or a
+    // transient error) leaves every field exactly as it already was, so this
+    // route's response is never worse than before the attempt.
+    if (requiresReconnect && deps.reconcileScopes) {
+      const reconciled = await deps.reconcileScopes(brand.id).catch(() => null);
+      if (reconciled?.healedConnection) {
+        legacyConnectionStatus = "CONNECTED";
+        requiresReconnect = false;
+      }
+    }
 
     // Connection identity/metadata (shop domain, install/uninstall
     // timestamps, status, last product sync) is sourced from the
@@ -126,7 +172,7 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
     const mirrorTrusted =
       summary !== null &&
       !summary.isLegacyFallback &&
-      summary.status === mapLegacyShopifyStatusToCommerceStatus(brand.shopifyConnectionStatus) &&
+      summary.status === mapLegacyShopifyStatusToCommerceStatus(legacyConnectionStatus) &&
       sameInstant(summary.installedAt, brand.shopifyInstalledAt) &&
       sameInstant(summary.uninstalledAt, brand.shopifyUninstalledAt) &&
       sameInstant(summary.lastProductSyncAt, brand.shopifyLastProductSyncAt);
@@ -142,7 +188,7 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
     const shopifyShopDomain = brand.shopifyShopDomain;
     const shopifyInstalledAt = mirrorTrusted ? summary.installedAt : brand.shopifyInstalledAt;
     const shopifyUninstalledAt = mirrorTrusted ? summary.uninstalledAt : brand.shopifyUninstalledAt;
-    const shopifyConnectionStatus = mirrorTrusted ? summary.status : brand.shopifyConnectionStatus;
+    const shopifyConnectionStatus = mirrorTrusted ? summary.status : legacyConnectionStatus;
     const shopifyLastProductSyncAt = mirrorTrusted
       ? summary.lastProductSyncAt
       : brand.shopifyLastProductSyncAt;
@@ -167,8 +213,27 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
     const shopifyAppEmbedDeepLink =
       deepLink !== null && deepLink.ok ? deepLink.url : null;
 
+    // Additive: the Shopify Admin App Home deep link used for the "Approve
+    // Shopify permissions" CTA. Opening this URL is sufficient by itself —
+    // under Shopify-managed installation, Shopify shows its OWN native
+    // permission-approval screen at this exact URL whenever a scope approval
+    // is pending, before letting the merchant into the app (see
+    // shopify-app-embed.ts's file header). Same trusted-inputs-only,
+    // server-derived construction as the Theme Editor link above; null under
+    // the same conditions.
+    const appHomeLink =
+      shopifyShopDomain && brandExtra?.shopifyClientId
+        ? buildShopifyAdminAppHomeDeepLink({
+            shopDomain: shopifyShopDomain,
+            apiKey: brandExtra.shopifyClientId,
+          })
+        : null;
+    const shopifyPermissionApprovalUrl =
+      appHomeLink !== null && appHomeLink.ok ? appHomeLink.url : null;
+
     const canonicalGrantedScopes = summary?.grantedScopes ?? [];
     const orderAttributionReady = canonicalGrantedScopes.includes("read_orders");
+    const themeVerificationScopeReady = canonicalGrantedScopes.includes("read_themes");
     const themeTracking =
       shopifyShopDomain && brandExtra?.shopifyClientId && deps.getThemeReadiness
         ? await deps.getThemeReadiness({
@@ -209,9 +274,26 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
         // Additive capability: legacy installs keep product sync/rewards but
         // cannot receive conversion attribution until they grant read_orders.
         orderAttributionReady,
+        // Additive capability: whether read_themes is granted (scope-only —
+        // NOT whether the app embed is actually enabled; that is the live,
+        // separately-inspected `themeTracking.state` below).
+        themeVerificationScopeReady,
         themeTracking,
         overallConversionTrackingReady:
           orderAttributionReady && themeTracking.state === "ENABLED",
+        // True when the merchant still needs to approve a Shopify managed-
+        // installation scope prompt (read_orders and/or read_themes not yet
+        // granted) for a connection that is otherwise healthy. Never true
+        // for a disconnected/uninstalled/genuinely-broken connection — the
+        // UI's Approve-permissions CTA is only meaningful for an
+        // already-connected store.
+        shopifyPermissionsNeedApproval:
+          shopifyConnectionStatus === "CONNECTED" &&
+          (!orderAttributionReady || !themeVerificationScopeReady),
+        // Deep link into Shopify Admin's App Home — Shopify shows its own
+        // native permission-approval screen here when one is pending. Null
+        // under the same conditions as shopifyAppEmbedDeepLink.
+        shopifyPermissionApprovalUrl,
         // Additive capability: null until both the shop domain and the
         // install-time client id are present and pass validation.
         shopifyAppEmbedDeepLink,

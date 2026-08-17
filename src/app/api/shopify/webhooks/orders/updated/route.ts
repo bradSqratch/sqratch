@@ -10,20 +10,24 @@
  * ===========================================================================
  *
  * This is the topic that carries authoritative order state over time: an
- * updated `financial_status`, a cancellation, a fulfillment change, and — per
- * the refund design in `src/lib/commerce/order-ingestion.ts` — the CUMULATIVE
- * refunded total, which Shopify reports on the order rather than on an
- * individual refund. A production rollout that subscribes to `refunds/create`
- * but not to this topic would record refund timing without ever recording the
- * refunded amount.
+ * updated `financial_status`, a cancellation, a fulfillment change, and — when
+ * this delivery's own `refunds[]` is non-empty
+ * (`shopifyOrderHasRefundEvidence` in `shopify-order-normalizer.ts`) — a live
+ * Shopify Admin GraphQL financial reconciliation for the CUMULATIVE refunded
+ * total (see `shopify-order-financial-reconciliation.ts` for why REST alone
+ * cannot establish this safely). A production rollout that subscribes to
+ * `refunds/create` but not to this topic would record refund timing without
+ * ever having a full-order snapshot to reconcile refunds against.
  *
  * Behavior: verifies the raw-body HMAC via `verifyShopifyWebhookRequest`,
  * resolves the shop to a `CommerceConnection`, normalizes the payload with the
- * pure Shopify normalizer, and hands it to the idempotent provider-neutral
- * ingestion service, which refuses to overwrite a stored order with an older
- * `updated_at`. Deterministic rejections acknowledge with 200; signature
- * failure returns 401 and transient storage failure returns 500 for retry.
- * Writes no points and computes no commission.
+ * pure Shopify normalizer, reconciles financial state via live Shopify
+ * GraphQL when refund evidence is present, and hands the result to the
+ * idempotent provider-neutral ingestion service, which refuses to overwrite a
+ * stored order with an older `updated_at`. Deterministic rejections
+ * acknowledge with 200; signature failure returns 401 and transient failure
+ * (write OR reconciliation) returns 500 for retry. Writes no points and
+ * computes no commission.
  */
 
 import type { NextRequest } from "next/server";

@@ -5,11 +5,12 @@ process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blo
  *
  * Tests the shared order-webhook pipeline
  * (`src/lib/commerce/providers/shopify-order-webhook.ts`'s
- * `handleShopifyOrderWebhook` / `resolveProviderEventId`) and the three real,
+ * `handleShopifyOrderWebhook` / `resolveProviderEventId` /
+ * `shopifyTopicRequiresFinancialReconciliation`) and the four real,
  * production-unreachable route handlers built on it
- * (`src/app/api/shopify/webhooks/{orders/create,orders/updated,refunds/create}/route.ts`).
+ * (`src/app/api/shopify/webhooks/{orders/create,orders/updated,refunds/create,order_transactions/create}/route.ts`).
  *
- * The three route files themselves take no deps parameter (they call
+ * The four route files themselves take no deps parameter (they call
  * `handleShopifyOrderWebhook(request, TOPIC, normalizer)` with no override),
  * so — matching the exact precedent in
  * `tests/shopify-webhook-verification.test.ts` for the four EXISTING webhook
@@ -29,11 +30,15 @@ process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blo
  * Covered cases (numbered to match the task's review checklist):
  *  2.  Duplicate webhook idempotency — same X-Shopify-Webhook-Id delivered
  *      twice through handleShopifyOrderWebhook creates ONE order.
- *  20. HMAC verification enforced — one of the three new routes rejects an
+ *  20. HMAC verification enforced — every one of the four routes rejects an
  *      invalid/missing signature with 401, using a genuine computed HMAC for
  *      the valid case.
  *  21. Unverified webhook rejected before writes — ingest is never invoked
  *      when HMAC verification fails.
+ *  P12.4. Financial reconciliation orchestration — refund evidence gates a
+ *      live Shopify GraphQL reconciliation; RECONCILED overlays financial
+ *      fields, NOT_ELIGIBLE defers them (never fabricates), TRANSIENT_FAILURE
+ *      blocks ingest entirely and asks for redelivery.
  */
 
 import { test, describe, before } from "node:test";
@@ -50,9 +55,15 @@ import {
   handleShopifyOrderWebhook,
   resolveProviderEventId,
   shopifyProductKeyCandidates,
+  shopifyTopicRequiresFinancialReconciliation,
   type ShopifyOrderWebhookDeps,
 } from "../src/lib/commerce/providers/shopify-order-webhook";
-import { normalizeShopifyOrderPayload } from "../src/lib/commerce/providers/shopify-order-normalizer";
+import {
+  normalizeShopifyOrderPayload,
+  normalizeShopifyRefundPayload,
+  normalizeShopifyOrderTransactionPayload,
+} from "../src/lib/commerce/providers/shopify-order-normalizer";
+import type { ReconcileShopifyOrderFinancialsResult } from "../src/lib/commerce/providers/shopify-order-financial-reconciliation";
 import {
   ingestNormalizedOrder,
   resolveOrderEventClaim,
@@ -74,11 +85,13 @@ import {
 let ordersCreateRoute: typeof import("../src/app/api/shopify/webhooks/orders/create/route");
 let ordersUpdatedRoute: typeof import("../src/app/api/shopify/webhooks/orders/updated/route");
 let refundsCreateRoute: typeof import("../src/app/api/shopify/webhooks/refunds/create/route");
+let orderTransactionsCreateRoute: typeof import("../src/app/api/shopify/webhooks/order_transactions/create/route");
 
 before(async () => {
   ordersCreateRoute = await import("../src/app/api/shopify/webhooks/orders/create/route");
   ordersUpdatedRoute = await import("../src/app/api/shopify/webhooks/orders/updated/route");
   refundsCreateRoute = await import("../src/app/api/shopify/webhooks/refunds/create/route");
+  orderTransactionsCreateRoute = await import("../src/app/api/shopify/webhooks/order_transactions/create/route");
 });
 
 // ---------------------------------------------------------------------------
@@ -134,7 +147,7 @@ function readSource(relPath: string): string {
 }
 
 // ---------------------------------------------------------------------------
-// 20 & route-level: HMAC verification enforced on all three new routes,
+// 20 & route-level: HMAC verification enforced on all four order webhook routes,
 // exactly like the four existing webhook routes.
 // ---------------------------------------------------------------------------
 
@@ -161,11 +174,16 @@ function routes(): RouteUnderTest[] {
       url: "http://localhost/api/shopify/webhooks/refunds/create",
       post: () => refundsCreateRoute.POST,
     },
+    {
+      name: "order_transactions/create",
+      url: "http://localhost/api/shopify/webhooks/order_transactions/create",
+      post: () => orderTransactionsCreateRoute.POST,
+    },
   ];
 }
 
-describe("20. HMAC verification is enforced on every one of the three new order webhook routes", () => {
-  test("all three: an invalid signature -> 401 {error:\"Invalid Shopify webhook signature.\"}", async () => {
+describe("20. HMAC verification is enforced on every one of the four order webhook routes", () => {
+  test("all four: an invalid signature -> 401 {error:\"Invalid Shopify webhook signature.\"}", async () => {
     await withShopifyApiSecret(SECRET, async () => {
       for (const route of routes()) {
         const rawBody = JSON.stringify({ id: 1 });
@@ -182,7 +200,7 @@ describe("20. HMAC verification is enforced on every one of the three new order 
     });
   });
 
-  test("all three: a MISSING signature header -> the same 401", async () => {
+  test("all four: a MISSING signature header -> the same 401", async () => {
     await withShopifyApiSecret(SECRET, async () => {
       for (const route of routes()) {
         const rawBody = JSON.stringify({ id: 1 });
@@ -193,7 +211,7 @@ describe("20. HMAC verification is enforced on every one of the three new order 
     });
   });
 
-  test("all three: a GENUINE, correctly-computed signature over the exact raw bytes verifies (200), with no shop connection registered (DB-free success path)", async () => {
+  test("all four: a GENUINE, correctly-computed signature over the exact raw bytes verifies (200), with no shop connection registered (DB-free success path)", async () => {
     await withShopifyApiSecret(SECRET, async () => {
       for (const route of routes()) {
         const rawBody = JSON.stringify({ id: 1, updated_at: "2026-08-01T00:00:00-04:00" });
@@ -210,7 +228,7 @@ describe("20. HMAC verification is enforced on every one of the three new order 
     });
   });
 
-  test("all three: a missing SHOPIFY_API_SECRET -> 500, even with an otherwise well-formed request", async () => {
+  test("all four: a missing SHOPIFY_API_SECRET -> 500, even with an otherwise well-formed request", async () => {
     await withShopifyApiSecret(undefined, async () => {
       for (const route of routes()) {
         const rawBody = JSON.stringify({ id: 1 });
@@ -248,6 +266,11 @@ describe("route wiring is bound to the route path, not the spoofable x-shopify-t
       topic: "refunds/create",
       normalizer: "normalizeShopifyRefundPayload",
     },
+    {
+      file: "src/app/api/shopify/webhooks/order_transactions/create/route.ts",
+      topic: "order_transactions/create",
+      normalizer: "normalizeShopifyOrderTransactionPayload",
+    },
   ];
 
   for (const { file, topic, normalizer } of wiring) {
@@ -259,7 +282,7 @@ describe("route wiring is bound to the route path, not the spoofable x-shopify-t
     });
   }
 
-  test("none of the three routes reads x-shopify-topic in actual code (comments deliberately NAME the header to document its exclusion)", () => {
+  test("none of the four routes reads x-shopify-topic in actual code (comments deliberately NAME the header to document its exclusion)", () => {
     for (const { file } of wiring) {
       const codeOnly = readSource(file)
         .replace(/\/\*[\s\S]*?\*\//g, "")
@@ -909,6 +932,302 @@ describe("21. an unverified (invalid-HMAC) delivery never reaches ingest — no 
 });
 
 // ---------------------------------------------------------------------------
+// P12.4: financial reconciliation orchestration
+// ---------------------------------------------------------------------------
+
+describe("shopifyTopicRequiresFinancialReconciliation is the single gate for live reconciliation", () => {
+  test("refunds/create and order_transactions/create ALWAYS require it, regardless of payload shape", () => {
+    assert.equal(shopifyTopicRequiresFinancialReconciliation("refunds/create", {}), true);
+    assert.equal(shopifyTopicRequiresFinancialReconciliation("refunds/create", null), true);
+    assert.equal(
+      shopifyTopicRequiresFinancialReconciliation("order_transactions/create", {}),
+      true,
+    );
+  });
+
+  test("orders/create and orders/updated require it ONLY when the payload's own refunds[] is non-empty", () => {
+    assert.equal(
+      shopifyTopicRequiresFinancialReconciliation("orders/updated", { refunds: [{ id: 1 }] }),
+      true,
+    );
+    assert.equal(
+      shopifyTopicRequiresFinancialReconciliation("orders/updated", { refunds: [] }),
+      false,
+    );
+    assert.equal(shopifyTopicRequiresFinancialReconciliation("orders/updated", {}), false);
+    assert.equal(
+      shopifyTopicRequiresFinancialReconciliation("orders/create", { refunds: [{ id: 1 }] }),
+      true,
+    );
+  });
+
+  test("any other topic never requires it", () => {
+    assert.equal(
+      shopifyTopicRequiresFinancialReconciliation("app/uninstalled", { refunds: [{ id: 1 }] }),
+      false,
+    );
+  });
+});
+
+describe("financial reconciliation orchestration through handleShopifyOrderWebhook", () => {
+  const RECONCILED_SNAPSHOT_UPDATED_AT = new Date("2026-08-15T12:00:00.000Z");
+
+  function reconciledResult(
+    overrides: Partial<Extract<ReconcileShopifyOrderFinancialsResult, { outcome: "RECONCILED" }>["snapshot"]> = {},
+  ): ReconcileShopifyOrderFinancialsResult {
+    return {
+      outcome: "RECONCILED",
+      snapshot: {
+        externalOrderId: "5551",
+        currencyCode: "CAD",
+        minorUnitExponent: 2,
+        totalMinor: BigInt(132257),
+        totalRefundedMinor: BigInt(61063),
+        financialStatus: "PARTIALLY_REFUNDED",
+        providerUpdatedAt: RECONCILED_SNAPSHOT_UPDATED_AT,
+        ...overrides,
+      },
+    };
+  }
+
+  function makeReconcileSpy(result: ReconcileShopifyOrderFinancialsResult) {
+    const calls: Array<{ brandId: string; shopDomain: string; externalOrderId: string }> = [];
+    const fn = async (params: { brandId: string; shopDomain: string; externalOrderId: string }) => {
+      calls.push(params);
+      return result;
+    };
+    return { fn, calls };
+  }
+
+  const ORDER_WITH_REFUND_EVIDENCE_BODY = JSON.stringify({
+    id: 5551,
+    currency: "USD",
+    total_price: "10.00",
+    financial_status: "paid",
+    updated_at: "2026-08-01T00:00:00-04:00",
+    line_items: [],
+    // Presence alone is the evidence signal — its own contents are never
+    // trusted as a financial source (see shopifyOrderHasRefundEvidence).
+    refunds: [{ id: 1 }],
+  });
+
+  function deliveryFor(url: string, rawBody: string, webhookId: string): NextRequest {
+    return buildWebhookRequest(url, {
+      rawBody,
+      hmac: computeHmac(rawBody, SECRET),
+      shopDomain: "reconciliation-test.myshopify.com",
+      webhookId,
+    });
+  }
+
+  test("A/B. orders/updated WITH refund evidence + RECONCILED: the merged financial fields reach ingest, non-financial fields are untouched", async () => {
+    await withShopifyApiSecret(SECRET, async () => {
+      const spy = makeIngestSpy(PASS_OUTCOME);
+      const reconcile = makeReconcileSpy(reconciledResult());
+
+      const response = await handleShopifyOrderWebhook(
+        deliveryFor(
+          "http://localhost/api/shopify/webhooks/orders/updated",
+          ORDER_WITH_REFUND_EVIDENCE_BODY,
+          "reconcile-merge-1",
+        ),
+        "orders/updated",
+        normalizeShopifyOrderPayload,
+        {
+          async findConnectionByShopDomain() {
+            return { id: "conn-1", brandId: "brand-1" };
+          },
+          ingest: spy.fn,
+          ingestionDeps: {},
+          reconcileFinancials: reconcile.fn,
+        },
+      );
+
+      assert.equal(response.status, 200);
+      assert.equal(reconcile.calls.length, 1);
+      assert.deepEqual(reconcile.calls[0], {
+        brandId: "brand-1",
+        shopDomain: "reconciliation-test.myshopify.com",
+        externalOrderId: "5551",
+      });
+
+      assert.equal(spy.calls.length, 1);
+      const ingestedOrder = spy.calls[0].order;
+      assert.equal(ingestedOrder.currencyCode, "CAD");
+      assert.equal(ingestedOrder.minorUnitExponent, 2);
+      assert.equal(ingestedOrder.totalMinor, BigInt(132257));
+      assert.equal(ingestedOrder.totalRefundedMinor, BigInt(61063));
+      assert.equal(ingestedOrder.financialStatus, "PARTIALLY_REFUNDED");
+      assert.equal(ingestedOrder.providerUpdatedAt?.getTime(), RECONCILED_SNAPSHOT_UPDATED_AT.getTime());
+      // Non-financial fields still come from the pure REST normalizer.
+      assert.equal(ingestedOrder.externalOrderId, "5551");
+      assert.equal(ingestedOrder.completeness, "FULL");
+      assert.deepEqual(ingestedOrder.lineItems, []);
+    });
+  });
+
+  test("B. orders/updated with NO refund evidence never calls reconcileFinancials (the common-case fast path pays no extra API cost)", async () => {
+    await withShopifyApiSecret(SECRET, async () => {
+      const spy = makeIngestSpy(PASS_OUTCOME);
+      const reconcile = makeReconcileSpy(reconciledResult());
+
+      await handleShopifyOrderWebhook(
+        deliveryFor(
+          "http://localhost/api/shopify/webhooks/orders/updated",
+          ORDER_BODY,
+          "no-refund-evidence-1",
+        ),
+        "orders/updated",
+        normalizeShopifyOrderPayload,
+        {
+          async findConnectionByShopDomain() {
+            return { id: "conn-1", brandId: "brand-1" };
+          },
+          ingest: spy.fn,
+          ingestionDeps: {},
+          reconcileFinancials: reconcile.fn,
+        },
+      );
+
+      assert.equal(reconcile.calls.length, 0);
+      assert.equal(spy.calls.length, 1);
+    });
+  });
+
+  test("refunds/create ALWAYS calls reconcileFinancials, even though its own payload never carries a refunds[] array", async () => {
+    await withShopifyApiSecret(SECRET, async () => {
+      const spy = makeIngestSpy(PASS_OUTCOME);
+      const reconcile = makeReconcileSpy(reconciledResult());
+      const refundBody = JSON.stringify({
+        id: 9001,
+        order_id: 5551,
+        processed_at: "2026-08-15T12:00:05-04:00",
+      });
+
+      await handleShopifyOrderWebhook(
+        deliveryFor(
+          "http://localhost/api/shopify/webhooks/refunds/create",
+          refundBody,
+          "refund-always-reconciles-1",
+        ),
+        "refunds/create",
+        normalizeShopifyRefundPayload,
+        {
+          async findConnectionByShopDomain() {
+            return { id: "conn-1", brandId: "brand-1" };
+          },
+          ingest: spy.fn,
+          ingestionDeps: {},
+          reconcileFinancials: reconcile.fn,
+        },
+      );
+
+      assert.equal(reconcile.calls.length, 1);
+      assert.equal(reconcile.calls[0].externalOrderId, "5551");
+    });
+  });
+
+  test("TRANSIENT_FAILURE: 500, ingest is NEVER called (no CommerceOrderEvent claim is taken for this delivery)", async () => {
+    await withShopifyApiSecret(SECRET, async () => {
+      const spy = makeIngestSpy(PASS_OUTCOME);
+      const reconcile = makeReconcileSpy({ outcome: "TRANSIENT_FAILURE" });
+
+      const response = await handleShopifyOrderWebhook(
+        deliveryFor(
+          "http://localhost/api/shopify/webhooks/orders/updated",
+          ORDER_WITH_REFUND_EVIDENCE_BODY,
+          "reconcile-transient-1",
+        ),
+        "orders/updated",
+        normalizeShopifyOrderPayload,
+        {
+          async findConnectionByShopDomain() {
+            return { id: "conn-1", brandId: "brand-1" };
+          },
+          ingest: spy.fn,
+          ingestionDeps: {},
+          reconcileFinancials: reconcile.fn,
+        },
+      );
+
+      assert.equal(response.status, 500, "Shopify must be asked to redeliver");
+      assert.equal(spy.calls.length, 0, "no unproven data may reach ingest");
+    });
+  });
+
+  test("F. NOT_ELIGIBLE: ingest IS called, but totalRefundedMinor and financialStatus are deferred (null) — never a guessed value; other fields still land", async () => {
+    await withShopifyApiSecret(SECRET, async () => {
+      const spy = makeIngestSpy(PASS_OUTCOME);
+      const reconcile = makeReconcileSpy({ outcome: "NOT_ELIGIBLE", reason: "NO_CREDENTIAL" });
+
+      const response = await handleShopifyOrderWebhook(
+        deliveryFor(
+          "http://localhost/api/shopify/webhooks/orders/updated",
+          ORDER_WITH_REFUND_EVIDENCE_BODY,
+          "reconcile-not-eligible-1",
+        ),
+        "orders/updated",
+        normalizeShopifyOrderPayload,
+        {
+          async findConnectionByShopDomain() {
+            return { id: "conn-1", brandId: "brand-1" };
+          },
+          ingest: spy.fn,
+          ingestionDeps: {},
+          reconcileFinancials: reconcile.fn,
+        },
+      );
+
+      assert.equal(response.status, 200);
+      assert.equal(spy.calls.length, 1);
+      const ingestedOrder = spy.calls[0].order;
+      assert.equal(ingestedOrder.totalRefundedMinor, null);
+      assert.equal(ingestedOrder.financialStatus, null);
+      // The immutable, pre-refund REST fields are untouched — only the two
+      // settlement fields that needed reconciliation are deferred.
+      assert.equal(ingestedOrder.currencyCode, "USD");
+      assert.equal(ingestedOrder.totalMinor, BigInt(1000));
+      assert.equal(ingestedOrder.externalOrderId, "5551");
+    });
+  });
+
+  test("order_transactions/create ALWAYS triggers reconciliation from its own bare, order-id-only payload", async () => {
+    await withShopifyApiSecret(SECRET, async () => {
+      const spy = makeIngestSpy(PASS_OUTCOME);
+      const reconcile = makeReconcileSpy(reconciledResult());
+      const transactionBody = JSON.stringify({
+        id: 42,
+        order_id: 5551,
+        kind: "refund",
+        status: "success",
+        processed_at: "2026-08-15T12:00:10-04:00",
+      });
+
+      await handleShopifyOrderWebhook(
+        deliveryFor(
+          "http://localhost/api/shopify/webhooks/order_transactions/create",
+          transactionBody,
+          "order-transaction-always-reconciles-1",
+        ),
+        "order_transactions/create",
+        normalizeShopifyOrderTransactionPayload,
+        {
+          async findConnectionByShopDomain() {
+            return { id: "conn-1", brandId: "brand-1" };
+          },
+          ingest: spy.fn,
+          ingestionDeps: {},
+          reconcileFinancials: reconcile.fn,
+        },
+      );
+
+      assert.equal(reconcile.calls.length, 1);
+      assert.equal(reconcile.calls[0].externalOrderId, "5551");
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
 // No PII / secrets in the audit log
 // ---------------------------------------------------------------------------
 
@@ -933,6 +1252,7 @@ describe("the webhook audit log never carries a payload excerpt, customer field,
       "lineItemCount",
       "outcome",
       "reason",
+      "reconciliationOutcome",
       "shopDomain",
       "topic",
       "warnings",

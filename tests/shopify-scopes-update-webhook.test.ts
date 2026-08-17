@@ -45,6 +45,16 @@ interface FakeBrand {
   shopifyShopDomain: string | null;
   shopifyConnectionStatus: string;
   shopifyGrantedScopes: string | null;
+  /**
+   * Present alongside `REQUIRES_RECONNECT` only for a scope-drift false
+   * alarm (a genuine credential failure always clears this in the same write
+   * that sets `REQUIRES_RECONNECT` — see `markRequiresReconnect` in
+   * `src/lib/shopify-token-manager.ts`). The route's healing pre-check reads
+   * this field directly.
+   */
+  shopifyAdminAccessTokenEncrypted: string | null;
+  shopifyCurrencyCode?: string | null;
+  shopifyClientId?: string | null;
 }
 
 interface FindUniqueArgs {
@@ -101,7 +111,10 @@ const brandDelegateStub = {
     // test can mutate the table exactly in the window a real concurrent
     // transaction would.
     onFindUnique?.(args);
-    return match ? { id: match.id } : null;
+    // Returns the full matched row (a superset of any real `select`) so the
+    // route's own additional pre-read (status + token presence, for the
+    // healing check) sees real values rather than `undefined`.
+    return match ? { ...match } : null;
   },
   updateMany: async (args: UpdateManyArgs) => {
     updateManyCalls.push(args);
@@ -229,11 +242,14 @@ before(async () => {
     .default as unknown as Record<string, unknown>;
   prismaModule.brand = brandDelegateStub;
   prismaModule.commerceConnection = commerceConnectionDelegateStub;
+  prismaModule.$transaction = fakeTransaction;
 
   const route = await import("../src/app/api/shopify/webhooks/app/scopes_update/route");
   POST = route.POST as unknown as (request: NextRequest) => Promise<Response>;
   extractCurrentScopes = route.extractCurrentScopes;
 });
+
+let connectionEventCreateCalls: Array<{ brandId: string; eventType: string }> = [];
 
 beforeEach(() => {
   brands = [
@@ -242,12 +258,18 @@ beforeEach(() => {
       shopifyShopDomain: SHOP_A,
       shopifyConnectionStatus: "CONNECTED",
       shopifyGrantedScopes: "read_products,read_discounts,write_discounts",
+      shopifyAdminAccessTokenEncrypted: "encrypted-token-a",
+      shopifyCurrencyCode: "USD",
+      shopifyClientId: "abcdef0123456789abcdef0123456789",
     },
     {
       id: "brand-b",
       shopifyShopDomain: SHOP_B,
       shopifyConnectionStatus: "CONNECTED",
       shopifyGrantedScopes: "read_products",
+      shopifyAdminAccessTokenEncrypted: "encrypted-token-b",
+      shopifyCurrencyCode: "USD",
+      shopifyClientId: "abcdef0123456789abcdef0123456789",
     },
   ];
   findUniqueCalls = [];
@@ -255,7 +277,63 @@ beforeEach(() => {
   onFindUnique = null;
   updateManyThrows = null;
   canonicalConnection = null;
+  connectionEventCreateCalls = [];
 });
+
+/**
+ * Backs `healScopeDriftReconnect`'s transaction. Shares the SAME `brands`
+ * in-memory table as the non-transactional stubs above (a real Postgres
+ * transaction would see the same committed rows either way), so a heal
+ * triggered through this mock is genuinely observable via `brand("brand-a")`
+ * afterward, not merely asserted against a separate, disconnected fixture.
+ */
+async function fakeTransaction<T>(
+  fn: (tx: Record<string, unknown>) => Promise<T>,
+): Promise<T> {
+  const tx = {
+    brand: {
+      findUnique: async (args: { where: { id: string } }) => {
+        const match = brands.find((b) => b.id === args.where.id) ?? null;
+        return match ? { ...match } : null;
+      },
+      updateMany: async (args: {
+        where: { id: string; shopifyConnectionStatus?: string };
+        data: Record<string, unknown>;
+      }) => {
+        const matched = brands.filter((b) => {
+          if (b.id !== args.where.id) return false;
+          if (
+            args.where.shopifyConnectionStatus !== undefined &&
+            b.shopifyConnectionStatus !== args.where.shopifyConnectionStatus
+          ) {
+            return false;
+          }
+          return true;
+        });
+        for (const b of matched) Object.assign(b, args.data);
+        return { count: matched.length };
+      },
+    },
+    // recordShopifyConnectionInstall deactivates reward offers before
+    // recording the event (existing, deliberate behavior for every
+    // install/reconnect/relink — see shopify-connection-transitions.ts).
+    // Present here purely so that call does not throw; this suite has no
+    // reward-offer fixtures to assert against.
+    brandRewardOffer: {
+      updateMany: async () => ({ count: 0 }),
+    },
+    shopifyConnectionEvent: {
+      create: async (args: { data: { brandId: string; eventType: string } }) => {
+        connectionEventCreateCalls.push({
+          brandId: args.data.brandId,
+          eventType: args.data.eventType,
+        });
+        return {};
+      },
+    },
+  };
+  return fn(tx);
+}
 
 // ---------------------------------------------------------------------------
 // 1. Valid HMAC + known shop -> 200 and the cached scopes match `current`.
@@ -765,12 +843,103 @@ describe("8. the topic is declared in both configs and bound to this route by PA
     });
   });
 
-  test("this webhook performs no authorization or status transition — it is a passive cache sync", () => {
+  test("this webhook performs no authorization decision — it is a passive cache sync, plus one narrowly-scoped healing exception", () => {
     const source = readSource("src/app/api/shopify/webhooks/app/scopes_update/route.ts");
-    // No connection-status writes, no reward/points side effects, no token work.
+    // No connection-LOSS side effects, no reward/points side effects, and no
+    // token decryption/mutation of any kind — the scope-drift eligibility
+    // check (token PRESENCE, not value) and the healing CAS write both live
+    // in shopify-token-manager.ts (`applyGrantedScopesUpdate`'s
+    // `wasScopeDriftReconnect` + `healScopeDriftReconnect`), never inline
+    // here. This route only ever branches on the ALREADY-COMPUTED boolean.
     assert.doesNotMatch(source, /shopifyConnectionStatus:\s*"/);
     assert.doesNotMatch(source, /recordShopifyConnectionLoss/);
     assert.doesNotMatch(source, /brandRewardOffer/);
-    assert.doesNotMatch(source, /AccessToken/);
+    assert.doesNotMatch(source, /decryptSecret|encryptSecret/);
+    // The one sanctioned exception, and only that one:
+    assert.match(source, /healScopeDriftReconnect/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 9. Healing: a scope-drift REQUIRES_RECONNECT is healed back to CONNECTED.
+// ---------------------------------------------------------------------------
+
+describe("9. healing a scope-drift false REQUIRES_RECONNECT", () => {
+  test("a REQUIRES_RECONNECT brand with a credential still on file is healed to CONNECTED, with a RECONNECTED event", async () => {
+    brand("brand-a").shopifyConnectionStatus = "REQUIRES_RECONNECT";
+    // Token deliberately left non-null (see the FakeBrand doc comment) — this
+    // is the scope-drift signature, never a genuine credential failure.
+
+    const rawBody = JSON.stringify({ current: ["read_products", "read_orders", "read_discounts", "write_discounts"] });
+    const response = await withShopifyApiSecret(SECRET, () =>
+      POST(signedRequest(JSON.parse(rawBody), SHOP_A)),
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(
+      brand("brand-a").shopifyConnectionStatus,
+      "CONNECTED",
+      "a scope-drift REQUIRES_RECONNECT must heal once new scopes are applied",
+    );
+    assert.equal(brand("brand-a").shopifyGrantedScopes, "read_products,read_orders,read_discounts,write_discounts");
+    assert.equal(connectionEventCreateCalls.length, 1);
+    assert.equal(connectionEventCreateCalls[0]!.brandId, "brand-a");
+    assert.equal(connectionEventCreateCalls[0]!.eventType, "RECONNECTED");
+  });
+
+  test("a REQUIRES_RECONNECT brand with NO credential on file (a genuine failure) is never healed", async () => {
+    brand("brand-a").shopifyConnectionStatus = "REQUIRES_RECONNECT";
+    brand("brand-a").shopifyAdminAccessTokenEncrypted = null;
+
+    const response = await withShopifyApiSecret(SECRET, () =>
+      POST(signedRequest({ current: ["read_products", "read_orders"] }, SHOP_A)),
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(
+      brand("brand-a").shopifyConnectionStatus,
+      "REQUIRES_RECONNECT",
+      "a genuine credential failure (token already cleared) must never be healed by this webhook",
+    );
+    assert.equal(connectionEventCreateCalls.length, 0);
+    // The scope cache is still updated — this webhook's cache-sync job is
+    // unconditional; only the STATUS heal is gated on the scope-drift proof.
+    assert.equal(brand("brand-a").shopifyGrantedScopes, "read_products,read_orders");
+  });
+
+  test("an already-CONNECTED brand is never touched by the healing path (no spurious event)", async () => {
+    // brand-a starts CONNECTED (see beforeEach).
+    const response = await withShopifyApiSecret(SECRET, () =>
+      POST(signedRequest({ current: ["read_products", "read_discounts", "write_discounts"] }, SHOP_A)),
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(brand("brand-a").shopifyConnectionStatus, "CONNECTED");
+    assert.equal(
+      connectionEventCreateCalls.length,
+      0,
+      "healing must never fire, and no event must be recorded, for a connection that was never REQUIRES_RECONNECT",
+    );
+  });
+
+  test("healing tenant isolation: a signed payload for shop A's scope-drift row never heals or events brand B", async () => {
+    brand("brand-a").shopifyConnectionStatus = "REQUIRES_RECONNECT";
+    brand("brand-b").shopifyConnectionStatus = "REQUIRES_RECONNECT";
+    brand("brand-b").shopifyGrantedScopes = "read_products";
+
+    const response = await withShopifyApiSecret(SECRET, () =>
+      POST(signedRequest({ current: ["read_products", "read_orders"] }, SHOP_A)),
+    );
+
+    assert.equal(response.status, 200);
+    assert.equal(brand("brand-a").shopifyConnectionStatus, "CONNECTED");
+    assert.equal(
+      brand("brand-b").shopifyConnectionStatus,
+      "REQUIRES_RECONNECT",
+      "a delivery naming shop A must never heal, event, or otherwise touch brand B's row",
+    );
+    assert.equal(brand("brand-b").shopifyGrantedScopes, "read_products");
+    assert.equal(connectionEventCreateCalls.length, 1);
+    assert.equal(connectionEventCreateCalls[0]!.brandId, "brand-a");
   });
 });

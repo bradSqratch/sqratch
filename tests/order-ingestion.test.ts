@@ -1288,6 +1288,491 @@ describe("17. computeNetRevenueMinor is deterministic and null-safe", () => {
 });
 
 // ---------------------------------------------------------------------------
+// P12.4 live-case multi-currency refund regression
+// ---------------------------------------------------------------------------
+
+/**
+ * End-to-end (real Shopify normalizer + real ingestion service) regression
+ * for the exact live-QA multi-currency P1: shop currency CAD, presentment
+ * currency USD, real Shopify order #1002 values. Every fixture below uses
+ * Shopify's actually-documented Refund resource shape (`refund_line_items[].
+ * subtotal_set` as a `{shop_money, presentment_money}` MoneyBag) — the same
+ * shape that caused the bug when the old code read a presentment-currency
+ * `transactions[].amount` and mislabeled it as shop money.
+ */
+describe("P12.4 live-case regression: CAD shop currency, USD presentment currency, real order #1002 values", () => {
+  // As of P12.4, totalRefundedMinor/financialStatus for a refund-bearing
+  // order are NEVER computed by the pure REST normalizer (see
+  // shopify-order-normalizer.ts's REFUNDS header block) — they are merged in
+  // by the Shopify webhook layer's live GraphQL reconciliation BEFORE
+  // ingestNormalizedOrder is ever called (see
+  // tests/shopify-order-webhook.test.ts's "financial reconciliation
+  // orchestration" suite for that merge step itself). This suite tests
+  // ingestNormalizedOrder's OWN idempotency/staleness/coalesce behavior
+  // given the exact values an authoritative reconciliation would produce —
+  // i.e. it constructs each delivery the way the webhook layer would have
+  // handed it to ingestion, post-merge.
+  const SHOP_TOTAL_CAD_MINOR = BigInt(132257); // CAD 1322.57
+  const PARTIAL_REFUND_CAD_MINOR = BigInt(61063); // CAD 610.63 — settled
+  const REMAINDER_REFUND_CAD_MINOR = BigInt(71194); // CAD 711.94 — settled
+  // The exact live-QA bug: the old REST-derivation code produced these
+  // PRESENTMENT-currency (USD-in-cents) numbers mislabeled as CAD.
+  const BUGGY_PARTIAL_PRESENTMENT_MINOR = BigInt(44000); // USD 440.00
+  const BUGGY_FULL_PRESENTMENT_MINOR = BigInt(95300); // USD 953.00
+
+  function shopifyOrder1002(overrides: Partial<NormalizedOrderInput> = {}): NormalizedOrderInput {
+    return makeOrder({
+      externalOrderId: "1002",
+      orderNumber: "#1002",
+      currencyCode: "CAD",
+      minorUnitExponent: 2,
+      subtotalMinor: SHOP_TOTAL_CAD_MINOR,
+      totalMinor: SHOP_TOTAL_CAD_MINOR,
+      totalRefundedMinor: BigInt(0),
+      financialStatus: "PAID",
+      lineItems: [],
+      ...overrides,
+    });
+  }
+
+  function makeShopifyEvent(providerEventId: string) {
+    return makeEvent({ provider: CommerceProvider.SHOPIFY, providerEventId });
+  }
+
+  test("original order: totalMinor = 132257, totalRefundedMinor = 0, netRevenueMinor = 132257 (CommerceOrder.currencyCode = CAD)", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const deps = makeDeps(store);
+
+    const outcome = await ingestNormalizedOrder(
+      makeShopifyEvent("orders-create-1002"),
+      shopifyOrder1002({ providerUpdatedAt: new Date("2026-08-15T10:00:00-04:00") }),
+      deps,
+    );
+    assert.equal(outcome.status, "CREATED");
+
+    const stored = store.orders.get(outcome.orderId!)!;
+    assert.equal(stored.currencyCode, "CAD");
+    assert.equal(stored.totalMinor, SHOP_TOTAL_CAD_MINOR);
+    assert.equal(stored.totalRefundedMinor, BigInt(0));
+    assert.equal(stored.netRevenueMinor, SHOP_TOTAL_CAD_MINOR);
+  });
+
+  test("first partial refund (as a reconciled snapshot): totalRefundedMinor = 61063, netRevenueMinor = 71194 — NEVER the presentment USD 44000 the old buggy code produced", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const deps = makeDeps(store);
+
+    const first = await ingestNormalizedOrder(
+      makeShopifyEvent("orders-create-1002"),
+      shopifyOrder1002({ providerUpdatedAt: new Date("2026-08-15T10:00:00-04:00") }),
+      deps,
+    );
+
+    const second = await ingestNormalizedOrder(
+      makeShopifyEvent("orders-updated-1002-partial"),
+      shopifyOrder1002({
+        providerUpdatedAt: new Date("2026-08-15T11:00:00-04:00"),
+        totalRefundedMinor: PARTIAL_REFUND_CAD_MINOR,
+        financialStatus: "PARTIALLY_REFUNDED",
+      }),
+      deps,
+    );
+    assert.equal(second.status, "UPDATED");
+    assert.equal(second.orderId, first.orderId);
+
+    const stored = store.orders.get(first.orderId!)!;
+    assert.equal(stored.currencyCode, "CAD");
+    assert.equal(stored.totalMinor, SHOP_TOTAL_CAD_MINOR);
+    assert.notEqual(stored.totalRefundedMinor, BUGGY_PARTIAL_PRESENTMENT_MINOR);
+    assert.equal(stored.totalRefundedMinor, PARTIAL_REFUND_CAD_MINOR);
+    assert.equal(stored.netRevenueMinor, BigInt(71194));
+    assert.equal(stored.financialStatus, "PARTIALLY_REFUNDED");
+  });
+
+  test("final cumulative refund (as a reconciled snapshot): totalRefundedMinor = 132257, netRevenueMinor = 0, financialStatus = REFUNDED — NEVER the presentment USD 95300 the old buggy code produced", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const deps = makeDeps(store);
+
+    const first = await ingestNormalizedOrder(
+      makeShopifyEvent("orders-create-1002"),
+      shopifyOrder1002({ providerUpdatedAt: new Date("2026-08-15T10:00:00-04:00") }),
+      deps,
+    );
+    await ingestNormalizedOrder(
+      makeShopifyEvent("orders-updated-1002-partial"),
+      shopifyOrder1002({
+        providerUpdatedAt: new Date("2026-08-15T11:00:00-04:00"),
+        totalRefundedMinor: PARTIAL_REFUND_CAD_MINOR,
+        financialStatus: "PARTIALLY_REFUNDED",
+      }),
+      deps,
+    );
+
+    const third = await ingestNormalizedOrder(
+      makeShopifyEvent("orders-updated-1002-full"),
+      shopifyOrder1002({
+        providerUpdatedAt: new Date("2026-08-15T12:00:00-04:00"),
+        // The reconciliation's own SETTLED-transaction sum, cumulative by
+        // construction (not the partial + remainder added by this test).
+        totalRefundedMinor: PARTIAL_REFUND_CAD_MINOR + REMAINDER_REFUND_CAD_MINOR,
+        financialStatus: "REFUNDED",
+      }),
+      deps,
+    );
+    assert.equal(third.status, "UPDATED");
+
+    const stored = store.orders.get(first.orderId!)!;
+    assert.equal(stored.currencyCode, "CAD");
+    assert.equal(stored.totalMinor, SHOP_TOTAL_CAD_MINOR);
+    assert.notEqual(stored.totalRefundedMinor, BUGGY_FULL_PRESENTMENT_MINOR);
+    assert.equal(stored.totalRefundedMinor, SHOP_TOTAL_CAD_MINOR);
+    assert.equal(stored.netRevenueMinor, BigInt(0));
+    assert.equal(stored.financialStatus, "REFUNDED");
+    // Required invariant: 0 <= totalRefundedMinor <= totalMinor.
+    assert.ok(stored.totalRefundedMinor >= BigInt(0));
+    assert.ok(stored.totalRefundedMinor <= stored.totalMinor!);
+  });
+
+  test("I/J. reverse-arrival convergence: a NOT_ELIGIBLE-deferred delivery (financial fields null, exactly as the webhook layer produces when reconciliation is unavailable) interleaved BEFORE the authoritative snapshots never changes the final state", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const deps = makeDeps(store);
+
+    await ingestNormalizedOrder(
+      makeShopifyEvent("orders-create-1002"),
+      shopifyOrder1002({ providerUpdatedAt: new Date("2026-08-15T10:00:00-04:00") }),
+      deps,
+    );
+
+    // A delivery whose reconciliation came back NOT_ELIGIBLE — the webhook
+    // layer defers (nulls) both settlement fields rather than guessing, per
+    // shopify-order-webhook.ts's NOT_ELIGIBLE branch. Every other field
+    // (fulfillmentStatus here) still lands normally — checked immediately,
+    // since a LATER full snapshot's own fulfillmentStatus (authoritative,
+    // not coalesced) legitimately supersedes it further down, same as any
+    // other non-settlement field on a FULL payload.
+    const deferred = await ingestNormalizedOrder(
+      makeShopifyEvent("orders-updated-1002-deferred"),
+      shopifyOrder1002({
+        providerUpdatedAt: new Date("2026-08-15T10:59:00-04:00"),
+        totalRefundedMinor: null,
+        financialStatus: null,
+        fulfillmentStatus: "FULFILLED",
+      }),
+      deps,
+    );
+    assert.equal(store.orders.get(deferred.orderId!)!.fulfillmentStatus, "FULFILLED");
+
+    await ingestNormalizedOrder(
+      makeShopifyEvent("orders-updated-1002-partial"),
+      shopifyOrder1002({
+        providerUpdatedAt: new Date("2026-08-15T11:00:00-04:00"),
+        totalRefundedMinor: PARTIAL_REFUND_CAD_MINOR,
+        financialStatus: "PARTIALLY_REFUNDED",
+      }),
+      deps,
+    );
+
+    const finalOutcome = await ingestNormalizedOrder(
+      makeShopifyEvent("orders-updated-1002-full"),
+      shopifyOrder1002({
+        providerUpdatedAt: new Date("2026-08-15T12:00:00-04:00"),
+        totalRefundedMinor: PARTIAL_REFUND_CAD_MINOR + REMAINDER_REFUND_CAD_MINOR,
+        financialStatus: "REFUNDED",
+      }),
+      deps,
+    );
+
+    const finalStored = store.orders.get(finalOutcome.orderId!)!;
+    assert.equal(finalStored.totalRefundedMinor, SHOP_TOTAL_CAD_MINOR);
+    assert.equal(finalStored.netRevenueMinor, BigInt(0));
+    assert.equal(finalStored.financialStatus, "REFUNDED");
+  });
+
+  test("I/J. reverse-arrival convergence: the same NOT_ELIGIBLE-deferred delivery interleaved AFTER the authoritative full-refund snapshot still converges to the identical final state, and never reverts it", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const deps = makeDeps(store);
+
+    await ingestNormalizedOrder(
+      makeShopifyEvent("orders-create-1002"),
+      shopifyOrder1002({ providerUpdatedAt: new Date("2026-08-15T10:00:00-04:00") }),
+      deps,
+    );
+    await ingestNormalizedOrder(
+      makeShopifyEvent("orders-updated-1002-partial"),
+      shopifyOrder1002({
+        providerUpdatedAt: new Date("2026-08-15T11:00:00-04:00"),
+        totalRefundedMinor: PARTIAL_REFUND_CAD_MINOR,
+        financialStatus: "PARTIALLY_REFUNDED",
+      }),
+      deps,
+    );
+
+    const finalOutcome = await ingestNormalizedOrder(
+      makeShopifyEvent("orders-updated-1002-full"),
+      shopifyOrder1002({
+        providerUpdatedAt: new Date("2026-08-15T12:00:00-04:00"),
+        totalRefundedMinor: PARTIAL_REFUND_CAD_MINOR + REMAINDER_REFUND_CAD_MINOR,
+        financialStatus: "REFUNDED",
+      }),
+      deps,
+    );
+
+    // A late, deferred delivery arrives AFTER the full-refund snapshot, with
+    // an OLDER providerUpdatedAt. The staleness guard rejects it outright —
+    // and even if it had landed, its null settlement fields would coalesce
+    // to the already-stored values (see order-ingestion.ts's coalesce-on-null
+    // rule for totalRefundedMinor/financialStatus), never reverting them.
+    const lateOutcome = await ingestNormalizedOrder(
+      makeShopifyEvent("orders-updated-1002-late-deferred"),
+      shopifyOrder1002({
+        providerUpdatedAt: new Date("2026-08-15T11:00:05-04:00"),
+        totalRefundedMinor: null,
+        financialStatus: null,
+      }),
+      deps,
+    );
+    assert.equal(lateOutcome.status, "SKIPPED_STALE");
+
+    const finalStored = store.orders.get(finalOutcome.orderId!)!;
+    assert.equal(finalStored.totalRefundedMinor, SHOP_TOTAL_CAD_MINOR);
+    assert.equal(finalStored.netRevenueMinor, BigInt(0));
+    assert.equal(finalStored.financialStatus, "REFUNDED");
+  });
+
+  /**
+   * A bare `refunds/create` PARTIAL fragment whose OWN reconciliation
+   * attempt did not (yet) succeed — the exact shape
+   * `normalizeShopifyRefundPayload` + a NOT_ELIGIBLE/TRANSIENT-then-retried
+   * reconciliation produces: `completeness: "PARTIAL"`, only
+   * `externalOrderId` and its own `providerUpdatedAt` populated, every other
+   * field (including the two settlement fields) null so ingestion's PARTIAL
+   * `pick` preserves whatever is already stored.
+   */
+  function bareRefundsCreateFragment(providerUpdatedAt: Date): NormalizedOrderInput {
+    return {
+      connectionId: "conn-1",
+      brandId: "brand-1",
+      provider: CommerceProvider.SHOPIFY,
+      completeness: "PARTIAL",
+      externalOrderId: "1002",
+      orderNumber: null,
+      currencyCode: null,
+      minorUnitExponent: null,
+      subtotalMinor: null,
+      discountsMinor: null,
+      shippingMinor: null,
+      taxMinor: null,
+      totalMinor: null,
+      totalRefundedMinor: null,
+      financialStatus: null,
+      fulfillmentStatus: null,
+      cancelledAt: null,
+      cancelReason: null,
+      providerCreatedAt: null,
+      providerUpdatedAt,
+      lineItems: [],
+      attributionToken: null,
+    };
+  }
+
+  test("I. topic-ordering: refunds/create (bare, unreconciled PARTIAL) arriving BEFORE orders/updated (reconciled FULL) converges to the correct final state", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const deps = makeDeps(store);
+
+    await ingestNormalizedOrder(
+      makeShopifyEvent("orders-create-1002"),
+      shopifyOrder1002({ providerUpdatedAt: new Date("2026-08-15T10:00:00-04:00") }),
+      deps,
+    );
+
+    await ingestNormalizedOrder(
+      makeShopifyEvent("refunds-create-1002"),
+      bareRefundsCreateFragment(new Date("2026-08-15T10:59:00-04:00")),
+      deps,
+    );
+
+    const updated = await ingestNormalizedOrder(
+      makeShopifyEvent("orders-updated-1002-full"),
+      shopifyOrder1002({
+        providerUpdatedAt: new Date("2026-08-15T12:00:00-04:00"),
+        totalRefundedMinor: PARTIAL_REFUND_CAD_MINOR + REMAINDER_REFUND_CAD_MINOR,
+        financialStatus: "REFUNDED",
+      }),
+      deps,
+    );
+
+    const stored = store.orders.get(updated.orderId!)!;
+    assert.equal(stored.totalRefundedMinor, SHOP_TOTAL_CAD_MINOR);
+    assert.equal(stored.netRevenueMinor, BigInt(0));
+    assert.equal(stored.financialStatus, "REFUNDED");
+  });
+
+  test("J. topic-ordering: orders/updated (reconciled FULL) arriving BEFORE a later refunds/create (bare, unreconciled PARTIAL) converges to the SAME final state", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const deps = makeDeps(store);
+
+    await ingestNormalizedOrder(
+      makeShopifyEvent("orders-create-1002"),
+      shopifyOrder1002({ providerUpdatedAt: new Date("2026-08-15T10:00:00-04:00") }),
+      deps,
+    );
+
+    const updated = await ingestNormalizedOrder(
+      makeShopifyEvent("orders-updated-1002-full"),
+      shopifyOrder1002({
+        providerUpdatedAt: new Date("2026-08-15T12:00:00-04:00"),
+        totalRefundedMinor: PARTIAL_REFUND_CAD_MINOR + REMAINDER_REFUND_CAD_MINOR,
+        financialStatus: "REFUNDED",
+      }),
+      deps,
+    );
+
+    // Shopify's own retried refunds/create arrives LAST — a bare PARTIAL
+    // fragment can never revert the already-correct cumulative total,
+    // regardless of its own providerUpdatedAt, because PARTIAL only ever
+    // contributes non-null fields and every one of its fields is null here.
+    const late = await ingestNormalizedOrder(
+      makeShopifyEvent("refunds-create-1002-late"),
+      bareRefundsCreateFragment(new Date("2026-08-15T12:00:05-04:00")),
+      deps,
+    );
+    assert.equal(late.status, "UPDATED");
+
+    const stored = store.orders.get(updated.orderId!)!;
+    assert.equal(stored.totalRefundedMinor, SHOP_TOTAL_CAD_MINOR);
+    assert.equal(stored.netRevenueMinor, BigInt(0));
+    assert.equal(stored.financialStatus, "REFUNDED");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// K. Financial invariant guard
+// ---------------------------------------------------------------------------
+
+describe("K. the financial invariant guard rejects an internally-contradictory complete snapshot rather than persisting it", () => {
+  test("totalRefundedMinor > totalMinor is rejected: FAILED/CONTRADICTORY_FINANCIAL_SNAPSHOT, nothing written", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const deps = makeDeps(store);
+
+    const outcome = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-contradictory-1" }),
+      makeOrder({ totalMinor: BigInt(1000), totalRefundedMinor: BigInt(1500), financialStatus: "PARTIALLY_REFUNDED" }),
+      deps,
+    );
+    assert.equal(outcome.status, "FAILED");
+    assert.equal(outcome.reason, "CONTRADICTORY_FINANCIAL_SNAPSHOT");
+    assert.equal(store.orders.size, 0, "nothing may be written for a rejected snapshot");
+  });
+
+  test("financialStatus REFUNDED with totalRefundedMinor < totalMinor is rejected — the exact contradictory state the live P1 bug produced", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const deps = makeDeps(store);
+
+    const outcome = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-contradictory-2" }),
+      makeOrder({ totalMinor: BigInt(132257), totalRefundedMinor: BigInt(95300), financialStatus: "REFUNDED" }),
+      deps,
+    );
+    assert.equal(outcome.status, "FAILED");
+    assert.equal(outcome.reason, "CONTRADICTORY_FINANCIAL_SNAPSHOT");
+  });
+
+  test("financialStatus PARTIALLY_REFUNDED with totalRefundedMinor === 0 is rejected (not strictly between 0 and totalMinor)", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const deps = makeDeps(store);
+
+    const outcome = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-contradictory-3" }),
+      makeOrder({ totalMinor: BigInt(1000), totalRefundedMinor: BigInt(0), financialStatus: "PARTIALLY_REFUNDED" }),
+      deps,
+    );
+    assert.equal(outcome.status, "FAILED");
+    assert.equal(outcome.reason, "CONTRADICTORY_FINANCIAL_SNAPSHOT");
+  });
+
+  test("financialStatus PARTIALLY_REFUNDED with totalRefundedMinor === totalMinor is rejected (that is REFUNDED, not partial)", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const deps = makeDeps(store);
+
+    const outcome = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-contradictory-4" }),
+      makeOrder({ totalMinor: BigInt(1000), totalRefundedMinor: BigInt(1000), financialStatus: "PARTIALLY_REFUNDED" }),
+      deps,
+    );
+    assert.equal(outcome.status, "FAILED");
+    assert.equal(outcome.reason, "CONTRADICTORY_FINANCIAL_SNAPSHOT");
+  });
+
+  test("a coherent complete snapshot (REFUNDED, totalRefundedMinor === totalMinor) is accepted normally", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const deps = makeDeps(store);
+
+    const outcome = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-coherent-1" }),
+      makeOrder({ totalMinor: BigInt(1000), totalRefundedMinor: BigInt(1000), financialStatus: "REFUNDED" }),
+      deps,
+    );
+    assert.equal(outcome.status, "CREATED");
+  });
+
+  test("CONTRADICTORY_FINANCIAL_SNAPSHOT is NOT retryable — it is a deterministic rejection of the data itself, not a transient condition", () => {
+    assert.equal(
+      isRetryableOrderIngestionOutcome({
+        status: "FAILED",
+        reason: "CONTRADICTORY_FINANCIAL_SNAPSHOT",
+      }),
+      false,
+    );
+  });
+
+  test("an UPDATE whose merged snapshot would be contradictory is rejected without corrupting the previously-stored, coherent row", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const deps = makeDeps(store);
+
+    const first = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-preserve-1" }),
+      makeOrder({
+        providerUpdatedAt: new Date("2026-08-15T10:00:00-04:00"),
+        totalMinor: BigInt(1000),
+        totalRefundedMinor: BigInt(0),
+        financialStatus: "PAID",
+      }),
+      deps,
+    );
+    assert.equal(first.status, "CREATED");
+    const storedBefore = { ...store.orders.get(first.orderId!)! };
+
+    const rejected = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-preserve-2" }),
+      makeOrder({
+        providerUpdatedAt: new Date("2026-08-15T11:00:00-04:00"),
+        totalMinor: BigInt(1000),
+        totalRefundedMinor: BigInt(1500),
+        financialStatus: "PARTIALLY_REFUNDED",
+      }),
+      deps,
+    );
+    assert.equal(rejected.status, "FAILED");
+    assert.equal(rejected.reason, "CONTRADICTORY_FINANCIAL_SNAPSHOT");
+
+    const storedAfter = store.orders.get(first.orderId!)!;
+    assert.deepEqual(storedAfter, storedBefore);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Connection gating — all six CommerceConnectionStatus values
 // ---------------------------------------------------------------------------
 
@@ -1416,12 +1901,19 @@ describe("19. externalOrderId identity is scoped to the connection, not global",
         brandId: "brand-A",
         externalOrderId: "shared-1001",
         providerUpdatedAt: new Date("2026-08-09T00:00:00.000Z"),
-        financialStatus: "REFUNDED",
+        // A status with no totalRefundedMinor relationship to assert, so
+        // this test (about cross-connection isolation) stays independent of
+        // the financial invariant guard (see "K." below) — REFUNDED here
+        // without a matching totalRefundedMinor would now be correctly
+        // rejected as a contradictory snapshot, which is not what this test
+        // is about.
+        financialStatus: "PARTIALLY_PAID",
       }),
       deps,
     );
     assert.equal(updateA.status, "UPDATED");
     assert.equal(updateA.orderId, a.orderId);
+    assert.equal(store.orders.get(a.orderId!)!.financialStatus, "PARTIALLY_PAID");
     assert.equal(store.orders.get(b.orderId!)!.financialStatus, "PAID");
   });
 });

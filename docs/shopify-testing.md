@@ -32,6 +32,7 @@ Do not add product write scopes unless the product requirements change.
 - Order created webhook: `https://www.sqratch.com/api/shopify/webhooks/orders/create`.
 - Order updated webhook: `https://www.sqratch.com/api/shopify/webhooks/orders/updated`.
 - Refund created webhook: `https://www.sqratch.com/api/shopify/webhooks/refunds/create`.
+- Order transaction created/settled webhook: `https://www.sqratch.com/api/shopify/webhooks/order_transactions/create`.
 
 The repository also contains `shopify.app.toml` for the production embedded app configuration.
 
@@ -163,7 +164,7 @@ See `docs/commerce/phase-12-live-order-ingestion-and-conversion-attribution-summ
 - Confirm a transient database failure during the order write returns `500` (`WRITE_FAILED`) so Shopify retries, and that retry succeeds once the transient condition clears.
 - Confirm a malformed/non-retryable payload (e.g. missing order id) is acknowledged `200` without creating a row, and is not retried by Shopify.
 - Confirm `orders/updated` treats an older `providerUpdatedAt` than what's stored as stale and does not overwrite newer state (`SKIPPED_STALE`, `200`).
-- Confirm `refunds/create` updates `totalRefundedMinor`/`financialStatus` on the existing order without creating a duplicate order row.
+- Confirm `refunds/create` (and, once a previously-pending refund transaction settles, `order_transactions/create`) triggers a live Shopify Admin GraphQL financial reconciliation — never a value computed from the refund/transaction webhook payload itself — that updates `totalRefundedMinor`/`financialStatus` on the existing order without creating a duplicate order row. `totalRefundedMinor` is the sum of settled (`status: SUCCESS`) `kind: REFUND` order transactions in shop currency; a pending/failed/error transaction must never reduce it.
 - Confirm an order with the same connected product on multiple line items counts as one attributed order for that product in conversion analytics (`attributedOrdersByProduct`), not one per line item.
 - Confirm no points, creator commission, or payout is triggered by any order/refund webhook — `orders/create` is a normalized snapshot, not a settlement event.
 - Automated coverage: `tests/order-ingestion.test.ts`, `tests/shopify-order-webhook.test.ts`, `tests/order-analytics.test.ts`, `tests/shopify-order-normalizer.test.ts`.

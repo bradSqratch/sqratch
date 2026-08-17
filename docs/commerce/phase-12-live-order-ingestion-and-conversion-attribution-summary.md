@@ -50,10 +50,14 @@ become conversions.
 ## Shopify configuration and rollout
 
 Both Shopify TOMLs request `read_products,read_orders,read_themes,read_discounts,write_discounts`
-and subscribe to `orders/create`, `orders/updated`, `refunds/create`, and
-`app/scopes_update` (in addition to the pre-existing `app/uninstalled` and
-the three GDPR compliance topics). `read_all_orders` and `write_orders` are
-not requested. Both apps use Shopify **managed installation**
+and subscribe to `orders/create`, `orders/updated`, `refunds/create`,
+`order_transactions/create`, and `app/scopes_update` (in addition to the
+pre-existing `app/uninstalled` and the three GDPR compliance topics).
+`order_transactions/create` fires only for a transaction created or settled
+to a terminal status (`success`, `failure`, or `error`) and exists as the
+reliable signal for a refund transaction that was created `PENDING` and
+later settles with no other order-level field changing — see "Refund
+settlement" below. `read_all_orders` and `write_orders` are not requested. Both apps use Shopify **managed installation**
 (`use_legacy_install_flow` is `false` in `shopify.app.toml` and absent from
 `shopify.app.custom.toml`) — confirmed by audit, not changed by this phase —
 which is what lets Shopify grant a newly-required scope to an
@@ -120,9 +124,29 @@ The raw body is HMAC-verified before parsing; route paths (not the
 spoofable `x-shopify-topic` header) bind topics; Shopify delivery IDs
 deduplicate `CommerceOrderEvent` (with a digest-of-body fallback for
 fixture-driven tests, which have no such header). `orders/updated` is the
-authoritative full-order state, and `refunds/create` is a non-creating
-partial fragment. Stale updates cannot overwrite newer state; refunds are
-cumulative; an order retains its existing attribution across later updates.
+authoritative full-order state, and `refunds/create` and
+`order_transactions/create` are non-creating partial fragments. Stale
+updates cannot overwrite newer state; an order retains its existing
+attribution across later updates.
+
+**Refund settlement is never computed from a REST refund/transaction
+webhook payload.** Shopify documents that a Refund object's existence does
+not prove money moved ("check the transaction status"), and the REST
+Transaction resource carries no shop-money field at all. Whenever a
+delivery carries refund evidence (`orders/create`/`orders/updated` with a
+non-empty `refunds[]`, or unconditionally for `refunds/create` and
+`order_transactions/create`), the Shopify provider layer
+(`src/lib/commerce/providers/shopify-order-financial-reconciliation.ts`)
+performs a live Admin GraphQL query for the order's `transactions`, sums
+only `kind: REFUND, status: SUCCESS` amounts in shop currency, and that
+sum — never a REST-derived figure — becomes the cumulative
+`totalRefundedMinor`/`financialStatus` written to `CommerceOrder`. If
+reconciliation cannot establish a trustworthy value right now (no usable
+credential, order not found, or an ambiguous/possibly-truncated
+transaction list), those two fields are deferred (left `null`), which
+`order-ingestion.ts` coalesces to the previously-stored value rather than
+guessing or zeroing it; a transient reconciliation failure blocks ingestion
+of that delivery entirely and asks Shopify to redeliver.
 
 `/api/brand/analytics/conversions` scopes to the immutable click Brand
 (`attribution.attributedBrandId`, never the FK-backed and cascade-rewritable
@@ -131,8 +155,12 @@ for why), and `/api/creator/analytics/conversions` scopes to creator-owned
 click Experiences. They report ingested orders, historical `attributedOrders`,
 current `currentlyNetPositivePaidOrders`, `pendingOrAuthorizedOrders`,
 `partiallyRefundedOrders`, and `fullyRefundedOrders`, plus
-`grossAttributedRevenueMinor`, `refundedRevenueMinor`, and
-`netAttributedRevenueMinor` current-state minor-unit sums, and
+`grossAttributedRevenueByCurrency`, `refundedRevenueByCurrency`, and
+`netAttributedRevenueByCurrency` current-state minor-unit sums — each an
+array of `{currencyCode, minor}` rows, grouped by the row's own currency, so
+a brand/creator whose orders span more than one currency never has those
+amounts silently summed into one unlabeled total (an `"UNKNOWN"` bucket
+catches any row whose own currency could not be resolved) — and
 provider/campaign/Experience/creator/lesson/product breakdowns
 (`src/lib/commerce/order-analytics.ts`). **`attributedOrdersByProduct`
 counts distinct ORDERS per product, not line-item occurrences** — an order

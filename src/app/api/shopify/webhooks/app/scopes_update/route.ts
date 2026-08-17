@@ -12,13 +12,22 @@
  * without a full re-OAuth — and then ANNOUNCES the resulting scope set on the
  * `app/scopes_update` topic.
  *
- * This route is the receiver for that announcement and nothing more: a passive
- * one-way synchronization of SQRATCH's cached provider-neutral view
+ * This route is the receiver for that announcement: a passive one-way
+ * synchronization of SQRATCH's cached provider-neutral view
  * (`CommerceConnection.grantedScopes`, with a legacy Brand mirror),
- * read by `hasSufficientScopes` / `hasOrderAttributionScope`) onto what Shopify
- * reports it has already granted. It grants no permission, approves nothing,
- * performs no authorization decision, and changes no connection status. Any
- * future authorization logic belongs in the install/OAuth path, not here.
+ * read by `hasSufficientScopes` / `hasOrderAttributionScope` /
+ * `hasThemeVerificationScope`) onto what Shopify reports it has already
+ * granted. It grants no permission, approves nothing, and performs no
+ * authorization decision. Any future authorization logic belongs in the
+ * install/OAuth path, not here.
+ *
+ * ONE EXCEPTION: it MAY heal a connection stuck in a false, scope-drift-caused
+ * `REQUIRES_RECONNECT` back to `CONNECTED` — never a genuine credential
+ * failure — via `healScopeDriftReconnect` (`src/lib/shopify-token-manager.ts`).
+ * This is not a new authorization decision: the connection was never actually
+ * unauthenticated, only mis-flagged by a since-fixed bug that required an
+ * optional, additive scope for baseline connectivity. See that function's doc
+ * comment for the exact eligibility proof this route supplies.
  *
  * ===========================================================================
  * VERIFICATION — REUSED, NOT REIMPLEMENTED
@@ -57,7 +66,10 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import { verifyShopifyWebhookRequest } from "@/lib/shopify-webhooks";
-import { applyGrantedScopesUpdate } from "@/lib/shopify-token-manager";
+import {
+  applyGrantedScopesUpdate,
+  healScopeDriftReconnect,
+} from "@/lib/shopify-token-manager";
 
 // Topic identity is bound to this route's URL PATH, never to a request header.
 const TOPIC = "app/scopes_update";
@@ -132,16 +144,36 @@ export async function POST(request: NextRequest) {
   //    `applyGrantedScopesUpdate`). A transient DB failure propagates so the
   //    500 below asks Shopify to retry; nothing else does.
   let outcome: string;
+  let healedConnection = false;
   try {
+    // `applyGrantedScopesUpdate` already resolves the row once and reports
+    // `wasScopeDriftReconnect` from that SAME lookup — a genuine scope-drift
+    // REQUIRES_RECONNECT (status REQUIRES_RECONNECT, credential still on
+    // file) versus either a healthy connection or a genuine credential
+    // failure (which always clears the credential in the same write that
+    // sets REQUIRES_RECONNECT — see `markRequiresReconnect`). A second,
+    // separate lookup here would be both redundant and racy (two reads of
+    // one row are not the atomic read a real concurrent write could
+    // interleave with).
     const result = await applyGrantedScopesUpdate({ shopDomain, grantedScopes });
     outcome = result.applied ? "APPLIED" : result.reason;
+
+    // 5. This webhook's arrival is Shopify's own authenticated notice that
+    //    the installation is live; combined with the credential-present
+    //    signature above, that is exactly the evidence
+    //    `healScopeDriftReconnect` requires (see its doc comment). A genuine
+    //    credential failure (token already cleared) is never eligible here,
+    //    and this never runs for a connection that was already healthy.
+    if (result.applied && result.wasScopeDriftReconnect) {
+      healedConnection = await healScopeDriftReconnect(result.brandId).catch(() => false);
+    }
   } catch {
     // Never log the error object — it can carry a connection string.
     logScopesUpdate(shopDomain, "WRITE_FAILED", grantedScopes);
     return new NextResponse(null, { status: 500 });
   }
 
-  logScopesUpdate(shopDomain, outcome, grantedScopes);
+  logScopesUpdate(shopDomain, healedConnection ? `${outcome}_HEALED` : outcome, grantedScopes);
 
   return new NextResponse(null, { status: 200 });
 }

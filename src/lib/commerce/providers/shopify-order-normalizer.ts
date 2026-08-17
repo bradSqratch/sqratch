@@ -74,6 +74,20 @@
  * ingestion service and everything else on the stored order is preserved. See
  * the refund note on `normalizeShopifyRefundPayload` for why a partial refund
  * payload deliberately does NOT try to synthesize a cumulative refund total.
+ *
+ * ===========================================================================
+ * REFUNDS: THIS MODULE NEVER COMPUTES A CUMULATIVE REFUND TOTAL
+ * ===========================================================================
+ * Whenever a payload carries refund evidence (`shopifyOrderHasRefundEvidence`
+ * below), `totalRefundedMinor` AND `financialStatus` are BOTH deferred (set
+ * `null`) — never derived from REST fields. REST/webhook shapes cannot prove
+ * a refund SETTLED (Shopify: a Refund object's existence does not mean money
+ * moved; check transaction status) and cannot always represent one completely
+ * (`Refund.refundShippingLines` is GraphQL-only). The caller — the Shopify
+ * provider I/O layer, never this pure module — is responsible for resolving
+ * refund evidence into a trustworthy value via a live, transaction-status-
+ * aware Shopify Admin GraphQL query before it may reach `../order-ingestion.ts`.
+ * See `./shopify-order-financial-reconciliation.ts`.
  */
 
 import crypto from "node:crypto";
@@ -455,76 +469,54 @@ function toMinorTracked(
 }
 
 // ---------------------------------------------------------------------------
-// Cumulative refunds
+// Refund evidence — a SIGNAL, never a computed cumulative total
 // ---------------------------------------------------------------------------
 
 /**
- * PURE. Derives the CUMULATIVE refunded amount for a FULL order payload.
+ * PURE. Whether a raw Shopify order/refund payload carries ANY evidence that
+ * a refund exists for this order — the trigger a caller (the webhook I/O
+ * shell, never this pure module) uses to decide whether an authoritative
+ * Shopify financial-reconciliation call is required before the order's
+ * money fields may be trusted. See `../providers/shopify-order-financial-reconciliation.ts`.
  *
- * Preference order:
- *   1. `total_refunded_set` / `total_refunded` when the payload carries it —
- *      already a cumulative figure by definition.
- *   2. Otherwise the sum over `refunds[]` of each refund's
- *      `transactions[].amount`. An order payload carries ALL of its refunds,
- *      so this sum is cumulative, not incremental.
- *   3. `null` when neither is present — meaning "this payload says nothing
- *      about refunds", which the ingestion service treats as "preserve the
- *      stored value", never as zero.
+ * WHY THIS MODULE NO LONGER COMPUTES A REFUND TOTAL ITSELF (root cause of a
+ * real P1 financial-integrity bug, verified against Shopify's current REST
+ * Admin API / webhook resource docs, not guessed):
+ *   - The Order resource has NO `total_refunded` / `total_refunded_set`
+ *     field. (Confirmed absent from the REST Order property reference — the
+ *     alphabetically-adjacent `total_price_set` / `total_shipping_price_set`
+ *     fields are present, `total_refunded*` is not. The GraphQL-only
+ *     `Order.totalRefundedSet` is a different API and never appears in a
+ *     REST-shaped webhook body.)
+ *   - `refunds[].transactions[].amount` is, per Shopify's own docs, "in the
+ *     presentment currency by default" for a multi-currency order, with no
+ *     shop-money sibling field on the REST Transaction resource.
+ *   - Shopify explicitly documents that a Refund object's existence does
+ *     NOT prove money was returned: "check the transaction status" (pending
+ *     / failure / error transactions have refunded nothing yet). REST
+ *     refund sub-fields (`refund_line_items`, `order_adjustments`) carry no
+ *     transaction-level settlement state at all, so summing them — even
+ *     using only their `shop_money` side — cannot distinguish a settled
+ *     refund from a pending or failed one.
+ *   - `Refund.refundShippingLines` is GraphQL-only; it is not present in the
+ *     REST webhook body a shipping-only refund arrives in, so a REST-only
+ *     component sum silently undercounts that case.
+ *
+ * A prior fix attempted to repair this by summing REST refund sub-fields'
+ * `shop_money` — correct on currency, but still WRONG on settlement (it
+ * could count a pending/failed refund as money returned) and incomplete on
+ * shape (shipping-only refunds). Given Shopify's REST/webhook shapes cannot
+ * establish trustworthy SETTLED shop-money evidence on their own, this
+ * module now treats refund evidence as exactly that — a signal — and defers
+ * the actual amount to a live, transaction-status-aware Shopify Admin
+ * GraphQL query performed by the provider layer.
  */
-export function deriveCumulativeRefundMinor(
-  order: Record<string, unknown>,
-  exponent: number,
-): bigint | null {
-  const direct = readMoneyAmount(order.total_refunded_set ?? order.total_refunded);
-  if (direct !== null) {
-    return toMinor(direct, exponent);
+export function shopifyOrderHasRefundEvidence(payload: unknown): boolean {
+  const order = asRecord(payload);
+  if (!order) {
+    return false;
   }
-
-  const refunds = asArray(order.refunds);
-  if (refunds.length === 0) {
-    return null;
-  }
-
-  let total: bigint | null = null;
-  for (const entry of refunds) {
-    const refund = asRecord(entry);
-    if (!refund) {
-      continue;
-    }
-    const amount = sumRefundTransactions(refund.transactions, exponent);
-    if (amount !== null) {
-      total = (total ?? BigInt(0)) + amount;
-    }
-  }
-  return total;
-}
-
-function sumRefundTransactions(value: unknown, exponent: number): bigint | null {
-  const transactions = asArray(value);
-  if (transactions.length === 0) {
-    return null;
-  }
-  let total: bigint | null = null;
-  for (const entry of transactions) {
-    const transaction = asRecord(entry);
-    if (!transaction) {
-      continue;
-    }
-    // Only settled money movements count toward a refunded total. A `pending`
-    // or `failure` transaction has not refunded anything yet.
-    const status = readText(transaction.status)?.toLowerCase();
-    if (status !== null && status !== undefined && status !== "success") {
-      continue;
-    }
-    const amount = toMinor(
-      readMoneyAmount(transaction.amount_set ?? transaction.amount),
-      exponent,
-    );
-    if (amount !== null) {
-      total = (total ?? BigInt(0)) + amount;
-    }
-  }
-  return total;
+  return asArray(order.refunds).length > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -607,6 +599,74 @@ export function normalizeShopifyOrderPayload(
     warnings.push("UNRECOGNIZED_FULFILLMENT_STATUS");
   }
 
+  // Refund evidence gates BOTH totalRefundedMinor AND financialStatus: a
+  // REST/webhook payload alone cannot prove refund money settled (see
+  // shopifyOrderHasRefundEvidence's doc comment), so persisting a claimed
+  // financialStatus of e.g. REFUNDED while the refunded amount stays
+  // unresolved would create exactly the contradictory snapshot this module
+  // must never produce. Both are deferred together to the caller's
+  // authoritative Shopify GraphQL reconciliation — see
+  // `../providers/shopify-order-financial-reconciliation.ts`.
+  const refundsPresent = shopifyOrderHasRefundEvidence(order);
+  if (refundsPresent) {
+    warnings.push("REFUND_CUMULATIVE_UNAVAILABLE");
+  }
+
+  // REQUIRED INVARIANT: every persisted money amount must have an
+  // unambiguous currencyCode. `exponent` above is never itself null —
+  // `getCurrencyExponent(undefined)` returns a DEFAULTED fallback exponent
+  // (see money.ts) so that a genuinely known currency's amounts still
+  // convert correctly earlier in this function's data flow — but a
+  // defaulted exponent must never be used to persist a real amount next to
+  // a `currencyCode: null` row, which would be exactly the ambiguous state
+  // this invariant forbids (an amount with no unit). When currency could
+  // not be resolved at all, every money field is nulled here, in one place,
+  // rather than threading a currency-known condition into each of the six
+  // conversion call sites below.
+  const moneyFields = currencyCode
+    ? {
+        subtotalMinor: toMinorTracked(
+          readMoneyAmount(order.subtotal_price_set ?? order.subtotal_price),
+          exponent,
+          warnings,
+        ),
+        discountsMinor: toMinorTracked(
+          readMoneyAmount(order.total_discounts_set ?? order.total_discounts),
+          exponent,
+          warnings,
+        ),
+        shippingMinor: toMinorTracked(
+          readMoneyAmount(order.total_shipping_price_set),
+          exponent,
+          warnings,
+        ),
+        taxMinor: toMinorTracked(
+          readMoneyAmount(order.total_tax_set ?? order.total_tax),
+          exponent,
+          warnings,
+        ),
+        // The provider's own total, verbatim. NEVER a sum of line items.
+        totalMinor: toMinorTracked(
+          readMoneyAmount(order.total_price_set ?? order.total_price),
+          exponent,
+          warnings,
+        ),
+        // `refunds[]` non-empty: unresolved pending authoritative
+        // reconciliation (see refundsPresent above) — null, never a REST-
+        // derived guess. Genuinely empty: Shopify is affirmatively saying
+        // zero refunds exist yet, which is unambiguous and safe to state
+        // directly, matching totalMinor's own confidence level.
+        totalRefundedMinor: refundsPresent ? null : BigInt(0),
+      }
+    : {
+        subtotalMinor: null,
+        discountsMinor: null,
+        shippingMinor: null,
+        taxMinor: null,
+        totalMinor: null,
+        totalRefundedMinor: null,
+      };
+
   return {
     order: {
       connectionId: context.connectionId,
@@ -622,35 +682,12 @@ export function normalizeShopifyOrderPayload(
       currencyCode: currencyCode ?? null,
       minorUnitExponent: currencyCode ? exponent : null,
 
-      subtotalMinor: toMinorTracked(
-        readMoneyAmount(order.subtotal_price_set ?? order.subtotal_price),
-        exponent,
-        warnings,
-      ),
-      discountsMinor: toMinorTracked(
-        readMoneyAmount(order.total_discounts_set ?? order.total_discounts),
-        exponent,
-        warnings,
-      ),
-      shippingMinor: toMinorTracked(
-        readMoneyAmount(order.total_shipping_price_set),
-        exponent,
-        warnings,
-      ),
-      taxMinor: toMinorTracked(
-        readMoneyAmount(order.total_tax_set ?? order.total_tax),
-        exponent,
-        warnings,
-      ),
-      // The provider's own total, verbatim. NEVER a sum of line items.
-      totalMinor: toMinorTracked(
-        readMoneyAmount(order.total_price_set ?? order.total_price),
-        exponent,
-        warnings,
-      ),
-      totalRefundedMinor: deriveCumulativeRefundMinor(order, exponent),
+      ...moneyFields,
 
-      financialStatus,
+      // Deferred to reconciliation whenever refund evidence is present — see
+      // the comment above `refundsPresent`. Otherwise read straight through:
+      // an order with no refunds has no settlement ambiguity to defer.
+      financialStatus: refundsPresent ? null : financialStatus,
       fulfillmentStatus,
       cancelledAt: readDate(order.cancelled_at),
       cancelReason: readText(order.cancel_reason),
@@ -668,30 +705,29 @@ export function normalizeShopifyOrderPayload(
 /**
  * Normalizes a `refunds/create` body into a `completeness: "PARTIAL"` input.
  *
- * WHY THIS DELIBERATELY DOES NOT PRODUCE A REFUND TOTAL FROM THE REFUND ALONE
+ * WHY THIS NEVER PRODUCES A TRUSTWORTHY REFUND TOTAL FROM THE REFUND ALONE
  * --------------------------------------------------------------------------
  * A `refunds/create` payload is a single Refund resource: `order_id`, its own
  * `transactions[]`, its own `refund_line_items[]`. Its transaction amounts are
  * an INCREMENT for that one refund, not the cumulative total for the order —
  * and `../order-ingestion.ts` interprets `totalRefundedMinor` as CUMULATIVE
  * (see its REFUND SEMANTICS block: cumulative is idempotent under replay,
- * incremental double-counts).
+ * incremental double-counts). Worse, a REST refund fragment cannot prove the
+ * money actually SETTLED at all (see the REFUNDS header block above), so even
+ * a correct cumulative figure computed from it would be untrustworthy.
  *
- * Rather than convert an increment into a cumulative figure by reading the
- * stored order and adding — which would reintroduce exactly the
- * double-counting race that cumulative semantics exist to eliminate — this
- * normalizer emits `totalRefundedMinor: null` (a `REFUND_CUMULATIVE_UNAVAILABLE`
- * warning) UNLESS the payload embeds its parent `order` object, in which case
- * the cumulative figure is derived from that order exactly as a full payload
- * would be.
+ * This normalizer therefore emits `totalRefundedMinor: null` and
+ * `financialStatus: null` (a `REFUND_CUMULATIVE_UNAVAILABLE` warning) for
+ * EVERY `refunds/create` delivery — including when the payload embeds its
+ * parent `order` object, which now ALSO defers those two fields via
+ * `normalizeShopifyOrderPayload`'s own refund-evidence handling (the embed is
+ * still useful: it is a genuine FULL snapshot for every OTHER field — line
+ * items, cancellation, attribution token).
  *
- * That is not a gap in coverage. Shopify emits an `orders/updated` for the
- * same order immediately after a refund, carrying the updated
- * `financial_status` and the full `refunds[]` array — that is where the
- * cumulative refund total legitimately lands. A production rollout must
- * therefore subscribe to `orders/updated` and treat `refunds/create` as a
- * timeliness signal, which is recorded in
- * `docs/commerce/phase-7-order-normalization-summary.md`.
+ * This is not a gap in coverage: it is a deliberate SIGNAL, always resolved
+ * by the caller's live Shopify GraphQL reconciliation — see
+ * `./shopify-order-financial-reconciliation.ts` — before ever reaching
+ * `../order-ingestion.ts`.
  */
 export function normalizeShopifyRefundPayload(
   payload: unknown,
@@ -736,4 +772,52 @@ export function normalizeShopifyRefundPayload(
 
 function refundTimestamp(refund: Record<string, unknown>): Date | null {
   return readDate(refund.processed_at) ?? readDate(refund.created_at);
+}
+
+/**
+ * Normalizes an `order_transactions/create` webhook body — a bare
+ * OrderTransaction resource, never the order — into a `completeness:
+ * "PARTIAL"` input carrying ONLY `externalOrderId` (from the transaction's
+ * own `order_id`) and this delivery's timestamp.
+ *
+ * This topic exists purely as a SETTLEMENT-CHANGED signal: Shopify fires it
+ * "when an order transaction is created or when its status is updated,"
+ * restricted to terminal states ("only occurs for transactions with a status
+ * of success, failure or error") — i.e. exactly when a previously-pending
+ * refund (or any other transaction) has just settled or definitively failed.
+ * Its own payload is never treated as a financial source (the REST
+ * Transaction resource still has no shop-money amount field — see this
+ * file's REFUNDS header block) — `shopifyTopicRequiresFinancialReconciliation`
+ * in `./shopify-order-webhook.ts` unconditionally routes this topic to live
+ * Shopify GraphQL reconciliation, exactly like `refunds/create`.
+ */
+export function normalizeShopifyOrderTransactionPayload(
+  payload: unknown,
+  context: ShopifyOrderNormalizationContext,
+): ShopifyOrderNormalizationResult {
+  const warnings: ShopifyOrderNormalizationWarning[] = [];
+  const transaction = asRecord(payload);
+
+  if (!transaction) {
+    warnings.push("PAYLOAD_NOT_AN_OBJECT");
+    return { order: emptyOrder(context), warnings };
+  }
+
+  const externalOrderId = readIdString(transaction.order_id);
+  if (!externalOrderId) {
+    warnings.push("MISSING_ORDER_ID");
+  }
+  warnings.push("REFUND_CUMULATIVE_UNAVAILABLE");
+
+  return {
+    order: {
+      ...emptyOrder(context),
+      externalOrderId,
+      // PARTIAL: every other field stays null so the ingestion service
+      // preserves the stored order rather than blanking it.
+      providerUpdatedAt:
+        readDate(transaction.processed_at) ?? readDate(transaction.created_at),
+    },
+    warnings,
+  };
 }

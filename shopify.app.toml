@@ -41,6 +41,10 @@ api_version = "2026-04"
   uri = "https://www.sqratch.com/api/shopify/webhooks/refunds/create"
   topics = [ "refunds/create" ]
 
+  [[webhooks.subscriptions]]
+  uri = "https://www.sqratch.com/api/shopify/webhooks/order_transactions/create"
+  topics = [ "order_transactions/create" ]
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_products,read_orders,read_themes,read_discounts,write_discounts"

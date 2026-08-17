@@ -527,31 +527,115 @@ describe("8. topic identity is bound to a dedicated URL, not the spoofable x-sho
     });
   });
 
-  test("shopify.app.toml and shopify.app.custom.toml each bind a distinct, dedicated URI per live topic — no shared catch-all endpoint", () => {
+  /**
+   * The full, closed set of webhook subscriptions this app declares, grouped
+   * the same way Shopify's own docs group them (compliance vs. app/connection
+   * vs. commerce). This is the actual security contract under test: EVERY
+   * topic below must resolve to its own dedicated URI, no topic may be
+   * missing, and no URI may be shared between two different topics (a
+   * generic catch-all commerce endpoint would defeat "topic identity comes
+   * from the route path" — see this describe block's own name). Deliberately
+   * a set assertion, not a magic count, so a future INTENTIONAL topic
+   * addition (the same shape order_transactions/create was) only needs a new
+   * entry here, not a hunt for a hardcoded number elsewhere in this file.
+   */
+  const EXPECTED_WEBHOOK_TOPICS = [
+    // Compliance (GDPR) — declared via compliance_topics.
+    "customers/data_request",
+    "customers/redact",
+    "shop/redact",
+    // App / connection lifecycle — declared via topics.
+    "app/uninstalled",
+    "app/scopes_update",
+    // Commerce order/refund pipeline — declared via topics.
+    "orders/create",
+    "orders/updated",
+    "refunds/create",
+    "order_transactions/create",
+  ] as const;
+
+  /**
+   * Parses each `[[webhooks.subscriptions]]` block into its own `uri` paired
+   * with whichever of `topics` / `compliance_topics` it declares — a real
+   * topic -> URI mapping, not a suffix-matching heuristic, so this test
+   * fails if a topic is ever attached to the WRONG uri, not just a missing
+   * one.
+   */
+  function parseWebhookSubscriptions(source: string): Array<{ uri: string; topic: string }> {
+    const blocks = source.split("[[webhooks.subscriptions]]").slice(1);
+    const parsed: Array<{ uri: string; topic: string }> = [];
+    for (const block of blocks) {
+      const uriMatch = block.match(/uri = "([^"]+)"/);
+      const topicsMatch = block.match(/(?:topics|compliance_topics) = \[([^\]]*)\]/);
+      assert.ok(uriMatch, `every [[webhooks.subscriptions]] block must declare a uri`);
+      assert.ok(
+        topicsMatch,
+        `every [[webhooks.subscriptions]] block must declare topics or compliance_topics`,
+      );
+      const topicsInBlock = [...topicsMatch![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+      for (const topic of topicsInBlock) {
+        parsed.push({ uri: uriMatch![1], topic });
+      }
+    }
+    return parsed;
+  }
+
+  test("shopify.app.toml and shopify.app.custom.toml each bind EXACTLY the expected topic set, one dedicated URI per topic, no shared catch-all endpoint", () => {
     for (const file of ["shopify.app.toml", "shopify.app.custom.toml"]) {
       const source = readSource(file);
-      const uriMatches = [...source.matchAll(/uri = "([^"]+)"/g)].map((match) => match[1]);
-      assert.equal(uriMatches.length, 8, `expected 8 webhook subscription URIs in ${file}`);
-      assert.equal(
-        new Set(uriMatches).size,
-        uriMatches.length,
-        `expected all webhook URIs in ${file} to be distinct (no shared endpoint)`,
+      const subscriptions = parseWebhookSubscriptions(source);
+
+      // No topic is declared twice, and no topic is missing.
+      const topics = subscriptions.map((s) => s.topic);
+      assert.deepEqual(
+        [...topics].sort(),
+        [...EXPECTED_WEBHOOK_TOPICS].sort(),
+        `${file}: configured topics must be exactly the expected set (no missing, no extra, no duplicate)`,
       );
-      for (const topic of [
-        "app/uninstalled",
-        "app/scopes_update",
-        "shop/redact",
-        "customers/redact",
-        "customers/data_request",
-        "orders/create",
-        "orders/updated",
-        "refunds/create",
-      ]) {
+
+      // Every topic's URI is genuinely DEDICATED to that topic: ends in
+      // /webhooks/<topic>, and no two different topics resolve to the same
+      // URI (which is what a generic catch-all commerce endpoint would do).
+      const uriByTopic = new Map(subscriptions.map((s) => [s.topic, s.uri]));
+      for (const topic of EXPECTED_WEBHOOK_TOPICS) {
+        const uri = uriByTopic.get(topic);
+        assert.ok(uri, `${file}: missing a URI for topic "${topic}"`);
         assert.ok(
-          uriMatches.some((uri) => uri.endsWith(`/webhooks/${topic}`)),
-          `expected a dedicated URI ending in /webhooks/${topic} in ${file}`,
+          uri!.endsWith(`/webhooks/${topic}`),
+          `${file}: topic "${topic}" must resolve to a URI ending in /webhooks/${topic}, got "${uri}"`,
         );
       }
+      const allUris = subscriptions.map((s) => s.uri);
+      assert.equal(
+        new Set(allUris).size,
+        allUris.length,
+        `${file}: every webhook URI must be distinct — no shared endpoint across topics`,
+      );
+
+      // It is fine to additionally pin the total count to the expected-set
+      // size, as a redundant, cheap sanity check alongside the set assertion
+      // above (which is the assertion that actually matters).
+      assert.equal(subscriptions.length, EXPECTED_WEBHOOK_TOPICS.length);
+    }
+  });
+
+  test("shopify.app.custom.toml targets the configured ngrok host for every webhook URI", () => {
+    const subscriptions = parseWebhookSubscriptions(readSource("shopify.app.custom.toml"));
+    for (const { uri, topic } of subscriptions) {
+      assert.ok(
+        uri.startsWith("https://spyglass-excluding-silliness.ngrok-free.dev/"),
+        `shopify.app.custom.toml: topic "${topic}"'s URI must target the configured ngrok host, got "${uri}"`,
+      );
+    }
+  });
+
+  test("shopify.app.toml targets www.sqratch.com for every webhook URI", () => {
+    const subscriptions = parseWebhookSubscriptions(readSource("shopify.app.toml"));
+    for (const { uri, topic } of subscriptions) {
+      assert.ok(
+        uri.startsWith("https://www.sqratch.com/"),
+        `shopify.app.toml: topic "${topic}"'s URI must target www.sqratch.com, got "${uri}"`,
+      );
     }
   });
 });

@@ -60,6 +60,15 @@
  *         proven yet. Answering 200 here is precisely how a crashed worker's
  *         order used to be lost forever.
  *   500 — a transient write failure, or any unexpected error in the pipeline.
+ *   500 — FINANCIAL RECONCILIATION returned `TRANSIENT_FAILURE` (see
+ *         `./shopify-order-financial-reconciliation.ts`). `ingest` is never
+ *         called on this path — no `CommerceOrderEvent` claim is taken for
+ *         this delivery, so a redelivery starts completely fresh, exactly as
+ *         if this attempt had crashed before the claim step. A
+ *         `NOT_ELIGIBLE` reconciliation outcome is NOT this bucket: it is a
+ *         deterministic "cannot reconcile right now," so the delivery still
+ *         proceeds to `ingest` with its settlement fields deferred (null),
+ *         landing everything else normally.
  *
  * `isRetryableOrderIngestionOutcome` (in `../order-ingestion`) is the single
  * source of truth for which ingestion outcomes fall in the 500 bucket; this
@@ -85,8 +94,13 @@ import {
 } from "../order-ingestion";
 import {
   computeShopifyPayloadDigest,
+  shopifyOrderHasRefundEvidence,
   type ShopifyOrderNormalizationResult,
 } from "./shopify-order-normalizer";
+import {
+  reconcileShopifyOrderFinancials,
+  type ReconcileShopifyOrderFinancialsResult,
+} from "./shopify-order-financial-reconciliation";
 
 /** Resolves a shop domain to its `CommerceConnection`, or null. */
 export type ShopifyOrderWebhookDeps = {
@@ -96,6 +110,18 @@ export type ShopifyOrderWebhookDeps = {
   ingest: typeof ingestNormalizedOrder;
   /** Forwarded to the ingestion service so tests can inject a DB-free stack. */
   ingestionDeps: Partial<OrderIngestionDeps>;
+  /**
+   * Live Shopify Admin GraphQL financial reconciliation — see
+   * `./shopify-order-financial-reconciliation.ts`. Only ever called when
+   * `shopifyTopicRequiresFinancialReconciliation` says this delivery carries
+   * refund evidence. Defaults to the real, network-calling implementation;
+   * tests inject a DB/network-free stand-in.
+   */
+  reconcileFinancials(params: {
+    brandId: string;
+    shopDomain: string;
+    externalOrderId: string;
+  }): Promise<ReconcileShopifyOrderFinancialsResult>;
 };
 
 async function defaultFindConnectionByShopDomain(
@@ -117,7 +143,39 @@ const DEFAULT_WEBHOOK_DEPS: ShopifyOrderWebhookDeps = {
   findConnectionByShopDomain: defaultFindConnectionByShopDomain,
   ingest: ingestNormalizedOrder,
   ingestionDeps: {},
+  reconcileFinancials: reconcileShopifyOrderFinancials,
 };
+
+/**
+ * PURE. Whether this delivery's topic/payload combination requires live
+ * Shopify financial reconciliation before its money fields may be trusted.
+ *
+ *   `refunds/create`, `order_transactions/create` — ALWAYS: both topics
+ *   exist ONLY because a refund/transaction event happened, so there is
+ *   always refund evidence by definition of the topic itself.
+ *
+ *   `orders/create`, `orders/updated` — only when the payload's OWN
+ *   `refunds[]` is non-empty (`shopifyOrderHasRefundEvidence`). The common
+ *   case (an order with no refunds) never pays for the extra Shopify API
+ *   round-trip.
+ *
+ * Kept centralized here, keyed on `topic`, rather than passed in per-route:
+ * every route already binds `topic` to its own URL path, so there is no
+ * risk of a route forgetting to wire this correctly, and no route file needs
+ * to change when this table does.
+ */
+export function shopifyTopicRequiresFinancialReconciliation(
+  topic: string,
+  payload: unknown,
+): boolean {
+  if (topic === "refunds/create" || topic === "order_transactions/create") {
+    return true;
+  }
+  if (topic === "orders/create" || topic === "orders/updated") {
+    return shopifyOrderHasRefundEvidence(payload);
+  }
+  return false;
+}
 
 /**
  * Deduplication key for a delivery.
@@ -250,12 +308,62 @@ async function runShopifyOrderWebhook(
     return new NextResponse(null, { status: 200 });
   }
 
-  // 3. Normalize (pure), then 4. ingest (idempotent).
+  // 3. Normalize (pure).
   const { order, warnings } = normalize(verification.payload, {
     connectionId: connection.id,
     brandId: connection.brandId,
   });
 
+  // 3b. FINANCIAL RECONCILIATION — only when this delivery carries refund
+  // evidence (see `shopifyTopicRequiresFinancialReconciliation`). The pure
+  // normalizer already deferred `totalRefundedMinor` / `financialStatus` to
+  // `null` in exactly this case; this step is the ONLY place either field
+  // may become non-null again before reaching ingestion.
+  let finalOrder = order;
+  let reconciliationOutcome: ReconcileShopifyOrderFinancialsResult["outcome"] | null = null;
+  if (
+    shopifyTopicRequiresFinancialReconciliation(topic, verification.payload) &&
+    order.externalOrderId
+  ) {
+    const reconciled = await resolved.reconcileFinancials({
+      brandId: connection.brandId,
+      shopDomain,
+      externalOrderId: order.externalOrderId,
+    });
+    reconciliationOutcome = reconciled.outcome;
+
+    if (reconciled.outcome === "TRANSIENT_FAILURE") {
+      // Unproven. No claim is taken (ingest is never called), so Shopify's
+      // redelivery starts this delivery completely fresh — see the CRASH
+      // WINDOW reasoning in order-ingestion.ts's header for why this is
+      // safe: nothing has been claimed, so there is nothing to reclaim.
+      logWebhook(topic, shopDomain, "RECONCILIATION_TRANSIENT_FAILURE", null);
+      return new NextResponse(null, { status: 500 });
+    }
+
+    finalOrder =
+      reconciled.outcome === "RECONCILED"
+        ? {
+            ...order,
+            currencyCode: reconciled.snapshot.currencyCode,
+            minorUnitExponent: reconciled.snapshot.minorUnitExponent,
+            totalMinor: reconciled.snapshot.totalMinor,
+            totalRefundedMinor: reconciled.snapshot.totalRefundedMinor,
+            financialStatus: reconciled.snapshot.financialStatus,
+            providerUpdatedAt: reconciled.snapshot.providerUpdatedAt,
+          }
+        : // NOT_ELIGIBLE: no trustworthy settlement evidence available right
+          // now (no usable credential, order not found, unusable response
+          // shape). Explicitly re-null the two settlement fields — the pure
+          // normalizer's embedded-order branch can otherwise carry a stale
+          // FULL snapshot here — so ingestion's own coalesce-on-null
+          // preserves whatever was already stored rather than persisting a
+          // guess. Every other field (line items, cancellation, attribution,
+          // the immutable pre-refund totals) still lands normally.
+          { ...order, totalRefundedMinor: null, financialStatus: null };
+  }
+
+  // 4. Ingest (idempotent).
   const outcome = await resolved.ingest(
     {
       providerEventId,
@@ -265,7 +373,7 @@ async function runShopifyOrderWebhook(
       brandId: connection.brandId,
       provider: CommerceProvider.SHOPIFY,
     },
-    order,
+    finalOrder,
     {
       // Shopify's own id-form knowledge, supplied to the provider-neutral
       // ingestion layer rather than embedded in it. Listed first so an
@@ -281,6 +389,7 @@ async function runShopifyOrderWebhook(
     lineItemCount: outcome.lineItemCount,
     attributionLinked: outcome.attributionLinked,
     warnings,
+    reconciliationOutcome,
   });
 
   // 5. Settled -> 200; unproven -> 500 so Shopify redelivers. The unproven set
@@ -305,6 +414,8 @@ function logWebhook(
     lineItemCount: number;
     attributionLinked: boolean;
     warnings: readonly string[];
+    /** Null when reconciliation was never attempted for this delivery. */
+    reconciliationOutcome?: string | null;
   } | null,
 ): void {
   // Sanitized: topic, shop domain, classified outcome/warning tags and counts
@@ -319,6 +430,7 @@ function logWebhook(
       lineItemCount: detail?.lineItemCount ?? 0,
       attributionLinked: detail?.attributionLinked ?? false,
       warnings: detail?.warnings ?? [],
+      reconciliationOutcome: detail?.reconciliationOutcome ?? null,
     }),
   );
 }

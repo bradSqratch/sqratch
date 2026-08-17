@@ -15,11 +15,15 @@
 
 import { encryptSecret, decryptSecret } from "@/lib/crypto";
 import { randomUUID } from "node:crypto";
-import { recordShopifyConnectionLoss } from "@/lib/shopify-connection-transitions";
+import {
+  recordShopifyConnectionLoss,
+  recordShopifyConnectionInstall,
+} from "@/lib/shopify-connection-transitions";
 import {
   safeSyncShopifyCommerceConnection,
   safeMarkShopifyCommerceConnectionDisconnected,
 } from "@/lib/commerce/connection-sync";
+import { SHOPIFY_API_VERSION } from "@/lib/shopify";
 
 // ---------------------------------------------------------------------------
 // Lazy DB access — import only when a DB operation is needed
@@ -46,10 +50,29 @@ const LOCK_WAIT_MS = 3_000;
 /** Interval (ms) between lock-wait polls. */
 const LOCK_POLL_INTERVAL_MS = 250;
 
-/** Required scopes — changing this list is intentional and reviewed. */
+/**
+ * BASELINE scopes — what SQRATCH's core, always-on functionality (catalog
+ * display, reward-discount issuance) needs to consider a connection usable at
+ * all. Changing this list is intentional and reviewed.
+ *
+ * Deliberately EXCLUDES `read_orders` and `read_themes`. Those are ADDITIVE,
+ * OPTIONAL capabilities (order-conversion attribution, live theme/app-embed
+ * verification) layered on top of an already-usable connection — see
+ * `hasOrderAttributionScope` / `hasThemeVerificationScope` below. A store
+ * that installed before either scope existed, or hasn't yet approved
+ * Shopify's managed-installation scope-update prompt for them, still has a
+ * fully valid, fully usable connection for everything this baseline list
+ * covers; it simply isn't ready for the newer capability yet. Folding either
+ * scope into this list would make `hasSufficientScopes` — and therefore
+ * `getValidAccessToken`'s internal gate — treat "hasn't approved an
+ * optional, newly-added scope" as equivalent to "connection is broken",
+ * which is exactly the bug this comment now guards against: it did that for
+ * `read_themes` for one release and produced a false, self-inflicted
+ * `REQUIRES_RECONNECT` for every already-connected store that hadn't yet
+ * clicked Shopify's native "Update" button.
+ */
 const REQUIRED_SCOPES = [
   "read_products",
-  "read_themes",
   "read_discounts",
   "write_discounts",
 ] as const;
@@ -139,6 +162,23 @@ export function hasOrderAttributionScope(
       ?.split(",")
       .map((scope) => scope.trim())
       .includes("read_orders"),
+  );
+}
+
+/**
+ * Theme/app-embed verification is likewise additive: it does not gate
+ * baseline connectivity (see `REQUIRED_SCOPES`), only whether SQRATCH may
+ * attempt the live theme inspection in
+ * `src/lib/commerce/providers/shopify-theme-readiness.ts`.
+ */
+export function hasThemeVerificationScope(
+  grantedScopes: string | null | undefined,
+): boolean {
+  return Boolean(
+    grantedScopes
+      ?.split(",")
+      .map((scope) => scope.trim())
+      .includes("read_themes"),
   );
 }
 
@@ -778,7 +818,22 @@ export async function exchangeSessionTokenForOfflineToken(
 // ---------------------------------------------------------------------------
 
 export type ApplyGrantedScopesUpdateResult =
-  | { applied: true; brandId: string }
+  | {
+      applied: true;
+      brandId: string;
+      /**
+       * True when the row's status was `REQUIRES_RECONNECT` WITH a
+       * credential still on file at the moment this update was resolved —
+       * i.e. the scope-drift signature (see `reconcileShopifyConnectionScopes`'s
+       * doc comment). Read from the SAME lookup this function already
+       * performs, so a caller that wants to react to this (see
+       * `POST /api/shopify/webhooks/app/scopes_update`) never needs a second,
+       * redundant `findUnique` of its own — which would also be a race
+       * hazard, since two lookups of the same row are not the same atomic
+       * read a real concurrent write could interleave with.
+       */
+      wasScopeDriftReconnect: boolean;
+    }
   | { applied: false; reason: "UNKNOWN_SHOP" | "SUPERSEDED" };
 
 /**
@@ -833,12 +888,17 @@ export async function applyGrantedScopesUpdate(input: {
 
   const brand = await db.brand.findUnique({
     where: { shopifyShopDomain: shopDomain },
-    select: { id: true },
+    select: { id: true, shopifyConnectionStatus: true, shopifyAdminAccessTokenEncrypted: true },
   });
 
   if (!brand) {
     return { applied: false, reason: "UNKNOWN_SHOP" };
   }
+
+  // See `ApplyGrantedScopesUpdateResult.wasScopeDriftReconnect`'s doc comment.
+  const wasScopeDriftReconnect =
+    brand.shopifyConnectionStatus === "REQUIRES_RECONNECT" &&
+    brand.shopifyAdminAccessTokenEncrypted !== null;
 
   const normalizedScopes = input.grantedScopes
     .split(",")
@@ -885,7 +945,7 @@ export async function applyGrantedScopesUpdate(input: {
       },
       data: { shopifyGrantedScopes: normalizedScopes.join(",") },
     });
-    return { applied: true, brandId: brand.id };
+    return { applied: true, brandId: brand.id, wasScopeDriftReconnect };
   }
 
   // A connection row for the same external shop but a different brand is
@@ -905,8 +965,283 @@ export async function applyGrantedScopesUpdate(input: {
   });
 
   return result.count === 1
-    ? { applied: true, brandId: brand.id }
+    ? { applied: true, brandId: brand.id, wasScopeDriftReconnect }
     : { applied: false, reason: "SUPERSEDED" };
+}
+
+// ---------------------------------------------------------------------------
+// Scope-drift healing (Brand back to CONNECTED) + authoritative reconciliation
+// ---------------------------------------------------------------------------
+
+/**
+ * CAS-guarded transition of a scope-drift-caused `REQUIRES_RECONNECT` back to
+ * `CONNECTED`, plus a truthful `RECONNECTED` `ShopifyConnectionEvent` — the
+ * mirror image of `markRequiresReconnect`.
+ *
+ * ONLY call this once genuine positive evidence exists that this
+ * `REQUIRES_RECONNECT` carries the scope-drift signature (not a genuine
+ * credential failure) AND that Shopify still considers the installation
+ * live. This function itself does not re-verify anything — it trusts its
+ * caller completely, so it must never be exposed as a standalone "mark
+ * connected" primitive. Exactly two callers exist, each with its own
+ * justification for that trust:
+ *   - `reconcileShopifyConnectionScopes` below, after proving the stored
+ *     credential works via a REAL Shopify Admin API call.
+ *   - `POST /api/shopify/webhooks/app/scopes_update`, after
+ *     `applyGrantedScopesUpdate` succeeds for a brand whose prior status was
+ *     `REQUIRES_RECONNECT` with a token still on file — an HMAC-verified
+ *     `app/scopes_update` delivery is itself Shopify's own authenticated
+ *     notification that this exact installation is live, and the token
+ *     presence alone already rules out a genuine credential failure (see
+ *     `markRequiresReconnect`, which always clears the token for that case).
+ *
+ * The `where: { id, shopifyConnectionStatus: "REQUIRES_RECONNECT" }` guard
+ * means this is a safe no-op (`healed: false`) if the row already moved on
+ * (healed by a concurrent request, or freshly disconnected/uninstalled) —
+ * it can never resurrect a status a different, more recent write chose.
+ *
+ * Reward offers are NOT reactivated here, matching `recordShopifyConnectionInstall`'s
+ * existing, deliberate behavior for every install/reconnect/relink: a Brand
+ * Admin must always explicitly review and reactivate them. This healing path
+ * reverses only the status/event side effects of the false alarm, not the
+ * reward-offer deactivation `recordShopifyConnectionLoss` already applied
+ * when the false `REQUIRES_RECONNECT` was recorded — that is a real,
+ * separate consequence of the original bug and is left for deliberate
+ * Brand Admin action, not auto-reversed by this fix.
+ */
+export async function healScopeDriftReconnect(brandId: string): Promise<boolean> {
+  const db = await getDb();
+
+  const healed = await db.$transaction(async (tx) => {
+    const before = await tx.brand.findUnique({
+      where: { id: brandId },
+      select: {
+        shopifyShopDomain: true,
+        shopifyCurrencyCode: true,
+        shopifyClientId: true,
+      },
+    });
+
+    if (!before?.shopifyShopDomain) {
+      return false;
+    }
+
+    const result = await tx.brand.updateMany({
+      where: { id: brandId, shopifyConnectionStatus: "REQUIRES_RECONNECT" },
+      data: { shopifyConnectionStatus: "CONNECTED" },
+    });
+
+    if (result.count !== 1) {
+      return false;
+    }
+
+    // Same shop, same currency, same client id — this heals a status flag,
+    // it does not represent any actual change of shop identity.
+    await recordShopifyConnectionInstall(tx, {
+      brandId,
+      eventType: "RECONNECTED",
+      shopDomain: before.shopifyShopDomain,
+      previousShopDomain: before.shopifyShopDomain,
+      currencyCode: before.shopifyCurrencyCode,
+      previousCurrencyCode: before.shopifyCurrencyCode,
+      shopifyClientId: before.shopifyClientId,
+    });
+
+    return true;
+  });
+
+  if (healed) {
+    // Best-effort mirror — re-reads the Brand row fresh internally, so it
+    // picks up the CONNECTED status this transaction just committed. Never
+    // throws, never affects the return value below.
+    await safeSyncShopifyCommerceConnection(brandId).catch(() => {});
+  }
+
+  return healed;
+}
+
+/**
+ * Fetches the Shopify-authoritative granted-scope list for the installation
+ * that issued `accessToken`, via `currentAppInstallation.accessScopes` —
+ * Shopify's own record of what this installation currently holds, not
+ * whatever SQRATCH last cached. Returns `{ok:false}` (never throws) on any
+ * network/HTTP/GraphQL-error/shape failure — including a 401/403, which is
+ * itself meaningful evidence that the credential is NOT valid and this
+ * reconciliation attempt must not proceed to healing.
+ */
+async function fetchShopifyCurrentAppInstallationScopes(
+  shopDomain: string,
+  accessToken: string,
+  fetchImpl: typeof fetch = fetch,
+): Promise<{ ok: true; scopes: string[] } | { ok: false }> {
+  try {
+    const response = await fetchImpl(
+      `https://${shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
+      {
+        method: "POST",
+        headers: {
+          "X-Shopify-Access-Token": accessToken,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body: JSON.stringify({
+          query: `{ currentAppInstallation { accessScopes { handle } } }`,
+        }),
+      },
+    );
+
+    if (!response.ok) {
+      return { ok: false };
+    }
+
+    const payload = (await response.json()) as {
+      data?: {
+        currentAppInstallation?: {
+          accessScopes?: Array<{ handle?: unknown }>;
+        };
+      };
+      errors?: unknown;
+    };
+
+    if (payload.errors) {
+      return { ok: false };
+    }
+
+    const scopes = payload.data?.currentAppInstallation?.accessScopes;
+    if (!Array.isArray(scopes)) {
+      return { ok: false };
+    }
+
+    const handles = scopes
+      .map((entry) => entry?.handle)
+      .filter((handle): handle is string => typeof handle === "string" && handle.trim().length > 0);
+
+    return { ok: true, scopes: handles };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export type ReconcileShopifyConnectionScopesResult =
+  | { outcome: "RECONCILED"; healedConnection: boolean; grantedScopes: string[] }
+  | { outcome: "NOT_ELIGIBLE"; reason: "NO_BRAND" | "NO_SHOP_DOMAIN" | "NOT_SCOPE_DRIFT" }
+  | { outcome: "CREDENTIAL_INVALID" };
+
+/**
+ * Authoritative scope reconciliation: proves the stored credential still
+ * works against Shopify by actually using it (a real Admin API call, not
+ * merely a stored expiry timestamp), fetches Shopify's own current
+ * `accessScopes` for the installation, persists them as the canonical
+ * `CommerceConnection.grantedScopes` (+ legacy mirror) via
+ * `applyGrantedScopesUpdate`, and — ONLY when this brand's `REQUIRES_RECONNECT`
+ * carries the scope-drift signature (status is `REQUIRES_RECONNECT` while a
+ * credential is still on file; a GENUINE credential failure always clears the
+ * token in the same write that sets `REQUIRES_RECONNECT`, see
+ * `markRequiresReconnect` above) — heals the connection back to `CONNECTED`.
+ *
+ * This is deliberately NOT the primary sync path — `app/scopes_update` (see
+ * `applyGrantedScopesUpdate`) is faster and is Shopify's own push notification
+ * of a scope change. This function exists for two purposes: (1) it is the
+ * healing trigger for a connection ALREADY stuck in a false
+ * `REQUIRES_RECONNECT` before this fix, since nothing else clears that sticky
+ * status; (2) it is a pull-based safety net against a missed or delayed
+ * `app/scopes_update` delivery, safe to call opportunistically (e.g. from the
+ * Brand Shopify status route) whenever the stored status is
+ * `REQUIRES_RECONNECT`.
+ *
+ * NEVER heals a genuine credential failure: if no usable token can be
+ * obtained, or Shopify's own API rejects the token, this returns
+ * `CREDENTIAL_INVALID` and leaves every stored field untouched.
+ */
+export async function reconcileShopifyConnectionScopes(
+  brandId: string,
+  deps: { tokenEndpoint?: TokenEndpointFn; fetchImpl?: typeof fetch } = {},
+): Promise<ReconcileShopifyConnectionScopesResult> {
+  const brand = await reloadBrand(brandId);
+  if (!brand) {
+    return { outcome: "NOT_ELIGIBLE", reason: "NO_BRAND" };
+  }
+  if (!brand.shopifyShopDomain) {
+    return { outcome: "NOT_ELIGIBLE", reason: "NO_SHOP_DOMAIN" };
+  }
+
+  const wasRequiresReconnect = brand.shopifyConnectionStatus === "REQUIRES_RECONNECT";
+
+  // The scope-drift signature: a genuine credential failure always clears
+  // shopifyAdminAccessTokenEncrypted in the SAME write that sets
+  // REQUIRES_RECONNECT (markRequiresReconnect above). A token still present
+  // alongside REQUIRES_RECONNECT can therefore only mean the softer
+  // scope-check path set it — there is no other code path that produces this
+  // combination. Anything else (no prior REQUIRES_RECONNECT at all, or
+  // REQUIRES_RECONNECT with no token) is not this function's job to touch.
+  if (wasRequiresReconnect && !brand.shopifyAdminAccessTokenEncrypted) {
+    return { outcome: "NOT_ELIGIBLE", reason: "NOT_SCOPE_DRIFT" };
+  }
+  if (!brand.shopifyAdminAccessTokenEncrypted) {
+    return { outcome: "NOT_ELIGIBLE", reason: "NOT_SCOPE_DRIFT" };
+  }
+
+  // Obtain a token to test with. Bypasses getValidAccessToken entirely — that
+  // function's own REQUIRES_RECONNECT guard is exactly the sticky gate this
+  // reconciliation exists to get past, and skipScopeCheck alone would not
+  // help here since the block above already proved a token exists.
+  let accessToken: string;
+  if (brand.shopifyAuthMode === "LEGACY_OFFLINE") {
+    accessToken = decryptSecret(brand.shopifyAdminAccessTokenEncrypted);
+  } else {
+    const nowMs = Date.now();
+    if (isAccessTokenFresh(brand.shopifyAccessTokenExpiresAt, nowMs)) {
+      accessToken = decryptSecret(brand.shopifyAdminAccessTokenEncrypted);
+    } else {
+      const lockId = await acquireRefreshLock(brand.id, nowMs);
+      if (!lockId) {
+        // A concurrent request already holds the refresh lock — do not wait
+        // or contend for it here; this is an opportunistic reconciliation,
+        // not the primary token path, so the next scheduled attempt (e.g.
+        // the next status-route load) will simply try again.
+        return { outcome: "CREDENTIAL_INVALID" };
+      }
+      try {
+        accessToken = await performTokenRefresh(
+          brand,
+          lockId,
+          deps.tokenEndpoint ?? defaultTokenEndpoint,
+        );
+      } catch {
+        await releaseRefreshLock(brand.id, lockId).catch(() => {});
+        // Deliberately does NOT call markRequiresReconnect on a refresh
+        // failure here — that is getValidAccessToken's own responsibility on
+        // its normal cycle. This function only ever adds positive evidence
+        // (a proven-good credential); it never adds negative evidence.
+        return { outcome: "CREDENTIAL_INVALID" };
+      }
+    }
+  }
+
+  const scopesResult = await fetchShopifyCurrentAppInstallationScopes(
+    brand.shopifyShopDomain,
+    accessToken,
+    deps.fetchImpl,
+  );
+  if (!scopesResult.ok) {
+    return { outcome: "CREDENTIAL_INVALID" };
+  }
+
+  const applied = await applyGrantedScopesUpdate({
+    shopDomain: brand.shopifyShopDomain,
+    grantedScopes: scopesResult.scopes.join(","),
+  });
+
+  let healedConnection = false;
+  if (wasRequiresReconnect && applied.applied) {
+    healedConnection = await healScopeDriftReconnect(brandId);
+  }
+
+  return {
+    outcome: "RECONCILED",
+    healedConnection,
+    grantedScopes: scopesResult.scopes,
+  };
 }
 
 // Re-export encryptSecret so callers saving tokens can use the same lib

@@ -62,7 +62,7 @@ export async function GET(request: NextRequest) {
       ],
     },
     select: {
-      provider: true, financialStatus: true, totalMinor: true, totalRefundedMinor: true, netRevenueMinor: true,
+      provider: true, financialStatus: true, currencyCode: true, totalMinor: true, totalRefundedMinor: true, netRevenueMinor: true,
       attribution: {
         select: {
           experienceId: true,
@@ -82,6 +82,7 @@ export async function GET(request: NextRequest) {
   const scoped: ConversionAnalyticsOrder[] = rows.map((row) => ({
     provider: row.provider,
     financialStatus: row.financialStatus,
+    currencyCode: row.currencyCode,
     totalMinor: row.totalMinor,
     totalRefundedMinor: row.totalRefundedMinor,
     netRevenueMinor: row.netRevenueMinor,

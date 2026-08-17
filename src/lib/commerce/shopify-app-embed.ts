@@ -1,27 +1,37 @@
 /**
- * Shopify Theme Editor app-embed deep link.
+ * Shopify Admin deep links: the Theme Editor app-embed link, and the Admin
+ * App Home link used for Shopify's native managed-installation permission
+ * approval screen.
  *
  * PURE MODULE. No I/O, no fetch, no Prisma, no `process.env` — every input is
  * passed in, so this is safe to unit-test and safe to call from a request
  * handler without any DB/network cost.
  *
- * WHY A DEEP LINK. A theme app extension's app-embed block ships with the app
- * but is INACTIVE until the merchant enables it in the Theme Editor and
- * presses Save. Nothing in this codebase can enable it on the merchant's
- * behalf. Live observation is implemented separately in the Shopify provider
- * theme-readiness module; this pure helper only builds the merchant-facing
- * deep link into the Theme Editor with the SQRATCH block pre-selected.
+ * WHY TWO SEPARATE DEEP LINKS.
+ *   - `buildThemeEditorAppEmbedDeepLink`: a theme app extension's app-embed
+ *     block ships with the app but is INACTIVE until the merchant enables it
+ *     in the Theme Editor and presses Save. Nothing in this codebase can
+ *     enable it on the merchant's behalf. Live observation is implemented
+ *     separately in the Shopify provider theme-readiness module; this pure
+ *     helper only builds the merchant-facing deep link into the Theme Editor
+ *     with the SQRATCH block pre-selected.
+ *   - `buildShopifyAdminAppHomeDeepLink`: opens SQRATCH's own embedded app
+ *     inside Shopify Admin. Under Shopify-managed installation this is also
+ *     how a merchant approves a newly-required scope — Shopify shows its own
+ *     native "needs access to... / Update" screen at this URL when a scope
+ *     approval is pending, before letting the merchant into the app. SQRATCH
+ *     never constructs a scope-consent URL itself; it only ever points the
+ *     merchant at Shopify's own app-home surface.
  *
- * SECURITY BOUNDARY. The returned string is embedded directly into an
+ * SECURITY BOUNDARY. Both returned strings are embedded directly into an
  * `<a href>` / `window.open` target, so this module treats every component as
  * untrusted even though callers are expected to pass server-side values from
  * the brand's own row (`Brand.shopifyShopDomain`, `Brand.shopifyClientId`).
  * Each component is validated against a strict allowlist pattern BEFORE the
  * URL is assembled, and the assembled URL is then re-parsed and re-checked
- * against those same components (see the invariant block in
- * `buildThemeEditorAppEmbedDeepLink`). A corrupted row or a future refactor
- * therefore cannot turn this into an open redirect to an attacker host, and
- * cannot smuggle extra query parameters into Shopify's admin.
+ * against those same components. A corrupted row or a future refactor
+ * therefore cannot turn either link into an open redirect to an attacker
+ * host, and cannot smuggle extra query parameters into Shopify's admin.
  */
 
 /**
@@ -155,6 +165,87 @@ export function buildThemeEditorAppEmbedDeepLink(
     parsed.searchParams.get("context") !== "apps" ||
     parsed.searchParams.get("activateAppId") !== activateAppId ||
     [...parsed.searchParams.keys()].length !== 2 ||
+    parsed.hash !== ""
+  ) {
+    return { ok: false, error: "url_invariant_violation" };
+  }
+
+  return { ok: true, url: url.toString() };
+}
+
+/** The Shopify Admin path that opens an installed app's embedded UI. */
+const ADMIN_APP_HOME_PATHNAME_PREFIX = "/admin/apps/";
+
+export type ShopifyAdminAppHomeDeepLinkInput = {
+  /** The brand's own stored canonical shop domain, e.g. `acme.myshopify.com`. */
+  shopDomain: string;
+  /** The client id of the Shopify app the brand installed under. */
+  apiKey: string;
+};
+
+export type ShopifyAdminAppHomeDeepLinkResult =
+  | { ok: true; url: string }
+  | { ok: false; error: string };
+
+/**
+ * Builds the Shopify Admin "App Home" deep link that opens SQRATCH inside a
+ * shop's Shopify Admin:
+ *
+ *   https://<shop>.myshopify.com/admin/apps/<apiKey>
+ *
+ * WHY THIS URL, AND NOT AN OAUTH/CONSENT LINK BUILT BY SQRATCH. Under
+ * Shopify-managed installation (see `shopify-scopes_update`'s route header),
+ * SQRATCH cannot construct a URL that grants a scope — only Shopify decides
+ * that, and it decides it by showing its OWN native "needs access to... /
+ * Update" interstitial whenever a merchant opens an app whose declared scopes
+ * have changed since they last approved it. Opening this exact URL is
+ * therefore sufficient and correct: if new scopes are pending, Shopify shows
+ * its native permission screen before letting the merchant into the app; if
+ * nothing is pending, it opens the app directly. There is no separate "scope
+ * approval" URL to construct, and this module never attempts to fabricate
+ * one.
+ *
+ * Same security posture as `buildThemeEditorAppEmbedDeepLink`: every
+ * component is validated against the exact same allowlists (see
+ * `SHOP_DOMAIN_PATTERN` / `API_KEY_PATTERN` above) BEFORE assembly, and the
+ * assembled URL is re-parsed and re-checked against those same components
+ * afterward, so a corrupted stored value can never turn this into an open
+ * redirect or a smuggled extra path/query component.
+ */
+export function buildShopifyAdminAppHomeDeepLink(
+  input: ShopifyAdminAppHomeDeepLinkInput,
+): ShopifyAdminAppHomeDeepLinkResult {
+  const { shopDomain, apiKey } = input;
+
+  if (typeof shopDomain !== "string" || shopDomain.length > MAX_SHOP_DOMAIN_LENGTH) {
+    return { ok: false, error: "invalid_shop_domain" };
+  }
+  if (!SHOP_DOMAIN_PATTERN.test(shopDomain)) {
+    return { ok: false, error: "invalid_shop_domain" };
+  }
+  if (typeof apiKey !== "string" || !API_KEY_PATTERN.test(apiKey)) {
+    return { ok: false, error: "invalid_api_key" };
+  }
+
+  const pathname = `${ADMIN_APP_HOME_PATHNAME_PREFIX}${apiKey}`;
+
+  let url: URL;
+  try {
+    url = new URL(pathname, `https://${shopDomain}`);
+  } catch {
+    // Unreachable given the host pattern above; failing closed keeps that
+    // assumption from becoming a thrown exception in a request handler.
+    return { ok: false, error: "invalid_shop_domain" };
+  }
+
+  const parsed = new URL(url.toString());
+  if (
+    parsed.protocol !== "https:" ||
+    parsed.host !== shopDomain ||
+    parsed.username !== "" ||
+    parsed.password !== "" ||
+    parsed.pathname !== pathname ||
+    parsed.search !== "" ||
     parsed.hash !== ""
   ) {
     return { ok: false, error: "url_invariant_violation" };

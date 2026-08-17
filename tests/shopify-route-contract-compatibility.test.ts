@@ -175,6 +175,9 @@ function makeStatusDeps(overrides: Partial<BrandShopifyStatusDeps> = {}): BrandS
     async getConnectionSummary() {
       throw new Error("getConnectionSummary should not be called in this test");
     },
+    async reconcileScopes() {
+      throw new Error("reconcileScopes should not be called in this test");
+    },
     ...overrides,
   };
 }
@@ -353,8 +356,11 @@ describe("brand/shopify/status route contract", () => {
       "shopifyGrantedScopes",
       "requiresReconnect",
       "orderAttributionReady",
+      "themeVerificationScopeReady",
       "themeTracking",
       "overallConversionTrackingReady",
+      "shopifyPermissionsNeedApproval",
+      "shopifyPermissionApprovalUrl",
       "shopifyAppEmbedDeepLink",
     ].sort();
 
@@ -376,6 +382,15 @@ describe("brand/shopify/status route contract", () => {
         },
         async getConnectionSummary() {
           return summary;
+        },
+        // Exercised only by the "requires-reconnect" case (see the
+        // healing-specific coverage in tests/shopify-scopes-update-webhook.test.ts
+        // and tests/shopify-token-manager.test.ts for the real function's
+        // behavior) — this test's own concern is the response SHAPE across
+        // every status, not the healing/reconciliation attempt itself, so a
+        // no-op stub keeps it real-network-free per this file's own header.
+        async reconcileScopes() {
+          return null;
         },
       });
 

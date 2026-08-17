@@ -120,11 +120,17 @@
  * `transactions[]` and `refund_line_items[]`), so a normalizer that naively
  * read that single refund's amount would be producing an INCREMENT, not a
  * cumulative total. The Shopify normalizer in this repo therefore derives the
- * cumulative figure ONLY from a full ORDER payload — either the order's own
- * `total_refunded`/`total_refunded_set` field, or the sum over the order's
- * complete `refunds[]` array (an order carries ALL of its refunds, so that sum
- * is cumulative by construction) — and yields `null` from a bare
- * `refunds/create` fragment, which can only ever describe an increment. See
+ * cumulative figure ONLY from a full ORDER payload, by summing the SHOP-MONEY
+ * components (`refund_line_items[].subtotal_set`/`total_tax_set`,
+ * `refund_shipping_lines[].subtotal_amount_set`,
+ * `order_adjustments[].amount_set`/`tax_amount_set`) across the order's
+ * complete `refunds[]` array — an order carries ALL of its refunds, so that
+ * sum is cumulative by construction — and yields `null` from a bare
+ * `refunds/create` fragment, which can only ever describe an increment. (The
+ * Order resource has no `total_refunded`/`total_refunded_set` field to prefer
+ * — verified against Shopify's REST Order property reference, not assumed —
+ * and a refund transaction's bare `amount` defaults to PRESENTMENT currency
+ * with no shop-money sibling, so neither is a valid cumulative source.) See
  * `./providers/shopify-order-normalizer.ts`. `null` means "this event says
  * nothing about refunds", and this module then PRESERVES the stored value
  * rather than zeroing it.
@@ -335,6 +341,16 @@ export type OrderIngestionReason =
   | "UNORDERABLE_MISSING_TIMESTAMP"
   /** Pairs with `IN_FLIGHT`: a live lease on this exact delivery. Retryable. */
   | "DELIVERY_IN_FLIGHT"
+  /**
+   * The normalized snapshot about to be persisted is internally
+   * contradictory (e.g. `totalRefundedMinor > totalMinor`, or
+   * `financialStatus: "REFUNDED"` without `totalRefundedMinor === totalMinor`).
+   * Deliberately NOT retryable: this is a deterministic rejection of the data
+   * itself, not a transient condition — see `isRetryableOrderIngestionOutcome`
+   * and the FINANCIAL INVARIANT GUARD block below. Nothing is written for
+   * this delivery; the previously stored row (if any) is untouched.
+   */
+  | "CONTRADICTORY_FINANCIAL_SNAPSHOT"
   /** The order transaction itself failed. Retryable. */
   | "WRITE_FAILED"
   /**
@@ -383,9 +399,12 @@ export type OrderIngestionOutcome = {
  *   FAILED / UNEXPECTED_FAILURE    — an unexpected throw; treated as transient.
  *
  * Everything else is either a success or a DETERMINISTIC rejection (missing
- * external order id, disconnected shop, stale event, genuine duplicate) that a
- * retry would reach the identical conclusion about, so retrying it would only
- * produce a retry storm.
+ * external order id, disconnected shop, stale event, genuine duplicate,
+ * internally-contradictory financial snapshot) that a retry would reach the
+ * identical conclusion about, so retrying it would only produce a retry
+ * storm. `FAILED / CONTRADICTORY_FINANCIAL_SNAPSHOT` is deliberately in this
+ * second group, not the retryable one: the data itself is rejected, and
+ * replaying the same bytes would reject it again.
  */
 export function isRetryableOrderIngestionOutcome(
   outcome: Pick<OrderIngestionOutcome, "status" | "reason">,
@@ -1371,15 +1390,50 @@ async function runOrderIngestion(
       const pick = <T>(incoming: T | null, stored: T | null | undefined): T | null =>
         partial ? (incoming ?? stored ?? null) : incoming;
 
-      // Cumulative refunds: a null incoming value ALWAYS means "this event
-      // says nothing about refunds" and must PRESERVE the stored figure, not
-      // zero it — this one field coalesces even on a FULL payload, because a
-      // provider omitting refund data is not the same as it reporting zero
-      // refunds. See the REFUND SEMANTICS block in this file's header.
+      // Cumulative refunds AND financial status: a null incoming value
+      // ALWAYS means "this event does not carry trustworthy settlement
+      // evidence" and must PRESERVE the stored figure, never blank it or
+      // zero it — these two fields coalesce even on a FULL payload, because
+      // a provider (or this provider's own normalizer, deferring to
+      // reconciliation — see shopify-order-normalizer.ts's REFUNDS header
+      // block) omitting settlement data is not the same as it reporting
+      // "no refunds" or "unknown status". The two travel together
+      // deliberately: a snapshot that knows one but not the other is
+      // exactly the contradictory state the invariant guard below rejects,
+      // so neither may independently overwrite a previously-consistent
+      // pair. See the REFUND SEMANTICS block in this file's header.
       const totalRefundedMinor =
         order.totalRefundedMinor ?? existing?.totalRefundedMinor ?? BigInt(0);
+      const financialStatus = order.financialStatus ?? existing?.financialStatus ?? null;
       const totalMinor = pick(order.totalMinor, existing?.totalMinor);
       const netRevenueMinor = computeNetRevenueMinor(totalMinor, totalRefundedMinor);
+
+      // ---------------------------------------------------------------------
+      // FINANCIAL INVARIANT GUARD
+      // ---------------------------------------------------------------------
+      // Never persist an internally-contradictory financial snapshot, even
+      // one produced by a bug elsewhere in the pipeline. Only evaluated once
+      // both totalMinor and totalRefundedMinor are actually known (a null
+      // totalMinor — e.g. MISSING_CURRENCY — has nothing coherent to check
+      // against, and is an existing, unrelated, already-handled case).
+      if (totalMinor !== null) {
+        const withinBounds =
+          totalRefundedMinor >= BigInt(0) && totalRefundedMinor <= totalMinor;
+        const refundedStatusCoherent =
+          financialStatus !== "REFUNDED" || totalRefundedMinor === totalMinor;
+        const partiallyRefundedStatusCoherent =
+          financialStatus !== "PARTIALLY_REFUNDED" ||
+          (totalRefundedMinor > BigInt(0) && totalRefundedMinor < totalMinor);
+        if (!withinBounds || !refundedStatusCoherent || !partiallyRefundedStatusCoherent) {
+          return {
+            status: "FAILED" as const,
+            reason: "CONTRADICTORY_FINANCIAL_SNAPSHOT" as const,
+            orderId: existing?.id ?? null,
+            lineItemCount: 0,
+            attributionLinked: existing?.attributionId != null,
+          };
+        }
+      }
 
       const moneyAndStatus = {
         currencyCode: pick(order.currencyCode, existing?.currencyCode),
@@ -1391,7 +1445,7 @@ async function runOrderIngestion(
         totalMinor,
         totalRefundedMinor,
         netRevenueMinor,
-        financialStatus: pick(order.financialStatus, existing?.financialStatus),
+        financialStatus,
         fulfillmentStatus: pick(order.fulfillmentStatus, existing?.fulfillmentStatus),
         // Cancellation rides the same upsert path and the same staleness
         // check — there is no separate cancellation branch. On a FULL payload
@@ -1510,10 +1564,28 @@ async function runOrderIngestion(
       };
     });
 
+    // The invariant guard above can return `status: "FAILED"` from WITHIN
+    // this transaction (a deterministic rejection, nothing written) — that
+    // must finalize as FAILED, not PROCESSED, so a later delivery for the
+    // same order (carrying different, hopefully-coherent data) can still be
+    // claimed and processed normally; `decideOrderEventClaim` already treats
+    // FAILED as immediately reclaimable.
     const eventStatus: CommerceOrderEventStatus =
-      result.status === "SKIPPED_STALE" ? "SKIPPED_STALE" : "PROCESSED";
+      result.status === "SKIPPED_STALE"
+        ? "SKIPPED_STALE"
+        : result.status === "FAILED"
+          ? "FAILED"
+          : "PROCESSED";
 
-    await finalizeEvent(eventId, { status: eventStatus, orderId: result.orderId }, now);
+    await finalizeEvent(
+      eventId,
+      {
+        status: eventStatus,
+        orderId: result.orderId,
+        failureSummary: result.status === "FAILED" ? result.reason : null,
+      },
+      now,
+    );
 
     return {
       status: result.status,

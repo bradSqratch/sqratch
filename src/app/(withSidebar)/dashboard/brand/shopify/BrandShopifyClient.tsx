@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { BrandPageShell } from "@/components/brand/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
@@ -25,11 +25,21 @@ type BrandProfileResponse = {
   shopifyLastProductSyncAt: string | null;
   /** True once the store has granted the read_orders scope. */
   orderAttributionReady: boolean;
+  /** True once the store has granted the read_themes scope (scope only — not live embed state). */
+  themeVerificationScopeReady: boolean;
   themeTracking: {
     provider: string;
     state: "PERMISSION_REQUIRED" | "NOT_CONFIGURED" | "DISABLED" | "ENABLED" | "UNKNOWN";
   };
   overallConversionTrackingReady: boolean;
+  /** True when a connected store still needs to approve a pending Shopify scope prompt. */
+  shopifyPermissionsNeedApproval: boolean;
+  /**
+   * Shopify Admin App Home deep link — opens Shopify's own native permission
+   * approval screen when one is pending. Null means the link cannot be
+   * offered yet.
+   */
+  shopifyPermissionApprovalUrl: string | null;
   /**
    * Theme Editor deep link that pre-selects the SQRATCH app-embed block, built
    * and validated server-side. Null means the link cannot be offered yet.
@@ -164,6 +174,67 @@ export function BrandShopifyClient({
     }
   }
 
+  // ---------------------------------------------------------------------------
+  // Bounded status polling after "Approve Shopify permissions" — Shopify's
+  // native approval screen opens in a NEW tab, so this tab has no other way
+  // to learn when the merchant finishes. Polls every 4s for at most ~2
+  // minutes; stops early once permissions read ready, on unmount, or at the
+  // timeout. "Refresh status" (below) remains the always-available manual
+  // fallback — polling never replaces it, only supplements it.
+  // ---------------------------------------------------------------------------
+  const POLL_INTERVAL_MS = 4000;
+  const POLL_TIMEOUT_MS = 120_000;
+  const [isPollingApproval, setIsPollingApproval] = useState(false);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const stopApprovalPolling = useCallback(() => {
+    if (pollIntervalRef.current !== null) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+    if (pollTimeoutRef.current !== null) {
+      clearTimeout(pollTimeoutRef.current);
+      pollTimeoutRef.current = null;
+    }
+    setIsPollingApproval(false);
+  }, []);
+
+  // Always clear any pending timers on unmount — never let a poll interval
+  // outlive the component (e.g. after navigating away from this page).
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current !== null) clearInterval(pollIntervalRef.current);
+      if (pollTimeoutRef.current !== null) clearTimeout(pollTimeoutRef.current);
+    };
+  }, []);
+
+  const startApprovalPolling = useCallback(() => {
+    stopApprovalPolling();
+    setIsPollingApproval(true);
+
+    pollIntervalRef.current = setInterval(() => {
+      void (async () => {
+        try {
+          const brandData =
+            await fetchJson<BrandProfileResponse>("/api/brand/shopify/status");
+          setBrand(brandData);
+          if (brandData && !brandData.shopifyPermissionsNeedApproval) {
+            stopApprovalPolling();
+          }
+        } catch {
+          // A transient failure during a background poll should not surface
+          // as a page error — "Refresh status" remains available, and the
+          // next tick simply tries again.
+        }
+      })();
+    }, POLL_INTERVAL_MS);
+
+    pollTimeoutRef.current = setTimeout(() => {
+      stopApprovalPolling();
+    }, POLL_TIMEOUT_MS);
+  }, [stopApprovalPolling]);
+
   function themeTrackingLabel(state: NonNullable<BrandProfileResponse>["themeTracking"]["state"] | undefined) {
     switch (state) {
       case "ENABLED": return "Enabled";
@@ -281,6 +352,57 @@ export function BrandShopifyClient({
             Creator-driven orders are attributed once every step below is in
             place. The final step is enabled inside the Shopify Theme Editor.
           </p>
+
+          {brand?.shopifyPermissionsNeedApproval && (
+            <div className="mt-5 rounded-2xl border border-amber-400/30 bg-amber-400/10 p-4">
+              <h3 className="text-sm font-semibold text-amber-200">
+                Shopify permissions need updating
+              </h3>
+              <p className="mt-2 text-sm leading-6 text-white/75">
+                {[
+                  !brand.orderAttributionReady ? "Order conversion access" : null,
+                  !brand.themeVerificationScopeReady ? "Theme verification access" : null,
+                ]
+                  .filter(Boolean)
+                  .join(" and ")}
+                {" "}
+                {!brand.orderAttributionReady && !brand.themeVerificationScopeReady ? "are" : "is"}{" "}
+                waiting on your approval in Shopify. This does not affect your
+                existing product catalog or reward redemptions.
+              </p>
+              {brand.shopifyPermissionApprovalUrl ? (
+                <div className="mt-3 space-y-2">
+                  <Button
+                    asChild
+                    className="rounded-full border border-white bg-white text-black"
+                  >
+                    <a
+                      href={brand.shopifyPermissionApprovalUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={() => startApprovalPolling()}
+                    >
+                      Approve Shopify permissions
+                    </a>
+                  </Button>
+                  <p className="text-xs text-white/55">
+                    This opens SQRATCH in Shopify Admin, where Shopify shows its
+                    own permission screen. Review it there and press{" "}
+                    <span className="font-medium text-white/75">Update</span>.
+                    {isPollingApproval
+                      ? " Checking for approval automatically..."
+                      : null}
+                  </p>
+                </div>
+              ) : (
+                <p className="mt-3 text-xs text-white/55">
+                  The approval link becomes available once the store
+                  connection finishes installing.
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="mt-5 divide-y divide-white/10 overflow-hidden rounded-2xl border border-white/10 bg-black/20">
             {[
               {
@@ -307,8 +429,8 @@ export function BrandShopifyClient({
               },
               {
                 label: "Theme verification access",
-                value: brand?.themeTracking?.state === "PERMISSION_REQUIRED" ? "Needs approval" : "Available",
-                ready: brand?.themeTracking?.state !== "PERMISSION_REQUIRED",
+                value: brand?.themeVerificationScopeReady ? "Ready" : "Needs approval",
+                ready: Boolean(brand?.themeVerificationScopeReady),
               },
               {
                 label: "Storefront conversion tracking",

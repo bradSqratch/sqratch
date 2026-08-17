@@ -92,6 +92,7 @@ import {
   isAccessTokenFresh,
   hasSufficientScopes,
   hasOrderAttributionScope,
+  hasThemeVerificationScope,
   computeExpiresAt,
   ownsRefreshLock,
   exchangeSessionTokenForOfflineToken,
@@ -264,6 +265,71 @@ describe("hasOrderAttributionScope", () => {
 
   test("is case-sensitive: a differently-cased scope string does not match", () => {
     assert.equal(hasOrderAttributionScope("READ_ORDERS"), false);
+  });
+});
+
+describe("hasThemeVerificationScope", () => {
+  test("returns true when read_themes is present among other scopes", () => {
+    assert.equal(
+      hasThemeVerificationScope("read_products,read_themes,read_discounts,write_discounts"),
+      true,
+    );
+  });
+
+  test("returns false when read_themes is absent, even with every baseline scope granted", () => {
+    assert.equal(
+      hasSufficientScopes("read_products,read_discounts,write_discounts"),
+      true,
+      "sanity check: baseline scopes alone already satisfy hasSufficientScopes",
+    );
+    assert.equal(
+      hasThemeVerificationScope("read_products,read_discounts,write_discounts"),
+      false,
+      "but must NOT satisfy hasThemeVerificationScope — independent of baseline connectivity, exactly like hasOrderAttributionScope",
+    );
+  });
+
+  test("hasOrderAttributionScope and hasThemeVerificationScope are independent of each other", () => {
+    const onlyOrders = "read_products,read_orders,read_discounts,write_discounts";
+    assert.equal(hasOrderAttributionScope(onlyOrders), true);
+    assert.equal(hasThemeVerificationScope(onlyOrders), false);
+
+    const onlyThemes = "read_products,read_themes,read_discounts,write_discounts";
+    assert.equal(hasOrderAttributionScope(onlyThemes), false);
+    assert.equal(hasThemeVerificationScope(onlyThemes), true);
+  });
+
+  test("returns false for null, undefined, and empty string", () => {
+    assert.equal(hasThemeVerificationScope(null), false);
+    assert.equal(hasThemeVerificationScope(undefined), false);
+    assert.equal(hasThemeVerificationScope(""), false);
+  });
+});
+
+describe("REQUIRED_SCOPES regression: neither read_orders nor read_themes gates baseline connectivity", () => {
+  test("a baseline-only installation (no read_orders, no read_themes) is sufficient", () => {
+    assert.equal(
+      hasSufficientScopes("read_products,read_discounts,write_discounts"),
+      true,
+      "the whole point of this fix: a store that has never seen the read_orders/read_themes prompt must still have a usable connection",
+    );
+  });
+
+  test("a store that already granted every scope, including the two additive ones, is still sufficient", () => {
+    assert.equal(
+      hasSufficientScopes(
+        "read_products,read_orders,read_themes,read_discounts,write_discounts",
+      ),
+      true,
+    );
+  });
+
+  test("missing a genuine baseline scope still correctly fails, proving this is not a blanket bypass", () => {
+    assert.equal(
+      hasSufficientScopes("read_orders,read_themes,read_discounts,write_discounts"),
+      false,
+      "read_products is still required — only the two ADDITIVE scopes were removed from the baseline gate",
+    );
   });
 });
 
@@ -1017,6 +1083,33 @@ describe("getValidAccessToken → mirror orchestration", () => {
     assert.ok(mirrorIndex >= 0, "the takeover winner must call the mirror");
     assert.ok(mirrorIndex > casIndex, "the mirror must run strictly after the takeover CAS commit");
     assert.equal(ctx.calls.filter((c) => c === "mirrorFindBrand").length, 1);
+  });
+
+  test("5b. missing read_orders and read_themes never triggers the REQUIRES_RECONNECT scope-check branch", async () => {
+    resetMirrorCtx({
+      brand: makeStaleExpiringBrand({
+        // Baseline-only: this is the exact regression scenario — a store
+        // that has never seen (or hasn't yet approved) the read_orders /
+        // read_themes managed-installation prompt.
+        shopifyGrantedScopes: "read_products,read_discounts,write_discounts",
+      }),
+      mirrorBehavior: "shortCircuit",
+    });
+    const tokenEndpoint: TokenEndpointFn = async () => makeTokenResponse();
+
+    const result = await getValidAccessToken("brand-mirror-1", { tokenEndpoint });
+
+    assert.equal(result.ok, true, "a baseline-sufficient store must get a token, not NEEDS_RECONNECT");
+    if (result.ok) assert.equal(result.accessToken, "shpat_new_access_token");
+    assert.ok(
+      !ctx.calls.includes("txBrandUpdateManyCAS"),
+      "the scope-check path must never reach markRequiresReconnect's CAS for a baseline-sufficient grant",
+    );
+    assert.equal(
+      ctx.brand?.shopifyConnectionStatus,
+      "CONNECTED",
+      "status must remain CONNECTED throughout — this is precisely the bug: an optional, additive scope must never flip it",
+    );
   });
 
   test("6a. a successful markRequiresReconnect (permanent refresh failure) triggers the status mirror", async () => {

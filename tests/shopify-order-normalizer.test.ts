@@ -31,10 +31,11 @@ import assert from "node:assert/strict";
 import {
   normalizeShopifyOrderPayload,
   normalizeShopifyRefundPayload,
+  normalizeShopifyOrderTransactionPayload,
   mapShopifyFinancialStatus,
   mapShopifyFulfillmentStatus,
   readMoneyAmount,
-  deriveCumulativeRefundMinor,
+  shopifyOrderHasRefundEvidence,
   extractShopifyAttributionToken,
   computeShopifyPayloadDigest,
   SHOPIFY_ORDER_PII_KEYS,
@@ -164,6 +165,32 @@ describe("8, 9, 10. money conversion uses the real, sign-aware decimalStringToMi
     assert.equal(result.order.totalMinor, BigInt(1000));
   });
 
+  test("an unresolvable currency nulls ALL six money fields, not just currencyCode/minorUnitExponent", () => {
+    const result = normalizeShopifyOrderPayload(
+      baseOrderFixture({
+        currency: undefined,
+        presentment_currency: undefined,
+        total_price: "10.00",
+        subtotal_price: "10.00",
+        total_discounts: "1.00",
+        total_tax: "0.50",
+      }),
+      CONTEXT,
+    );
+    assert.ok(result.warnings.includes("MISSING_CURRENCY"));
+    assert.equal(result.order.currencyCode, null);
+    assert.equal(result.order.minorUnitExponent, null);
+    // A defaulted exponent must never be used to compute a "real-looking"
+    // amount paired with a null currency — every money field is nulled
+    // together, or none are. See shopify-order-normalizer.ts's moneyFields.
+    assert.equal(result.order.subtotalMinor, null);
+    assert.equal(result.order.discountsMinor, null);
+    assert.equal(result.order.shippingMinor, null);
+    assert.equal(result.order.taxMinor, null);
+    assert.equal(result.order.totalMinor, null);
+    assert.equal(result.order.totalRefundedMinor, null);
+  });
+
   test("readMoneyAmount handles a bare decimal string, a MoneyBag (shop_money preferred), a bare Money object, and a plain number", () => {
     assert.equal(readMoneyAmount("19.99"), "19.99");
     assert.equal(
@@ -284,49 +311,86 @@ describe("16. cancellation fields normalize onto the order", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 14/15. Refunds
+// 14/15. Refunds are a SIGNAL, never a normalizer-computed total
 // ---------------------------------------------------------------------------
 
-describe("14/15. refund derivation is cumulative, never incremental", () => {
-  test("deriveCumulativeRefundMinor prefers the order's own total_refunded field when present", () => {
-    const order = { total_refunded: "12.50" };
-    assert.equal(deriveCumulativeRefundMinor(order, 2), BigInt(1250));
+describe("shopifyOrderHasRefundEvidence: the pure refund-evidence signal", () => {
+  test("a non-empty refunds[] is evidence", () => {
+    assert.equal(shopifyOrderHasRefundEvidence({ refunds: [{ id: 1 }] }), true);
   });
 
-  test("deriveCumulativeRefundMinor falls back to summing refunds[].transactions[].amount when total_refunded is absent", () => {
-    const order = {
-      refunds: [
-        { transactions: [{ status: "success", amount: "5.00" }] },
-        { transactions: [{ status: "success", amount: "2.50" }] },
-      ],
-    };
-    assert.equal(deriveCumulativeRefundMinor(order, 2), BigInt(750));
+  test("an empty refunds[] is NOT evidence — Shopify is affirmatively saying zero refunds", () => {
+    assert.equal(shopifyOrderHasRefundEvidence({ refunds: [] }), false);
   });
 
-  test("deriveCumulativeRefundMinor ignores non-success transactions (pending/failure never refunded anything yet)", () => {
-    const order = {
-      refunds: [{ transactions: [{ status: "pending", amount: "5.00" }, { status: "success", amount: "1.00" }] }],
-    };
-    assert.equal(deriveCumulativeRefundMinor(order, 2), BigInt(100));
+  test("an absent refunds key is not evidence", () => {
+    assert.equal(shopifyOrderHasRefundEvidence({}), false);
   });
 
-  test("deriveCumulativeRefundMinor yields null (not zero) when the payload says nothing about refunds", () => {
-    assert.equal(deriveCumulativeRefundMinor({}, 2), null);
+  test("a non-object payload is not evidence", () => {
+    assert.equal(shopifyOrderHasRefundEvidence(null), false);
+    assert.equal(shopifyOrderHasRefundEvidence("not an object"), false);
   });
+});
 
-  test("15. a FULL order payload with total_refunded === total_price and financial_status 'refunded' normalizes to a fully-refunded order", () => {
+describe("14/15. a FULL order payload NEVER computes totalRefundedMinor/financialStatus from REST refund evidence — both defer to live reconciliation", () => {
+  test("refunds[] present: totalRefundedMinor is null (not a REST-derived guess), financialStatus is ALSO null even though financial_status says 'refunded' — deferring both together avoids ever persisting a contradictory REFUNDED-with-unknown-amount snapshot", () => {
     const result = normalizeShopifyOrderPayload(
       baseOrderFixture({
-        total_price: "48.59",
-        total_refunded: "48.59",
+        total_price: "1322.57",
+        currency: "CAD",
+        refunds: [{ id: 1, refund_line_items: [{ subtotal_set: { shop_money: { amount: "610.63", currency_code: "CAD" } } }] }],
+        financial_status: "partially_refunded",
+      }),
+      CONTEXT,
+    );
+    assert.equal(result.order.totalRefundedMinor, null);
+    assert.equal(result.order.financialStatus, null);
+    assert.ok(result.warnings.includes("REFUND_CUMULATIVE_UNAVAILABLE"));
+    // The immutable, pre-refund total is still trustworthy directly from
+    // REST (Shopify: total_price_set is "before returns") and is NOT deferred.
+    assert.equal(result.order.totalMinor, BigInt(132257));
+    assert.equal(result.order.currencyCode, "CAD");
+  });
+
+  test("refunds[] empty: totalRefundedMinor is a confident 0n (Shopify affirmatively says zero refunds), financialStatus reads straight through — no ambiguity to defer", () => {
+    const result = normalizeShopifyOrderPayload(
+      baseOrderFixture({ total_price: "48.59", refunds: [], financial_status: "paid" }),
+      CONTEXT,
+    );
+    assert.equal(result.order.totalRefundedMinor, BigInt(0));
+    assert.equal(result.order.financialStatus, "PAID");
+    assert.ok(!result.warnings.includes("REFUND_CUMULATIVE_UNAVAILABLE"));
+  });
+
+  test("refunds key entirely absent: same as empty — confident 0n, financialStatus reads through", () => {
+    const result = normalizeShopifyOrderPayload(
+      baseOrderFixture({ total_price: "48.59", financial_status: "paid" }),
+      CONTEXT,
+    );
+    assert.equal(result.order.totalRefundedMinor, BigInt(0));
+    assert.equal(result.order.financialStatus, "PAID");
+  });
+
+  test("a presentment-currency transaction amount embedded anywhere in refunds[] is never read by this normalizer at all — the whole payload is deferred to reconciliation the moment refunds[] is non-empty", () => {
+    // This exact shape (bare transactions[] reporting the presentment USD
+    // amount) is what caused the live P1 under the old REST-summing design.
+    // The new design never inspects refund sub-fields at all.
+    const result = normalizeShopifyOrderPayload(
+      baseOrderFixture({
+        currency: "CAD",
+        total_price: "1322.57",
+        refunds: [{ transactions: [{ status: "success", amount: "953.00", currency: "USD" }] }],
         financial_status: "refunded",
       }),
       CONTEXT,
     );
-    assert.equal(result.order.totalMinor, result.order.totalRefundedMinor);
-    assert.equal(result.order.financialStatus, "REFUNDED");
+    assert.equal(result.order.totalRefundedMinor, null);
+    assert.equal(result.order.financialStatus, null);
   });
+});
 
+describe("normalizeShopifyRefundPayload: always a signal, never financial truth", () => {
   test("a bare refunds/create fragment (no embedded order) is PARTIAL and cannot fabricate a cumulative refund total — it flags REFUND_CUMULATIVE_UNAVAILABLE and leaves totalRefundedMinor null so the ingestion service preserves the stored figure", () => {
     const refundFixture = {
       id: 1,
@@ -347,21 +411,86 @@ describe("14/15. refund derivation is cumulative, never incremental", () => {
     assert.equal(result.order.lineItems.length, 0);
   });
 
-  test("a refund payload that embeds its parent order object uses that order directly, producing a FULL, cumulatively-accurate result", () => {
+  test("a refund payload that embeds its parent order object uses that order for every OTHER field (line items, cancellation) — but its financial fields are STILL deferred, exactly like any other FULL payload with refunds[] present", () => {
     const refundFixture = {
       id: 1,
       processed_at: "2026-08-03T00:00:05-04:00",
-      order: baseOrderFixture({ total_refunded: "48.59", financial_status: "refunded" }),
+      order: baseOrderFixture({
+        refunds: [{ id: 1 }],
+        financial_status: "refunded",
+        line_items: [
+          { id: 1, product_id: 1, variant_id: 1, quantity: 1, price: "48.59" },
+        ],
+      }),
     };
     const result = normalizeShopifyRefundPayload(refundFixture, CONTEXT);
     assert.equal(result.order.completeness, "FULL");
-    assert.equal(result.order.totalRefundedMinor, BigInt(4859));
-    assert.equal(result.order.financialStatus, "REFUNDED");
+    assert.equal(result.order.totalRefundedMinor, null);
+    assert.equal(result.order.financialStatus, null);
+    assert.ok(result.warnings.includes("REFUND_CUMULATIVE_UNAVAILABLE"));
+    // The embed is still useful: every non-financial field is real.
+    assert.equal(result.order.lineItems.length, 1);
     // The refund's own processed_at wins as the ordering timestamp.
     assert.equal(
       result.order.providerUpdatedAt?.toISOString(),
       new Date("2026-08-03T00:00:05-04:00").toISOString(),
     );
+  });
+});
+
+describe("normalizeShopifyOrderTransactionPayload: order_transactions/create is a bare order-id-only signal", () => {
+  test("extracts externalOrderId from order_id, PARTIAL, financial fields null, REFUND_CUMULATIVE_UNAVAILABLE warning", () => {
+    const result = normalizeShopifyOrderTransactionPayload(
+      {
+        id: 42,
+        order_id: 5551,
+        kind: "refund",
+        status: "success",
+        processed_at: "2026-08-15T12:00:10-04:00",
+      },
+      CONTEXT,
+    );
+    assert.equal(result.order.completeness, "PARTIAL");
+    assert.equal(result.order.externalOrderId, "5551");
+    assert.equal(result.order.totalRefundedMinor, null);
+    assert.equal(result.order.financialStatus, null);
+    assert.ok(result.warnings.includes("REFUND_CUMULATIVE_UNAVAILABLE"));
+    assert.equal(
+      result.order.providerUpdatedAt?.toISOString(),
+      new Date("2026-08-15T12:00:10-04:00").toISOString(),
+    );
+  });
+
+  test("falls back to created_at when processed_at is absent", () => {
+    const result = normalizeShopifyOrderTransactionPayload(
+      { id: 42, order_id: 5551, created_at: "2026-08-15T11:00:00-04:00" },
+      CONTEXT,
+    );
+    assert.equal(
+      result.order.providerUpdatedAt?.toISOString(),
+      new Date("2026-08-15T11:00:00-04:00").toISOString(),
+    );
+  });
+
+  test("a missing order_id is flagged MISSING_ORDER_ID, externalOrderId null", () => {
+    const result = normalizeShopifyOrderTransactionPayload({ id: 42 }, CONTEXT);
+    assert.equal(result.order.externalOrderId, null);
+    assert.ok(result.warnings.includes("MISSING_ORDER_ID"));
+  });
+
+  test("a non-object payload is PAYLOAD_NOT_AN_OBJECT, never throws", () => {
+    const result = normalizeShopifyOrderTransactionPayload(null, CONTEXT);
+    assert.ok(result.warnings.includes("PAYLOAD_NOT_AN_OBJECT"));
+    assert.equal(result.order.externalOrderId, null);
+  });
+
+  test("never reads a money field — this topic's payload is never treated as a financial source, even when it looks money-shaped", () => {
+    const result = normalizeShopifyOrderTransactionPayload(
+      { id: 42, order_id: 5551, amount: "953.00", currency: "USD" },
+      CONTEXT,
+    );
+    assert.equal(result.order.totalMinor, null);
+    assert.equal(result.order.currencyCode, null);
   });
 });
 

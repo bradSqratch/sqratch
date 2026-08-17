@@ -15,23 +15,26 @@
  * describe THAT refund, i.e. an INCREMENT, while
  * `src/lib/commerce/order-ingestion.ts` deliberately models
  * `totalRefundedMinor` as a CUMULATIVE total (cumulative is idempotent under
- * replay; incremental double-counts). `normalizeShopifyRefundPayload`
- * therefore emits a PARTIAL input that updates only what it can prove —
- * chiefly the refund timestamp — and leaves the refunded amount to the
- * `orders/updated` delivery Shopify emits for the same order, which carries
- * the order's own cumulative refund state. A rollout must subscribe to BOTH
- * topics; this one on its own records refund timing but never a refunded
- * amount. If a payload variant embeds its parent `order` object, the
- * normalizer uses that instead and the cumulative figure lands here directly.
+ * replay; incremental double-counts). Worse, a REST refund payload cannot
+ * prove the money actually SETTLED at all (Shopify: a Refund object's
+ * existence does not mean money moved — check transaction status).
+ * `normalizeShopifyRefundPayload` therefore emits a PARTIAL input that
+ * updates only what it can prove — chiefly the refund timestamp — and this
+ * route's shared handler (`shopifyTopicRequiresFinancialReconciliation` in
+ * `shopify-order-webhook.ts`) unconditionally triggers a live Shopify Admin
+ * GraphQL reconciliation for every delivery on this topic, which is the sole
+ * trustworthy source of the refunded amount. See
+ * `src/lib/commerce/providers/shopify-order-financial-reconciliation.ts`.
  *
  * Behavior: verifies the raw-body HMAC via `verifyShopifyWebhookRequest`,
  * resolves the shop to a `CommerceConnection`, normalizes the payload with the
- * pure Shopify refund normalizer, and hands it to the idempotent
- * provider-neutral ingestion service — which applies it as an UPDATE to the
- * existing order, never as a new order row. Deterministic rejections
- * acknowledge with 200; signature failure returns 401 and transient storage
- * failure returns 500 for retry. Writes no points, reverses no points, and
- * computes no commission.
+ * pure Shopify refund normalizer, reconciles financial state via live Shopify
+ * GraphQL, and hands the result to the idempotent provider-neutral ingestion
+ * service — which applies it as an UPDATE to the existing order, never as a
+ * new order row. Deterministic rejections acknowledge with 200; signature
+ * failure returns 401 and transient failure (write OR reconciliation)
+ * returns 500 for retry. Writes no points, reverses no points, and computes
+ * no commission.
  */
 
 import type { NextRequest } from "next/server";

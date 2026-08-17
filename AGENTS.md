@@ -1,89 +1,64 @@
 # SQRATCH Agent Rules
 
-These rules apply repository-wide. Preserve Graphify-generated sections below; they are maintained by Graphify.
+These rules apply repository-wide.
+Preserve Graphify-generated sections; Graphify maintains them.
 
 ## Working Tree Safety
 
-Other AI agents or the user may be modifying this repository concurrently.
-
-- Inspect the current working tree before substantial edits.
-- Preserve unrelated and uncommitted changes.
-- Never reset, revert, clean, stash, or overwrite unrelated work.
-- Re-read a target file immediately before modifying it if concurrent work may be occurring.
-- Make the smallest coherent change required for the task.
+- Inspect `git status` before substantial edits.
+- Preserve unrelated and uncommitted work.
+- Never reset, revert, clean, stash, or overwrite unrelated changes.
+- Re-read a target file before editing when concurrent work may exist.
+- Make the smallest coherent change required.
 
 ## Codebase Navigation
 
-Use Graphify as the first orientation layer for architecture, dependencies, call flows, and file relationships.
+Follow the generated `## graphify` rules below for initial navigation.
+Graphify narrows the search space; current source code is authoritative.
 
-Before stating factual conclusions about current runtime behavior, data ownership, persistence, authentication, security, or architectural authority, verify the relevant current source files identified by Graphify.
+Use targeted source search only when locating an exact symbol/string/path,
+Graphify is insufficient or stale, or source verification is required.
 
-Graphify is not the source of truth. After Graphify identifies relevant files, inspect the current source before modifying code.
+## Stack
 
-Targeted `rg`, `grep`, file search, or direct reads are allowed when:
+Next.js App Router, React, TypeScript, Prisma/PostgreSQL, NextAuth, Tailwind.
+Prefer existing project abstractions and conventions over new duplicates.
 
-- locating an exact symbol, string, route, environment variable, or error;
-- Graphify returns insufficient information;
-- the graph may be stale;
-- source-level verification is required.
+## Verification & Execution Economy
 
-Avoid broad recursive repository scanning when Graphify can narrow the search first.
-
-## Graph Maintenance
-
-For normal code changes, do not perform a full Graphify rebuild.
-
-After completing code modifications, run one:
-
-`graphify update .`
-
-Do not run multiple Graphify update/build processes concurrently.
-
-If multiple coding agents are actively modifying the same working tree, defer the final Graphify update until concurrent work is complete.
-
-Never manually edit files inside `graphify-out/`.
-
-## SQRATCH Stack
-
-Follow existing SQRATCH conventions before introducing new abstractions.
-
-Primary stack:
-
-- Next.js App Router
-- React
-- TypeScript
-- Prisma
-- PostgreSQL
-- NextAuth
-- Tailwind CSS
-
-Prefer existing utilities, components, services, and patterns over duplicate implementations.
-
-## Verification
-
-Focused tests are the default while developing. Run the full suite/build only
-when the user explicitly requests it or a final security/data-integrity gate
-requires it.
-
-Do not suppress lint, type, Prisma, test, or build failures. Clearly distinguish pre-existing failures from failures caused by the current change.
+- Run focused tests while developing.
+- Run the full verification suite only when explicitly requested or at a final
+  security/data-integrity release gate.
+- Never suppress Prisma, typecheck, lint, test, or build failures.
+- Suppress verbose successful command output; report status/counts and relevant failures.
+- Do not restate these repository rules in plans or completion reports.
+- The user performs live browser, production, database, and external-provider QA
+  unless explicitly requested otherwise.
 
 ## Database Safety
 
-Inspect the existing Prisma schema and migrations before database changes.
+- Inspect Prisma schema and migrations before database changes.
+- Never reset, drop, truncate, or destructively modify an unknown/shared database.
+- Never apply migrations unless explicitly requested.
+- Never expose secrets, tokens, passwords, database URLs, or complete environment values.
 
-Never reset, drop, truncate, or destructively modify an unknown, shared, or production database.
+## Git / Deployment Safety
 
-Agents never apply migrations or run live browser/provider QA unless the user
-explicitly requests those operations. Shopify app deploy is likewise never an
-agent action without explicit authorization.
+- Never commit, push, merge, rebase, force-push, publish, or deploy unless explicitly requested.
+- Never run `shopify app deploy` unless explicitly requested.
+- Before completion inspect the relevant diff and `git status`.
 
-Do not expose secrets, API keys, tokens, passwords, connection strings, or complete environment variable values.
+## Commerce Invariants
 
-## Git
-
-Do not commit, push, merge, rebase, force-push, or publish changes unless explicitly requested.
-
-Before reporting completion, inspect the relevant diff and current `git status`.
+- `CommerceConnection` and provider-neutral commerce models are canonical.
+- Provider-specific API/transport behavior ends at provider modules/adapters.
+- Never trust client-supplied Brand, merchant, product, Campaign, Creator, or attribution identity.
+- External carts carry only opaque SQRATCH attribution evidence.
+- Verify provider webhook authenticity before processing payloads.
+- Order creation does not imply payment.
+- Refunds/cancellations update current net analytics without erasing historical attribution.
+- Do not expose customer PII in Creator commerce analytics.
+- Current Campaign ownership must not rewrite historical attribution.
 
 ## graphify
 

@@ -710,7 +710,7 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
           ok: true,
           json: async () => ({
             access_token: "access-token-999",
-            scope: "read_products,read_orders,read_discounts,write_discounts",
+            scope: "read_products,read_orders,read_themes,read_discounts,write_discounts",
           }),
         } as Response;
       }
@@ -1099,7 +1099,7 @@ describe("Route Scenario 3: Shopify Token Refresh", () => {
       shopifyAccessTokenExpiresAt: new Date(Date.now() - 10000), // expired
       shopifyRefreshTokenEncrypted: encryptSecret("old-refresh-token"),
       shopifyRefreshTokenExpiresAt: new Date(Date.now() + 1000000),
-      shopifyGrantedScopes: "read_products,read_discounts,write_discounts",
+      shopifyGrantedScopes: "read_products,read_orders,read_themes,read_discounts,write_discounts",
       shopifyClientId: "client-id",
       shopifyTokenRefreshLockedUntil: null as Date | null,
       shopifyTokenRefreshLockId: null as string | null,
@@ -1133,7 +1133,7 @@ describe("Route Scenario 3: Shopify Token Refresh", () => {
       assert.equal(body.refresh_token, "old-refresh-token");
       return {
         access_token: "new-access-token",
-        scope: "read_products,read_discounts,write_discounts",
+        scope: "read_products,read_orders,read_themes,read_discounts,write_discounts",
         expires_in: 3600,
         refresh_token: "new-refresh-token",
         refresh_token_expires_in: 86400,
@@ -1156,7 +1156,7 @@ describe("Route Scenario 3: Shopify Token Refresh", () => {
       shopifyAccessTokenExpiresAt: new Date(Date.now() - 10000), // expired
       shopifyRefreshTokenEncrypted: encryptSecret("old-refresh-token"),
       shopifyRefreshTokenExpiresAt: new Date(Date.now() + 1000000),
-      shopifyGrantedScopes: "read_products,read_discounts,write_discounts",
+      shopifyGrantedScopes: "read_products,read_orders,read_themes,read_discounts,write_discounts",
       shopifyClientId: "client-id",
       shopifyTokenRefreshLockedUntil: null as Date | null,
       shopifyTokenRefreshLockId: null as string | null,
@@ -1200,7 +1200,7 @@ describe("Route Scenario 3: Shopify Token Refresh", () => {
       shopifyAccessTokenExpiresAt: new Date(Date.now() - 10000), // expired
       shopifyRefreshTokenEncrypted: encryptSecret("old-refresh-token"),
       shopifyRefreshTokenExpiresAt: new Date(Date.now() + 1000000),
-      shopifyGrantedScopes: "read_products,read_discounts,write_discounts",
+      shopifyGrantedScopes: "read_products,read_orders,read_themes,read_discounts,write_discounts",
       shopifyClientId: "client-id",
       shopifyTokenRefreshLockedUntil: null as Date | null,
       shopifyTokenRefreshLockId: null as string | null,
@@ -1232,7 +1232,7 @@ describe("Route Scenario 3: Shopify Token Refresh", () => {
 
     const mockTokenEndpoint = async () => ({
       access_token: "failed-stale-token",
-      scope: "read_products,read_discounts,write_discounts",
+      scope: "read_products,read_orders,read_themes,read_discounts,write_discounts",
       expires_in: 3600,
       refresh_token: "new-refresh-token",
       refresh_token_expires_in: 86400,
@@ -1253,7 +1253,7 @@ describe("Route Scenario 3: Shopify Token Refresh", () => {
       shopifyAccessTokenExpiresAt: new Date(Date.now() + 3600 * 1000),
       shopifyRefreshTokenEncrypted: encryptSecret("refresh-A"),
       shopifyRefreshTokenExpiresAt: new Date(Date.now() + 1000000),
-      shopifyGrantedScopes: "read_products,read_discounts,write_discounts",
+      shopifyGrantedScopes: "read_products,read_orders,read_themes,read_discounts,write_discounts",
       shopifyClientId: "client-A",
       shopifyTokenRefreshLockedUntil: null as Date | null,
       shopifyTokenRefreshLockId: null as string | null,
@@ -1281,7 +1281,7 @@ describe("Route Scenario 3: Shopify Token Refresh", () => {
       shopifyAccessTokenExpiresAt: new Date(Date.now() - 10000), // expired
       shopifyRefreshTokenEncrypted: encryptSecret("old-refresh-token") as string | null,
       shopifyRefreshTokenExpiresAt: new Date(Date.now() + 1000000),
-      shopifyGrantedScopes: "read_products,read_discounts,write_discounts",
+      shopifyGrantedScopes: "read_products,read_orders,read_themes,read_discounts,write_discounts",
       shopifyClientId: "client-id",
       shopifyTokenRefreshLockedUntil: null as Date | null,
       shopifyTokenRefreshLockId: null as string | null,

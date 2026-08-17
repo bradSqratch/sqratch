@@ -49,7 +49,7 @@ export async function GET(request: NextRequest) {
       attribution: { is: { creatorProfileId: context.creatorProfile.id } },
     },
     select: {
-      provider: true, financialStatus: true, totalMinor: true, totalRefundedMinor: true, netRevenueMinor: true,
+      provider: true, financialStatus: true, currencyCode: true, totalMinor: true, totalRefundedMinor: true, netRevenueMinor: true,
       // No campaign id and no line item is selected at all: a column that is
       // never read cannot be leaked by a later refactor of the shared builder.
       attribution: { select: { experienceId: true, creatorProfileId: true, lessonId: true, connectedProductId: true } },
@@ -59,6 +59,7 @@ export async function GET(request: NextRequest) {
   const scoped: ConversionAnalyticsOrder[] = rows.map((row) => ({
     provider: row.provider,
     financialStatus: row.financialStatus,
+    currencyCode: row.currencyCode,
     totalMinor: row.totalMinor,
     totalRefundedMinor: row.totalRefundedMinor,
     netRevenueMinor: row.netRevenueMinor,
