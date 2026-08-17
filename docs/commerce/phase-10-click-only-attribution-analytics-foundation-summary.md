@@ -1,17 +1,30 @@
 # Phase 10 — Durable Click-Only Attribution Analytics Foundation
 
+> **Superseded rollout status:** Phase 12 adds exact-token order conversion
+> attribution. Click analytics remain click-only; conversion metrics are exposed
+> separately and do not turn a click count into an inferred purchase.
+
 ## Click-only decision
 
 Phase 10 tracks exactly one fact: **a visitor was redirected from a SQRATCH
 commerce surface to a merchant page.** It does not track, imply, or make
 answerable: purchases, conversions, conversion rate, sales, revenue,
 attributed revenue, affiliate commissions, ROAS, order value, purchase-based
-points, click-to-order matching, or buyer identity. `CommerceOrder`,
-`CommerceOrderLineItem`, and `CommerceOrderEvent` (Phase 7) remain fully
-dormant — nothing added in Phase 10 or Phase 11 reads them, and no Shopify
-`read_orders` scope or order/refund webhook topic was added. See
+points, click-to-order matching, or buyer identity. **As of Phase 10/11**,
+`CommerceOrder`, `CommerceOrderLineItem`, and `CommerceOrderEvent` (Phase 7)
+remained fully dormant — nothing added in Phase 10 or Phase 11 read them, and
+no Shopify `read_orders` scope or order/refund webhook topic had been added
+yet. **Phase 12 has since added `read_orders` and the order/refund webhook
+topics** (see
+[phase-12-live-order-ingestion-and-conversion-attribution-summary.md](phase-12-live-order-ingestion-and-conversion-attribution-summary.md)) —
+click analytics themselves are unaffected and remain click-only; conversion
+metrics are a separate, additive surface (`/api/brand/analytics/conversions`,
+`/api/creator/analytics/conversions`) that does not turn a click count into
+an inferred purchase. See
 [phase-7-order-normalization-summary.md](phase-7-order-normalization-summary.md)
-and the "Why Phase 7 stays dormant" section below.
+and the "Why Phase 7 stays dormant" section below for the Phase 10/11-era
+reasoning, which still explains why click analytics and order/conversion
+analytics are architecturally separate.
 
 This document covers the durability foundation (schema + pure/repository
 layers). API and UI consumption is covered in
@@ -198,18 +211,31 @@ existing Phase 6 privacy posture (`ipHash`, `userAgent`, `userId`,
 no-referrer-persistence, 30-day `expiresAt`) is unchanged; see
 [phase-6-commerce-click-attribution-summary.md](phase-6-commerce-click-attribution-summary.md).
 
-## Why Phase 7 stays dormant
+## Why Phase 7 stayed dormant through Phase 10/11 (superseded by Phase 12)
 
-Phase 7's `CommerceOrder`/`CommerceOrderLineItem`/`CommerceOrderEvent`
-models and Shopify order-webhook normalizer exist but are not referenced by
-any live route, not wired into `shopify.app.toml`, and require no
-`read_orders` scope. Phase 10/11 code never imports, queries, or writes to
-any of these three models — confirmed by a whole-tree grep tripwire test and
-by the independent adversarial review. Activating order tracking is a
-separate, later, independently-scoped and independently-reviewed decision;
-this phase's analytics foundation is architected so that decision, whenever
-it happens, does not require touching `CommerceClickAttribution`'s schema
-again.
+**As of Phase 10/11**, Phase 7's `CommerceOrder`/`CommerceOrderLineItem`/
+`CommerceOrderEvent` models and Shopify order-webhook normalizer existed but
+were not referenced by any live route, not wired into `shopify.app.toml`,
+and required no `read_orders` scope. Phase 10/11's own click-analytics code
+never imported, queried, or wrote to any of these three models — confirmed
+at the time by a whole-tree grep tripwire test and an independent adversarial
+review. Activating order tracking was deliberately left as a separate, later,
+independently-scoped and independently-reviewed decision; this phase's
+analytics foundation was architected so that decision, whenever it happened,
+would not require touching `CommerceClickAttribution`'s schema again — and it
+didn't (Phase 12 added `surface`-adjacent columns to nothing; it consumes
+`CommerceClickAttribution` read-only through the same `tokenHash` lookup
+path Phase 6 always intended, see
+[phase-12-live-order-ingestion-and-conversion-attribution-summary.md](phase-12-live-order-ingestion-and-conversion-attribution-summary.md)).
+
+**Phase 12 has since activated order tracking.** The click-analytics
+code paths described throughout this document remain unchanged and remain
+click-only — they still never read `CommerceOrder`/`CommerceOrderLineItem`/
+`CommerceOrderEvent`. Conversion/order analytics now exists as an
+architecturally SEPARATE surface (`/api/brand/analytics/conversions`,
+`/api/creator/analytics/conversions`, `src/lib/commerce/order-analytics.ts`),
+so a click total and a conversion total are never silently combined into one
+number by either surface.
 
 ## Future Commerce7 compatibility
 

@@ -32,12 +32,10 @@
  * authorized the click. A product with no publicly reachable storefront URL now
  * fails CLOSED here (see `PUBLICLY_CLICKABLE_CONNECTED_PRODUCT`).
  *
- * TRANSPORT REALITY. SQRATCH's Shopify app holds only `read_products`,
- * `read_discounts`, `write_discounts` — no `read_orders`, no orders webhook, no
- * checkout/theme/admin extension. The token appended to the destination URL
- * therefore has NO guaranteed mechanism today to survive into a merchant order.
- * It is an inert, forward-compatible seam, and this module must never be
- * described as live order attribution.
+ * TRANSPORT. For Shopify, Phase 12's Theme App Extension reads only the
+ * namespaced token and writes it to a cart attribute. A later HMAC-verified
+ * order delivery can claim it only when provider, connection, redirect, hash,
+ * expiry, and immutable brand evidence all match.
  */
 
 import { NextResponse, type NextRequest } from "next/server";
@@ -838,15 +836,9 @@ export async function handleCommerceClick(
       });
     }
 
-    // The token is a forward-compatible seam ONLY. Finding G of the Phase 6
-    // audit confirmed there is no mechanism today — no orders scope, no
-    // webhook, no extension — by which a merchant would read this parameter or
-    // carry it into an order. Appending it is inert and harmless; it must not
-    // be read as working order attribution.
-    //
-    // An existing `ref` on the merchant's own URL is left untouched: clobbering
-    // it could break the merchant's own attribution, which is a real harm in
-    // exchange for a parameter that currently does nothing.
+    // The Shopify Theme App Extension observes this SQRATCH-namespaced query
+    // parameter and persists it as a cart attribute. Only our namespaced key
+    // is written; merchant referral parameters are left untouched.
     if (token && !destination.searchParams.has(CLICK_TOKEN_QUERY_PARAM)) {
       destination.searchParams.set(CLICK_TOKEN_QUERY_PARAM, token);
     }

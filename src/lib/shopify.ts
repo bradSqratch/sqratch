@@ -12,6 +12,8 @@ import { timingSafeEqualString } from "@/lib/security/timing-safe-equal";
 export const SHOPIFY_API_VERSION = "2026-04";
 export const SHOPIFY_SCOPES = [
   "read_products",
+  "read_orders",
+  "read_themes",
   "read_discounts",
   "write_discounts",
 ].join(",");

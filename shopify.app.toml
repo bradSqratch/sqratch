@@ -25,9 +25,25 @@ api_version = "2026-04"
   uri = "https://www.sqratch.com/api/shopify/webhooks/app/uninstalled"
   topics = [ "app/uninstalled" ]
 
+  [[webhooks.subscriptions]]
+  uri = "https://www.sqratch.com/api/shopify/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+  [[webhooks.subscriptions]]
+  uri = "https://www.sqratch.com/api/shopify/webhooks/orders/create"
+  topics = [ "orders/create" ]
+
+  [[webhooks.subscriptions]]
+  uri = "https://www.sqratch.com/api/shopify/webhooks/orders/updated"
+  topics = [ "orders/updated" ]
+
+  [[webhooks.subscriptions]]
+  uri = "https://www.sqratch.com/api/shopify/webhooks/refunds/create"
+  topics = [ "refunds/create" ]
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_products,read_discounts,write_discounts"
+scopes = "read_products,read_orders,read_themes,read_discounts,write_discounts"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 

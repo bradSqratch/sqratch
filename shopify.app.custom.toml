@@ -12,6 +12,10 @@ api_version = "2026-04"
   topics = [ "app/uninstalled" ]
 
   [[webhooks.subscriptions]]
+  uri = "https://spyglass-excluding-silliness.ngrok-free.dev/api/shopify/webhooks/app/scopes_update"
+  topics = [ "app/scopes_update" ]
+
+  [[webhooks.subscriptions]]
   uri = "https://spyglass-excluding-silliness.ngrok-free.dev/api/shopify/webhooks/customers/data_request"
   compliance_topics = [ "customers/data_request" ]
 
@@ -23,8 +27,20 @@ api_version = "2026-04"
   uri = "https://spyglass-excluding-silliness.ngrok-free.dev/api/shopify/webhooks/shop/redact"
   compliance_topics = [ "shop/redact" ]
 
+  [[webhooks.subscriptions]]
+  uri = "https://spyglass-excluding-silliness.ngrok-free.dev/api/shopify/webhooks/orders/create"
+  topics = [ "orders/create" ]
+
+  [[webhooks.subscriptions]]
+  uri = "https://spyglass-excluding-silliness.ngrok-free.dev/api/shopify/webhooks/orders/updated"
+  topics = [ "orders/updated" ]
+
+  [[webhooks.subscriptions]]
+  uri = "https://spyglass-excluding-silliness.ngrok-free.dev/api/shopify/webhooks/refunds/create"
+  topics = [ "refunds/create" ]
+
 [access_scopes]
-scopes = "read_products,read_discounts,write_discounts"
+scopes = "read_products,read_orders,read_themes,read_discounts,write_discounts"
 
 [auth]
 redirect_urls = [ "https://spyglass-excluding-silliness.ngrok-free.dev/api/shopify/oauth/callback" ]

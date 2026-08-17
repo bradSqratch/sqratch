@@ -8,12 +8,11 @@
  * `../order-ingestion.ts`.
  *
  * ===========================================================================
- * NOT REACHABLE IN PRODUCTION TODAY
+ * LIVE-CONFIGURATION PREREQUISITES
  * ===========================================================================
- * SQRATCH's Shopify app does not hold `read_orders`, and neither
- * `shopify.app.toml` nor `shopify.app.custom.toml` subscribes to an `orders/*`
- * or `refunds/*` topic, so no real Shopify order payload ever reaches this
- * module. It is written against Shopify Admin API `2026-04`
+ * Phase 12 declares the required `read_orders` scope and order topics. A
+ * merchant must still reauthorize after the config deployment before Shopify
+ * can send real order payloads. It is written against Shopify Admin API `2026-04`
  * (`SHOPIFY_API_VERSION` in `src/lib/shopify.ts` is the single source of truth)
  * and is exercised only by fixtures. Rollout steps live in
  * `docs/commerce/phase-7-order-normalization-summary.md`.
@@ -56,7 +55,7 @@
  * shop currency code would produce a number that is wrong by an exchange rate,
  * silently.
  *
- * Every conversion uses `decimalStringToMinorUnits` (SIGN-AWARE) from
+ * Every conversion uses `decimalStringToBigIntMinorUnits` (SIGN-AWARE) from
  * `../money.ts` — never `providerPriceStringToMinorUnits`, which rejects
  * negatives by design and would wrongly reject a refund, discount, or
  * adjustment. A conversion failure nulls that ONE field and never fails the
@@ -83,8 +82,8 @@ import type {
   CommerceOrderFinancialStatus,
   CommerceOrderFulfillmentStatus,
 } from "@prisma/client";
-import { decimalStringToMinorUnits, getCurrencyExponent } from "../money";
-import { CLICK_TOKEN_QUERY_PARAM, isValidClickToken } from "../click-token";
+import { decimalStringToBigIntMinorUnits, getCurrencyExponent } from "../money";
+import { CLICK_TOKEN_CART_ATTRIBUTE, isValidClickToken } from "../click-token";
 import type {
   NormalizedOrderInput,
   NormalizedOrderLineItemInput,
@@ -290,20 +289,9 @@ export function mapShopifyFulfillmentStatus(
  * Only the token's FORMAT is screened here (43 base64url chars), purely to
  * avoid handing obvious junk downstream; passing that screen proves nothing.
  *
- * Sources checked, in order of how durable each would be if a transport ever
- * existed:
- *   1. `note_attributes[]` / `attributes[]` — `{name, value}` pairs. The only
- *      place a merchant-side integration could durably persist a value onto
- *      an order.
- *   2. `landing_site` — the first storefront URL of the session, as a query
- *      parameter.
- *   3. `referring_site` — the referrer, as a query parameter.
- *
- * PHASE 6'S FINDING STANDS: no Shopify storefront-to-order path populates any
- * of these from a product-URL query parameter today without a theme or
- * checkout extension SQRATCH does not ship. This extractor exists so the
- * behavior is correct under fixtures and if a transport is later built. It
- * must never be described as live attribution.
+ * Source: the namespaced cart attribute written by SQRATCH's Theme App
+ * Extension. URL/referrer values are intentionally not accepted: they are not
+ * durable order evidence and generic referral parameters belong to merchants.
  */
 export function extractShopifyAttributionToken(payload: unknown): string | null {
   const order = asRecord(payload);
@@ -323,7 +311,7 @@ export function extractShopifyAttributionToken(payload: unknown): string | null 
       continue;
     }
     const name = readText(pair.name) ?? readText(pair.key);
-    if (name?.toLowerCase() !== CLICK_TOKEN_QUERY_PARAM) {
+    if (name !== CLICK_TOKEN_CART_ATTRIBUTE) {
       continue;
     }
     const candidate = readText(pair.value);
@@ -332,32 +320,7 @@ export function extractShopifyAttributionToken(payload: unknown): string | null 
     }
   }
 
-  for (const urlish of [order.landing_site, order.referring_site]) {
-    const candidate = readTokenFromUrlish(readText(urlish));
-    if (candidate) {
-      return candidate;
-    }
-  }
-
   return null;
-}
-
-/**
- * `landing_site` is often a PATH with a query (`/products/x?ref=...`), not an
- * absolute URL, so it is resolved against a throwaway base rather than parsed
- * as absolute. The base is never used for anything but parsing.
- */
-function readTokenFromUrlish(value: string | null): string | null {
-  if (!value) {
-    return null;
-  }
-  try {
-    const url = new URL(value, "https://shopify-order-normalizer.invalid");
-    const candidate = url.searchParams.get(CLICK_TOKEN_QUERY_PARAM);
-    return candidate && isValidClickToken(candidate) ? candidate : null;
-  } catch {
-    return null;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -471,8 +434,8 @@ function toMinor(raw: string | null, exponent: number): bigint | null {
   if (raw === null) {
     return null;
   }
-  const parsed = decimalStringToMinorUnits(raw, exponent);
-  return parsed.ok ? BigInt(parsed.minorUnits) : null;
+  const parsed = decimalStringToBigIntMinorUnits(raw, exponent);
+  return parsed.ok ? parsed.minorUnits : null;
 }
 
 function toMinorTracked(
@@ -483,12 +446,12 @@ function toMinorTracked(
   if (raw === null) {
     return null;
   }
-  const parsed = decimalStringToMinorUnits(raw, exponent);
+  const parsed = decimalStringToBigIntMinorUnits(raw, exponent);
   if (!parsed.ok) {
     warnings.push("UNPARSEABLE_MONEY_FIELD");
     return null;
   }
-  return BigInt(parsed.minorUnits);
+  return parsed.minorUnits;
 }
 
 // ---------------------------------------------------------------------------

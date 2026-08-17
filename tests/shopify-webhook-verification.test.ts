@@ -531,7 +531,7 @@ describe("8. topic identity is bound to a dedicated URL, not the spoofable x-sho
     for (const file of ["shopify.app.toml", "shopify.app.custom.toml"]) {
       const source = readSource(file);
       const uriMatches = [...source.matchAll(/uri = "([^"]+)"/g)].map((match) => match[1]);
-      assert.equal(uriMatches.length, 4, `expected 4 webhook subscription URIs in ${file}`);
+      assert.equal(uriMatches.length, 8, `expected 8 webhook subscription URIs in ${file}`);
       assert.equal(
         new Set(uriMatches).size,
         uriMatches.length,
@@ -539,9 +539,13 @@ describe("8. topic identity is bound to a dedicated URL, not the spoofable x-sho
       );
       for (const topic of [
         "app/uninstalled",
+        "app/scopes_update",
         "shop/redact",
         "customers/redact",
         "customers/data_request",
+        "orders/create",
+        "orders/updated",
+        "refunds/create",
       ]) {
         assert.ok(
           uriMatches.some((uri) => uri.endsWith(`/webhooks/${topic}`)),

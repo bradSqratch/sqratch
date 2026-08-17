@@ -16,18 +16,13 @@
  * module never requires `DATABASE_URL`.
  *
  * ===========================================================================
- * NOT REACHABLE IN PRODUCTION TODAY
+ * LIVE ROLLOUT BOUNDARY
  * ===========================================================================
- * Nothing in production calls this module. SQRATCH's Shopify app holds
- * `read_products`, `read_discounts` and `write_discounts` — NOT `read_orders`
- * — and neither `shopify.app.toml` nor `shopify.app.custom.toml` subscribes to
- * any `orders/*` or `refunds/*` topic, so Shopify never sends an order
- * payload. The three route handlers that call this
- * (`src/app/api/shopify/webhooks/orders/create`, `.../orders/updated`,
- * `.../refunds/create`) are real, correct, and fixture-testable, but they can
- * only be exercised by a fixture. Turning them on is a separate, deliberately
- * reviewed rollout with scope-change and privacy-policy prerequisites,
- * documented in `docs/commerce/phase-7-order-normalization-summary.md`.
+ * Phase 12 declares Shopify order/refund topics and `read_orders`. Delivery
+ * begins only after deploying the config and merchant reauthorization; the
+ * Theme App Extension must also be enabled for click-token transport. The
+ * service itself remains provider-neutral and can only persist a normalized,
+ * HMAC-verified provider delivery.
  *
  * ===========================================================================
  * NO PII, NO POINTS, NO COMMISSION
@@ -45,11 +40,37 @@
  * IDEMPOTENCY: THE EVENT CLAIM IS ITS OWN STATEMENT, AND WHY
  * ===========================================================================
  * The deduplication gate is an INSERT into `CommerceOrderEvent` keyed on the
- * unique `(provider, providerEventId)`. Winning that INSERT is the claim on
- * the delivery; losing it (Prisma P2002) means another delivery of the same
- * provider event already claimed it, which is a successful no-op
- * (`ALREADY_PROCESSED`), never an error and never a second write to the order
- * table.
+ * unique `(provider, providerEventId)`. Winning that INSERT is the claim on the
+ * delivery. Losing it (Prisma P2002) is NOT automatically a successful no-op:
+ * what the loser may conclude depends entirely on what the winning row's state
+ * PROVES, so the claim resolves to exactly one of four outcomes (see
+ * `OrderEventClaim`):
+ *
+ *   CLAIMED             — the INSERT won. Nothing has processed this delivery.
+ *   RECLAIMED           — a prior row exists but is provably not being worked
+ *                         on: either `FAILED` (a previous attempt recorded its
+ *                         own failure) or `RECEIVED` with an EXPIRED lease
+ *                         (`EVENT_CLAIM_LEASE_MS`). Reclaimed through a
+ *                         compare-and-set, so exactly one retry can win it.
+ *   COMPLETED_DUPLICATE — a prior row is in a TERMINAL state (`PROCESSED`,
+ *                         `SKIPPED_STALE`, `SKIPPED_DISCONNECTED`). This
+ *                         delivery was already fully handled — acknowledging it
+ *                         without reprocessing is correct (`ALREADY_PROCESSED`).
+ *   IN_FLIGHT           — a prior row is `RECEIVED` with a LIVE lease. Another
+ *                         request holds this delivery and we can prove NEITHER
+ *                         success NOR failure yet.
+ *
+ * IN_FLIGHT is the outcome that must never be acknowledged as success, and the
+ * reason this four-state model exists at all. When every lost INSERT was
+ * reported `ALREADY_PROCESSED`, a process that died between winning the claim
+ * and committing the order transaction turned the provider's own retry into
+ * PERMANENT DATA LOSS: the retry was answered 200, the provider stopped
+ * retrying, and that order was never written by anyone. A caller must therefore
+ * translate IN_FLIGHT into a RETRYABLE failure (HTTP 500 for a webhook) — by
+ * the time the provider retries, the lease has either been finalized
+ * (-> COMPLETED_DUPLICATE -> 200) or expired (-> RECLAIMED -> reprocessed for
+ * real). `isRetryableOrderIngestionOutcome` is that translation, and it is the
+ * single source of truth for it.
  *
  * That claim is executed as its OWN statement/transaction, before the
  * order-writing transaction — deliberately NOT inside it. In PostgreSQL a
@@ -60,14 +81,16 @@
  * expressible there. A single INSERT is already atomic and is itself the lock,
  * so nothing is lost by hoisting it: exactly one caller can ever win it.
  *
- * The consequence, stated plainly rather than hidden: a process that dies
- * between winning the claim and committing the order transaction leaves a
- * `RECEIVED` event row with no order, and a redelivery of that same provider
- * event id will be reported `ALREADY_PROCESSED` and will NOT retry the order
- * write. `CommerceOrderEvent.status = RECEIVED` with a null `processedAt` and
- * a null `orderId` is precisely the query that finds these, and re-driving
- * them is an operational task, not something this module should paper over by
- * weakening the dedup guarantee.
+ * A process that dies between winning the claim and committing the order
+ * transaction leaves a `RECEIVED` event row with no order.
+ * `CommerceOrderEvent.status = RECEIVED` with a null `processedAt` and a null
+ * `orderId` is still precisely the query that finds these, but they are no
+ * longer an operator's re-drive task: while the lease is live the delivery is
+ * reported IN_FLIGHT (retryable, never acknowledged), and once the lease expires
+ * the next provider retry RECLAIMS and reprocesses it. Reprocessing is safe
+ * because it lands through the same idempotent upsert — a redelivery carrying
+ * the same `providerUpdatedAt` as the stored row is `SKIPPED_STALE`, never a
+ * second order row.
  *
  * ===========================================================================
  * REFUND SEMANTICS: CUMULATIVE, NOT INCREMENTAL
@@ -110,16 +133,37 @@
  * in the normalizer, not here.
  *
  * ===========================================================================
+ * CONCURRENT DELIVERIES FOR THE SAME ORDER
+ * ===========================================================================
+ * The event claim above deduplicates ONE delivery. It says nothing about two
+ * DIFFERENT deliveries that describe the same order and arrive together —
+ * which providers routinely do (Shopify emits `refunds/create` and
+ * `orders/updated` for one refund back to back). Those run as two independent
+ * transactions, and under READ COMMITTED each one's staleness decision is made
+ * against a snapshot that the other can invalidate before either writes.
+ *
+ * The order UPDATE is therefore a COMPARE-AND-SET that restates the stored
+ * `providerUpdatedAt` the decision was made against. The loser raises, rolls
+ * back, and is reported as the retryable `WRITE_FAILED`; the provider's
+ * redelivery re-reads committed state and decides again. Without that
+ * predicate the losing transaction would write its full field set — including
+ * the values it coalesced from its own stale read — over the newer committed
+ * state, reverting a financial status or zeroing a cumulative refund total
+ * with no later delivery to repair it. The `create` branch needs no equivalent
+ * because `@@unique([connectionId, externalOrderId])` already elects one
+ * winner and turns the loser into the same retryable failure.
+ *
+ * ===========================================================================
  * MONEY
  * ===========================================================================
  * All amounts arrive already converted to minor units as `bigint`. Conversion
  * itself is the normalizer's job and uses `getCurrencyExponent` /
- * `decimalStringToMinorUnits` from `./money.ts` — the SIGN-AWARE converter,
+ * `decimalStringToBigIntMinorUnits` from `./money.ts` — the SIGN-AWARE converter,
  * never `providerPriceStringToMinorUnits`, which rejects negatives by design
  * and would wrongly reject a refund, discount, or adjustment amount.
  *
  * `totalMinor` is the provider's own reported total, persisted verbatim. It is
- * never derived by summing converted line items: `decimalStringToMinorUnits`
+ * never derived by summing converted line items: the decimal converter
  * truncates rather than rounds, so a sum of per-line conversions can
  * legitimately disagree with the provider's total by a few minor units, and
  * asserting equality would reject perfectly valid orders.
@@ -128,11 +172,8 @@
  * totalRefundedMinor`, computed at write time, and null whenever `totalMinor`
  * is null (an unknown total cannot produce a known net).
  *
- * KNOWN LIMITATION (see the schema comment too): the columns are `BigInt`, but
- * `decimalStringToMinorUnits` still enforces the int4 range because it was
- * written for the `Int` catalog columns. Today a single amount above roughly
- * $21.4M-equivalent is rejected by the converter with `OUT_OF_RANGE`, which
- * nulls that one field and never fails the order.
+ * Order normalization uses the BigInt-bounded converter. Catalog prices still
+ * use the deliberately narrower int4 converter because their columns are Int.
  *
  * ===========================================================================
  * CROSS-BRAND INTEGRITY
@@ -271,6 +312,13 @@ export type OrderIngestionStatus =
   | "ALREADY_PROCESSED"
   | "SKIPPED_STALE"
   | "SKIPPED_DISCONNECTED"
+  /**
+   * Another request holds this delivery's live claim lease. NOT a duplicate and
+   * NOT a failure of this delivery — nothing is known yet about whether the
+   * holder succeeded. Callers must retry (see
+   * `isRetryableOrderIngestionOutcome`), never acknowledge.
+   */
+  | "IN_FLIGHT"
   | "FAILED";
 
 /**
@@ -285,7 +333,16 @@ export type OrderIngestionReason =
   | "MISSING_EXTERNAL_ORDER_ID"
   | "OLDER_THAN_STORED_STATE"
   | "UNORDERABLE_MISSING_TIMESTAMP"
-  | "WRITE_FAILED";
+  /** Pairs with `IN_FLIGHT`: a live lease on this exact delivery. Retryable. */
+  | "DELIVERY_IN_FLIGHT"
+  /** The order transaction itself failed. Retryable. */
+  | "WRITE_FAILED"
+  /**
+   * An unexpected throw anywhere in the pipeline (claim, connection load, order
+   * write). Retryable, and deliberately classified rather than propagated —
+   * see `ingestNormalizedOrder`.
+   */
+  | "UNEXPECTED_FAILURE";
 
 /**
  * Everything a caller may log. Contains ids, counts, enum-like tags and
@@ -294,7 +351,12 @@ export type OrderIngestionReason =
 export type OrderIngestionOutcome = {
   status: OrderIngestionStatus;
   reason: OrderIngestionReason | null;
-  /** `CommerceOrderEvent.id`, or null when the claim was lost to a duplicate. */
+  /**
+   * `CommerceOrderEvent.id`. When this delivery's claim was lost (duplicate or
+   * in-flight) it is the EXISTING row's id when that row could be read, so an
+   * operator can correlate the two deliveries; null when no row is known at all
+   * (an unexpected failure, or a row that vanished under us).
+   */
   eventId: string | null;
   orderId: string | null;
   lineItemCount: number;
@@ -306,6 +368,36 @@ export type OrderIngestionOutcome = {
    */
   brandIdOverriddenFromConnection: boolean;
 };
+
+/**
+ * PURE. Whether the caller must ask the provider to REDELIVER this event.
+ *
+ * This is the single source of truth for that decision, kept here beside the
+ * outcome union rather than in each transport so a new outcome cannot be
+ * introduced without deciding its retry semantics in one place. Exactly three
+ * outcomes are retryable, and all three share one property: SQRATCH cannot
+ * prove the order was landed, and a later attempt plausibly can.
+ *
+ *   IN_FLIGHT / DELIVERY_IN_FLIGHT — someone else's live claim; unproven.
+ *   FAILED / WRITE_FAILED          — the order transaction failed; transient.
+ *   FAILED / UNEXPECTED_FAILURE    — an unexpected throw; treated as transient.
+ *
+ * Everything else is either a success or a DETERMINISTIC rejection (missing
+ * external order id, disconnected shop, stale event, genuine duplicate) that a
+ * retry would reach the identical conclusion about, so retrying it would only
+ * produce a retry storm.
+ */
+export function isRetryableOrderIngestionOutcome(
+  outcome: Pick<OrderIngestionOutcome, "status" | "reason">,
+): boolean {
+  if (outcome.status === "IN_FLIGHT") {
+    return true;
+  }
+  return (
+    outcome.status === "FAILED" &&
+    (outcome.reason === "WRITE_FAILED" || outcome.reason === "UNEXPECTED_FAILURE")
+  );
+}
 
 // ---------------------------------------------------------------------------
 // Connection gating
@@ -429,16 +521,31 @@ export function computeNetRevenueMinor(
 // Dependency injection
 // ---------------------------------------------------------------------------
 
+/**
+ * The four distinguishable results of trying to claim one delivery. See the
+ * IDEMPOTENCY block in this file's header for why all four must exist.
+ *
+ * `eventId` is non-null for the two outcomes that authorize processing, because
+ * the caller must finalize that exact row. For the two that do not authorize
+ * processing it is the EXISTING row's id when it could be read, and null only
+ * when no row could be identified at all.
+ */
 export type OrderEventClaim =
-  | { claimed: true; eventId: string }
-  | { claimed: false };
+  /** The INSERT won. Process it. */
+  | { status: "CLAIMED"; eventId: string }
+  /** A dead/abandoned prior claim was atomically taken over. Process it. */
+  | { status: "RECLAIMED"; eventId: string }
+  /** Already fully handled (terminal status). Acknowledge, do not reprocess. */
+  | { status: "COMPLETED_DUPLICATE"; eventId: string | null }
+  /** Someone else's live lease. Neither acknowledge nor process — retry later. */
+  | { status: "IN_FLIGHT"; eventId: string | null };
 
 export type OrderIngestionDeps = {
   /**
-   * Atomically claims the delivery by inserting the `CommerceOrderEvent` row.
-   * Returns `{claimed:false}` on a P2002 against
-   * `(provider, providerEventId)` — a duplicate delivery, which is a
-   * successful no-op. Any other error propagates.
+   * Atomically claims the delivery by inserting the `CommerceOrderEvent` row,
+   * resolving a P2002 against `(provider, providerEventId)` into one of the
+   * three non-CLAIMED `OrderEventClaim` outcomes. Any other error propagates
+   * and is classified as `UNEXPECTED_FAILURE` by `ingestNormalizedOrder`.
    */
   claimEvent(input: {
     providerEventId: string;
@@ -453,6 +560,20 @@ export type OrderIngestionDeps = {
 
   /** Loads the gating projection of the connection, or null if it is gone. */
   loadConnection(connectionId: string): Promise<OrderIngestionConnection | null>;
+
+  /**
+   * PROVIDER-SPECIFIC id expansion, injected so this generic layer holds no
+   * provider's id format. Given one raw `externalProductId` from a normalized
+   * line item, returns every id form that provider's CATALOG adapter might have
+   * stored in `ConnectedCommerceProduct.externalKey`.
+   *
+   * Defaults to `providerProductKeyCandidates`, which is provider-neutral. The
+   * Shopify wiring supplies `shopifyProductKeyCandidates` (see
+   * `./providers/shopify-order-webhook.ts`), because only Shopify knows that
+   * its catalog stores `gid://shopify/Product/<id>` while its order webhooks
+   * report the same product as a bare numeric REST id.
+   */
+  expandProductKeyCandidates(externalProductId: string | null): string[];
 
   /** Runs `fn` inside a DB transaction and returns its result. */
   runTransaction<T>(fn: (tx: TxClient) => Promise<T>): Promise<T>;
@@ -469,6 +590,150 @@ export type OrderIngestionDeps = {
   now(): Date;
 };
 
+/**
+ * How long a `RECEIVED` `CommerceOrderEvent` row is treated as a LIVE lease held
+ * by the request that claimed it.
+ *
+ * 60s is deliberately unchanged from the original implementation. It only has
+ * to comfortably exceed the wall-clock cost of one order transaction (a handful
+ * of statements), and neither direction of error is a correctness bug now that
+ * IN_FLIGHT is answered with a retry rather than an acknowledgement:
+ *
+ *   - too SHORT lets two workers both judge a row stale near the boundary, which
+ *     the compare-and-set in `reclaim` resolves by electing exactly one winner;
+ *     the loser is reported IN_FLIGHT and retries.
+ *   - too LONG only delays the self-heal of a genuinely abandoned claim by more
+ *     provider-retry round trips.
+ *
+ * Both are operational costs. The correctness comes from never reporting an
+ * unfinished claim as completed.
+ */
+export const EVENT_CLAIM_LEASE_MS = 60_000;
+
+/** What an EXISTING event row proves about whether this delivery may proceed. */
+export type OrderEventClaimDecision =
+  | "RECLAIMABLE"
+  | "COMPLETED_DUPLICATE"
+  | "IN_FLIGHT";
+
+/** The projection of an existing event row the claim decision needs. */
+export type ExistingOrderEventRow = {
+  id: string;
+  status: CommerceOrderEventStatus;
+  receivedAt: Date;
+};
+
+/**
+ * PURE. Classifies an existing `CommerceOrderEvent` row for a redelivery of the
+ * same `(provider, providerEventId)`.
+ *
+ * ALL FIVE `CommerceOrderEventStatus` members are handled explicitly — a total
+ * switch, so a sixth member becomes a compile error rather than silently
+ * defaulting. The dangerous direction to guess in is COMPLETED_DUPLICATE (which
+ * would acknowledge unfinished work), so the default is not reachable and no
+ * status is grouped by accident:
+ *
+ *   FAILED               -> RECLAIMABLE. A previous attempt explicitly recorded
+ *                          its own failure, so nothing holds this delivery. Safe
+ *                          immediately, with no lease wait.
+ *   RECEIVED, expired    -> RECLAIMABLE. The holder is gone (crashed, or its
+ *                          finalize write failed). Take it over.
+ *   RECEIVED, live       -> IN_FLIGHT. Someone is (or just was) working on it.
+ *                          Nothing is proven; this must not be acknowledged.
+ *   PROCESSED,
+ *   SKIPPED_STALE,
+ *   SKIPPED_DISCONNECTED -> COMPLETED_DUPLICATE. Terminal and deliberate: the
+ *                          delivery was applied, or superseded by newer state,
+ *                          or declined because the shop was disconnected.
+ */
+export function decideOrderEventClaim(
+  existingStatus: CommerceOrderEventStatus,
+  existingReceivedAt: Date,
+  now: Date,
+  leaseMs: number = EVENT_CLAIM_LEASE_MS,
+): OrderEventClaimDecision {
+  switch (existingStatus) {
+    case "FAILED":
+      return "RECLAIMABLE";
+    case "RECEIVED":
+      return now.getTime() - existingReceivedAt.getTime() > leaseMs
+        ? "RECLAIMABLE"
+        : "IN_FLIGHT";
+    case "PROCESSED":
+    case "SKIPPED_STALE":
+    case "SKIPPED_DISCONNECTED":
+      return "COMPLETED_DUPLICATE";
+    default: {
+      const exhaustive: never = existingStatus;
+      return exhaustive;
+    }
+  }
+}
+
+/**
+ * The three row operations the claim state machine needs, isolated from Prisma
+ * so the state machine itself is the SAME code in production and under test —
+ * a fake that re-implemented the machine would prove nothing about it.
+ */
+export type OrderEventClaimStore = {
+  /**
+   * Inserts the `RECEIVED` row. Resolves to `"DUPLICATE"` on a unique violation
+   * against `(provider, providerEventId)`; any other error must throw.
+   */
+  insertClaim(): Promise<{ id: string } | "DUPLICATE">;
+  /** Reads the existing row for this `(provider, providerEventId)`, or null. */
+  findExistingClaim(): Promise<ExistingOrderEventRow | null>;
+  /**
+   * COMPARE-AND-SET takeover: flips the row to a FRESH `RECEIVED` lease if and
+   * only if `(id, status, receivedAt)` still match `row`. Resolves true for the
+   * single winner and false for anyone whose read is already outdated.
+   *
+   * `receivedAt` is part of the predicate, not just `status`: a stale
+   * `RECEIVED` row is reclaimed BACK to `RECEIVED`, so status alone cannot tell
+   * two concurrent reclaimers apart and both would believe they won.
+   */
+  reclaim(row: ExistingOrderEventRow, now: Date): Promise<boolean>;
+};
+
+/**
+ * The claim state machine. Transport-free and DB-free by construction.
+ */
+export async function resolveOrderEventClaim(
+  store: OrderEventClaimStore,
+  now: Date,
+  leaseMs: number = EVENT_CLAIM_LEASE_MS,
+): Promise<OrderEventClaim> {
+  const inserted = await store.insertClaim();
+  if (inserted !== "DUPLICATE") {
+    return { status: "CLAIMED", eventId: inserted.id };
+  }
+
+  const existing = await store.findExistingClaim();
+  if (!existing) {
+    // Lost the INSERT, then found no row: the winner's transaction has not
+    // become visible, or the row was redacted between the two statements.
+    // Nothing is proven, so fail closed to RETRYABLE rather than acknowledge.
+    return { status: "IN_FLIGHT", eventId: null };
+  }
+
+  const decision = decideOrderEventClaim(
+    existing.status,
+    existing.receivedAt,
+    now,
+    leaseMs,
+  );
+  if (decision !== "RECLAIMABLE") {
+    return { status: decision, eventId: existing.id };
+  }
+
+  const won = await store.reclaim(existing, now);
+  // Losing the CAS means a concurrent reclaimer now holds a fresh lease on this
+  // exact delivery — which is IN_FLIGHT, not a completed duplicate.
+  return won
+    ? { status: "RECLAIMED", eventId: existing.id }
+    : { status: "IN_FLIGHT", eventId: existing.id };
+}
+
 async function defaultClaimEvent(input: {
   providerEventId: string;
   topic: string;
@@ -480,47 +745,67 @@ async function defaultClaimEvent(input: {
   providerUpdatedAt: Date | null;
 }): Promise<OrderEventClaim> {
   const { default: prisma } = await import("@/lib/prisma");
-  try {
-    const created = await prisma.commerceOrderEvent.create({
-      data: {
-        providerEventId: input.providerEventId,
-        topic: input.topic,
-        payloadDigest: input.payloadDigest,
-        connectionId: input.connectionId,
-        brandId: input.brandId,
-        provider: input.provider,
-        externalOrderRef: input.externalOrderRef,
-        providerUpdatedAt: input.providerUpdatedAt,
-        status: "RECEIVED",
+  const identity = {
+    provider_providerEventId: {
+      provider: input.provider,
+      providerEventId: input.providerEventId,
+    },
+  };
+
+  return resolveOrderEventClaim(
+    {
+      async insertClaim() {
+        try {
+          const created = await prisma.commerceOrderEvent.create({
+            data: {
+              providerEventId: input.providerEventId,
+              topic: input.topic,
+              payloadDigest: input.payloadDigest,
+              connectionId: input.connectionId,
+              brandId: input.brandId,
+              provider: input.provider,
+              externalOrderRef: input.externalOrderRef,
+              providerUpdatedAt: input.providerUpdatedAt,
+              status: "RECEIVED",
+            },
+            select: { id: true },
+          });
+          return { id: created.id };
+        } catch (error) {
+          if (isUniqueViolation(error)) {
+            return "DUPLICATE";
+          }
+          throw error;
+        }
       },
-      select: { id: true },
-    });
-    return { claimed: true, eventId: created.id };
-  } catch (error) {
-    if (isUniqueViolation(error)) {
-      // A previous process may have died after claiming the delivery but before
-      // committing the order transaction. The event body is intentionally not
-      // stored, so a provider retry is the only safe re-drive source. Reclaim
-      // terminal failed events and stale RECEIVED leases; never reclaim a
-      // processed/skipped delivery.
-      const { default: prisma } = await import("@/lib/prisma");
-      const existing = await prisma.commerceOrderEvent.findUnique({
-        where: { provider_providerEventId: { provider: input.provider, providerEventId: input.providerEventId } },
-        select: { id: true, status: true, receivedAt: true },
-      });
-      const staleLease = existing?.status === "RECEIVED" &&
-        Date.now() - existing.receivedAt.getTime() > 60_000;
-      if (existing && (existing.status === "FAILED" || staleLease)) {
-        const reclaimed = await prisma.commerceOrderEvent.updateMany({
-          where: { id: existing.id, status: existing.status },
-          data: { status: "RECEIVED", processedAt: null, failureSummary: null },
+      async findExistingClaim() {
+        return prisma.commerceOrderEvent.findUnique({
+          where: identity,
+          select: { id: true, status: true, receivedAt: true },
         });
-        if (reclaimed.count === 1) return { claimed: true, eventId: existing.id };
-      }
-      return { claimed: false };
-    }
-    throw error;
-  }
+      },
+      async reclaim(row, now) {
+        const reclaimed = await prisma.commerceOrderEvent.updateMany({
+          where: { id: row.id, status: row.status, receivedAt: row.receivedAt },
+          data: {
+            status: "RECEIVED",
+            // Restart the lease for THIS attempt. Without it, a row that was
+            // ever reclaimed keeps its original `receivedAt` forever, so every
+            // later retry immediately reads as stale and the lease stops
+            // protecting that row at all.
+            receivedAt: now,
+            processedAt: null,
+            failureSummary: null,
+          },
+        });
+        return reclaimed.count === 1;
+      },
+    },
+    // Real wall clock, deliberately not the injected `now`: the lease measures
+    // elapsed real time between two processes, and a frozen test clock would
+    // make every lease look either eternally live or eternally stale.
+    new Date(),
+  );
 }
 
 async function defaultLoadConnection(
@@ -543,10 +828,29 @@ async function defaultRunTransaction<T>(
 const DEFAULT_ORDER_INGESTION_DEPS: OrderIngestionDeps = {
   claimEvent: defaultClaimEvent,
   loadConnection: defaultLoadConnection,
+  expandProductKeyCandidates: providerProductKeyCandidates,
   runTransaction: defaultRunTransaction,
   hashAttributionToken: hashClickToken,
   now: () => new Date(),
 };
+
+/**
+ * Raised when the optimistic-concurrency guard on the order UPDATE loses: the
+ * stored row's ordering key moved between this transaction's read and its
+ * write, so a concurrent delivery for the SAME order committed underneath us
+ * and this delivery's staleness decision is based on a snapshot that no longer
+ * exists.
+ *
+ * Deliberately carries a CONSTANT tag rather than any state: it is classified
+ * as the retryable `WRITE_FAILED` by the order-transaction catch below, and
+ * nothing derived from a payload may ever ride an error message into a log.
+ */
+class ConcurrentOrderWriteError extends Error {
+  constructor() {
+    super("CONCURRENT_ORDER_WRITE");
+    this.name = "ConcurrentOrderWriteError";
+  }
+}
 
 /** True for a Prisma P2002 unique-constraint violation. */
 function isUniqueViolation(error: unknown): boolean {
@@ -563,10 +867,18 @@ function isUniqueViolation(error: unknown): boolean {
 /**
  * Best-effort terminal write on the event row. Deliberately swallowing its own
  * failure: the order write has already committed at this point, and throwing
- * here would turn a successful ingestion into a caller-visible error (and, for
- * a webhook caller, a provider retry of work that is already done). The row
- * simply stays `RECEIVED`, which is the same recoverable state described in
- * the IDEMPOTENCY section of this file's header.
+ * here would turn a successful ingestion into a caller-visible error. The row
+ * simply stays `RECEIVED`, holding a live lease.
+ *
+ * Under the four-state claim model that outcome is now strictly SAFER than it
+ * used to be. A redelivery arriving while the lease is live is classified
+ * IN_FLIGHT and answered with a retry, so nothing is acknowledged on the
+ * strength of a write we cannot see; once the lease expires the next retry
+ * RECLAIMS the row and reprocesses it, which is idempotent (the redelivery
+ * carries the same `providerUpdatedAt` as the stored order, so it lands as
+ * `SKIPPED_STALE`). Previously the same swallowed failure meant the next
+ * redelivery was answered `ALREADY_PROCESSED`, permanently hiding an order that
+ * may never have been written.
  */
 async function finalizeEvent(
   eventId: string,
@@ -606,14 +918,11 @@ async function finalizeEvent(
  * session, by IP, or by "the only recent click for this brand". An
  * unattributed order is the correct and expected outcome.
  *
- * IN PRODUCTION TODAY THIS PATH NEVER FIRES. Phase 6's transport audit found
- * that no Shopify storefront-to-order path carries the `ref` query parameter
- * into an order payload: the token is appended to the merchant product URL,
- * and nothing in Shopify's cart/checkout/order pipeline captures a storefront
- * query parameter into `note_attributes` or any other order field without a
- * theme or checkout extension SQRATCH does not ship. This logic exists so that
- * it is CORRECT when fixture-tested and when a real transport is eventually
- * built — NOT because live traffic reaches it.
+ * SHOPIFY TRANSPORT. Phase 12's Theme App Extension copies only the
+ * namespaced click token into a cart attribute. The Shopify normalizer accepts
+ * that durable attribute only; it never trusts landing/referrer query strings.
+ * This generic claim path still requires exact hash, expiry, redirected click,
+ * immutable brand, provider, and connection evidence before linking an order.
  *
  * RACE SAFETY. The claim is a CONDITIONAL update:
  * `updateMany({ where: { id, consumedAt: null }, data: {...} })`. Postgres
@@ -632,6 +941,7 @@ async function associateAttribution(
     orderId: string;
     brandId: string;
     connectionId: string;
+    provider: CommerceProvider;
     now: Date;
     hashAttributionToken: (token: string) => string;
   },
@@ -652,6 +962,8 @@ async function associateAttribution(
       id: true,
       attributedBrandId: true,
       commerceConnectionId: true,
+      provider: true,
+      redirectedAt: true,
       expiresAt: true,
       consumedAt: true,
       consumedByOrderRef: true,
@@ -662,14 +974,15 @@ async function associateAttribution(
     return null;
   }
 
-  // A bearer token is evidence only for its immutable attributed Brand. A
-  // non-null connection narrows that proof to one merchant connection too.
-  // Never let a token observed in a different shop's payload cross that
-  // boundary, even if a future transport accidentally propagates it.
+  // A bearer token is evidence only for its immutable attributed Brand and
+  // exact merchant connection. Legacy/unpinned clicks are not conversion
+  // evidence; they remain historical click-only rows.
   if (
+    attribution.redirectedAt === null ||
+    attribution.attributedBrandId === null ||
     attribution.attributedBrandId !== params.brandId ||
-    (attribution.commerceConnectionId !== null &&
-      attribution.commerceConnectionId !== params.connectionId)
+    attribution.provider !== params.provider ||
+    attribution.commerceConnectionId !== params.connectionId
   ) {
     return null;
   }
@@ -714,6 +1027,7 @@ async function writeLineItems(
   orderId: string,
   connectionId: string,
   lineItems: NormalizedOrderLineItemInput[],
+  expandProductKeyCandidates: (externalProductId: string | null) => string[],
 ): Promise<number> {
   await tx.commerceOrderLineItem.deleteMany({ where: { orderId } });
 
@@ -735,7 +1049,7 @@ async function writeLineItems(
   const productKeys = Array.from(
     new Set(
       uniqueLineItems
-        .flatMap((item) => providerProductKeyCandidates(item.externalProductId))
+        .flatMap((item) => expandProductKeyCandidates(item.externalProductId))
         .filter((key): key is string => key !== null),
     ),
   );
@@ -751,7 +1065,7 @@ async function writeLineItems(
   const byExternalKey = new Map(matches.map((row) => [row.externalKey, row.id]));
 
   const resolveConnectedProductId = (externalProductId: string | null): string | null => {
-    for (const candidate of providerProductKeyCandidates(externalProductId)) {
+    for (const candidate of expandProductKeyCandidates(externalProductId)) {
       const hit = byExternalKey.get(candidate);
       if (hit) {
         return hit;
@@ -781,12 +1095,22 @@ async function writeLineItems(
 }
 
 /**
- * PURE. `ConnectedCommerceProduct.externalKey` stores whatever id form the
- * provider's CATALOG adapter emitted (for Shopify, a GraphQL global id such as
- * `gid://shopify/Product/123`), whereas an order WEBHOOK payload reports the
- * same product as a bare numeric REST id (`123`). Matching therefore tries
- * both forms rather than assuming either. A non-numeric, non-gid value is
- * returned as-is so other providers still match.
+ * PURE and PROVIDER-NEUTRAL. The DEFAULT `expandProductKeyCandidates`.
+ *
+ * `ConnectedCommerceProduct.externalKey` stores whatever id form that
+ * provider's CATALOG adapter emitted, which is not always the form its ORDER
+ * payloads report. This generic layer knows only the two provider-agnostic
+ * facts it can justify for ANY provider:
+ *
+ *   - the id may be stored verbatim, and
+ *   - a namespaced/pathish id may also be stored as its trailing numeric
+ *     segment (`.../123` also matches `123`).
+ *
+ * It deliberately contains NO provider's id format. Expanding in the other
+ * direction — a bare id back into a provider's namespaced form — requires
+ * knowing that namespace, so it is the provider's job and arrives through
+ * `OrderIngestionDeps.expandProductKeyCandidates`. See
+ * `shopifyProductKeyCandidates` in `./providers/shopify-order-webhook.ts`.
  */
 export function providerProductKeyCandidates(
   externalProductId: string | null,
@@ -794,9 +1118,6 @@ export function providerProductKeyCandidates(
   const raw = externalProductId?.trim();
   if (!raw) {
     return [];
-  }
-  if (/^\d+$/.test(raw)) {
-    return [raw, `gid://shopify/Product/${raw}`];
   }
   const numericTail = /\/(\d+)$/.exec(raw);
   return numericTail ? [raw, numericTail[1]] : [raw];
@@ -810,8 +1131,10 @@ export function providerProductKeyCandidates(
  * Idempotently lands one normalized provider order.
  *
  * Sequence, exactly:
- *   1. Claim the delivery (`CommerceOrderEvent` insert). Lost claim ->
- *      `ALREADY_PROCESSED`, order table untouched.
+ *   1. Claim the delivery (`CommerceOrderEvent` insert), resolving to one of
+ *      four outcomes. `COMPLETED_DUPLICATE` -> `ALREADY_PROCESSED`, order table
+ *      untouched. `IN_FLIGHT` -> the retryable `IN_FLIGHT` outcome, order table
+ *      untouched, and NOT an acknowledgement. `CLAIMED`/`RECLAIMED` proceed.
  *   2. Gate on connection status. Not ingestible (or connection gone) ->
  *      `SKIPPED_DISCONNECTED`, event recorded, order table untouched.
  *   3. Require an external order id. Absent -> `FAILED`
@@ -824,14 +1147,57 @@ export function providerProductKeyCandidates(
  *      matched.
  *   5. Finalize the event row with the terminal status.
  *
- * Never throws for an expected condition (duplicate, disconnected, stale,
- * missing id) — each is a typed outcome. A genuine DB failure inside the
- * transaction is caught, recorded on the event as `FAILED`/`WRITE_FAILED`, and
- * returned as a `FAILED` outcome rather than propagated, so a webhook caller
- * can still answer 200 and avoid a provider retry storm; the event row is the
- * durable record that the delivery arrived and did not apply.
+ * NEVER THROWS. Every expected condition (duplicate, in-flight, disconnected,
+ * stale, missing id) is a typed outcome, and every UNEXPECTED throw — from the
+ * claim, the connection load, or the order transaction — is caught and
+ * classified rather than propagated, so a route can never turn one into an
+ * unhandled exception.
+ *
+ * Failures are classified by whether a RETRY could plausibly succeed, which is
+ * the opposite of a blanket "always answer 200":
+ *
+ *   - A transient write failure (`WRITE_FAILED`) or an unexpected throw
+ *     (`UNEXPECTED_FAILURE`) is RETRYABLE, so the caller answers 500 and the
+ *     provider redelivers. That redelivery is what eventually lands the order;
+ *     answering 200 here would discard it.
+ *   - A deterministic rejection (missing external order id, disconnected shop,
+ *     stale event, genuine duplicate) is NOT retryable, so the caller answers
+ *     200 and no retry storm forms over work that can never succeed.
+ *
+ * `isRetryableOrderIngestionOutcome` encodes exactly that split. Either way the
+ * event row is the durable record that the delivery arrived.
  */
 export async function ingestNormalizedOrder(
+  event: OrderIngestionEventInput,
+  order: NormalizedOrderInput,
+  deps: Partial<OrderIngestionDeps> = {},
+): Promise<OrderIngestionOutcome> {
+  try {
+    return await runOrderIngestion(event, order, deps);
+  } catch {
+    // FAIL CLOSED TO RETRYABLE. Reached only for an UNEXPECTED throw outside
+    // the order transaction's own catch — a claim or connection-load error, or
+    // a non-P2002 Prisma error. The alternative is an unhandled exception
+    // escaping into the route, where an accidental 200 (or an opaque crash)
+    // could drop a real order.
+    //
+    // The error is not swallowed silently: it becomes the classified
+    // `UNEXPECTED_FAILURE` tag, which the caller logs and answers 500 to. It is
+    // not bound or read, for the same no-PII reason as the write-failure catch
+    // below — a Prisma error message can embed payload column values.
+    return {
+      status: "FAILED",
+      reason: "UNEXPECTED_FAILURE",
+      eventId: null,
+      orderId: null,
+      lineItemCount: 0,
+      attributionLinked: false,
+      brandIdOverriddenFromConnection: false,
+    };
+  }
+}
+
+async function runOrderIngestion(
   event: OrderIngestionEventInput,
   order: NormalizedOrderInput,
   deps: Partial<OrderIngestionDeps> = {},
@@ -861,10 +1227,33 @@ export async function ingestNormalizedOrder(
     providerUpdatedAt: order.providerUpdatedAt,
   });
 
-  if (!claim.claimed) {
-    return { ...base, status: "ALREADY_PROCESSED", reason: "DUPLICATE_DELIVERY" };
+  if (claim.status === "COMPLETED_DUPLICATE") {
+    // The prior row is TERMINAL: this delivery was already fully handled.
+    // Acknowledging it without reprocessing is correct.
+    return {
+      ...base,
+      status: "ALREADY_PROCESSED",
+      reason: "DUPLICATE_DELIVERY",
+      eventId: claim.eventId,
+    };
   }
 
+  if (claim.status === "IN_FLIGHT") {
+    // NOT a duplicate. Another request holds a live lease on this exact
+    // delivery and we can prove neither success nor failure, so this must be
+    // reported as RETRYABLE. The provider's next redelivery will find the lease
+    // either finalized (-> COMPLETED_DUPLICATE -> acknowledged) or expired
+    // (-> RECLAIMED -> processed for real). Answering "already processed" here
+    // is what used to lose orders outright.
+    return {
+      ...base,
+      status: "IN_FLIGHT",
+      reason: "DELIVERY_IN_FLIGHT",
+      eventId: claim.eventId,
+    };
+  }
+
+  // CLAIMED or RECLAIMED: this request now owns the delivery.
   const eventId = claim.eventId;
 
   // --- 2. Connection gate ---------------------------------------------------
@@ -1023,10 +1412,42 @@ export async function ingestNormalizedOrder(
       let created: boolean;
 
       if (existing) {
-        await tx.commerceOrder.update({
-          where: { id: existing.id },
+        // OPTIMISTIC CONCURRENCY ON THE ORDERING KEY — NOT A BARE UPDATE.
+        //
+        // `decision` above was computed from the snapshot read at the top of
+        // this transaction. Under PostgreSQL's default READ COMMITTED
+        // isolation that snapshot can go out of date before this statement
+        // runs: a provider legitimately delivers several events for one order
+        // at once (Shopify emits `refunds/create` and `orders/updated` for the
+        // same refund back to back), and those land as SEPARATE deliveries in
+        // SEPARATE transactions. An unconditional `update` would then write
+        // this delivery's whole field set — including the values it COALESCED
+        // from its own already-stale read — straight over the newer committed
+        // state, silently reverting a financial status or zeroing a cumulative
+        // refund total with no later delivery to repair it.
+        //
+        // Restating `providerUpdatedAt` in the predicate makes the write
+        // conditional on the exact row version the decision was made against.
+        // Postgres re-evaluates an UPDATE's predicate against the row version
+        // it actually locks, so of two concurrent writers exactly one matches
+        // and the other gets `count === 0` — the same compare-and-set idiom
+        // the event claim and the attribution claim already use.
+        //
+        // Losing is NOT a silent skip: it raises, which rolls the transaction
+        // back and is classified as the RETRYABLE `WRITE_FAILED`. The
+        // provider's redelivery then re-reads the committed state and reaches
+        // the correct decision — usually `SKIPPED_STALE`, because the winner
+        // already carried the newer snapshot.
+        const applied = await tx.commerceOrder.updateMany({
+          where: {
+            id: existing.id,
+            providerUpdatedAt: existing.providerUpdatedAt,
+          },
           data: moneyAndStatus,
         });
+        if (applied.count !== 1) {
+          throw new ConcurrentOrderWriteError();
+        }
         orderId = existing.id;
         created = false;
       } else {
@@ -1049,7 +1470,13 @@ export async function ingestNormalizedOrder(
       // order's own, so replacing from it would delete every stored line.
       const lineItemCount =
         order.completeness === "FULL"
-          ? await writeLineItems(tx, orderId, connection.id, order.lineItems)
+          ? await writeLineItems(
+              tx,
+              orderId,
+              connection.id,
+              order.lineItems,
+              resolved.expandProductKeyCandidates,
+            )
           : 0;
 
       // Attribution is only ever attempted when a token was actually present,
@@ -1061,6 +1488,7 @@ export async function ingestNormalizedOrder(
           orderId,
           brandId,
           connectionId: connection.id,
+          provider: connection.provider,
           now,
           hashAttributionToken: resolved.hashAttributionToken,
         });

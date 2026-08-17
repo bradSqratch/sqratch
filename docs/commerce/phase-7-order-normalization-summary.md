@@ -1,22 +1,36 @@
 # Phase 7 — Provider-Neutral Order Normalization
 
-## Not live. Read this before anything else.
+> **Superseded rollout status:** Phase 12 activates the prospective Shopify
+> transport (`read_orders`, order/refund webhooks, and a Theme App Extension).
+> The model and normalization semantics below remain the foundation; the
+> "Not live" section immediately below, and every other historical statement
+> that no order delivery exists, describe the pre-Phase-12 state and are
+> **no longer current** — see
+> `docs/commerce/phase-12-live-order-ingestion-and-conversion-attribution-summary.md`
+> for what is actually live today.
 
-Nothing in production writes to `CommerceOrder`, `CommerceOrderLineItem`, or
-`CommerceOrderEvent` today, and nothing in production can. SQRATCH's Shopify
-app holds `read_products, read_discounts, write_discounts` — **not**
+## Not live at Phase 7. Superseded by Phase 12 — read that document for current status.
+
+**Everything in this section describes Phase 7 as it stood before Phase 12.**
+It is preserved verbatim below because the reasoning ("design and
+fixture-test the normalization before requesting the scope") is still worth
+recording, but treat every present-tense claim in it as **historical**, not
+current.
+
+Nothing in production wrote to `CommerceOrder`, `CommerceOrderLineItem`, or
+`CommerceOrderEvent` at Phase 7, and nothing in production could. SQRATCH's
+Shopify app held `read_products, read_discounts, write_discounts` — **not**
 `read_orders`. Neither `shopify.app.toml` nor `shopify.app.custom.toml`
-subscribes to any `orders/*` or `refunds/*` webhook topic. Shopify therefore
-never sends an order payload to this app, and the three new route handlers
+subscribed to any `orders/*` or `refunds/*` webhook topic. Shopify therefore
+never sent an order payload to this app, and the three route handlers
 (`src/app/api/shopify/webhooks/orders/create`, `.../orders/updated`,
-`.../refunds/create`) can only ever be exercised by a fixture.
+`.../refunds/create`) could only be exercised by a fixture.
 
-Phase 7 exists so this normalization is designed, reviewed, and
-fixture-tested **before** any scope is requested. Do not describe this phase,
-in any downstream document or product communication, as "SQRATCH now tracks
-orders." It does not, and cannot, until every item in
-[Shopify scope/webhook rollout requirement](#shopify-scopewebhook-rollout-requirement---not-done-in-phase-7)
-below is completed.
+Phase 7 existed so this normalization was designed, reviewed, and
+fixture-tested **before** any scope was requested. **Phase 12 has since
+requested and uses `read_orders`, subscribed all three topics, and these
+routes now receive live Shopify traffic** — do not describe Phase 7's
+"not live" framing as still true.
 
 ## Models
 
@@ -268,28 +282,59 @@ guessed. An **equal** timestamp is treated as stale, not applied: it carries
 no evidence of being newer, and applying it would let two same-timestamp
 deliveries flap the row.
 
-**The crash-between-claim-and-commit operational gap — stated, not hidden.**
+**The crash-between-claim-and-commit operational gap — stated, not hidden,
+and self-healing as of Phase 12.**
 The event claim (`CommerceOrderEvent` insert) is its own statement/transaction,
 executed **before** the order-writing transaction, deliberately not inside
 it — Postgres aborts an entire transaction on a failed statement, so "catch
 P2002 and carry on" is not expressible if the claim were inside the same
 transaction as the order write. The consequence: a process that dies between
 winning the claim and committing the order transaction leaves a `RECEIVED`
-event row with no order, and a redelivery of that same provider event id
-will report `ALREADY_PROCESSED` and will **not** retry the order write.
+event row with no order.
 
-Ops runbook note — the exact recovery query for finding these rows:
+**Phase 7's original design point stopped here** and described the next
+redelivery as reporting `ALREADY_PROCESSED` with no retry — that was a real
+P1 (a retry landing in that window could be permanently lost, since Shopify
+treats 200 as settled and stops retrying). **Phase 12 closed it.** The claim
+now resolves to one of four explicit outcomes
+(`src/lib/commerce/order-ingestion.ts`, `OrderEventClaim` /
+`decideOrderEventClaim` / `resolveOrderEventClaim`):
+
+- `CLAIMED` — no prior row; process it.
+- `RECLAIMED` — the prior row is `FAILED` (any age), or `RECEIVED` past a
+  60-second lease (`EVENT_CLAIM_LEASE_MS`); atomically taken over
+  (compare-and-set on `id` + `status` + `receivedAt`, which also refreshes
+  the lease so a genuinely live reclaimer doesn't immediately look stale to
+  a third retry) and processed.
+- `COMPLETED_DUPLICATE` — the prior row is terminal (`PROCESSED`,
+  `SKIPPED_STALE`, or `SKIPPED_DISCONNECTED`); acknowledged `200`, not
+  reprocessed.
+- `IN_FLIGHT` — the prior row is `RECEIVED` and the lease has **not**
+  expired: this is the exact "crashed between claim and commit" window.
+  It is **not** treated as a duplicate. The webhook responds `500`, so
+  Shopify redelivers, and by the time it does the lease has either
+  completed normally (→ `COMPLETED_DUPLICATE`, `200`) or expired
+  (→ `RECLAIMED`, reprocessed for real).
+
+So a stuck `RECEIVED` row with no order now self-heals within roughly one
+lease window of Shopify's own retry cadence, with no operator action
+required in the common case.
+
+Ops runbook note — the query below still finds rows that are unusually old
+for a `RECEIVED`, `processedAt IS NULL` state, which is now a signal of a
+genuinely abandoned or slow-to-retry delivery worth investigating (rather
+than, as at Phase 7, every such row being a guaranteed permanent loss):
 
 ```sql
 SELECT * FROM "CommerceOrderEvent"
-WHERE status = 'RECEIVED' AND "processedAt" IS NULL AND "orderId" IS NULL;
+WHERE status = 'RECEIVED' AND "processedAt" IS NULL AND "orderId" IS NULL
+  AND "receivedAt" < now() - interval '10 minutes';
 ```
 
-Re-driving these rows (re-normalizing and re-calling `ingestNormalizedOrder`
-with the same `providerEventId`, which will fail the claim and must instead
-be handled by a dedicated repair path that bypasses the claim step) is an
-operational task, not something this module papers over by weakening the
-dedup guarantee.
+A row already past several retry cycles without reclaiming warrants
+investigation (e.g. a repeatedly-crashing worker, or Shopify's retries
+having stopped for an unrelated reason) rather than an operational
+assumption that it is unrecoverable.
 
 ## Privacy
 

@@ -89,6 +89,14 @@ export type DecimalToMinorUnitsResult =
   | { ok: true; minorUnits: number }
   | { ok: false; reason: "EMPTY" | "INVALID_FORMAT" | "UNSAFE_INTEGER" | "OUT_OF_RANGE" };
 
+/** The `BIGINT` range used by provider-neutral order totals in Postgres. */
+const INT64_MIN = BigInt("-9223372036854775808");
+const INT64_MAX = BigInt("9223372036854775807");
+
+export type DecimalToBigIntMinorUnitsResult =
+  | { ok: true; minorUnits: bigint }
+  | { ok: false; reason: "EMPTY" | "INVALID_FORMAT" | "OUT_OF_RANGE" };
+
 /**
  * Postgres `INTEGER` (int4) bounds. `CommerceProduct.priceMinMinor` /
  * `priceMaxMinor` are declared as `INTEGER` in `prisma/schema.prisma` (see
@@ -164,6 +172,35 @@ export function decimalStringToMinorUnits(
   }
 
   if (minorUnits < INT32_MIN || minorUnits > INT32_MAX) {
+    return { ok: false, reason: "OUT_OF_RANGE" };
+  }
+
+  return { ok: true, minorUnits };
+}
+
+/**
+ * The BigInt counterpart for order totals. Catalog prices intentionally stay
+ * on the int4-bounded function above; provider order columns are BigInt and
+ * must not silently lose an otherwise representable high-value order.
+ */
+export function decimalStringToBigIntMinorUnits(
+  raw: string | null | undefined,
+  exponent: number,
+): DecimalToBigIntMinorUnitsResult {
+  if (raw === null || raw === undefined) return { ok: false, reason: "EMPTY" };
+
+  const trimmed = raw.trim();
+  if (trimmed === "") return { ok: false, reason: "EMPTY" };
+
+  const match = DECIMAL_STRING_PATTERN.exec(trimmed);
+  if (!match) return { ok: false, reason: "INVALID_FORMAT" };
+
+  const [, signPart, integerDigits, fractionDigits = ""] = match;
+  const paddedFraction = (fractionDigits + "0".repeat(exponent)).slice(0, exponent);
+  const digits = `${integerDigits}${paddedFraction}`.replace(/^0+(?=\d)/, "");
+  const minorUnits = (signPart === "-" ? BigInt(-1) : BigInt(1)) * BigInt(digits);
+
+  if (minorUnits < INT64_MIN || minorUnits > INT64_MAX) {
     return { ok: false, reason: "OUT_OF_RANGE" };
   }
 

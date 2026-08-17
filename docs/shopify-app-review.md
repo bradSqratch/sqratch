@@ -2,7 +2,8 @@
 
 - App URL and callback use `https://www.sqratch.com`.
 - Embedded launch obtains and verifies an App Bridge session token before token exchange.
-- Requested scopes are exactly `read_products,read_discounts,write_discounts`.
+- Requested scopes are exactly `read_products,read_orders,read_themes,read_discounts,write_discounts`; `read_all_orders` and `write_themes` are not requested.
+- `read_orders` is a Shopify **protected customer data** scope: the Partner Dashboard protected-customer-data request must be approved for the app, and the declared data-use answers must match what the privacy policy says (`src/content/legal/privacy.ts`, "Shopify Order and Conversion Information"). SQRATCH receives order payloads that can carry customer fields but reads/stores none of them — see `SHOPIFY_ORDER_PII_KEYS` in `src/lib/commerce/providers/shopify-order-normalizer.ts`, which `tests/shopify-order-normalizer.test.ts` asserts mechanically.
 - Webhooks are TOML-managed; all routes verify raw-body HMAC.
 - Uninstall clears active credentials while preserving non-sensitive history.
 - **Use the preapproved Brand Admin review account supplied in the Partner Dashboard review notes.** A brand-new normal SQRATCH signup (`USER` role) cannot link Shopify — see "Shopify authorization requirements" below.

@@ -5,9 +5,9 @@ process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blo
  *
  * Unit tests for the provider-neutral order persistence service
  * (`src/lib/commerce/order-ingestion.ts`). Every dependency (`claimEvent`,
- * `loadConnection`, `runTransaction`, `hashAttributionToken`, `now`) is
- * injected and backed by an in-memory `FakeOrderStore` — no real DB, no real
- * network anywhere in this file. `finalizeEvent` inside `order-ingestion.ts`
+ * `loadConnection`, `expandProductKeyCandidates`, `runTransaction`,
+ * `hashAttributionToken`, `now`) is injected and backed by an in-memory
+ * `FakeOrderStore` — no real DB, no real network anywhere in this file. `finalizeEvent` inside `order-ingestion.ts`
  * is NOT dependency-injected (it always dynamically imports the real
  * `@/lib/prisma` singleton and swallows any error) — see the "genuine
  * observation" describe block near the bottom, which documents this rather
@@ -18,6 +18,12 @@ process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blo
  *
  * Covered cases (numbered to match the task's review checklist):
  *  1.  Order create idempotency — duplicate (provider, providerEventId) creates ONE order.
+ *  P1. The four-outcome event-claim state machine — CLAIMED / RECLAIMED /
+ *      COMPLETED_DUPLICATE / IN_FLIGHT — including THE CRASH WINDOW: a worker
+ *      that dies after claiming and before writing must NOT have its provider
+ *      retry answered as a duplicate, or that order is lost forever.
+ *  10. The full attribution-claim rejection matrix.
+ *  11. Provider neutrality: no Shopify id format in the generic layer's code.
  *  3.  Order update — newer providerUpdatedAt updates the existing row.
  *  4.  Older update is rejected (SKIPPED_STALE), stored row unchanged.
  *  5.  Multiple line items — 3+ items produce 3+ line-item rows.
@@ -47,21 +53,166 @@ import { join } from "node:path";
 import { CommerceProvider, Prisma } from "@prisma/client";
 import type {
   CommerceConnectionStatus,
+  CommerceOrderEventStatus,
   CommerceOrderFinancialStatus,
 } from "@prisma/client";
 
 import {
   ingestNormalizedOrder,
   isIngestibleConnectionStatus,
+  isRetryableOrderIngestionOutcome,
   decideOrderStaleness,
+  decideOrderEventClaim,
+  resolveOrderEventClaim,
   computeNetRevenueMinor,
   providerProductKeyCandidates,
+  EVENT_CLAIM_LEASE_MS,
+  type ExistingOrderEventRow,
   type NormalizedOrderInput,
   type NormalizedOrderLineItemInput,
+  type OrderEventClaim,
+  type OrderEventClaimStore,
   type OrderIngestionEventInput,
   type OrderIngestionConnection,
   type OrderIngestionDeps,
+  type OrderIngestionOutcome,
 } from "../src/lib/commerce/order-ingestion";
+
+const FIXED_NOW = new Date("2026-08-07T12:00:00.000Z");
+
+// ---------------------------------------------------------------------------
+// In-memory CommerceOrderEvent ledger
+// ---------------------------------------------------------------------------
+
+type FakeEventRow = {
+  id: string;
+  status: CommerceOrderEventStatus;
+  receivedAt: Date;
+  processedAt: Date | null;
+  failureSummary: string | null;
+};
+
+/**
+ * A realistic stand-in for the `CommerceOrderEvent` idempotency ledger: it
+ * tracks a real `status` and `receivedAt` per row and enforces the same unique
+ * `(provider, providerEventId)` the database does.
+ *
+ * It deliberately does NOT re-implement the claim state machine. It supplies
+ * only the three row operations of `OrderEventClaimStore` and hands them to the
+ * PRODUCTION `resolveOrderEventClaim`, so every test below exercises the real
+ * classification, the real lease arithmetic, and the real compare-and-set. A
+ * fake that reimplemented that logic would only ever be testing itself — which
+ * is exactly why the previous `Set`-membership double could not detect the
+ * in-flight/duplicate confusion this ledger exists to prove is fixed.
+ *
+ * `clock` is the wall clock the claim machine reads (production hands it
+ * `new Date()`), so lease expiry is testable without waiting a minute.
+ */
+class FakeEventTable {
+  nextId = 1;
+  clock: Date = FIXED_NOW;
+  rows = new Map<string, FakeEventRow>();
+
+  static key(provider: CommerceProvider, providerEventId: string): string {
+    return `${provider}:${providerEventId}`;
+  }
+
+  row(provider: CommerceProvider, providerEventId: string): FakeEventRow | undefined {
+    return this.rows.get(FakeEventTable.key(provider, providerEventId));
+  }
+
+  /** Pre-existing row, as if written by an earlier delivery. */
+  seed(
+    provider: CommerceProvider,
+    providerEventId: string,
+    row: Partial<FakeEventRow> & { status: CommerceOrderEventStatus },
+  ): FakeEventRow {
+    const complete: FakeEventRow = {
+      id: `event-${this.nextId++}`,
+      receivedAt: this.clock,
+      processedAt: null,
+      failureSummary: null,
+      ...row,
+    };
+    this.rows.set(FakeEventTable.key(provider, providerEventId), complete);
+    return complete;
+  }
+
+  /**
+   * Simulates the terminal write `finalizeEvent` performs in production.
+   *
+   * It cannot happen on its own here: `finalizeEvent` is NOT dependency
+   * injected, always imports the real prisma singleton, and swallows its own
+   * failure — so under this file's unreachable `DATABASE_URL` every row stays
+   * `RECEIVED` forever. That is exactly the crash/lost-finalize state the
+   * lease exists for, so it is the DEFAULT here and reaching a terminal status
+   * is the thing a test must ask for explicitly.
+   */
+  finalize(
+    provider: CommerceProvider,
+    providerEventId: string,
+    status: CommerceOrderEventStatus,
+  ): void {
+    const row = this.row(provider, providerEventId);
+    if (!row) throw new Error(`no event row for ${providerEventId}`);
+    row.status = status;
+    row.processedAt = this.clock;
+  }
+
+  storeFor(provider: CommerceProvider, providerEventId: string): OrderEventClaimStore {
+    const key = FakeEventTable.key(provider, providerEventId);
+    return {
+      insertClaim: async () => {
+        if (this.rows.has(key)) {
+          return "DUPLICATE";
+        }
+        const row: FakeEventRow = {
+          id: `event-${this.nextId++}`,
+          status: "RECEIVED",
+          receivedAt: this.clock,
+          processedAt: null,
+          failureSummary: null,
+        };
+        this.rows.set(key, row);
+        return { id: row.id };
+      },
+      findExistingClaim: async () => {
+        const row = this.rows.get(key);
+        return row
+          ? { id: row.id, status: row.status, receivedAt: row.receivedAt }
+          : null;
+      },
+      reclaim: async (row: ExistingOrderEventRow, now: Date) => {
+        const current = this.rows.get(key);
+        // The same compare-and-set predicate the Prisma implementation uses:
+        // id AND status AND receivedAt must all still match the read.
+        if (
+          !current ||
+          current.id !== row.id ||
+          current.status !== row.status ||
+          current.receivedAt.getTime() !== row.receivedAt.getTime()
+        ) {
+          return false;
+        }
+        current.status = "RECEIVED";
+        current.receivedAt = now;
+        current.processedAt = null;
+        current.failureSummary = null;
+        return true;
+      },
+    };
+  }
+
+  claim(input: {
+    provider: CommerceProvider;
+    providerEventId: string;
+  }): Promise<OrderEventClaim> {
+    return resolveOrderEventClaim(
+      this.storeFor(input.provider, input.providerEventId),
+      this.clock,
+    );
+  }
+}
 
 // ---------------------------------------------------------------------------
 // In-memory fake store
@@ -116,6 +267,8 @@ type AttributionRow = {
   consumedByOrderRef: string | null;
   attributedBrandId: string | null;
   commerceConnectionId: string | null;
+  provider: CommerceProvider | null;
+  redirectedAt: Date | null;
 };
 
 class FakeOrderStore {
@@ -127,14 +280,28 @@ class FakeOrderStore {
   attributions = new Map<string, AttributionRow>();
   attributionsByHash = new Map<string, string>();
   connections = new Map<string, OrderIngestionConnection>();
-  claimedEventIds = new Set<string>();
+  events = new FakeEventTable();
+
+  /**
+   * Fires immediately AFTER `commerceOrder.findUnique` has copied the stored
+   * row, and before the caller can act on it. That is exactly the READ
+   * COMMITTED window a concurrent delivery for the same order commits in, so
+   * a test can stage one without needing real concurrency.
+   */
+  onOrderRead: (() => void) | null = null;
 
   seedConnection(conn: OrderIngestionConnection): void {
     this.connections.set(conn.id, conn);
   }
 
-  seedAttribution(row: Omit<AttributionRow, "attributedBrandId" | "commerceConnectionId"> & Partial<Pick<AttributionRow, "attributedBrandId" | "commerceConnectionId">>): void {
-    const complete: AttributionRow = { attributedBrandId: "brand-1", commerceConnectionId: "conn-1", ...row };
+  seedAttribution(row: Omit<AttributionRow, "attributedBrandId" | "commerceConnectionId" | "provider" | "redirectedAt"> & Partial<Pick<AttributionRow, "attributedBrandId" | "commerceConnectionId" | "provider" | "redirectedAt">>): void {
+    const complete: AttributionRow = {
+      attributedBrandId: "brand-1",
+      commerceConnectionId: "conn-1",
+      provider: CommerceProvider.SHOPIFY,
+      redirectedAt: FIXED_NOW,
+      ...row,
+    };
     this.attributions.set(complete.id, complete);
     this.attributionsByHash.set(complete.tokenHash, complete.id);
   }
@@ -148,7 +315,7 @@ class FakeOrderStore {
   /**
    * A minimal, hand-written fake conforming structurally to exactly the
    * methods `order-ingestion.ts` calls on its `TxClient` (verified by
-   * reading the source: `commerceOrder.{findUnique,create,update}`,
+   * reading the source: `commerceOrder.{findUnique,create,update,updateMany}`,
    * `commerceOrderLineItem.{deleteMany,createMany}`,
    * `connectedCommerceProduct.findMany`,
    * `commerceClickAttribution.{findUnique,updateMany}`). `Prisma.TransactionClient`
@@ -168,7 +335,9 @@ class FakeOrderStore {
         }) {
           const key = `${where.connectionId_externalOrderId.connectionId}:${where.connectionId_externalOrderId.externalOrderId}`;
           const id = store.ordersByKey.get(key);
-          return id ? { ...store.orders.get(id)! } : null;
+          const snapshot = id ? { ...store.orders.get(id)! } : null;
+          store.onOrderRead?.();
+          return snapshot;
         },
         async create({
           data,
@@ -186,6 +355,28 @@ class FakeOrderStore {
           if (!existing) throw new Error(`unknown order ${where.id}`);
           Object.assign(existing, data);
           return { ...existing };
+        },
+        /**
+         * The optimistic-concurrency guard on the order write. Mirrors what
+         * Postgres does for `UPDATE ... WHERE id = $1 AND "providerUpdatedAt"
+         * IS NOT DISTINCT FROM $2`: the predicate is re-evaluated against the
+         * CURRENT row, so a writer whose read is already outdated matches
+         * nothing and gets `count: 0`.
+         */
+        async updateMany({
+          where,
+          data,
+        }: {
+          where: { id: string; providerUpdatedAt: Date | null };
+          data: Partial<OrderRow>;
+        }) {
+          const existing = store.orders.get(where.id);
+          if (!existing) return { count: 0 };
+          const stored = existing.providerUpdatedAt?.getTime() ?? null;
+          const expected = where.providerUpdatedAt?.getTime() ?? null;
+          if (stored !== expected) return { count: 0 };
+          Object.assign(existing, data);
+          return { count: 1 };
         },
       },
       commerceOrderLineItem: {
@@ -251,20 +442,13 @@ class FakeOrderStore {
 // Deps / fixture builders
 // ---------------------------------------------------------------------------
 
-const FIXED_NOW = new Date("2026-08-07T12:00:00.000Z");
-
 function makeDeps(
   store: FakeOrderStore,
   overrides: Partial<OrderIngestionDeps> = {},
 ): Partial<OrderIngestionDeps> {
   return {
     async claimEvent(input) {
-      const key = `${input.provider}:${input.providerEventId}`;
-      if (store.claimedEventIds.has(key)) {
-        return { claimed: false };
-      }
-      store.claimedEventIds.add(key);
-      return { claimed: true, eventId: `event-${store.nextId++}` };
+      return store.events.claim(input);
     },
     async loadConnection(connectionId) {
       return store.connections.get(connectionId) ?? null;
@@ -354,7 +538,7 @@ function makeOrder(overrides: Partial<NormalizedOrderInput> = {}): NormalizedOrd
 // ---------------------------------------------------------------------------
 
 describe("1. order create idempotency", () => {
-  test("the same (provider, providerEventId) delivered twice creates ONE order; the second call is ALREADY_PROCESSED", async () => {
+  test("the same (provider, providerEventId) delivered twice creates ONE order; once the first delivery has been finalized the second is ALREADY_PROCESSED", async () => {
     const store = new FakeOrderStore();
     store.seedConnection(makeConnection());
     const deps = makeDeps(store);
@@ -363,13 +547,359 @@ describe("1. order create idempotency", () => {
     assert.equal(first.status, "CREATED");
     assert.ok(first.orderId);
 
+    // In production `finalizeEvent` flips the row to PROCESSED here. It cannot
+    // run in this file (not injectable, unreachable DATABASE_URL), so the
+    // terminal write is simulated explicitly — see FakeEventTable.finalize.
+    store.events.finalize(CommerceProvider.SHOPIFY, "webhook-1", "PROCESSED");
+
     const second = await ingestNormalizedOrder(makeEvent(), makeOrder(), deps);
     assert.equal(second.status, "ALREADY_PROCESSED");
     assert.equal(second.reason, "DUPLICATE_DELIVERY");
     assert.equal(second.orderId, null);
+    assert.equal(
+      isRetryableOrderIngestionOutcome(second),
+      false,
+      "a genuinely completed duplicate must NOT ask the provider to retry",
+    );
 
     assert.equal(store.orders.size, 1);
   });
+});
+
+// ---------------------------------------------------------------------------
+// P1. The event-claim state machine: CLAIMED / RECLAIMED /
+//     COMPLETED_DUPLICATE / IN_FLIGHT
+//
+// The bug these tests exist for: every lost INSERT used to be reported
+// ALREADY_PROCESSED, so a delivery still being processed (or abandoned by a
+// crashed worker) was answered 200 and the provider stopped retrying. If the
+// order write had not happened yet, that order was lost permanently.
+// ---------------------------------------------------------------------------
+
+const SHOPIFY = CommerceProvider.SHOPIFY;
+
+describe("P1a. decideOrderEventClaim classifies every CommerceOrderEventStatus", () => {
+  const fresh = FIXED_NOW;
+  const withinLease = new Date(FIXED_NOW.getTime() + EVENT_CLAIM_LEASE_MS - 1);
+  const pastLease = new Date(FIXED_NOW.getTime() + EVENT_CLAIM_LEASE_MS + 1);
+
+  test("RECEIVED inside the lease is IN_FLIGHT — never a completed duplicate", () => {
+    assert.equal(decideOrderEventClaim("RECEIVED", fresh, fresh), "IN_FLIGHT");
+    assert.equal(decideOrderEventClaim("RECEIVED", fresh, withinLease), "IN_FLIGHT");
+  });
+
+  test("RECEIVED exactly AT the lease boundary is still IN_FLIGHT (strictly greater expires it)", () => {
+    const atBoundary = new Date(FIXED_NOW.getTime() + EVENT_CLAIM_LEASE_MS);
+    assert.equal(decideOrderEventClaim("RECEIVED", fresh, atBoundary), "IN_FLIGHT");
+  });
+
+  test("RECEIVED past the lease is RECLAIMABLE", () => {
+    assert.equal(decideOrderEventClaim("RECEIVED", fresh, pastLease), "RECLAIMABLE");
+  });
+
+  test("FAILED is RECLAIMABLE immediately, regardless of age", () => {
+    assert.equal(decideOrderEventClaim("FAILED", fresh, fresh), "RECLAIMABLE");
+    assert.equal(decideOrderEventClaim("FAILED", fresh, pastLease), "RECLAIMABLE");
+  });
+
+  test("every TERMINAL status is a COMPLETED_DUPLICATE, at any age", () => {
+    for (const status of ["PROCESSED", "SKIPPED_STALE", "SKIPPED_DISCONNECTED"] as const) {
+      assert.equal(decideOrderEventClaim(status, fresh, fresh), "COMPLETED_DUPLICATE", status);
+      assert.equal(decideOrderEventClaim(status, fresh, pastLease), "COMPLETED_DUPLICATE", status);
+    }
+  });
+
+  test("the classification covers all five enum members with no default fallthrough", () => {
+    const all: CommerceOrderEventStatus[] = [
+      "RECEIVED",
+      "PROCESSED",
+      "SKIPPED_STALE",
+      "SKIPPED_DISCONNECTED",
+      "FAILED",
+    ];
+    for (const status of all) {
+      const decision = decideOrderEventClaim(status, fresh, pastLease);
+      assert.ok(
+        ["RECLAIMABLE", "COMPLETED_DUPLICATE", "IN_FLIGHT"].includes(decision),
+        `${status} produced ${decision}`,
+      );
+    }
+  });
+});
+
+describe("P1b. resolveOrderEventClaim: insert, takeover, and the compare-and-set", () => {
+  test("an unseen delivery is CLAIMED", async () => {
+    const events = new FakeEventTable();
+    const claim = await events.claim({ provider: SHOPIFY, providerEventId: "wh-new" });
+    assert.equal(claim.status, "CLAIMED");
+    assert.ok(claim.eventId);
+  });
+
+  test("a row that vanishes between the lost INSERT and the read fails CLOSED to IN_FLIGHT, never to a duplicate", async () => {
+    const store: OrderEventClaimStore = {
+      async insertClaim() {
+        return "DUPLICATE";
+      },
+      async findExistingClaim() {
+        return null;
+      },
+      async reclaim() {
+        throw new Error("must not be reached");
+      },
+    };
+    const claim = await resolveOrderEventClaim(store, FIXED_NOW);
+    assert.equal(claim.status, "IN_FLIGHT");
+    assert.equal(claim.eventId, null);
+  });
+
+  test("losing the compare-and-set to a concurrent reclaimer yields IN_FLIGHT, not a duplicate", async () => {
+    const store: OrderEventClaimStore = {
+      async insertClaim() {
+        return "DUPLICATE";
+      },
+      async findExistingClaim() {
+        // Stale RECEIVED: reclaimable on paper.
+        return { id: "event-x", status: "RECEIVED", receivedAt: FIXED_NOW };
+      },
+      async reclaim() {
+        return false; // somebody else got there first
+      },
+    };
+    const claim = await resolveOrderEventClaim(
+      store,
+      new Date(FIXED_NOW.getTime() + EVENT_CLAIM_LEASE_MS + 1),
+    );
+    assert.equal(claim.status, "IN_FLIGHT");
+    assert.equal(claim.eventId, "event-x");
+  });
+
+  test("two workers that both read the same STALE row: exactly one RECLAIMS it, the other is told IN_FLIGHT", async () => {
+    const events = new FakeEventTable();
+    events.seed(SHOPIFY, "wh-stale", { status: "RECEIVED", receivedAt: FIXED_NOW });
+    events.clock = new Date(FIXED_NOW.getTime() + EVENT_CLAIM_LEASE_MS + 1_000);
+
+    const [a, b] = await Promise.all([
+      events.claim({ provider: SHOPIFY, providerEventId: "wh-stale" }),
+      events.claim({ provider: SHOPIFY, providerEventId: "wh-stale" }),
+    ]);
+
+    const statuses = [a.status, b.status].sort();
+    assert.deepEqual(
+      statuses,
+      ["IN_FLIGHT", "RECLAIMED"],
+      "the receivedAt-aware CAS must elect exactly one winner",
+    );
+  });
+
+  test("reclaiming RESETS receivedAt, so the lease restarts for the reclaiming attempt", async () => {
+    const events = new FakeEventTable();
+    events.seed(SHOPIFY, "wh-stale", { status: "FAILED", receivedAt: FIXED_NOW });
+    const reclaimAt = new Date(FIXED_NOW.getTime() + 5 * 60_000);
+    events.clock = reclaimAt;
+
+    const claim = await events.claim({ provider: SHOPIFY, providerEventId: "wh-stale" });
+    assert.equal(claim.status, "RECLAIMED");
+
+    const row = events.row(SHOPIFY, "wh-stale")!;
+    assert.equal(row.receivedAt.getTime(), reclaimAt.getTime());
+    assert.equal(row.status, "RECEIVED");
+    assert.equal(row.processedAt, null);
+    assert.equal(row.failureSummary, null);
+
+    // And the restarted lease is now LIVE: an immediate retry must not reclaim
+    // it again. Before the reset, `receivedAt` kept its original value forever
+    // and every subsequent retry re-read the row as stale.
+    const immediateRetry = await events.claim({
+      provider: SHOPIFY,
+      providerEventId: "wh-stale",
+    });
+    assert.equal(immediateRetry.status, "IN_FLIGHT");
+  });
+});
+
+describe("P1c. THE CRASH WINDOW: a worker dies after claiming and before writing the order", () => {
+  test("the retry inside the lease is IN_FLIGHT (retryable), NOT ALREADY_PROCESSED — and the order is still landed once the lease expires", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const deps = makeDeps(store);
+
+    // 1. Delivery #1 wins the claim... and the process dies right there. No
+    //    order write, no finalize: the ledger holds a RECEIVED row and nothing
+    //    else, which is exactly what a crashed worker leaves behind.
+    const claim = await store.events.claim({ provider: SHOPIFY, providerEventId: "webhook-1" });
+    assert.equal(claim.status, "CLAIMED");
+    assert.equal(store.orders.size, 0, "the crashed worker never wrote an order");
+
+    // 2. Shopify redelivers 5s later — inside the 60s lease.
+    store.events.clock = new Date(FIXED_NOW.getTime() + 5_000);
+    const retry = await ingestNormalizedOrder(makeEvent(), makeOrder(), deps);
+
+    assert.notEqual(
+      retry.status,
+      "ALREADY_PROCESSED",
+      "THE BUG: this delivery was never processed by anyone, so calling it a duplicate loses the order",
+    );
+    assert.equal(retry.status, "IN_FLIGHT");
+    assert.equal(retry.reason, "DELIVERY_IN_FLIGHT");
+    assert.equal(
+      isRetryableOrderIngestionOutcome(retry),
+      true,
+      "the caller must answer 500 so Shopify keeps retrying",
+    );
+    assert.equal(store.orders.size, 0, "and no second order was written either");
+
+    // 3. Shopify retries again after the lease expires: now the abandoned claim
+    //    is taken over and the order is finally landed for real.
+    store.events.clock = new Date(FIXED_NOW.getTime() + EVENT_CLAIM_LEASE_MS + 1_000);
+    const recovered = await ingestNormalizedOrder(makeEvent(), makeOrder(), deps);
+    assert.equal(recovered.status, "CREATED");
+    assert.equal(store.orders.size, 1, "the order is recovered, not lost");
+    assert.equal(isRetryableOrderIngestionOutcome(recovered), false);
+  });
+
+  test("the same holds when the worker dies mid-transaction: the WRITE_FAILED attempt leaves a live lease, and the in-lease retry is IN_FLIGHT", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+
+    // Attempt #1 claims, then its order transaction blows up. Its own
+    // finalizeEvent(FAILED) write cannot reach the blocked DB, so the row stays
+    // RECEIVED — the realistic "we don't know what happened" state.
+    const failing = await ingestNormalizedOrder(
+      makeEvent(),
+      makeOrder(),
+      makeDeps(store, {
+        async runTransaction() {
+          throw new Error("connection terminated unexpectedly");
+        },
+      }),
+    );
+    assert.equal(failing.status, "FAILED");
+    assert.equal(failing.reason, "WRITE_FAILED");
+    assert.equal(isRetryableOrderIngestionOutcome(failing), true);
+
+    store.events.clock = new Date(FIXED_NOW.getTime() + 1_000);
+    const retry = await ingestNormalizedOrder(makeEvent(), makeOrder(), makeDeps(store));
+    assert.equal(retry.status, "IN_FLIGHT");
+    assert.equal(store.orders.size, 0);
+  });
+
+  test("a FAILED row (its finalize DID land) is reclaimed immediately, without waiting out the lease", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    store.events.seed(SHOPIFY, "webhook-1", {
+      status: "FAILED",
+      receivedAt: FIXED_NOW,
+      failureSummary: "WRITE_FAILED",
+    });
+
+    const retry = await ingestNormalizedOrder(makeEvent(), makeOrder(), makeDeps(store));
+    assert.equal(retry.status, "CREATED", "an explicitly failed attempt is safe to redo at once");
+    assert.equal(store.orders.size, 1);
+  });
+});
+
+describe("P1d. terminal statuses are genuine duplicates and are never reprocessed", () => {
+  for (const status of ["PROCESSED", "SKIPPED_STALE", "SKIPPED_DISCONNECTED"] as const) {
+    test(`a ${status} row -> ALREADY_PROCESSED / DUPLICATE_DELIVERY, no order write, not retryable`, async () => {
+      const store = new FakeOrderStore();
+      store.seedConnection(makeConnection());
+      const seeded = store.events.seed(SHOPIFY, "webhook-1", {
+        status,
+        receivedAt: FIXED_NOW,
+      });
+
+      const outcome = await ingestNormalizedOrder(makeEvent(), makeOrder(), makeDeps(store));
+
+      assert.equal(outcome.status, "ALREADY_PROCESSED");
+      assert.equal(outcome.reason, "DUPLICATE_DELIVERY");
+      assert.equal(outcome.eventId, seeded.id, "the existing row is surfaced for correlation");
+      assert.equal(store.orders.size, 0, "a settled delivery must never be reprocessed");
+      assert.equal(isRetryableOrderIngestionOutcome(outcome), false);
+      assert.equal(store.events.row(SHOPIFY, "webhook-1")!.status, status, "and is left untouched");
+    });
+  }
+});
+
+describe("P1e. unexpected throws become deliberate, retryable outcomes — never unhandled exceptions", () => {
+  test("claimEvent throwing yields FAILED / UNEXPECTED_FAILURE, not a rejected promise", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+
+    const outcome = await ingestNormalizedOrder(
+      makeEvent(),
+      makeOrder(),
+      makeDeps(store, {
+        async claimEvent() {
+          throw new Error("P1001: can't reach database server at db:5432");
+        },
+      }),
+    );
+
+    assert.equal(outcome.status, "FAILED");
+    assert.equal(outcome.reason, "UNEXPECTED_FAILURE");
+    assert.equal(isRetryableOrderIngestionOutcome(outcome), true);
+    assert.equal(store.orders.size, 0);
+  });
+
+  test("loadConnection throwing does the same, and the delivery keeps its live lease for the retry", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+
+    const outcome = await ingestNormalizedOrder(
+      makeEvent(),
+      makeOrder(),
+      makeDeps(store, {
+        async loadConnection() {
+          throw new Error("P1017: server has closed the connection");
+        },
+      }),
+    );
+
+    assert.equal(outcome.status, "FAILED");
+    assert.equal(outcome.reason, "UNEXPECTED_FAILURE");
+    assert.equal(isRetryableOrderIngestionOutcome(outcome), true);
+    assert.equal(store.events.row(SHOPIFY, "webhook-1")!.status, "RECEIVED");
+  });
+
+  test("the classified outcome never carries the thrown error's text", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const secret = "leaky-column-value-4b21";
+
+    const outcome = await ingestNormalizedOrder(
+      makeEvent(),
+      makeOrder(),
+      makeDeps(store, {
+        async claimEvent() {
+          throw new Error(`unique constraint, Detail: (${secret}) already exists.`);
+        },
+      }),
+    );
+
+    assert.doesNotMatch(JSON.stringify(outcome), new RegExp(secret));
+  });
+});
+
+describe("P1f. isRetryableOrderIngestionOutcome is the single source of truth for 500-vs-200", () => {
+  const cases: Array<[Pick<OrderIngestionOutcome, "status" | "reason">, boolean]> = [
+    [{ status: "CREATED", reason: null }, false],
+    [{ status: "UPDATED", reason: null }, false],
+    [{ status: "ALREADY_PROCESSED", reason: "DUPLICATE_DELIVERY" }, false],
+    [{ status: "SKIPPED_STALE", reason: "OLDER_THAN_STORED_STATE" }, false],
+    [{ status: "SKIPPED_STALE", reason: "UNORDERABLE_MISSING_TIMESTAMP" }, false],
+    [{ status: "SKIPPED_DISCONNECTED", reason: "CONNECTION_NOT_FOUND" }, false],
+    [{ status: "SKIPPED_DISCONNECTED", reason: "CONNECTION_NOT_INGESTIBLE" }, false],
+    [{ status: "FAILED", reason: "MISSING_EXTERNAL_ORDER_ID" }, false],
+    [{ status: "IN_FLIGHT", reason: "DELIVERY_IN_FLIGHT" }, true],
+    [{ status: "FAILED", reason: "WRITE_FAILED" }, true],
+    [{ status: "FAILED", reason: "UNEXPECTED_FAILURE" }, true],
+  ];
+
+  for (const [outcome, retryable] of cases) {
+    test(`${outcome.status} / ${outcome.reason} -> ${retryable ? "retry (500)" : "settled (200)"}`, () => {
+      assert.equal(isRetryableOrderIngestionOutcome(outcome), retryable);
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -475,6 +1005,126 @@ describe("3 & 4. order update and staleness protection", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Concurrent deliveries for the SAME order
+// ---------------------------------------------------------------------------
+
+describe("concurrent deliveries for one order never overwrite newer committed state", () => {
+  /**
+   * The event claim deduplicates ONE delivery; it says nothing about two
+   * DIFFERENT deliveries describing the same order arriving together, which
+   * Shopify routinely does (`refunds/create` and `orders/updated` for one
+   * refund). Each runs in its own transaction, and under READ COMMITTED the
+   * staleness decision is made against a snapshot the other can invalidate
+   * before either writes. `onOrderRead` stages exactly that interleaving.
+   */
+  test("a delivery whose snapshot went stale mid-transaction fails RETRYABLY instead of reverting the newer row", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const deps = makeDeps(store);
+
+    const created = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-create" }),
+      makeOrder({
+        providerUpdatedAt: new Date("2026-08-01T00:00:00.000Z"),
+        financialStatus: "PAID",
+        totalMinor: BigInt(1999),
+      }),
+      deps,
+    );
+    assert.equal(created.status, "CREATED");
+    const orderId = created.orderId!;
+
+    // The concurrent winner: a later `orders/updated` carrying the refund,
+    // committing between this delivery's read and its write.
+    store.onOrderRead = () => {
+      store.onOrderRead = null;
+      const row = store.orders.get(orderId)!;
+      row.providerUpdatedAt = new Date("2026-08-03T00:00:00.000Z");
+      row.financialStatus = "REFUNDED";
+      row.totalRefundedMinor = BigInt(1999);
+      row.netRevenueMinor = BigInt(0);
+    };
+
+    const loser = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-refund" }),
+      makeOrder({
+        providerUpdatedAt: new Date("2026-08-02T00:00:00.000Z"),
+        financialStatus: "PAID",
+        totalRefundedMinor: null,
+      }),
+      deps,
+    );
+
+    assert.equal(loser.status, "FAILED");
+    assert.equal(loser.reason, "WRITE_FAILED");
+    assert.equal(
+      isRetryableOrderIngestionOutcome(loser),
+      true,
+      "the provider must be asked to redeliver so the decision is remade against committed state",
+    );
+
+    // The newer committed state survived intact: no reverted financial status,
+    // no zeroed cumulative refund total.
+    const stored = store.orders.get(orderId)!;
+    assert.equal(stored.financialStatus, "REFUNDED");
+    assert.equal(stored.totalRefundedMinor, BigInt(1999));
+    assert.equal(stored.netRevenueMinor, BigInt(0));
+    assert.equal(
+      stored.providerUpdatedAt?.toISOString(),
+      "2026-08-03T00:00:00.000Z",
+    );
+    assert.equal(store.orders.size, 1);
+  });
+
+  test("the redelivery of that loser reaches the correct decision against committed state", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+
+    await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-create" }),
+      makeOrder({ providerUpdatedAt: new Date("2026-08-03T00:00:00.000Z") }),
+      makeDeps(store),
+    );
+
+    // Same delivery id as a failed attempt: the event row is FAILED, which is
+    // immediately RECLAIMABLE, so the retry genuinely reprocesses.
+    store.events.seed(CommerceProvider.SHOPIFY, "wh-refund", { status: "FAILED" });
+
+    const retry = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-refund" }),
+      makeOrder({ providerUpdatedAt: new Date("2026-08-02T00:00:00.000Z") }),
+      makeDeps(store),
+    );
+
+    assert.equal(retry.status, "SKIPPED_STALE");
+    assert.equal(retry.reason, "OLDER_THAN_STORED_STATE");
+  });
+
+  test("an unchanged ordering key still applies normally — the guard only fires on a real conflict", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const deps = makeDeps(store);
+
+    const created = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-1" }),
+      makeOrder({ providerUpdatedAt: null, financialStatus: "PENDING" }),
+      deps,
+    );
+    assert.equal(created.status, "CREATED");
+
+    // A stored NULL ordering key must compare equal to a stored NULL, not
+    // behave like SQL's `NULL <> NULL`.
+    const applied = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-2" }),
+      makeOrder({ providerUpdatedAt: null, financialStatus: "PAID" }),
+      deps,
+    );
+    assert.equal(applied.status, "UPDATED");
+    assert.equal(store.orders.get(created.orderId!)!.financialStatus, "PAID");
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 5 & 7. Line items
 // ---------------------------------------------------------------------------
 
@@ -520,20 +1170,70 @@ describe("5 & 7. line items", () => {
     assert.equal(rows[0].externalProductId, "9999999");
   });
 
-  test("a matching catalog product DOES resolve connectedProductId, via either the bare numeric id or the gid form", async () => {
+  test("a matching catalog product resolves connectedProductId through the GENERIC candidate rule (namespaced catalog key, bare-tail order id)", async () => {
     const store = new FakeOrderStore();
     store.seedConnection(makeConnection());
-    const catalogId = store.seedConnectedProduct("conn-1", "gid://shopify/Product/1001");
+    // The catalog stores a namespaced key; the order webhook reports its
+    // trailing segment. That direction needs no provider knowledge at all.
+    const catalogId = store.seedConnectedProduct("conn-1", "some-provider:product/1001");
     const deps = makeDeps(store);
 
     const outcome = await ingestNormalizedOrder(
       makeEvent(),
-      makeOrder({ lineItems: [makeLineItem({ externalProductId: "1001" })] }),
+      makeOrder({
+        lineItems: [makeLineItem({ externalProductId: "some-provider:product/1001" })],
+      }),
       deps,
     );
 
     const rows = store.lineItems.get(outcome.orderId!)!;
     assert.equal(rows[0].connectedProductId, catalogId);
+  });
+
+  test("the PROVIDER-INJECTED expansion is what resolves a bare id against a provider-namespaced catalog key", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const catalogId = store.seedConnectedProduct("conn-1", "gid://example/Product/1001");
+
+    // Stands in for a provider module's own `expandProductKeyCandidates` (the
+    // real Shopify one is `shopifyProductKeyCandidates`, proven in
+    // tests/shopify-order-webhook.test.ts). The generic layer cannot do this
+    // expansion, because the namespace is the provider's knowledge.
+    const expandProductKeyCandidates = (externalProductId: string | null): string[] => {
+      const raw = externalProductId?.trim();
+      if (!raw) return [];
+      const candidates = new Set(providerProductKeyCandidates(raw));
+      if (/^\d+$/.test(raw)) candidates.add(`gid://example/Product/${raw}`);
+      return [...candidates];
+    };
+
+    const withProvider = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-with-provider" }),
+      makeOrder({
+        externalOrderId: "order-with-provider",
+        lineItems: [makeLineItem({ externalProductId: "1001" })],
+      }),
+      makeDeps(store, { expandProductKeyCandidates }),
+    );
+    assert.equal(
+      store.lineItems.get(withProvider.orderId!)![0].connectedProductId,
+      catalogId,
+    );
+
+    // Without it the SAME line item stays unresolved — which is the proof that
+    // the generic default carries no provider-specific expansion any more.
+    const withoutProvider = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-generic" }),
+      makeOrder({
+        externalOrderId: "order-generic",
+        lineItems: [makeLineItem({ externalProductId: "1001" })],
+      }),
+      makeDeps(store),
+    );
+    assert.equal(
+      store.lineItems.get(withoutProvider.orderId!)![0].connectedProductId,
+      null,
+    );
   });
 });
 
@@ -541,19 +1241,23 @@ describe("5 & 7. line items", () => {
 // providerProductKeyCandidates — pure helper
 // ---------------------------------------------------------------------------
 
-describe("providerProductKeyCandidates", () => {
-  test("a bare numeric id yields itself and its gid form", () => {
-    assert.deepEqual(providerProductKeyCandidates("123"), ["123", "gid://shopify/Product/123"]);
+describe("providerProductKeyCandidates is provider-neutral", () => {
+  test("a bare numeric id yields ONLY itself — expanding it into a provider's namespaced form is the provider's job, not this layer's", () => {
+    assert.deepEqual(providerProductKeyCandidates("123"), ["123"]);
   });
 
-  test("a gid yields itself and its trailing numeric tail", () => {
+  test("a namespaced/pathish id yields itself and its trailing numeric tail (true for any provider)", () => {
     assert.deepEqual(providerProductKeyCandidates("gid://shopify/Product/456"), [
       "gid://shopify/Product/456",
       "456",
     ]);
+    assert.deepEqual(providerProductKeyCandidates("commerce7:products/789"), [
+      "commerce7:products/789",
+      "789",
+    ]);
   });
 
-  test("a non-numeric, non-gid value is returned as-is", () => {
+  test("a non-numeric, non-namespaced value is returned as-is", () => {
     assert.deepEqual(providerProductKeyCandidates("some-other-provider-id"), [
       "some-other-provider-id",
     ]);
@@ -835,6 +1539,32 @@ describe("22, 23, 24. attribution association is evidence-based only", () => {
     assert.equal(store.attributions.get("click-unknown-brand")!.consumedAt, null);
   });
 
+  test("24c2. an unredirected, wrong-provider, or unpinned click token never becomes conversion evidence", async () => {
+    for (const [id, overrides] of [
+      ["click-unredirected", { redirectedAt: null }],
+      ["click-wrong-provider", { provider: CommerceProvider.COMMERCE7 }],
+      ["click-unpinned", { commerceConnectionId: null }],
+    ] as const) {
+      const store = new FakeOrderStore();
+      store.seedConnection(makeConnection());
+      store.seedAttribution({
+        id,
+        tokenHash: `hash:${id}`,
+        expiresAt: new Date("2026-09-01T00:00:00.000Z"),
+        consumedAt: null,
+        consumedByOrderRef: null,
+        ...overrides,
+      });
+      const outcome = await ingestNormalizedOrder(
+        makeEvent({ providerEventId: `event-${id}` }),
+        makeOrder({ externalOrderId: `order-${id}`, attributionToken: id }),
+        makeDeps(store),
+      );
+      assert.equal(outcome.attributionLinked, false, id);
+      assert.equal(store.attributions.get(id)!.consumedAt, null, id);
+    }
+  });
+
   test("24d. a token already consumed by a DIFFERENT order -> unattributed, never stolen", async () => {
     const store = new FakeOrderStore();
     store.seedConnection(makeConnection());
@@ -907,6 +1637,187 @@ describe("22, 23, 24. attribution association is evidence-based only", () => {
     );
     assert.equal(second.status, "UPDATED");
     assert.equal(second.attributionLinked, true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 10. The full attribution-claim rejection matrix
+// ---------------------------------------------------------------------------
+
+/**
+ * Consolidates every INDEPENDENT reason `associateAttribution` refuses to link
+ * a click to an order into one table, so the set is legible as a whole and a
+ * newly-added guard has an obvious home. Each row differs from a KNOWN-GOOD
+ * baseline in exactly one field, which is what makes it a proof that the field
+ * alone is load-bearing.
+ */
+describe("10. attribution claim rejection matrix", () => {
+  const GOOD_TOKEN = "MATRIX-TOKEN";
+  const UNEXPIRED = new Date("2026-09-01T00:00:00.000Z");
+
+  type SeedOverrides = {
+    expiresAt?: Date;
+    redirectedAt?: Date | null;
+    attributedBrandId?: string | null;
+    commerceConnectionId?: string | null;
+    provider?: CommerceProvider | null;
+    consumedAt?: Date | null;
+    consumedByOrderRef?: string | null;
+  };
+
+  async function runWithClick(
+    overrides: SeedOverrides,
+    token = GOOD_TOKEN,
+  ): Promise<{ store: FakeOrderStore; outcome: OrderIngestionOutcome }> {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    store.seedAttribution({
+      id: "click-matrix",
+      tokenHash: `hash:${GOOD_TOKEN}`,
+      expiresAt: UNEXPIRED,
+      consumedAt: null,
+      consumedByOrderRef: null,
+      ...overrides,
+    });
+    const outcome = await ingestNormalizedOrder(
+      makeEvent(),
+      makeOrder({ attributionToken: token }),
+      makeDeps(store),
+    );
+    return { store, outcome };
+  }
+
+  test("BASELINE: with every field correct the click IS claimed (so each rejection below is caused by its one changed field)", async () => {
+    const { store, outcome } = await runWithClick({});
+    assert.equal(outcome.attributionLinked, true);
+    assert.equal(store.attributions.get("click-matrix")!.consumedByOrderRef, outcome.orderId);
+  });
+
+  const rejections: Array<{ name: string; overrides: SeedOverrides; token?: string }> = [
+    {
+      name: "a random token that hash-matches no stored row",
+      overrides: {},
+      token: "SOME-OTHER-TOKEN-ENTIRELY",
+    },
+    {
+      name: "an EXPIRED click (expiresAt in the past)",
+      overrides: { expiresAt: new Date(FIXED_NOW.getTime() - 1) },
+    },
+    {
+      name: "a click that was never actually redirected (redirectedAt null)",
+      overrides: { redirectedAt: null },
+    },
+    {
+      name: "a click pinned to a DIFFERENT CommerceConnection",
+      overrides: { commerceConnectionId: "conn-SOMEONE-ELSE" },
+    },
+    {
+      name: "a click pinned to no connection at all (legacy/unpinned)",
+      overrides: { commerceConnectionId: null },
+    },
+    {
+      name: "a click recorded under a DIFFERENT provider",
+      overrides: { provider: CommerceProvider.COMMERCE7 },
+    },
+    {
+      name: "a click with no attributed brand (attributedBrandId null)",
+      overrides: { attributedBrandId: null },
+    },
+    {
+      name: "a click attributed to a DIFFERENT brand than the connection's",
+      overrides: { attributedBrandId: "brand-SOMEONE-ELSE" },
+    },
+    {
+      name: "a click already consumed by a DIFFERENT order (replay/steal attempt)",
+      overrides: {
+        consumedAt: new Date("2026-08-06T00:00:00.000Z"),
+        consumedByOrderRef: "order-belonging-to-someone-else",
+      },
+    },
+  ];
+
+  for (const { name, overrides, token } of rejections) {
+    test(`${name} -> no claim, order still created, stored click untouched`, async () => {
+      const { store, outcome } = await runWithClick(overrides, token ?? GOOD_TOKEN);
+
+      assert.equal(outcome.status, "CREATED", "a rejected claim never fails the ingestion");
+      assert.equal(outcome.attributionLinked, false);
+      assert.equal(store.orders.get(outcome.orderId!)!.attributionId, null);
+
+      const click = store.attributions.get("click-matrix")!;
+      assert.equal(
+        click.consumedByOrderRef,
+        overrides.consumedByOrderRef ?? null,
+        "the stored click's ownership must be left exactly as it was",
+      );
+    });
+  }
+
+  test("REPLAY, same order: re-claiming a click this very order already consumed is idempotent, not a loss", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+
+    // First delivery, no token: the order exists but holds no attribution.
+    const first = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-1" }),
+      makeOrder({ attributionToken: null }),
+      makeDeps(store),
+    );
+    assert.equal(first.attributionLinked, false);
+
+    // The click is already consumed BY THIS ORDER (as a committed claim from an
+    // attempt whose order-row update did not land).
+    store.seedAttribution({
+      id: "click-self",
+      tokenHash: "hash:SELF-TOKEN",
+      expiresAt: UNEXPIRED,
+      consumedAt: FIXED_NOW,
+      consumedByOrderRef: first.orderId,
+    });
+
+    const replay = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-2" }),
+      makeOrder({
+        attributionToken: "SELF-TOKEN",
+        providerUpdatedAt: new Date("2026-08-09T00:00:00.000Z"),
+      }),
+      makeDeps(store),
+    );
+
+    assert.equal(replay.status, "UPDATED");
+    assert.equal(replay.attributionLinked, true, "the rightful owner re-links its own click");
+    assert.equal(store.orders.get(first.orderId!)!.attributionId, "click-self");
+    assert.equal(store.attributions.get("click-self")!.consumedByOrderRef, first.orderId);
+  });
+
+  test("REPLAY, different order: the second order cannot take a click the first already consumed", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    store.seedAttribution({
+      id: "click-contested",
+      tokenHash: "hash:CONTESTED",
+      expiresAt: UNEXPIRED,
+      consumedAt: null,
+      consumedByOrderRef: null,
+    });
+
+    const winner = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-winner" }),
+      makeOrder({ externalOrderId: "order-winner", attributionToken: "CONTESTED" }),
+      makeDeps(store),
+    );
+    assert.equal(winner.attributionLinked, true);
+
+    const loser = await ingestNormalizedOrder(
+      makeEvent({ providerEventId: "wh-loser" }),
+      makeOrder({ externalOrderId: "order-loser", attributionToken: "CONTESTED" }),
+      makeDeps(store),
+    );
+
+    assert.equal(loser.status, "CREATED");
+    assert.equal(loser.attributionLinked, false);
+    assert.equal(store.orders.get(loser.orderId!)!.attributionId, null);
+    assert.equal(store.attributions.get("click-contested")!.consumedByOrderRef, winner.orderId);
   });
 });
 
@@ -1014,6 +1925,37 @@ describe("26, 27, 28. Phase 7 never touches points, brand rewards, or creator co
 });
 
 // ---------------------------------------------------------------------------
+// 11. Provider neutrality of the generic ingestion layer
+// ---------------------------------------------------------------------------
+
+describe("11. order-ingestion.ts is provider-neutral: no provider's id format in its executable code", () => {
+  /** Same rationale as the Phase 7 grep block below: comments may NAME what the code must not contain. */
+  function codeOnly(source: string): string {
+    return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/.*$/gm, "");
+  }
+
+  test("the Shopify product GID prefix appears nowhere in the executable code", () => {
+    const code = codeOnly(readSource("src/lib/commerce/order-ingestion.ts"));
+    assert.doesNotMatch(
+      code,
+      /gid:\/\/shopify/i,
+      "the generic layer must not know Shopify's global-id format — it belongs in the Shopify provider module, injected through OrderIngestionDeps.expandProductKeyCandidates",
+    );
+  });
+
+  test("no provider brand name is referenced as a product-key concept in the executable code", () => {
+    const code = codeOnly(readSource("src/lib/commerce/order-ingestion.ts"));
+    assert.doesNotMatch(code, /shopify/i);
+  });
+
+  test("the injection seam exists on OrderIngestionDeps and defaults to the neutral helper", () => {
+    const source = readSource("src/lib/commerce/order-ingestion.ts");
+    assert.match(source, /expandProductKeyCandidates\(externalProductId: string \| null\): string\[\];/);
+    assert.match(source, /expandProductKeyCandidates: providerProductKeyCandidates,/);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 30. No secrets serialized on the FAILED path
 // ---------------------------------------------------------------------------
 
@@ -1036,12 +1978,26 @@ describe("30. the FAILED outcome never leaks the underlying error", () => {
     assert.doesNotMatch(serialized, new RegExp(secret));
   });
 
-  test("order-ingestion.ts's catch block deliberately discards the caught error's message (source inspection)", () => {
+  test("order-ingestion.ts's write-failure catch deliberately discards the caught error's message (source inspection)", () => {
     const source = readSource("src/lib/commerce/order-ingestion.ts");
-    const catchIdx = source.lastIndexOf("} catch {");
-    assert.notEqual(catchIdx, -1, "the write-failure catch must not bind the error (no `catch (error)`), so its message can never be read");
+    const writeStepIdx = source.indexOf("// --- 4. Order write");
+    assert.notEqual(writeStepIdx, -1);
+    const catchIdx = source.indexOf("} catch {", writeStepIdx);
+    assert.notEqual(
+      catchIdx,
+      -1,
+      "the write-failure catch must not bind the error (no `catch (error)`), so its message can never be read",
+    );
     const catchBody = source.slice(catchIdx, catchIdx + 400);
     assert.match(catchBody, /WRITE_FAILED/);
+  });
+
+  test("the outer unexpected-failure catch is unbound for the same reason", () => {
+    const source = readSource("src/lib/commerce/order-ingestion.ts");
+    const entryIdx = source.indexOf("export async function ingestNormalizedOrder");
+    const catchIdx = source.indexOf("} catch {", entryIdx);
+    assert.notEqual(catchIdx, -1);
+    assert.match(source.slice(catchIdx, catchIdx + 700), /UNEXPECTED_FAILURE/);
   });
 });
 

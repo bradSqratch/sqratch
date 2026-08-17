@@ -710,7 +710,7 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
           ok: true,
           json: async () => ({
             access_token: "access-token-999",
-            scope: "read_products,read_discounts,write_discounts",
+            scope: "read_products,read_orders,read_discounts,write_discounts",
           }),
         } as Response;
       }

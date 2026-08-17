@@ -23,6 +23,18 @@ type BrandProfileResponse = {
   shopifyUninstalledAt: string | null;
   shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED";
   shopifyLastProductSyncAt: string | null;
+  /** True once the store has granted the read_orders scope. */
+  orderAttributionReady: boolean;
+  themeTracking: {
+    provider: string;
+    state: "PERMISSION_REQUIRED" | "NOT_CONFIGURED" | "DISABLED" | "ENABLED" | "UNKNOWN";
+  };
+  overallConversionTrackingReady: boolean;
+  /**
+   * Theme Editor deep link that pre-selects the SQRATCH app-embed block, built
+   * and validated server-side. Null means the link cannot be offered yet.
+   */
+  shopifyAppEmbedDeepLink: string | null;
 } | null;
 
 type ShopifyProduct = {
@@ -152,6 +164,16 @@ export function BrandShopifyClient({
     }
   }
 
+  function themeTrackingLabel(state: NonNullable<BrandProfileResponse>["themeTracking"]["state"] | undefined) {
+    switch (state) {
+      case "ENABLED": return "Enabled";
+      case "DISABLED": return "Disabled";
+      case "NOT_CONFIGURED": return "Not configured";
+      case "PERMISSION_REQUIRED": return "Needs approval";
+      default: return "Unknown";
+    }
+  }
+
   return (
     <BrandPageShell
       title="Shopify Connect"
@@ -251,6 +273,106 @@ export function BrandShopifyClient({
           </div>
         )}
       </PageCard>
+
+      {isConnected && (
+        <PageCard>
+          <h2 className="text-xl font-semibold">Conversion tracking</h2>
+          <p className="mt-2 text-sm text-white/55">
+            Creator-driven orders are attributed once every step below is in
+            place. The final step is enabled inside the Shopify Theme Editor.
+          </p>
+          <div className="mt-5 divide-y divide-white/10 overflow-hidden rounded-2xl border border-white/10 bg-black/20">
+            {[
+              {
+                label: "Shopify connection",
+                value:
+                  brand?.shopifyConnectionStatus === "CONNECTED"
+                    ? "Connected"
+                    : brand?.shopifyConnectionStatus === "UNINSTALLED"
+                      ? "Uninstalled"
+                      : "Not connected",
+                ready: brand?.shopifyConnectionStatus === "CONNECTED",
+              },
+              {
+                label: "Product catalog",
+                value: brand?.shopifyLastProductSyncAt
+                  ? "Ready"
+                  : "Not yet synced",
+                ready: Boolean(brand?.shopifyLastProductSyncAt),
+              },
+              {
+                label: "Order access",
+                value: brand?.orderAttributionReady ? "Ready" : "Needs approval",
+                ready: Boolean(brand?.orderAttributionReady),
+              },
+              {
+                label: "Theme verification access",
+                value: brand?.themeTracking?.state === "PERMISSION_REQUIRED" ? "Needs approval" : "Available",
+                ready: brand?.themeTracking?.state !== "PERMISSION_REQUIRED",
+              },
+              {
+                label: "Storefront conversion tracking",
+                value: themeTrackingLabel(brand?.themeTracking?.state),
+                ready: brand?.themeTracking?.state === "ENABLED",
+              },
+              {
+                label: "Overall conversion tracking",
+                value: brand?.overallConversionTrackingReady ? "Ready" : "Not ready",
+                ready: Boolean(brand?.overallConversionTrackingReady),
+              },
+            ].map((row) => (
+              <div
+                key={row.label}
+                className="flex flex-wrap items-center justify-between gap-2 px-4 py-3"
+              >
+                <p className="text-sm text-white/55">{row.label}</p>
+                <p
+                  className={`text-sm ${
+                    row.ready ? "text-emerald-300" : "text-amber-300"
+                  }`}
+                >
+                  {row.value}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => window.location.reload()}
+            className="mt-4 rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+          >
+            Refresh status
+          </Button>
+
+          {brand?.shopifyAppEmbedDeepLink ? (
+            <div className="mt-5 space-y-3">
+              <Button
+                asChild
+                className="rounded-full border border-white bg-white text-black"
+              >
+                <a
+                  href={brand.shopifyAppEmbedDeepLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  Enable conversion tracking
+                </a>
+              </Button>
+              <p className="text-sm text-white/55">
+                This opens Shopify&apos;s Theme Editor with the SQRATCH block
+                ready to enable. Press Save in the editor to activate it.
+              </p>
+            </div>
+          ) : (
+            <p className="mt-5 text-sm text-white/55">
+              The Theme Editor link becomes available once the store connection
+              finishes installing.
+            </p>
+          )}
+        </PageCard>
+      )}
 
       {products.length > 0 && (
         <PageCard>

@@ -87,7 +87,7 @@ gated (`getBrandAdminContext()` / `getBrandManagementContext()` in
 - Never remove `timingSafeEqual` / `timingSafeBase64urlEqual` from HMAC checks
 - Never change `SHOPIFY_API_VERSION` without testing all GraphQL calls
 - All 4 GDPR webhooks must always return HTTP 200
-- Scopes must remain exactly: `read_products`, `read_discounts`, `write_discounts`
+- Required Shopify scopes are `read_products`, `read_themes`, `read_discounts`, and `write_discounts`; `read_orders` gates conversion ingestion readiness.
 - Webhooks are TOML-managed (`shopify.app.toml`) — `registerShopifyWebhooks()` was removed
 
 **Two distribution modes:**

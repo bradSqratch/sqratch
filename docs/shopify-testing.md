@@ -2,7 +2,7 @@
 
 The public app uses App Bridge session tokens, token exchange, and expiring offline-token rotation. The custom test app remains `LEGACY_OFFLINE`. Use the matching TOML and credentials for each flow; never mix public and custom client IDs.
 
-This app reads Shopify products for display, and creates single-use Shopify discount codes when a user redeems SQRATCH points (`write_discounts`) — it never writes or mutates products. Redemption status is polled and reconciled against Shopify after issuance. Store ownership is tied to `Brand`, not the individual user. For the detailed redemption/refund transaction and reconciliation logic, see `docs/points-ledger.md` and `docs/codebase-map.md` (Section F: "Shopify Reward Redemption", "Reward State Machine", "Stuck-Redemption Reconciliation").
+This app reads Shopify products for display, reads Shopify orders for click-only conversion attribution (`read_orders` — see the Order Ingestion checklist below and `docs/commerce/phase-12-live-order-ingestion-and-conversion-attribution-summary.md`), and creates single-use Shopify discount codes when a user redeems SQRATCH points (`write_discounts`) — it never writes or mutates products or orders. Redemption status is polled and reconciled against Shopify after issuance. Store ownership is tied to `Brand`, not the individual user. For the detailed redemption/refund transaction and reconciliation logic, see `docs/points-ledger.md` and `docs/codebase-map.md` (Section F: "Shopify Reward Redemption", "Reward State Machine", "Stuck-Redemption Reconciliation").
 
 ## Vercel Environment Variables
 
@@ -22,12 +22,16 @@ Do not add product write scopes unless the product requirements change.
 - App URL: `https://www.sqratch.com/shopify`.
 - Embedded app: enabled.
 - Allowed redirection URL: `https://www.sqratch.com/api/shopify/oauth/callback`.
-- Access scopes: `read_products`, `read_discounts`, and `write_discounts` only.
+- Access scopes: `read_products`, `read_orders`, `read_themes`, `read_discounts`, and `write_discounts` (see `docs/env-vars.md`'s Shopify scopes section for why `read_orders` is tracked separately from the other four at runtime).
 - Admin API version: match `SHOPIFY_API_VERSION` in `src/lib/shopify.ts`.
 - App uninstall webhook: `https://www.sqratch.com/api/shopify/webhooks/app/uninstalled`.
+- Scope-update webhook: `https://www.sqratch.com/api/shopify/webhooks/app/scopes_update`.
 - Customer data request webhook: `https://www.sqratch.com/api/shopify/webhooks/customers/data_request`.
 - Customer redact webhook: `https://www.sqratch.com/api/shopify/webhooks/customers/redact`.
 - Shop redact webhook: `https://www.sqratch.com/api/shopify/webhooks/shop/redact`.
+- Order created webhook: `https://www.sqratch.com/api/shopify/webhooks/orders/create`.
+- Order updated webhook: `https://www.sqratch.com/api/shopify/webhooks/orders/updated`.
+- Refund created webhook: `https://www.sqratch.com/api/shopify/webhooks/refunds/create`.
 
 The repository also contains `shopify.app.toml` for the production embedded app configuration.
 
@@ -48,7 +52,7 @@ Current limitation: the embedded shell loads the minimum App Bridge script/meta 
 - Open `/dashboard/brand/shopify`.
 - Enter a valid `*.myshopify.com` domain.
 - Click `Connect Shopify`.
-- Confirm OAuth asks only for product read access.
+- Confirm OAuth asks for exactly the five scopes in `SHOPIFY_SCOPES` (`read_products`, `read_orders`, `read_themes`, `read_discounts`, `write_discounts`) — no product/order/theme write access.
 - Complete OAuth and confirm redirect to `/dashboard/brand/shopify/install?install=...` if brand selection is needed.
 - Select an existing eligible Brand (installation never creates a Brand — confirm no "Create new Brand" option is shown).
 - Confirm redirect to `/dashboard/brand/shopify?connected=1`.
@@ -131,7 +135,7 @@ See `docs/points-ledger.md` for the full ledger/account model and `docs/codebase
 
 ## Compliance Webhook Checklist
 
-All four webhooks live under `/api/shopify/webhooks/`, are HMAC-verified via `verifyShopifyWebhookRequest`, and must return `200` even when no action is needed. See `docs/shopify-data-inventory.md` for the field-by-field data-handling rationale.
+The four compliance/lifecycle webhooks below (`customers/data_request`, `customers/redact`, `shop/redact`, `app/uninstalled`) live under `/api/shopify/webhooks/`, are HMAC-verified via `verifyShopifyWebhookRequest`, and always return `200` once the signature checks out — every outcome for these four topics is deterministic. This is **not** true of every webhook topic this app now subscribes to: the order/refund topics and `app/scopes_update` can legitimately return `500` for a transient persistence failure or an in-flight claim, so Shopify retries — see the Order Ingestion checklist below. See `docs/shopify-data-inventory.md` for the field-by-field data-handling rationale.
 
 - Send each of `customers/data_request`, `customers/redact`, `shop/redact`, and `app/uninstalled` with an invalid HMAC and confirm the request is rejected (non-200) before any processing.
 - Confirm `customers/data_request` and `customers/redact` return `200` and write a sanitized audit log entry (topic + shop domain only, no customer PII) without touching any database row — SQRATCH stores no Shopify-customer-keyed data.
@@ -140,14 +144,38 @@ All four webhooks live under `/api/shopify/webhooks/`, are HMAC-verified via `ve
 - Confirm `app/uninstalled` clears credential/token fields and sets `UNINSTALLED`, but intentionally preserves `shopifyShopDomain` (unlike `shop/redact`) so the same shop can reinstall and relink seamlessly.
 - Automated coverage: `tests/integration-coverage.test.ts` (shop/redact temp-token cleanup) and `tests/shopify-connection-transitions.test.ts`.
 
+## Storefront Conversion Tracking (Theme App Extension) Checklist
+
+See `docs/commerce/phase-12-live-order-ingestion-and-conversion-attribution-summary.md` for the full design. The extension (`extensions/sqratch-attribution/`) writes exactly one hidden cart attribute, `_sqratch_ref`, carrying only the opaque click token — never a creator/campaign/experience/lesson/user/brand/connection id.
+
+- Confirm the Brand Shopify status page shows an "Enable conversion tracking" call-to-action once connected, with rows for Shopify connection / Product catalog / Order conversion permission / Storefront conversion tracking (`src/app/(withSidebar)/dashboard/brand/shopify/BrandShopifyClient.tsx`).
+- Click the CTA and confirm it opens Shopify's Theme Editor (`/admin/themes/current/editor?context=apps&activateAppId=<api-key>/sqratch-attribution-embed`) in a new tab — never an automatic redirect/popup on the connect flow itself.
+- In the Theme Editor, enable the "SQRATCH attribution" app embed block and press Save.
+- Click a SQRATCH commerce-click redirect link, confirm the storefront cart carries a `_sqratch_ref` attribute (Ajax cart / `/cart.js`), and confirm it is NOT visible in the normal checkout summary (single leading underscore).
+- Complete a test order and confirm the `orders/create` webhook payload's `note_attributes`/`attributes`/`cart_attributes` carries `_sqratch_ref`, and that it correctly attributes (see the Order Ingestion checklist).
+- Confirm the "Order access" row reads "Needs approval" before `read_orders` is granted and "Ready" after — this is `orderAttributionReady`, gated on canonical `CommerceConnection.grantedScopes`.
+
+## Order Ingestion / Conversion Attribution Checklist
+
+- Send `orders/create` for a brand-new `providerEventId` and confirm a `CommerceOrder` row is created with attribution linked when the order carries a valid, unexpired, unconsumed `_sqratch_ref` token whose hash matches a `CommerceClickAttribution` row with `redirectedAt` set and a non-null `attributedBrandId` matching the connection's brand.
+- Redeliver the identical `orders/create` payload (same `providerEventId`) after the first has fully processed and confirm `200` with no second order/line-item write (`COMPLETED_DUPLICATE`).
+- Confirm a webhook delivery that fails signature verification never reaches ingestion and is rejected `401` before any database write.
+- Confirm a transient database failure during the order write returns `500` (`WRITE_FAILED`) so Shopify retries, and that retry succeeds once the transient condition clears.
+- Confirm a malformed/non-retryable payload (e.g. missing order id) is acknowledged `200` without creating a row, and is not retried by Shopify.
+- Confirm `orders/updated` treats an older `providerUpdatedAt` than what's stored as stale and does not overwrite newer state (`SKIPPED_STALE`, `200`).
+- Confirm `refunds/create` updates `totalRefundedMinor`/`financialStatus` on the existing order without creating a duplicate order row.
+- Confirm an order with the same connected product on multiple line items counts as one attributed order for that product in conversion analytics (`attributedOrdersByProduct`), not one per line item.
+- Confirm no points, creator commission, or payout is triggered by any order/refund webhook — `orders/create` is a normalized snapshot, not a settlement event.
+- Automated coverage: `tests/order-ingestion.test.ts`, `tests/shopify-order-webhook.test.ts`, `tests/order-analytics.test.ts`, `tests/shopify-order-normalizer.test.ts`.
+
 ## App Store Submission Checklist
 
-- Confirm scopes contain only `read_products`, `read_discounts`, and `write_discounts`.
+- Confirm scopes contain `read_products`, `read_orders`, `read_themes`, `read_discounts`, and `write_discounts` — and no broader order scope (`read_all_orders`, `write_orders`) or theme write scope (`write_themes`).
 - Confirm the app is embedded.
 - Confirm app URL and OAuth redirect URL are HTTPS production URLs.
 - Confirm privacy compliance webhooks are configured and return `200` for valid HMAC requests.
 - Confirm uninstall webhook clears token access.
-- Confirm the app does not write or mutate Shopify products.
+- Confirm the app does not write or mutate Shopify products or orders.
 - Confirm the app explains that products are displayed in SQRATCH experiences.
 - Confirm the privacy policy and support/contact URLs are set in Shopify Partner Dashboard.
 - Confirm test credentials and test instructions are ready for Shopify review.

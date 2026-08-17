@@ -110,5 +110,17 @@ export function hashClickIp(ip: string | null | undefined): string | null {
     .digest("hex");
 }
 
-export const CLICK_TOKEN_QUERY_PARAM = "ref";
+/** SQRATCH-namespaced public transport key; never collides with merchant `ref`. */
+export const CLICK_TOKEN_QUERY_PARAM = "sqratch_ref";
+/**
+ * Shopify cart/order attribute written by the Theme App Extension.
+ *
+ * Deliberately NOT the same string as `CLICK_TOKEN_QUERY_PARAM`. The single
+ * leading underscore is Shopify's convention for a cart attribute that stays
+ * out of the merchant-facing presentation while remaining fully readable via
+ * the Ajax Cart API and the order webhooks this system normalizes. A double
+ * underscore is reserved for Shopify's own internal use and must not be used
+ * here.
+ */
+export const CLICK_TOKEN_CART_ATTRIBUTE = "_sqratch_ref";
 export const CLICK_TOKEN_CHAR_LENGTH = CLICK_TOKEN_LENGTH;

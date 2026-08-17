@@ -8,13 +8,23 @@ import {
 import prisma from "@/lib/prisma";
 import { getActiveCommerceConnection } from "@/lib/commerce/connection-service";
 import { mapLegacyShopifyStatusToCommerceStatus } from "@/lib/commerce/connection-resolver";
-import type { CommerceConnectionSummary } from "@/lib/commerce/types";
+import {
+  SQRATCH_ATTRIBUTION_EMBED_BLOCK_HANDLE,
+  buildThemeEditorAppEmbedDeepLink,
+} from "@/lib/commerce/shopify-app-embed";
+import { getShopifyThemeTrackingReadiness } from "@/lib/commerce/providers/shopify-theme-readiness";
+import type {
+  CommerceConnectionSummary,
+  CommerceThemeTrackingReadiness,
+} from "@/lib/commerce/types";
 
-/** The `Brand.shopify*` token-derived columns not selected by `getBrandManagementContext`. */
+/** The `Brand.shopify*` columns not selected by `getBrandManagementContext`. */
 type BrandTokenExtra = {
   shopifyAuthMode: ShopifyAuthMode;
   shopifyAccessTokenExpiresAt: Date | null;
   shopifyGrantedScopes: string | null;
+  /** Client id of the app this brand installed under, stamped at connect time. */
+  shopifyClientId: string | null;
 };
 
 export type BrandShopifyStatusDeps = {
@@ -24,6 +34,12 @@ export type BrandShopifyStatusDeps = {
   findTokenExtra(brandId: string): Promise<BrandTokenExtra | null>;
   /** Resolves the brand's provider-neutral Shopify connection summary. */
   getConnectionSummary(brandId: string): Promise<CommerceConnectionSummary | null>;
+  getThemeReadiness?(input: {
+    brandId: string;
+    shopDomain: string;
+    apiKey: string;
+    grantedScopes: string[];
+  }): Promise<CommerceThemeTrackingReadiness>;
 };
 
 async function defaultFindTokenExtra(brandId: string): Promise<BrandTokenExtra | null> {
@@ -33,6 +49,7 @@ async function defaultFindTokenExtra(brandId: string): Promise<BrandTokenExtra |
       shopifyAuthMode: true,
       shopifyAccessTokenExpiresAt: true,
       shopifyGrantedScopes: true,
+      shopifyClientId: true,
     },
   });
 }
@@ -40,8 +57,9 @@ async function defaultFindTokenExtra(brandId: string): Promise<BrandTokenExtra |
 const DEFAULT_DEPS: BrandShopifyStatusDeps = {
   getContext: getBrandManagementContext,
   findTokenExtra: defaultFindTokenExtra,
-  getConnectionSummary: (brandId) =>
+    getConnectionSummary: (brandId) =>
     getActiveCommerceConnection(brandId, CommerceProvider.SHOPIFY),
+  getThemeReadiness: (input) => getShopifyThemeTrackingReadiness(input),
 };
 
 /** `Date | null` equality by timestamp — `null` only equals `null`. */
@@ -129,6 +147,43 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
       ? summary.lastProductSyncAt
       : brand.shopifyLastProductSyncAt;
 
+    // Additive: the Theme Editor deep link that opens this shop's current
+    // theme with the SQRATCH app-embed block pre-selected, so the merchant can
+    // activate storefront conversion tracking in one click. Derived only from
+    // this brand's OWN stored shop domain + install-time client id — never
+    // from request input (this route takes none) — and the builder is a pure,
+    // strictly validating function (see shopify-app-embed.ts). It is null
+    // whenever either column is absent (brand never fully connected) or the
+    // builder rejects the pair; a null link simply means the UI cannot offer
+    // the button yet, and must never be an error for this route.
+    const deepLink =
+      shopifyShopDomain && brandExtra?.shopifyClientId
+        ? buildThemeEditorAppEmbedDeepLink({
+            shopDomain: shopifyShopDomain,
+            apiKey: brandExtra.shopifyClientId,
+            blockHandle: SQRATCH_ATTRIBUTION_EMBED_BLOCK_HANDLE,
+          })
+        : null;
+    const shopifyAppEmbedDeepLink =
+      deepLink !== null && deepLink.ok ? deepLink.url : null;
+
+    const canonicalGrantedScopes = summary?.grantedScopes ?? [];
+    const orderAttributionReady = canonicalGrantedScopes.includes("read_orders");
+    const themeTracking =
+      shopifyShopDomain && brandExtra?.shopifyClientId && deps.getThemeReadiness
+        ? await deps.getThemeReadiness({
+            brandId: brand.id,
+            shopDomain: shopifyShopDomain,
+            apiKey: brandExtra.shopifyClientId,
+            grantedScopes: canonicalGrantedScopes,
+          })
+        : {
+            provider: CommerceProvider.SHOPIFY,
+            state: canonicalGrantedScopes.includes("read_themes")
+              ? "UNKNOWN"
+              : "PERMISSION_REQUIRED",
+          } as CommerceThemeTrackingReadiness;
+
     return NextResponse.json({
       data: {
         id: brand.id,
@@ -151,6 +206,15 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
         shopifyAccessTokenExpiresAt: brandExtra?.shopifyAccessTokenExpiresAt ?? null,
         shopifyGrantedScopes: brandExtra?.shopifyGrantedScopes ?? null,
         requiresReconnect,
+        // Additive capability: legacy installs keep product sync/rewards but
+        // cannot receive conversion attribution until they grant read_orders.
+        orderAttributionReady,
+        themeTracking,
+        overallConversionTrackingReady:
+          orderAttributionReady && themeTracking.state === "ENABLED",
+        // Additive capability: null until both the shop domain and the
+        // install-time client id are present and pass validation.
+        shopifyAppEmbedDeepLink,
       },
     });
   } catch (error) {

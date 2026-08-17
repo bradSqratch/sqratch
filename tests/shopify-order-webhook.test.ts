@@ -44,15 +44,23 @@ import { join } from "node:path";
 
 import { NextRequest } from "next/server";
 import { CommerceProvider } from "@prisma/client";
+import type { CommerceOrderEventStatus } from "@prisma/client";
 
 import {
   handleShopifyOrderWebhook,
   resolveProviderEventId,
+  shopifyProductKeyCandidates,
   type ShopifyOrderWebhookDeps,
 } from "../src/lib/commerce/providers/shopify-order-webhook";
 import { normalizeShopifyOrderPayload } from "../src/lib/commerce/providers/shopify-order-normalizer";
 import {
   ingestNormalizedOrder,
+  resolveOrderEventClaim,
+  EVENT_CLAIM_LEASE_MS,
+  type ExistingOrderEventRow,
+  type OrderEventClaim,
+  type OrderEventClaimStore,
+  type OrderIngestionDeps,
   type OrderIngestionOutcome,
   type OrderIngestionEventInput,
   type NormalizedOrderInput,
@@ -313,109 +321,502 @@ const PASS_OUTCOME: OrderIngestionOutcome = {
   brandIdOverriddenFromConnection: false,
 };
 
+const DETERMINISTIC_FAILURE: OrderIngestionOutcome = {
+  ...PASS_OUTCOME,
+  status: "FAILED",
+  reason: "MISSING_EXTERNAL_ORDER_ID",
+  orderId: null,
+};
+
+const TRANSIENT_FAILURE: OrderIngestionOutcome = {
+  ...PASS_OUTCOME,
+  status: "FAILED",
+  reason: "WRITE_FAILED",
+  orderId: null,
+};
+
+const IN_FLIGHT_OUTCOME: OrderIngestionOutcome = {
+  ...PASS_OUTCOME,
+  status: "IN_FLIGHT",
+  reason: "DELIVERY_IN_FLIGHT",
+  orderId: null,
+};
+
+const UNEXPECTED_FAILURE: OrderIngestionOutcome = {
+  ...PASS_OUTCOME,
+  status: "FAILED",
+  reason: "UNEXPECTED_FAILURE",
+  eventId: null,
+  orderId: null,
+};
+
+/**
+ * A DB-free ingestion stack whose `CommerceOrderEvent` ledger is REAL enough to
+ * exercise the claim state machine: it tracks `status` and `receivedAt` per row
+ * and delegates the decision-making to the production `resolveOrderEventClaim`
+ * rather than reimplementing it. Kept self-contained here (same idiom as
+ * tests/order-ingestion.test.ts) so this file can prove the HTTP contract
+ * end-to-end against the real `ingestNormalizedOrder`.
+ */
+const LEDGER_NOW = new Date("2026-08-07T12:00:00.000Z");
+
+class FakeEventLedger {
+  nextId = 1;
+  clock: Date = LEDGER_NOW;
+  rows = new Map<string, { id: string; status: CommerceOrderEventStatus; receivedAt: Date }>();
+
+  claim(input: { provider: CommerceProvider; providerEventId: string }): Promise<OrderEventClaim> {
+    const key = `${input.provider}:${input.providerEventId}`;
+    const store: OrderEventClaimStore = {
+      insertClaim: async () => {
+        if (this.rows.has(key)) return "DUPLICATE";
+        const row = {
+          id: `event-${this.nextId++}`,
+          status: "RECEIVED" as CommerceOrderEventStatus,
+          receivedAt: this.clock,
+        };
+        this.rows.set(key, row);
+        return { id: row.id };
+      },
+      findExistingClaim: async () => this.rows.get(key) ?? null,
+      reclaim: async (row: ExistingOrderEventRow, now: Date) => {
+        const current = this.rows.get(key);
+        if (
+          !current ||
+          current.status !== row.status ||
+          current.receivedAt.getTime() !== row.receivedAt.getTime()
+        ) {
+          return false;
+        }
+        current.status = "RECEIVED";
+        current.receivedAt = now;
+        return true;
+      },
+    };
+    return resolveOrderEventClaim(store, this.clock);
+  }
+
+  /** Stands in for `finalizeEvent`, which cannot reach the blocked test DB. */
+  finalize(providerEventId: string, status: CommerceOrderEventStatus): void {
+    const row = this.rows.get(`${CommerceProvider.SHOPIFY}:${providerEventId}`);
+    if (!row) throw new Error(`no event row for ${providerEventId}`);
+    row.status = status;
+  }
+}
+
+function makeIngestionStack() {
+  const ledger = new FakeEventLedger();
+  const state = { orderCount: 0 };
+  const deps: Partial<OrderIngestionDeps> = {
+    claimEvent: (input) => ledger.claim(input),
+    async loadConnection() {
+      return {
+        id: "conn-1",
+        brandId: "brand-1",
+        provider: CommerceProvider.SHOPIFY,
+        status: "CONNECTED" as const,
+      };
+    },
+    async runTransaction<T>(fn: (tx: never) => Promise<T>): Promise<T> {
+      const fakeTx = {
+        commerceOrder: {
+          async findUnique() {
+            return null;
+          },
+          async create() {
+            state.orderCount += 1;
+            return { id: `order-${state.orderCount}` };
+          },
+          async update() {
+            return {};
+          },
+        },
+        commerceOrderLineItem: {
+          async deleteMany() {
+            return { count: 0 };
+          },
+          async createMany({ data }: { data: unknown[] }) {
+            return { count: data.length };
+          },
+        },
+        connectedCommerceProduct: {
+          async findMany() {
+            return [];
+          },
+        },
+        commerceClickAttribution: {
+          async findUnique() {
+            return null;
+          },
+          async updateMany() {
+            return { count: 0 };
+          },
+        },
+      };
+      return fn(fakeTx as never);
+    },
+    hashAttributionToken: (token: string) => `hash:${token}`,
+    now: () => LEDGER_NOW,
+  };
+
+  const webhookDeps: Partial<ShopifyOrderWebhookDeps> = {
+    async findConnectionByShopDomain() {
+      return { id: "conn-1", brandId: "brand-1" };
+    },
+    ingest: ingestNormalizedOrder,
+    ingestionDeps: deps,
+  };
+
+  return { ledger, state, webhookDeps };
+}
+
+const ORDER_BODY = JSON.stringify({
+  id: 5551,
+  currency: "USD",
+  total_price: "10.00",
+  updated_at: "2026-08-01T00:00:00-04:00",
+  line_items: [],
+});
+
+function orderDelivery(webhookId: string, rawBody = ORDER_BODY): NextRequest {
+  return buildWebhookRequest("http://localhost/api/shopify/webhooks/orders/create", {
+    rawBody,
+    hmac: computeHmac(rawBody, SECRET),
+    shopDomain: "idempotency-test.myshopify.com",
+    webhookId,
+  });
+}
+
 describe("2. duplicate webhook idempotency through the full handleShopifyOrderWebhook pipeline", () => {
   test("the same X-Shopify-Webhook-Id delivered twice results in exactly one CREATED ingest call and one ALREADY_PROCESSED — proven against the REAL ingestNormalizedOrder, not a stub", async () => {
     await withShopifyApiSecret(SECRET, async () => {
-      // A minimal in-memory backing for ingestNormalizedOrder's own deps —
-      // same idiom as tests/order-ingestion.test.ts, kept self-contained here
-      // so this file proves the pipeline wiring end-to-end.
-      const claimed = new Set<string>();
-      let nextEventId = 1;
-      let orderCounter = 0;
-      const deps = {
-        async claimEvent(input: { provider: CommerceProvider; providerEventId: string }) {
-          const key = `${input.provider}:${input.providerEventId}`;
-          if (claimed.has(key)) return { claimed: false as const };
-          claimed.add(key);
-          return { claimed: true as const, eventId: `event-${nextEventId++}` };
-        },
-        async loadConnection() {
-          return { id: "conn-1", brandId: "brand-1", provider: CommerceProvider.SHOPIFY, status: "CONNECTED" as const };
-        },
-        async runTransaction<T>(fn: (tx: never) => Promise<T>): Promise<T> {
-          const fakeTx = {
-            commerceOrder: {
-              async findUnique() {
-                return null;
-              },
-              async create() {
-                orderCounter += 1;
-                return { id: `order-${orderCounter}` };
-              },
-              async update() {
-                return {};
-              },
-            },
-            commerceOrderLineItem: {
-              async deleteMany() {
-                return { count: 0 };
-              },
-              async createMany({ data }: { data: unknown[] }) {
-                return { count: data.length };
-              },
-            },
-            connectedCommerceProduct: {
-              async findMany() {
-                return [];
-              },
-            },
-            commerceClickAttribution: {
-              async findUnique() {
-                return null;
-              },
-              async updateMany() {
-                return { count: 0 };
-              },
-            },
-          };
-          return fn(fakeTx as never);
-        },
-        hashAttributionToken: (token: string) => `hash:${token}`,
-        now: () => new Date("2026-08-07T12:00:00.000Z"),
-      };
-
-      const webhookDeps: Partial<ShopifyOrderWebhookDeps> = {
-        async findConnectionByShopDomain() {
-          return { id: "conn-1", brandId: "brand-1" };
-        },
-        ingest: ingestNormalizedOrder,
-        ingestionDeps: deps,
-      };
-
-      const rawBody = JSON.stringify({
-        id: 5551,
-        currency: "USD",
-        total_price: "10.00",
-        updated_at: "2026-08-01T00:00:00-04:00",
-        line_items: [],
-      });
-      const hmac = computeHmac(rawBody, SECRET);
-
-      const makeRequest = () =>
-        buildWebhookRequest("http://localhost/api/shopify/webhooks/orders/create", {
-          rawBody,
-          hmac,
-          shopDomain: "idempotency-test.myshopify.com",
-          webhookId: "same-delivery-id-999",
-        });
+      const { ledger, state, webhookDeps } = makeIngestionStack();
 
       const first = await handleShopifyOrderWebhook(
-        makeRequest(),
+        orderDelivery("same-delivery-id-999"),
         "orders/create",
         normalizeShopifyOrderPayload,
         webhookDeps,
       );
       assert.equal(first.status, 200);
-      assert.equal(orderCounter, 1, "first delivery must create exactly one order");
+      assert.equal(state.orderCount, 1, "first delivery must create exactly one order");
+
+      // Production's finalizeEvent marks the row PROCESSED here; it cannot run
+      // against the blocked test DATABASE_URL, so it is simulated explicitly.
+      ledger.finalize("same-delivery-id-999", "PROCESSED");
 
       const second = await handleShopifyOrderWebhook(
-        makeRequest(),
+        orderDelivery("same-delivery-id-999"),
         "orders/create",
         normalizeShopifyOrderPayload,
         webhookDeps,
       );
       assert.equal(second.status, 200);
-      assert.equal(orderCounter, 1, "the duplicate delivery must NOT create a second order");
+      assert.equal(state.orderCount, 1, "the duplicate delivery must NOT create a second order");
+    });
+  });
+
+  for (const terminal of ["SKIPPED_STALE", "SKIPPED_DISCONNECTED"] as const) {
+    test(`a redelivery of an event already finalized as ${terminal} is also answered 200 with no reprocessing`, async () => {
+      await withShopifyApiSecret(SECRET, async () => {
+        const { ledger, state, webhookDeps } = makeIngestionStack();
+
+        await handleShopifyOrderWebhook(
+          orderDelivery("terminal-delivery"),
+          "orders/create",
+          normalizeShopifyOrderPayload,
+          webhookDeps,
+        );
+        assert.equal(state.orderCount, 1);
+        ledger.finalize("terminal-delivery", terminal);
+
+        const redelivery = await handleShopifyOrderWebhook(
+          orderDelivery("terminal-delivery"),
+          "orders/create",
+          normalizeShopifyOrderPayload,
+          webhookDeps,
+        );
+        assert.equal(redelivery.status, 200);
+        assert.equal(state.orderCount, 1);
+      });
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// THE P1: an in-flight delivery must never be acknowledged
+// ---------------------------------------------------------------------------
+
+describe("P1. a delivery still in flight is answered 500 so Shopify keeps retrying", () => {
+  test("THE CRASH WINDOW: a worker dies after claiming and before writing — the retry inside the lease gets 500 and no order, and a later retry lands the order for real", async () => {
+    await withShopifyApiSecret(SECRET, async () => {
+      const { ledger, state, webhookDeps } = makeIngestionStack();
+
+      // 1. A worker claims the delivery and then dies: RECEIVED row, no order.
+      const claim = await ledger.claim({
+        provider: CommerceProvider.SHOPIFY,
+        providerEventId: "crashed-delivery",
+      });
+      assert.equal(claim.status, "CLAIMED");
+      assert.equal(state.orderCount, 0);
+
+      // 2. Shopify redelivers 5s later, inside the 60s lease.
+      ledger.clock = new Date(LEDGER_NOW.getTime() + 5_000);
+      const retry = await handleShopifyOrderWebhook(
+        orderDelivery("crashed-delivery"),
+        "orders/create",
+        normalizeShopifyOrderPayload,
+        webhookDeps,
+      );
+
+      assert.equal(
+        retry.status,
+        500,
+        "answering 200 here is what stopped Shopify retrying and lost the order",
+      );
+      assert.equal(state.orderCount, 0, "and nothing was written twice either");
+
+      // 3. After the lease expires the retry reclaims the abandoned event and
+      //    finally lands the order — the data is recovered, not lost.
+      ledger.clock = new Date(LEDGER_NOW.getTime() + EVENT_CLAIM_LEASE_MS + 1_000);
+      const recovered = await handleShopifyOrderWebhook(
+        orderDelivery("crashed-delivery"),
+        "orders/create",
+        normalizeShopifyOrderPayload,
+        webhookDeps,
+      );
+      assert.equal(recovered.status, 200);
+      assert.equal(state.orderCount, 1, "the order is landed by the later retry");
+    });
+  });
+
+  test("a concurrent redelivery arriving while the first is still being processed is 500, not a silent 200", async () => {
+    await withShopifyApiSecret(SECRET, async () => {
+      const { ledger, state, webhookDeps } = makeIngestionStack();
+
+      const first = await handleShopifyOrderWebhook(
+        orderDelivery("live-lease"),
+        "orders/create",
+        normalizeShopifyOrderPayload,
+        webhookDeps,
+      );
+      assert.equal(first.status, 200);
+      assert.equal(state.orderCount, 1);
+
+      // finalizeEvent never landed (it cannot here, and in production it is
+      // best-effort), so the lease is still live. Nothing may be acknowledged
+      // on the strength of a terminal write we cannot see.
+      assert.equal(ledger.rows.get(`SHOPIFY:live-lease`)!.status, "RECEIVED");
+
+      const concurrent = await handleShopifyOrderWebhook(
+        orderDelivery("live-lease"),
+        "orders/create",
+        normalizeShopifyOrderPayload,
+        webhookDeps,
+      );
+      assert.equal(concurrent.status, 500);
+      assert.equal(state.orderCount, 1, "no second order write");
+    });
+  });
+});
+
+describe("webhook retry classification: 200 means settled, 500 means redeliver", () => {
+  const rawBody = JSON.stringify({ id: 55, updated_at: "2026-08-01T00:00:00Z" });
+  const requestFor = () =>
+    buildWebhookRequest("http://localhost/api/shopify/webhooks/orders/create", {
+      rawBody,
+      hmac: computeHmac(rawBody, SECRET),
+      shopDomain: "retry-test.myshopify.com",
+      webhookId: "retry-delivery",
+    });
+  const baseDeps = {
+    async findConnectionByShopDomain() {
+      return { id: "conn-1", brandId: "brand-1" };
+    },
+    ingestionDeps: {},
+  };
+
+  const matrix: Array<{ name: string; outcome: OrderIngestionOutcome; status: number }> = [
+    { name: "CREATED", outcome: PASS_OUTCOME, status: 200 },
+    {
+      name: "deterministic rejection (MISSING_EXTERNAL_ORDER_ID)",
+      outcome: DETERMINISTIC_FAILURE,
+      status: 200,
+    },
+    {
+      name: "genuinely completed duplicate (ALREADY_PROCESSED)",
+      outcome: { ...PASS_OUTCOME, status: "ALREADY_PROCESSED", reason: "DUPLICATE_DELIVERY" },
+      status: 200,
+    },
+    {
+      name: "stale event (SKIPPED_STALE)",
+      outcome: { ...PASS_OUTCOME, status: "SKIPPED_STALE", reason: "OLDER_THAN_STORED_STATE" },
+      status: 200,
+    },
+    {
+      name: "disconnected shop (SKIPPED_DISCONNECTED)",
+      outcome: {
+        ...PASS_OUTCOME,
+        status: "SKIPPED_DISCONNECTED",
+        reason: "CONNECTION_NOT_INGESTIBLE",
+      },
+      status: 200,
+    },
+    { name: "transient write failure (WRITE_FAILED)", outcome: TRANSIENT_FAILURE, status: 500 },
+    { name: "delivery in flight (IN_FLIGHT)", outcome: IN_FLIGHT_OUTCOME, status: 500 },
+    {
+      name: "unexpected pipeline error (UNEXPECTED_FAILURE)",
+      outcome: UNEXPECTED_FAILURE,
+      status: 500,
+    },
+  ];
+
+  for (const { name, outcome, status } of matrix) {
+    test(`${name} -> ${status}`, async () => {
+      await withShopifyApiSecret(SECRET, async () => {
+        const response = await handleShopifyOrderWebhook(
+          requestFor(),
+          "orders/create",
+          normalizeShopifyOrderPayload,
+          { ...baseDeps, ingest: makeIngestSpy(outcome).fn },
+        );
+        assert.equal(response.status, status);
+      });
+    });
+  }
+});
+
+describe("no unexpected exception escapes the webhook: it becomes a deliberate, retryable 500", () => {
+  const rawBody = JSON.stringify({ id: 77, updated_at: "2026-08-01T00:00:00Z" });
+  const requestFor = () =>
+    buildWebhookRequest("http://localhost/api/shopify/webhooks/orders/create", {
+      rawBody,
+      hmac: computeHmac(rawBody, SECRET),
+      shopDomain: "throwing-test.myshopify.com",
+      webhookId: "throwing-delivery",
+    });
+
+  test("a throwing connection lookup answers 500 instead of rejecting the promise", async () => {
+    await withShopifyApiSecret(SECRET, async () => {
+      const response = await handleShopifyOrderWebhook(
+        requestFor(),
+        "orders/create",
+        normalizeShopifyOrderPayload,
+        {
+          async findConnectionByShopDomain() {
+            throw new Error("P1001: can't reach database server at db:5432");
+          },
+          ingest: makeIngestSpy(PASS_OUTCOME).fn,
+          ingestionDeps: {},
+        },
+      );
+      assert.equal(response.status, 500);
+    });
+  });
+
+  test("a throwing ingest also answers 500 rather than crashing the route", async () => {
+    await withShopifyApiSecret(SECRET, async () => {
+      const response = await handleShopifyOrderWebhook(
+        requestFor(),
+        "orders/create",
+        normalizeShopifyOrderPayload,
+        {
+          async findConnectionByShopDomain() {
+            return { id: "conn-1", brandId: "brand-1" };
+          },
+          ingest: (async () => {
+            throw new Error("unexpected");
+          }) as unknown as typeof ingestNormalizedOrder,
+          ingestionDeps: {},
+        },
+      );
+      assert.equal(response.status, 500);
+    });
+  });
+
+  test("a throwing claimEvent inside the REAL ingestion path is classified, not propagated, and answers 500", async () => {
+    await withShopifyApiSecret(SECRET, async () => {
+      const response = await handleShopifyOrderWebhook(
+        requestFor(),
+        "orders/create",
+        normalizeShopifyOrderPayload,
+        {
+          async findConnectionByShopDomain() {
+            return { id: "conn-1", brandId: "brand-1" };
+          },
+          ingest: ingestNormalizedOrder,
+          ingestionDeps: {
+            async claimEvent() {
+              throw new Error("P1017: server has closed the connection");
+            },
+          },
+        },
+      );
+      assert.equal(response.status, 500);
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Shopify-specific product-key expansion lives in the Shopify provider module
+// ---------------------------------------------------------------------------
+
+describe("shopifyProductKeyCandidates: the provider's own id-form knowledge", () => {
+  test("a bare numeric REST id also matches the catalog's GraphQL global id", () => {
+    assert.deepEqual(shopifyProductKeyCandidates("123"), [
+      "123",
+      "gid://shopify/Product/123",
+    ]);
+  });
+
+  test("a global id also matches its bare numeric form", () => {
+    assert.deepEqual(shopifyProductKeyCandidates("gid://shopify/Product/456"), [
+      "gid://shopify/Product/456",
+      "456",
+    ]);
+  });
+
+  test("anything else is passed through unchanged, and blank yields nothing", () => {
+    assert.deepEqual(shopifyProductKeyCandidates("weird-handle"), ["weird-handle"]);
+    assert.deepEqual(shopifyProductKeyCandidates(null), []);
+    assert.deepEqual(shopifyProductKeyCandidates("  "), []);
+  });
+
+  test("the webhook handler injects it into the ingestion deps, so the generic layer never needs Shopify's id format", async () => {
+    await withShopifyApiSecret(SECRET, async () => {
+      let injected: Partial<OrderIngestionDeps> | undefined;
+      const capturingIngest = (async (
+        _event: OrderIngestionEventInput,
+        _order: NormalizedOrderInput,
+        deps?: Partial<OrderIngestionDeps>,
+      ): Promise<OrderIngestionOutcome> => {
+        injected = deps;
+        return PASS_OUTCOME;
+      }) as unknown as typeof ingestNormalizedOrder;
+
+      const rawBody = JSON.stringify({ id: 99, updated_at: "2026-08-01T00:00:00Z" });
+      const request = buildWebhookRequest(
+        "http://localhost/api/shopify/webhooks/orders/create",
+        {
+          rawBody,
+          hmac: computeHmac(rawBody, SECRET),
+          shopDomain: "wiring-test.myshopify.com",
+          webhookId: "wiring-delivery",
+        },
+      );
+
+      await handleShopifyOrderWebhook(request, "orders/create", normalizeShopifyOrderPayload, {
+        async findConnectionByShopDomain() {
+          return { id: "conn-1", brandId: "brand-1" };
+        },
+        ingest: capturingIngest,
+      });
+
+      assert.ok(injected?.expandProductKeyCandidates, "expansion must be wired by default");
+      assert.deepEqual(injected!.expandProductKeyCandidates!("1001"), [
+        "1001",
+        "gid://shopify/Product/1001",
+      ]);
     });
   });
 });

@@ -24,6 +24,19 @@ export type CommerceCapabilities = {
   canVerifyWebhooks: boolean;
 };
 
+/** Provider-neutral state of storefront conversion tracking readiness. */
+export type CommerceThemeTrackingState =
+  | "PERMISSION_REQUIRED"
+  | "NOT_CONFIGURED"
+  | "DISABLED"
+  | "ENABLED"
+  | "UNKNOWN";
+
+export type CommerceThemeTrackingReadiness = {
+  provider: CommerceProvider;
+  state: CommerceThemeTrackingState;
+};
+
 /**
  * The neutral view of a commerce connection handed to business code.
  *

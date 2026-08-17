@@ -84,7 +84,7 @@ This project uses Prisma migrations against a shared Supabase database. **Never 
 
 ## Shopify integration
 
-SQRATCH connects to a brand's Shopify store (via OAuth or embedded App Bridge token exchange) to read products for display and create single-use discount codes for point redemptions. Scopes are limited to `read_products`, `read_discounts`, `write_discounts` — the app never writes or mutates products. Four Shopify compliance webhooks (`customers/data_request`, `customers/redact`, `shop/redact`, `app/uninstalled`) are implemented and HMAC-verified. Details: **[docs/shopify-testing.md](docs/shopify-testing.md)** (testing/verification checklists) and **[docs/shopify-data-inventory.md](docs/shopify-data-inventory.md)** (what Shopify-linked data is stored, retained, or erased).
+SQRATCH connects to a brand's Shopify store (via OAuth or embedded App Bridge token exchange) to read products for display, verify the main-theme conversion embed, create single-use reward discount codes, and prospectively ingest authenticated orders for exact click-token conversion attribution. Scopes are `read_products`, `read_orders`, `read_themes`, `read_discounts`, and `write_discounts`; the app never writes or mutates products, themes, or orders. Shopify compliance and order webhooks are TOML-managed and HMAC-verified. Details: **[docs/shopify-testing.md](docs/shopify-testing.md)** and **[docs/shopify-data-inventory.md](docs/shopify-data-inventory.md)**.
 
 ## Points and rewards
 

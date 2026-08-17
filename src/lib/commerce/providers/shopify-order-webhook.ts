@@ -8,13 +8,12 @@
  * drift apart between them.
  *
  * ===========================================================================
- * NOT REACHABLE IN PRODUCTION TODAY
+ * LIVE-CONFIGURATION PREREQUISITES
  * ===========================================================================
- * No `orders/*` or `refunds/*` topic is subscribed in `shopify.app.toml` or
- * `shopify.app.custom.toml`, and the app does not hold `read_orders`, so
- * Shopify never delivers to these routes. See
- * `docs/commerce/phase-7-order-normalization-summary.md` for the rollout
- * prerequisites. Nothing here requests, implies, or grants a scope.
+ * Phase 12 declares `orders/create`, `orders/updated`, and `refunds/create`
+ * plus `read_orders` in both Shopify configurations. Delivery is live only
+ * after the operator deploys that config, enables the Theme App Extension, and
+ * each existing merchant reauthorizes to grant the new scope.
  *
  * ===========================================================================
  * VERIFICATION SEQUENCE — REUSED, NOT REIMPLEMENTED
@@ -39,16 +38,32 @@
  * establish this convention by ignoring it entirely.
  *
  * ===========================================================================
- * RESPONSE POLICY: 200 FOR EVERYTHING EXCEPT A SIGNATURE FAILURE
+ * RESPONSE POLICY: 200 MEANS "SETTLED", 500 MEANS "REDELIVER THIS"
  * ===========================================================================
- * A webhook that was processed, deduplicated, skipped, or even failed to write
- * has been RECEIVED — telling Shopify otherwise triggers its retry schedule
- * and can produce a retry storm over work that will never succeed on a retry
- * (a disconnected shop, an unknown shop, a duplicate delivery). The only
- * non-200 responses are the ones `verifyShopifyWebhookRequest` itself
- * produces: 401 for an invalid/absent HMAC and 500 for an unconfigured
- * `SHOPIFY_API_SECRET`. Both are returned verbatim, exactly as the four
- * existing routes do.
+ * The response code is a single question: would asking Shopify to redeliver
+ * plausibly change the result? A 200 tells Shopify to stop retrying, so it may
+ * only be sent once this delivery is SETTLED — applied, or deliberately and
+ * permanently declined. Anything unproven must be a 500, because Shopify's
+ * retry is the only remaining chance to land that order.
+ *
+ *   401 — invalid or absent HMAC. Produced upstream by
+ *         `verifyShopifyWebhookRequest` and returned verbatim.
+ *   500 — `SHOPIFY_API_SECRET` unconfigured. Also produced upstream, verbatim.
+ *   200 — applied (created/updated), or skipped as stale, or the shop is
+ *         unknown/disconnected, or the payload is deterministically
+ *         unprocessable (e.g. no external order id). A retry would reach the
+ *         identical conclusion, so retrying would only cause a retry storm.
+ *   200 — a genuinely COMPLETED duplicate: the ingestion ledger shows this
+ *         exact delivery already reached a terminal state.
+ *   500 — the delivery is IN FLIGHT: another request holds a live claim lease
+ *         on this exact event and neither its success nor its failure is
+ *         proven yet. Answering 200 here is precisely how a crashed worker's
+ *         order used to be lost forever.
+ *   500 — a transient write failure, or any unexpected error in the pipeline.
+ *
+ * `isRetryableOrderIngestionOutcome` (in `../order-ingestion`) is the single
+ * source of truth for which ingestion outcomes fall in the 500 bucket; this
+ * module does not maintain a second copy of that list.
  *
  * ===========================================================================
  * NO PII IN LOGS
@@ -62,7 +77,12 @@ import { NextResponse, type NextRequest } from "next/server";
 import { CommerceProvider } from "@prisma/client";
 import { verifyShopifyWebhookRequest } from "@/lib/shopify-webhooks";
 import { normalizeExternalAccountId } from "../connection-sync";
-import { ingestNormalizedOrder, type OrderIngestionDeps } from "../order-ingestion";
+import {
+  ingestNormalizedOrder,
+  isRetryableOrderIngestionOutcome,
+  providerProductKeyCandidates,
+  type OrderIngestionDeps,
+} from "../order-ingestion";
 import {
   computeShopifyPayloadDigest,
   type ShopifyOrderNormalizationResult,
@@ -132,13 +152,69 @@ export type ShopifyOrderWebhookResult = {
 };
 
 /**
+ * PURE. Shopify's `OrderIngestionDeps.expandProductKeyCandidates`.
+ *
+ * Shopify reports one product under two different ids depending on the API that
+ * emitted it: the CATALOG sync stores the GraphQL global id
+ * (`gid://shopify/Product/123`) in `ConnectedCommerceProduct.externalKey`, while
+ * an ORDER webhook reports the same product as its bare numeric REST id
+ * (`123`). Matching therefore has to try both directions.
+ *
+ * That `gid://` namespace is knowledge only Shopify has, so it lives here rather
+ * than in the provider-neutral ingestion layer, which keeps the generic
+ * candidates (`providerProductKeyCandidates`) and adds the one Shopify-specific
+ * expansion on top.
+ */
+export function shopifyProductKeyCandidates(
+  externalProductId: string | null,
+): string[] {
+  const raw = externalProductId?.trim();
+  if (!raw) {
+    return [];
+  }
+  const candidates = new Set(providerProductKeyCandidates(raw));
+  if (/^\d+$/.test(raw)) {
+    candidates.add(`gid://shopify/Product/${raw}`);
+  }
+  return [...candidates];
+}
+
+/**
  * Runs the full verify -> resolve -> normalize -> ingest pipeline for one
  * Shopify order webhook delivery.
+ *
+ * This wrapper exists so that NOTHING in the pipeline can escape as an
+ * unhandled exception. `ingestNormalizedOrder` already classifies its own
+ * failures, but the steps around it (signature verification, the shop-domain
+ * lookup, the pure normalizer) can still throw — a transient DB error on the
+ * connection lookup being the realistic case. An unhandled throw here would
+ * become an opaque framework error; a deliberate 500 is the same instruction to
+ * Shopify ("redeliver") with a classified audit line and no error content.
  *
  * @param topic Bound to the ROUTE PATH by the caller (e.g. "orders/create").
  * @param normalize Pure payload normalizer for this topic.
  */
 export async function handleShopifyOrderWebhook(
+  request: NextRequest,
+  topic: string,
+  normalize: (
+    payload: unknown,
+    context: { connectionId: string; brandId: string },
+  ) => ShopifyOrderNormalizationResult,
+  deps: Partial<ShopifyOrderWebhookDeps> = {},
+): Promise<NextResponse> {
+  try {
+    return await runShopifyOrderWebhook(request, topic, normalize, deps);
+  } catch {
+    // Not bound and never logged: an error thrown from a Prisma call can embed
+    // payload column values, and this module's whole logging contract is that
+    // only classified tags leave it. The tag plus the 500 are the record.
+    logWebhook(topic, "", "UNEXPECTED_ERROR", null);
+    return new NextResponse(null, { status: 500 });
+  }
+}
+
+async function runShopifyOrderWebhook(
   request: NextRequest,
   topic: string,
   normalize: (
@@ -190,7 +266,14 @@ export async function handleShopifyOrderWebhook(
       provider: CommerceProvider.SHOPIFY,
     },
     order,
-    resolved.ingestionDeps,
+    {
+      // Shopify's own id-form knowledge, supplied to the provider-neutral
+      // ingestion layer rather than embedded in it. Listed first so an
+      // injected `ingestionDeps` can still override it deliberately, while a
+      // caller that overrides unrelated deps never silently loses it.
+      expandProductKeyCandidates: shopifyProductKeyCandidates,
+      ...resolved.ingestionDeps,
+    },
   );
 
   logWebhook(topic, shopDomain, outcome.status, {
@@ -200,11 +283,17 @@ export async function handleShopifyOrderWebhook(
     warnings,
   });
 
-  // 5. A transient storage failure must be retried by Shopify. The ingestion
-  // layer leases failed event IDs for re-drive, so a retry can safely reclaim
-  // the event without duplicating an order write. Deterministic rejects above
-  // still return 200 and do not create retry storms.
-  return new NextResponse(null, { status: outcome.status === "FAILED" ? 500 : 200 });
+  // 5. Settled -> 200; unproven -> 500 so Shopify redelivers. The unproven set
+  // is owned by the ingestion layer (`isRetryableOrderIngestionOutcome`): a
+  // transient write failure, an unexpected error, and — the case that makes
+  // this more than a nicety — a delivery still IN FLIGHT under another
+  // request's claim lease. The ingestion layer's lease/reclaim machinery means
+  // a redelivery either finds the work finished (200, no reprocessing) or takes
+  // the abandoned claim over and lands the order for real. Deterministic
+  // rejects stay 200 and never form a retry storm.
+  return new NextResponse(null, {
+    status: isRetryableOrderIngestionOutcome(outcome) ? 500 : 200,
+  });
 }
 
 function logWebhook(

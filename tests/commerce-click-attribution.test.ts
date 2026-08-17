@@ -724,7 +724,7 @@ describe("redirect target and PII", () => {
     assert.equal(response.status, 302);
     assert.match(
       response.headers.get("location") || "",
-      /^https:\/\/shop\.acme\.example\/products\/widget\?ref=/,
+      /^https:\/\/shop\.acme\.example\/products\/widget\?sqratch_ref=/,
     );
   });
 
@@ -746,12 +746,16 @@ describe("redirect target and PII", () => {
     assert.equal(mintCalled, false);
   });
 
-  test("the redirect Location carries only the opaque token as ?ref=, never an email or raw internal id", async () => {
+  test("the redirect Location carries only the opaque namespaced token, never an email or raw internal id", async () => {
     const response = await click(SHOP_SURFACE, {}, req());
     assert.equal(response.status, 302);
     const location = response.headers.get("location") || "";
 
-    assert.match(location, /^https:\/\/acme\.test\/products\/widget\?ref=[A-Za-z0-9_-]{43}$/);
+    assert.match(location, /^https:\/\/acme\.test\/products\/widget\?sqratch_ref=[A-Za-z0-9_-]{43}$/);
+    // The redirect carries the URL query param (`sqratch_ref`), never the
+    // underscore-prefixed Shopify cart-attribute key (`_sqratch_ref`); the two
+    // are separate constants and must not be crossed.
+    assert.doesNotMatch(location, /_sqratch_ref/);
     assert.doesNotMatch(location, /@/); // no email pattern
     assert.doesNotMatch(location, /bcp-1|brand-1|campaign-A|creator-1|experience-1/);
   });
@@ -770,6 +774,7 @@ describe("redirect target and PII", () => {
 
     const location = response.headers.get("location") || "";
     assert.match(location, /ref=merchant-own-value/);
+    assert.match(location, /sqratch_ref=[A-Za-z0-9_-]{43}/);
   });
 });
 

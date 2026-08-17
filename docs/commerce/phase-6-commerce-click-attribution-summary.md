@@ -1,5 +1,10 @@
 # Phase 6 — Commerce Click Attribution
 
+> **Historical status:** Phase 12 supersedes this document's former dormant
+> Shopify transport statements. See
+> [`phase-12-live-order-ingestion-and-conversion-attribution-summary.md`](./phase-12-live-order-ingestion-and-conversion-attribution-summary.md)
+> for the current prospective cart-attribute, order-webhook, and scope model.
+
 ## Click attribution ≠ purchase attribution ≠ buyer identity
 
 Read this section first. `CommerceClickAttribution` records that a specific
@@ -12,6 +17,7 @@ conversion, or evidence of identity beyond "this visitor was sent here."
 
 ## Provider transport status
 
+> **AS OF PHASE 6** (historical — see the banner at the top of this document):
 > Phase 6 implements the attribution foundation — an opaque, hash-stored,
 > campaign-scoped click token, a server-side click-creation-and-redirect
 > path, and a code-side seam (`CommerceClickAttribution.consumedAt` /
@@ -25,9 +31,17 @@ conversion, or evidence of identity beyond "this visitor was sent here."
 > heuristics (timing, product, shop domain), never by a carried identifier.
 
 Do not soften, summarize away, or omit the paragraph above in any downstream
-document, PR description, or product communication about this phase.
+document, PR description, or product communication about **Phase 6 as it
+stood at the time**. **Phase 12 has since closed this gap** — see
+`docs/commerce/phase-12-live-order-ingestion-and-conversion-attribution-summary.md`
+for the live `read_orders` scope, the three order/refund webhook
+subscriptions, the `extensions/sqratch-attribution` theme app extension, and
+the carried-identifier (cart-attribute) transport that now exists. The
+click-vs-purchase distinction two sections above remains true regardless:
+even with live order ingestion, a click row is still never itself proof of a
+sale — `CommerceOrder` is the separate, explicit evidence for that.
 
-## Shopify limitations
+## Shopify limitations (AS OF PHASE 6 — historical)
 
 The transport audit that motivated the paragraph above found, as of this
 phase:
@@ -41,7 +55,12 @@ phase:
   a web pixel event, a checkout UI extension reading the URL — but **none of
   them are wired up in this app today**. Phase 6 does not add any of them.
 
-Given that, `?ref=<token>` is appended to the outbound merchant URL as a
+**All four bullets above are resolved by Phase 12** — see that document for
+the current, live state.
+
+Given that, `?sqratch_ref=<token>` (originally `?ref=<token>` at Phase 6; the
+query-param name was namespaced later, before Phase 12's cart-attribute
+transport landed) is appended to the outbound merchant URL as a
 harmless, currently-inert, forward-compatible seam. No code in this app
 reads it back. It exists so that a future phase adding one of the
 mechanisms above has somewhere to look, without requiring a second

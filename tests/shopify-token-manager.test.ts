@@ -91,6 +91,7 @@ after(() => {
 import {
   isAccessTokenFresh,
   hasSufficientScopes,
+  hasOrderAttributionScope,
   computeExpiresAt,
   ownsRefreshLock,
   exchangeSessionTokenForOfflineToken,
@@ -113,7 +114,7 @@ function makeExpiry(offsetSeconds: number, base = NOW_MS): Date {
 function makeTokenResponse(overrides?: Partial<ShopifyTokenResponse>): ShopifyTokenResponse {
   return {
     access_token: "shpat_new_access_token",
-    scope: "read_products,read_discounts,write_discounts",
+    scope: "read_products,read_themes,read_discounts,write_discounts",
     expires_in: 3600,
     refresh_token: "shprt_new_refresh_token",
     refresh_token_expires_in: 7776000, // 90 days
@@ -165,7 +166,7 @@ describe("isAccessTokenFresh", () => {
 describe("hasSufficientScopes", () => {
   test("returns true when all required scopes are present", () => {
     assert.equal(
-      hasSufficientScopes("read_products,read_discounts,write_discounts"),
+      hasSufficientScopes("read_products,read_themes,read_discounts,write_discounts"),
       true,
     );
   });
@@ -186,7 +187,7 @@ describe("hasSufficientScopes", () => {
 
   test("write_discounts also satisfies the Shopify discount read scope", () => {
     assert.equal(
-      hasSufficientScopes("read_products,write_discounts"),
+      hasSufficientScopes("read_products,read_themes,write_discounts"),
       true,
     );
   });
@@ -194,7 +195,7 @@ describe("hasSufficientScopes", () => {
   test("handles extra scopes gracefully", () => {
     assert.equal(
       hasSufficientScopes(
-        "read_products,read_discounts,write_discounts,write_products",
+        "read_products,read_themes,read_discounts,write_discounts,write_products",
       ),
       true,
     );
@@ -202,7 +203,7 @@ describe("hasSufficientScopes", () => {
 
   test("handles scopes with whitespace", () => {
     assert.equal(
-      hasSufficientScopes("read_products, read_discounts, write_discounts"),
+      hasSufficientScopes("read_products, read_themes, read_discounts, write_discounts"),
       true,
     );
   });
@@ -213,6 +214,56 @@ describe("hasSufficientScopes", () => {
 
   test("returns false for empty string", () => {
     assert.equal(hasSufficientScopes(""), false);
+  });
+});
+
+describe("hasOrderAttributionScope", () => {
+  test("returns true when read_orders is present among other scopes", () => {
+    assert.equal(
+      hasOrderAttributionScope(
+        "read_products,read_orders,read_discounts,write_discounts",
+      ),
+      true,
+    );
+  });
+
+  test("returns true when read_orders is the only scope", () => {
+    assert.equal(hasOrderAttributionScope("read_orders"), true);
+  });
+
+  test("returns false when read_orders is absent, even with every other required scope granted", () => {
+    assert.equal(
+      hasSufficientScopes("read_products,read_themes,read_discounts,write_discounts"),
+      true,
+      "sanity check: the other three scopes alone already satisfy hasSufficientScopes",
+    );
+    assert.equal(
+      hasOrderAttributionScope("read_products,read_discounts,write_discounts"),
+      false,
+      "but must NOT satisfy hasOrderAttributionScope — the two checks are independent, and orderAttributionReady must not become true merely because catalog/discount scopes are sufficient",
+    );
+  });
+
+  test("does not match a scope name that merely contains read_orders as a substring", () => {
+    assert.equal(hasOrderAttributionScope("read_all_orders"), false);
+    assert.equal(hasOrderAttributionScope("write_orders"), false);
+  });
+
+  test("handles scopes with whitespace around read_orders", () => {
+    assert.equal(
+      hasOrderAttributionScope("read_products, read_orders, write_discounts"),
+      true,
+    );
+  });
+
+  test("returns false for null, undefined, and empty string", () => {
+    assert.equal(hasOrderAttributionScope(null), false);
+    assert.equal(hasOrderAttributionScope(undefined), false);
+    assert.equal(hasOrderAttributionScope(""), false);
+  });
+
+  test("is case-sensitive: a differently-cased scope string does not match", () => {
+    assert.equal(hasOrderAttributionScope("READ_ORDERS"), false);
   });
 });
 
@@ -276,7 +327,7 @@ describe("exchangeSessionTokenForOfflineToken", () => {
     assert.equal(result.refreshToken, "shprt_new_refresh_token");
     assert.equal(result.expiresIn, 3600);
     assert.equal(result.refreshTokenExpiresIn, 7776000);
-    assert.equal(result.scope, "read_products,read_discounts,write_discounts");
+    assert.equal(result.scope, "read_products,read_themes,read_discounts,write_discounts");
   });
 });
 
@@ -424,7 +475,7 @@ describe("Token refresh decision logic", () => {
 
   test("(f) all required scopes present → sufficient", () => {
     assert.equal(
-      hasSufficientScopes("read_products,read_discounts,write_discounts"),
+      hasSufficientScopes("read_products,read_themes,read_discounts,write_discounts"),
       true,
     );
   });
@@ -673,7 +724,7 @@ describe("getValidAccessToken → mirror orchestration", () => {
       shopifyAccessTokenExpiresAt: realExpiry(-60_000), // already expired -> stale
       shopifyRefreshTokenEncrypted: encryptSecret("shprt_old_refresh"),
       shopifyRefreshTokenExpiresAt: realExpiry(7_776_000_000),
-      shopifyGrantedScopes: "read_products,read_discounts,write_discounts",
+      shopifyGrantedScopes: "read_products,read_themes,read_discounts,write_discounts",
       shopifyClientId: "client_abc",
       shopifyTokenRefreshLockedUntil: null,
       shopifyTokenRefreshLockId: null,

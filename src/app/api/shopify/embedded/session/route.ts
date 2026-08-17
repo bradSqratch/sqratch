@@ -127,7 +127,7 @@ export async function POST(req: Request): Promise<NextResponse> {
   if (!hasSufficientScopes(result.scope)) {
     console.warn("[shopify/embedded/session] insufficient scopes", {
       grantedScopes: result.scope,
-      requiredScopes: "read_products,read_discounts,write_discounts",
+      requiredScopes: "read_products,read_themes,read_discounts,write_discounts",
       shop,
     });
 

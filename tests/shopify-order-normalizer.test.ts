@@ -372,18 +372,26 @@ describe("14/15. refund derivation is cumulative, never incremental", () => {
 describe("extractShopifyAttributionToken", () => {
   const VALID_TOKEN = "a".repeat(43);
 
-  test("finds a ref token in note_attributes", () => {
-    const payload = { note_attributes: [{ name: "ref", value: VALID_TOKEN }] };
+  // The cart-attribute key Shopify carries into the order is underscore-
+  // prefixed (`_sqratch_ref`); the bare `sqratch_ref` below is SQRATCH's own
+  // URL query parameter, which is deliberately a different, distrusted source.
+  test("finds the namespaced token in durable cart/order attributes", () => {
+    const payload = { note_attributes: [{ name: "_sqratch_ref", value: VALID_TOKEN }] };
     assert.equal(extractShopifyAttributionToken(payload), VALID_TOKEN);
   });
 
-  test("finds a ref token in landing_site as a query parameter", () => {
-    const payload = { landing_site: `/products/x?ref=${VALID_TOKEN}` };
-    assert.equal(extractShopifyAttributionToken(payload), VALID_TOKEN);
+  test("does not trust a landing-site query parameter as order evidence", () => {
+    const payload = { landing_site: `/products/x?sqratch_ref=${VALID_TOKEN}` };
+    assert.equal(extractShopifyAttributionToken(payload), null);
+  });
+
+  test("the pre-rename bare cart-attribute key is no longer accepted as the attribution attribute", () => {
+    const payload = { note_attributes: [{ name: "sqratch_ref", value: VALID_TOKEN }] };
+    assert.equal(extractShopifyAttributionToken(payload), null);
   });
 
   test("an obviously malformed candidate (wrong length) is rejected by the format screen and yields null", () => {
-    const payload = { note_attributes: [{ name: "ref", value: "too-short" }] };
+    const payload = { note_attributes: [{ name: "_sqratch_ref", value: "too-short" }] };
     assert.equal(extractShopifyAttributionToken(payload), null);
   });
 

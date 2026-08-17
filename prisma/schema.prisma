@@ -202,7 +202,6 @@ model QRCode {
   redeemedById              String?
   createdById               String
   isActive                  Boolean                    @default(true)
-  deletedCampaignName       String?
   batchId                   String?
   analyticsEvents           AnalyticsEvent[]
   unlocks                   CampaignUnlock[]
@@ -745,13 +744,12 @@ model CampaignLessonProduct {
 /// non-secret slice kept purely for operator triage (correlating a support
 /// report to a row) and is never sufficient to reconstruct the token.
 ///
-/// TRANSPORT REALITY (do not overstate this table's power)
-/// ------------------------------------------------------
-/// SQRATCH's Shopify app holds only `read_products, read_discounts,
-/// write_discounts` — no `read_orders`, no orders webhook, no checkout or
-/// theme extension. Appending the token to a product URL therefore has NO
-/// guaranteed mechanism today to survive into a merchant order. This table is
-/// the foundation and the forward seam; it is not live order attribution.
+/// TRANSPORT REALITY
+/// -----------------
+/// Phase 12's Shopify Theme App Extension copies the namespaced click token
+/// into a cart attribute, and signed Shopify order webhooks may claim the
+/// matching hash. This remains prospective, evidence-based attribution only:
+/// a token is never accepted from a landing/referrer URL or client request.
 ///
 /// CAMPAIGN CONTEXT
 /// ----------------
@@ -922,12 +920,10 @@ model CommerceClickAttribution {
 /// per-provider pure normalizer (e.g.
 /// `src/lib/commerce/providers/shopify-order-normalizer.ts`).
 ///
-/// NOT LIVE. Nothing in production writes to these tables today. SQRATCH's
-/// Shopify app does not hold `read_orders` and neither `shopify.app.toml` nor
-/// `shopify.app.custom.toml` subscribes to any `orders/*` or `refunds/*`
-/// topic, so Shopify never sends an order payload. These models exist so the
-/// normalization is designed, reviewed, and fixture-tested BEFORE any scope is
-/// requested — see `docs/commerce/phase-7-order-normalization-summary.md`.
+/// Phase 12 declares prospective Shopify order/refund topics and `read_orders`.
+/// Delivery still requires deployment of that config and merchant
+/// reauthorization; see
+/// `docs/commerce/phase-12-live-order-ingestion-and-conversion-attribution-summary.md`.
 ///
 /// NO CUSTOMER PII. There is deliberately no email, name, phone, or address
 /// column on any model below, and the Shopify normalizer actively skips the
@@ -948,22 +944,24 @@ model CommerceClickAttribution {
 /// int4 outright. Overflowing produces a Postgres `22003` at write time and
 /// loses the order. Every money column here is therefore `BigInt`.
 ///
-/// KNOWN LIMITATION, stated rather than worked around: the shared converter
-/// `decimalStringToMinorUnits` in `src/lib/commerce/money.ts` still enforces
-/// the int4 range (`INT32_MIN`/`INT32_MAX`) because it was written for the
-/// `Int` catalog columns. So although these COLUMNS accept a 64-bit value, the
-/// current ingestion path rejects any single amount outside int4 with a typed
-/// `OUT_OF_RANGE` result (nulling that one field, never failing the order).
-/// Widening that helper is a separate, deliberately-reviewed change; the wider
-/// column type is what makes that change a code-only change later, with no
-/// second migration.
+/// CONVERTER: order ingestion uses `decimalStringToBigIntMinorUnits` in
+/// `src/lib/commerce/money.ts`, which enforces the full int8 range
+/// (`INT64_MIN`/`INT64_MAX`) to match these `BigInt` columns. This is a
+/// SEPARATE function from `decimalStringToMinorUnits`, which remains
+/// int4-bounded (`INT32_MIN`/`INT32_MAX`) and is used only for the `Int`
+/// catalog columns (`ConnectedCommerceProduct.priceMinMinor`/`priceMaxMinor`).
+/// An amount outside the int8 range still rejects with a typed `OUT_OF_RANGE`
+/// result (nulling that one field, never failing the order) — this is now a
+/// defense against a genuinely pathological provider value, not a routine
+/// limitation, since int8 comfortably covers any realistic order total.
 ///
 /// TOTALS ARE NEVER DERIVED. `totalMinor` is always the provider's own
 /// reported total, persisted verbatim. It is never computed by summing
-/// converted line items: `decimalStringToMinorUnits` truncates rather than
-/// rounds, so a sum of per-line conversions can legitimately disagree with the
-/// provider's total by a few minor units. `netRevenueMinor` is the one derived
-/// column (`totalMinor - totalRefundedMinor`), computed at write time.
+/// converted line items: `decimalStringToBigIntMinorUnits` truncates rather
+/// than rounds, so a sum of per-line conversions can legitimately disagree
+/// with the provider's total by a few minor units. `netRevenueMinor` is the
+/// one derived column (`totalMinor - totalRefundedMinor`), computed at write
+/// time.
 ///
 /// IDENTITY IS SCOPED TO THE CONNECTION. `@@unique([connectionId,
 /// externalOrderId])`, never a bare unique on `externalOrderId` — two
@@ -1033,11 +1031,9 @@ model CommerceOrder {
   updatedAt         DateTime  @updatedAt
 
   /// Optional 1:1 to the click that produced this order. Populated ONLY when a
-  /// payload genuinely carried a durable, hash-matched, unexpired, unconsumed
-  /// click token. Never inferred from timing, product overlap, or similarity.
-  /// In production today this is always null: Phase 6's audit found no Shopify
-  /// storefront-to-order path that carries the `ref` query parameter into an
-  /// order payload at all.
+  /// payload genuinely carried a durable, hash-matched, redirected, unexpired,
+  /// unconsumed click token from the exact Brand/connection/provider. Never
+  /// inferred from timing, product overlap, or similarity.
   attributionId String? @unique
 
   connection  CommerceConnection        @relation(fields: [connectionId], references: [id], onDelete: Cascade)
@@ -1077,8 +1073,9 @@ model CommerceOrderLineItem {
 
   unitPriceMinor BigInt?
   /// Signed: a discount or adjustment line can legitimately be negative, which
-  /// is why the ingestion path uses `decimalStringToMinorUnits` (sign-aware)
-  /// and NOT `providerPriceStringToMinorUnits` (rejects negatives by design).
+  /// is why the ingestion path uses `decimalStringToBigIntMinorUnits`
+  /// (sign-aware, int8-bounded) and NOT `providerPriceStringToMinorUnits`
+  /// (rejects negatives by design, int4-bounded).
   discountMinor  BigInt?
   taxMinor       BigInt?
   totalMinor     BigInt?

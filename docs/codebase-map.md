@@ -821,7 +821,7 @@ No database is required for the standard CI run — nearly all tests use mocked 
 
 ### Files That Can Break Shopify Review
 - `src/app/api/shopify/webhooks/` — all 4 GDPR webhooks must respond 200 (Shopify tests these)
-- `src/lib/shopify.ts:SHOPIFY_SCOPES` — only `read_products`, `read_discounts`, `write_discounts` are requested
+- `src/lib/shopify.ts:SHOPIFY_SCOPES` — `read_products`, `read_orders`, `read_themes`, `read_discounts`, and `write_discounts` are requested
 - `src/lib/shopify-session-token.ts` — embedded auth; removing signature verification fails review
 
 ---

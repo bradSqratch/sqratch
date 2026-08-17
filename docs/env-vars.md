@@ -41,13 +41,22 @@ This inventory was produced by searching the repository for every `process.env.*
 | `SHOPIFY_APP_URL` | Required for Shopify features, production-supplied | `src/lib/shopify.ts` | Canonical HTTPS origin, e.g. `https://www.sqratch.com` in production. |
 | `SHOPIFY_REDIRECT_URI` | **Stale — unused** | — | Not referenced anywhere in the codebase (confirmed by repository-wide search). The OAuth redirect URL is derived from `SHOPIFY_APP_URL` plus a hardcoded path. Removed from `.env.example`. |
 
-**Scopes are not configured through an environment variable.** There is no `SHOPIFY_SCOPES` (or similarly named) variable read anywhere in the codebase — confirmed by repository-wide search — so it has been removed from `.env.example`. The required scopes, `read_products,read_discounts,write_discounts`, are instead hardcoded/configured independently in three places and must be kept aligned across all three by hand whenever they change:
+**Scopes are not configured through a generic `SHOPIFY_SCOPES`-named environment variable.** There is no such variable read anywhere in the codebase — confirmed by repository-wide search — so it has been removed from `.env.example`. Scopes are instead hardcoded/configured independently in FOUR places; the runtime minimum intentionally omits `read_orders` because order access is an additive capability:
 
-- `src/lib/shopify.ts` — the `SHOPIFY_SCOPES` constant, which the application code actually reads at runtime.
-- `shopify.app.toml` — the `[access_scopes]` block for the public (reviewed) app.
-- `shopify.app.custom.toml` — the `[access_scopes]` block for the custom test app.
+- `src/lib/shopify.ts` — the `SHOPIFY_SCOPES` constant (`"read_products,read_orders,read_themes,read_discounts,write_discounts"`), what the OAuth/embedded-install flow actually requests at runtime.
+- `shopify.app.toml` — the `[access_scopes]` block for the public (reviewed) app, same five requested scopes.
+- `shopify.app.custom.toml` — the `[access_scopes]` block for the custom test app, same five requested scopes.
+- `src/lib/shopify-token-manager.ts` — `REQUIRED_SCOPES` (`read_products,read_themes,read_discounts,write_discounts`), the minimum scope set `hasSufficientScopes()` gates core catalog, theme verification, and discount functionality on. `read_orders` is checked separately via `hasOrderAttributionScope()` and gates order conversion readiness.
 
-Deploy TOML config explicitly with `shopify app deploy --config shopify.app.toml` or `shopify app deploy --config shopify.app.custom.toml`. If these three drift out of alignment, the app can request or be granted a different scope set than the code expects.
+The first three must be kept aligned by hand whenever they change — deploy TOML config explicitly with `shopify app deploy --config shopify.app.toml` or `shopify app deploy --config shopify.app.custom.toml`. If they drift out of alignment, the app can request or be granted a different scope set than `src/lib/shopify.ts` expects. `REQUIRED_SCOPES` should only ever be a subset of the other three, never a superset — widening it without widening the TOML/runtime request first would make `hasSufficientScopes()` unsatisfiable.
+
+An already-installed merchant's granted scopes can also change WITHOUT a full re-OAuth, via Shopify's managed-installation scope approval flow; SQRATCH synchronizes canonical `CommerceConnection.grantedScopes` (and a temporary legacy Brand mirror) through the `app/scopes_update` webhook (`src/app/api/shopify/webhooks/app/scopes_update/route.ts`) — see the Webhooks subsection below.
+
+### Theme app extension / storefront conversion tracking
+
+`extensions/sqratch-attribution/` is a Shopify theme app extension (an app-embed block, handle `sqratch-attribution-embed`, filename-derived — there is no `handle` key in its `shopify.extension.toml`). It ships with the app but is **inactive on a merchant's storefront until the merchant manually enables it in the Theme Editor and presses Save**. The Shopify-specific readiness module uses `read_themes` to inspect only the current main theme's `config/settings_data.json`; it returns a neutral state and never persists or logs theme contents. The Brand Shopify status page keeps the deep-link call to action and refreshes live state after the merchant returns from Theme Editor.
+
+The extension writes exactly one Shopify cart attribute, `_sqratch_ref` (single leading underscore — hidden from normal checkout presentation, readable via the Ajax Cart API and order webhooks), containing only the opaque click token. It never writes a creator/campaign/experience/lesson/user/brand/connection id.
 
 ## Supabase / storage
 

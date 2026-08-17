@@ -49,6 +49,7 @@ const LOCK_POLL_INTERVAL_MS = 250;
 /** Required scopes — changing this list is intentional and reviewed. */
 const REQUIRED_SCOPES = [
   "read_products",
+  "read_themes",
   "read_discounts",
   "write_discounts",
 ] as const;
@@ -123,6 +124,22 @@ export function hasSufficientScopes(
 
     return false;
   });
+}
+
+/**
+ * Conversion ingestion is an additive capability. It intentionally does not
+ * gate existing catalog/reward operations for installations granted before
+ * Phase 12; those stores are surfaced as not conversion-ready until reauth.
+ */
+export function hasOrderAttributionScope(
+  grantedScopes: string | null | undefined,
+): boolean {
+  return Boolean(
+    grantedScopes
+      ?.split(",")
+      .map((scope) => scope.trim())
+      .includes("read_orders"),
+  );
 }
 
 /**
@@ -484,7 +501,7 @@ async function readWinnerToken(
  */
 export async function getValidAccessToken(
   brandId: string,
-  options?: { tokenEndpoint?: TokenEndpointFn },
+  options?: { tokenEndpoint?: TokenEndpointFn; skipScopeCheck?: boolean },
 ): Promise<GetValidAccessTokenResult> {
   const tokenEndpoint = options?.tokenEndpoint ?? defaultTokenEndpoint;
 
@@ -521,7 +538,7 @@ export async function getValidAccessToken(
   // ---------------------------------------------------------------------------
 
   // Scope check — if missing required scopes, treat as NEEDS_RECONNECT
-  if (!hasSufficientScopes(brand.shopifyGrantedScopes)) {
+  if (!options?.skipScopeCheck && !hasSufficientScopes(brand.shopifyGrantedScopes)) {
     const db = await getDb();
     await db.$transaction(async (tx) => {
       await tx.brand.update({
@@ -754,6 +771,142 @@ export async function exchangeSessionTokenForOfflineToken(
     refreshToken: response.refresh_token,
     refreshTokenExpiresIn: response.refresh_token_expires_in,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Granted-scope synchronization (Shopify `app/scopes_update` webhook)
+// ---------------------------------------------------------------------------
+
+export type ApplyGrantedScopesUpdateResult =
+  | { applied: true; brandId: string }
+  | { applied: false; reason: "UNKNOWN_SHOP" | "SUPERSEDED" };
+
+/**
+ * Synchronizes Shopify's granted scopes into canonical
+ * `CommerceConnection.grantedScopes`. A legacy `Brand.shopifyGrantedScopes`
+ * mirror is maintained only for older token lifecycle code.
+ *
+ * This grants nothing and authorizes nothing. Under Shopify-managed
+ * installation, Shopify itself decides what an installation holds and then
+ * announces the result via `app/scopes_update`; this function only records that
+ * announcement so the readers above stop reporting a stale grant. It is
+ * therefore deliberately a pure cache write: no status transition, no
+ * connection-history event, no reward-offer side effect.
+ *
+ * SHOP DOMAIN IS THE ONLY IDENTITY INPUT. The brand row is resolved solely from
+ * `shopDomain` (the value the caller took from the HMAC-verified
+ * `X-Shopify-Shop-Domain` header) via the `@unique` `Brand.shopifyShopDomain`
+ * column. No id, no payload field, and no other caller-suppliable value can
+ * select or influence which row is written.
+ *
+ * The write mirrors `performTokenRefresh`'s compare-and-swap shape: an
+ * `updateMany` whose `where` re-states the resolved row's OWN id plus the
+ * predicates that must still hold at write time, so it can never widen to a
+ * second tenant and never races a concurrent refresh into a wrong row.
+ *   - `id` pins the write to exactly the row resolved above.
+ *   - `shopifyShopDomain` is the optimistic-concurrency guard: if the row was
+ *     relinked or redacted (domain nulled/changed) between the read and the
+ *     write, the write matches nothing rather than landing on a shop it was
+ *     not authenticated for.
+ *   - `shopifyConnectionStatus: { not: "UNINSTALLED" }` stops a late/reordered
+ *     delivery from resurrecting scopes on a row whose uninstall handler has
+ *     already cleared them.
+ * A zero-count outcome is a deterministic SUPERSEDED no-op, not a failure.
+ *
+ * `grantedScopes` must already be the comma-separated form Shopify returns in
+ * `scope`; it is normalized before being stored in either representation.
+ *
+ * Throws only on a genuine transient DB failure, so the caller can answer in a
+ * way that asks Shopify to retry.
+ */
+export async function applyGrantedScopesUpdate(input: {
+  shopDomain: string;
+  grantedScopes: string;
+}): Promise<ApplyGrantedScopesUpdateResult> {
+  const shopDomain = input.shopDomain.trim().toLowerCase();
+
+  if (!shopDomain) {
+    return { applied: false, reason: "UNKNOWN_SHOP" };
+  }
+
+  const db = await getDb();
+
+  const brand = await db.brand.findUnique({
+    where: { shopifyShopDomain: shopDomain },
+    select: { id: true },
+  });
+
+  if (!brand) {
+    return { applied: false, reason: "UNKNOWN_SHOP" };
+  }
+
+  const normalizedScopes = input.grantedScopes
+    .split(",")
+    .map((scope) => scope.trim())
+    .filter(Boolean);
+
+  // CommerceConnection.grantedScopes is the canonical provider-neutral cache.
+  // The legacy Brand mirror is retained only for older token lifecycle code.
+  const connectionModel = (db as typeof db & {
+    commerceConnection?: typeof db.commerceConnection;
+  }).commerceConnection;
+  const connection = connectionModel
+    ? await connectionModel.findUnique({
+    where: {
+      provider_externalAccountId: {
+        provider: "SHOPIFY",
+        externalAccountId: shopDomain,
+      },
+    },
+    select: { id: true, brandId: true },
+      })
+    : null;
+
+  if (connection && connection.brandId === brand.id) {
+    const result = await connectionModel!.updateMany({
+      where: {
+        id: connection.id,
+        brandId: brand.id,
+        provider: "SHOPIFY",
+        externalAccountId: shopDomain,
+        status: { not: "UNINSTALLED" },
+      },
+      data: { grantedScopes: normalizedScopes },
+    });
+    if (result.count !== 1) return { applied: false, reason: "SUPERSEDED" };
+
+    // Compatibility mirror for legacy token checks. Never use this as the
+    // provider-neutral readiness authority.
+    await db.brand.updateMany({
+      where: {
+        id: brand.id,
+        shopifyShopDomain: shopDomain,
+        shopifyConnectionStatus: { not: "UNINSTALLED" },
+      },
+      data: { shopifyGrantedScopes: normalizedScopes.join(",") },
+    });
+    return { applied: true, brandId: brand.id };
+  }
+
+  // A connection row for the same external shop but a different brand is
+  // inconsistent state; never fall back to a tenant-wide legacy write.
+  if (connection && connection.brandId !== brand.id) {
+    return { applied: false, reason: "SUPERSEDED" };
+  }
+
+  // Pre-cutover installations may not have a CommerceConnection row yet.
+  const result = await db.brand.updateMany({
+    where: {
+      id: brand.id,
+      shopifyShopDomain: shopDomain,
+      shopifyConnectionStatus: { not: "UNINSTALLED" },
+    },
+    data: { shopifyGrantedScopes: normalizedScopes.join(",") },
+  });
+
+  return result.count === 1
+    ? { applied: true, brandId: brand.id }
+    : { applied: false, reason: "SUPERSEDED" };
 }
 
 // Re-export encryptSecret so callers saving tokens can use the same lib

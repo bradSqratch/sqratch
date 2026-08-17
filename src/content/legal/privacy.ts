@@ -28,17 +28,17 @@ const sections: LegalSection[] = [
         "SQRATCH connects real-world products with useful digital experiences, product education, rewards, and commerce pathways. Our approach is based on data minimization, least-privilege access, and trust between brands and their audiences."
       ),
       paragraph(
-        "When a merchant installs the SQRATCH Shopify app, SQRATCH requests only the Shopify permissions needed to provide product display and reward discount functionality."
+        "When a merchant installs the SQRATCH Shopify app, SQRATCH requests only the Shopify permissions needed for product display, reward discounts, and prospective conversion attribution."
       ),
       paragraph(
         "The Shopify permissions currently requested by SQRATCH include:"
       ),
-      bullets(["read_products", "read_discounts", "write_discounts"], true),
+      bullets(["read_products", "read_orders", "read_themes", "read_discounts", "write_discounts"], true),
       paragraph(
         "SQRATCH does not request permission to create, edit, or delete Shopify products."
       ),
       paragraph(
-        "SQRATCH does not request access to Shopify orders, Shopify customer records, payment information, checkout data, shipping addresses, fulfillment information, or protected customer data."
+        "SQRATCH requests Shopify order access only for conversion attribution. It deliberately does not persist Shopify customer name, email, phone, billing address, shipping address, payment details, or checkout data."
       ),
       paragraph(
         "SQRATCH does not sell merchant data, product data, scan data, reward data, redemption data, account data, or end-user data."
@@ -84,6 +84,26 @@ const sections: LegalSection[] = [
       ]),
       paragraph(
         "SQRATCH does not request permission to create, edit, or delete Shopify products."
+      ),
+      subheading("Shopify Order and Conversion Information"),
+      paragraph(
+        "If a merchant grants order access and enables SQRATCH conversion tracking, SQRATCH receives signed Shopify order and refund notifications and records only the commercial fields needed to report which SQRATCH product clicks led to a purchase, including:"
+      ),
+      bullets([
+        "Shopify order identifier and order number",
+        "Currency and order amounts (subtotal, discounts, shipping amount, tax, total, refunded total, and net of refunds)",
+        "Order financial status and fulfilment status",
+        "Order cancellation time and cancellation reason",
+        "Shopify order creation and last-updated timestamps",
+        "Order line items: product and variant identifiers, product title, SKU, quantity, and line amounts",
+        "A record that a signed Shopify notification was received and processed (delivery identifier, topic, processing status, and a one-way digest of the verified message)",
+        "A link to the SQRATCH product click that produced the order, matched only by an opaque single-use click token",
+      ]),
+      paragraph(
+        "Shopify order notifications can contain customer name, email address, phone number, billing address, shipping address, and checkout details. SQRATCH deliberately does not read, store, log, or use any of those fields, and there is no column anywhere in SQRATCH that can hold one."
+      ),
+      paragraph(
+        "SQRATCH does not request permission to create, edit, cancel, or fulfil Shopify orders, and does not request broader historical order access."
       ),
       subheading("SQRATCH Account Information"),
       paragraph(
@@ -161,15 +181,21 @@ const sections: LegalSection[] = [
   {
     title: "3. Information We Do Not Collect Through Shopify",
     blocks: [
-      paragraph("SQRATCH does not request access to Shopify orders."),
-      paragraph("SQRATCH does not request access to Shopify customer records."),
-      paragraph("SQRATCH does not request access to payment information."),
-      paragraph("SQRATCH does not request access to checkout data."),
-      paragraph("SQRATCH does not request access to shipping addresses."),
-      paragraph("SQRATCH does not request access to fulfillment information."),
-      paragraph("SQRATCH does not request access to protected customer data."),
       paragraph(
-        "SQRATCH does not process Shopify payments, orders, fulfillment, returns, taxes, shipping, or checkout transactions."
+        "SQRATCH requests Shopify order access only to measure conversion attribution from SQRATCH commerce clicks. Everything SQRATCH does record from an order is listed under “Shopify Order and Conversion Information” above; everything below is what SQRATCH does not collect."
+      ),
+      paragraph("SQRATCH does not request the Shopify customer permission and does not store Shopify customer records."),
+      paragraph("SQRATCH does not store payment information, and never receives card or bank details."),
+      paragraph("SQRATCH does not store checkout data."),
+      paragraph("SQRATCH does not store billing addresses, shipping addresses, email addresses, or phone numbers."),
+      paragraph(
+        "SQRATCH stores a single order-level fulfilment status value for reporting. It does not store fulfilment, shipment, tracking, or logistics records, and it cannot create or change a fulfilment."
+      ),
+      paragraph(
+        "Shopify classifies the order permission SQRATCH requests as protected customer data access. SQRATCH does not store or use the protected customer fields those order notifications can contain, and does not request the broader all-orders permission."
+      ),
+      paragraph(
+        "SQRATCH does not process Shopify payments, shipping, or checkout transactions, does not create, modify, cancel, or fulfil orders, and does not process customer records. It records only the minimum order and refund information needed for conversion attribution."
       ),
       paragraph(
         "Product purchases are completed on the merchant’s Shopify store. SQRATCH may display a public Shopify product link or help generate a reward discount code, but the actual commerce transaction occurs on Shopify, not inside SQRATCH."
@@ -369,7 +395,7 @@ const sections: LegalSection[] = [
         "Shop data redaction",
       ]),
       paragraph(
-        "Because SQRATCH does not request access to Shopify customer records, Shopify orders, checkout data, payment information, shipping addresses, or protected customer data, most customer data requests will not involve Shopify customer records stored by SQRATCH."
+        "SQRATCH deliberately does not persist Shopify customer records, checkout data, payment information, or shipping addresses. Order conversion records contain only the minimum merchant-order and attribution information needed for reporting."
       ),
       paragraph(
         "If SQRATCH receives a valid privacy request from Shopify, SQRATCH will verify and process the request in accordance with Shopify requirements and applicable law."
@@ -445,7 +471,7 @@ const sections: LegalSection[] = [
         "SQRATCH will review and respond to valid privacy requests in accordance with applicable law."
       ),
       paragraph(
-        "For requests related to Shopify customer records, orders, payments, checkout, shipping, or fulfillment, individuals should contact the merchant directly, because SQRATCH does not request access to or process that information through Shopify."
+        "For requests related to Shopify customer records, payments, checkout, shipping, addresses, or fulfilment, individuals should contact the merchant directly. SQRATCH does not hold that information: the only order data SQRATCH stores is the commercial order and refund information listed in “Shopify Order and Conversion Information” above."
       ),
     ],
   },

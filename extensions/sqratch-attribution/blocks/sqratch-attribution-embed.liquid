@@ -1,0 +1,46 @@
+{% comment %}
+  SQRATCH attribution app embed.
+  Reads only the format-valid sqratch_ref URL parameter and writes it to the
+  namespaced cart attribute that Shopify carries into the resulting order.
+
+  The read key and the write key are two deliberately distinct literals:
+  - queryParamKey mirrors CLICK_TOKEN_QUERY_PARAM ("sqratch_ref"), the public
+    URL parameter SQRATCH appends to the merchant destination.
+  - cartAttributeKey mirrors CLICK_TOKEN_CART_ATTRIBUTE ("_sqratch_ref"). The
+    single leading underscore is Shopify's convention for an attribute that
+    stays out of the merchant-facing presentation while remaining readable via
+    the Ajax Cart API and order webhooks. A double underscore is reserved by
+    Shopify and must never be used here.
+
+  Liquid cannot import the TypeScript constants in
+  src/lib/commerce/click-token.ts, so both literals are mirrored here and
+  pinned by tests/shopify-attribution-theme-extension.test.ts.
+{% endcomment %}
+<script>
+  (() => {
+    const queryParamKey = "sqratch_ref";
+    const cartAttributeKey = "_sqratch_ref";
+    const token = new URL(window.location.href).searchParams.get(queryParamKey);
+    if (!token || !/^[A-Za-z0-9_-]{43}$/.test(token)) return;
+
+    // Shopify's cart update endpoint merges the supplied attribute, preserving
+    // unrelated merchant cart attributes. A later genuine SQRATCH click is
+    // deliberate last-touch replacement of this namespaced value only.
+    fetch("/cart/update.js", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ attributes: { [cartAttributeKey]: token } }),
+      credentials: "same-origin",
+    }).catch(() => {
+      // Attribution is best effort and must never interrupt ordinary browsing.
+    });
+  })();
+</script>
+
+{% schema %}
+{
+  "name": "SQRATCH attribution",
+  "target": "head",
+  "settings": []
+}
+{% endschema %}

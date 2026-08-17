@@ -21,6 +21,7 @@ Before stating factual conclusions about current runtime behavior, data ownershi
 Graphify is not the source of truth. After Graphify identifies relevant files, inspect the current source before modifying code.
 
 Targeted `rg`, `grep`, file search, or direct reads are allowed when:
+
 - locating an exact symbol, string, route, environment variable, or error;
 - Graphify returns insufficient information;
 - the graph may be stale;
@@ -47,6 +48,7 @@ Never manually edit files inside `graphify-out/`.
 Follow existing SQRATCH conventions before introducing new abstractions.
 
 Primary stack:
+
 - Next.js App Router
 - React
 - TypeScript
@@ -59,13 +61,9 @@ Prefer existing utilities, components, services, and patterns over duplicate imp
 
 ## Verification
 
-Run focused tests while developing.
-
-For substantial changes, run:
-
-`npm run verify`
-
-when the environment permits.
+Focused tests are the default while developing. Run the full suite/build only
+when the user explicitly requests it or a final security/data-integrity gate
+requires it.
 
 Do not suppress lint, type, Prisma, test, or build failures. Clearly distinguish pre-existing failures from failures caused by the current change.
 
@@ -75,6 +73,10 @@ Inspect the existing Prisma schema and migrations before database changes.
 
 Never reset, drop, truncate, or destructively modify an unknown, shared, or production database.
 
+Agents never apply migrations or run live browser/provider QA unless the user
+explicitly requests those operations. Shopify app deploy is likewise never an
+agent action without explicit authorization.
+
 Do not expose secrets, API keys, tokens, passwords, connection strings, or complete environment variable values.
 
 ## Git
@@ -83,7 +85,6 @@ Do not commit, push, merge, rebase, force-push, or publish changes unless explic
 
 Before reporting completion, inspect the relevant diff and current `git status`.
 
-
 ## graphify
 
 This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
@@ -91,8 +92,32 @@ This project has a knowledge graph at graphify-out/ with god nodes, community st
 When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
 
 Rules:
+
 - For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
 - Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
 - If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
 - Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
 - After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
+
+## Execution Economy
+
+- Do not restate repository rules from this file in plans or completion reports.
+- Use focused tests while developing.
+- Run the full verification suite only when explicitly requested or when a
+  security/data-integrity final gate requires it.
+- Suppress verbose successful command output; report exit status, counts, and
+  relevant failures only.
+- The user performs live browser, production, and external-provider QA unless
+  explicitly requested otherwise.
+
+## Commerce Invariants
+
+- CommerceConnection and provider-neutral commerce models are canonical.
+- Provider-specific transport/API behavior stops at provider modules/adapters.
+- Never trust client-supplied merchant/product/campaign/creator identity.
+- Store only opaque SQRATCH attribution evidence in external carts.
+- Verify provider webhook authenticity before parsing/processing.
+- Order creation does not mean payment.
+- Refunds/cancellations must update current net analytics without destroying
+  historical attribution.
+- No customer PII belongs in creator commerce analytics.

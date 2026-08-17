@@ -14,6 +14,7 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  CLICK_TOKEN_CART_ATTRIBUTE,
   CLICK_TOKEN_CHAR_LENGTH,
   CLICK_TOKEN_QUERY_PARAM,
   clickTokenPrefix,
@@ -124,8 +125,23 @@ describe("hashClickIp", () => {
 });
 
 describe("module constants", () => {
-  test("the outbound query param is the documented 'ref'", () => {
-    assert.equal(CLICK_TOKEN_QUERY_PARAM, "ref");
+  test("the outbound query param is SQRATCH-namespaced and unchanged", () => {
+    // This is SQRATCH's own URL parameter on the merchant landing page, not a
+    // Shopify cart attribute, so it stays a bare namespaced key.
+    assert.equal(CLICK_TOKEN_QUERY_PARAM, "sqratch_ref");
+  });
+
+  test("the cart attribute is underscore-prefixed so Shopify keeps it out of the merchant-facing presentation", () => {
+    assert.equal(CLICK_TOKEN_CART_ATTRIBUTE, "_sqratch_ref");
+    // A single leading underscore only; the double-underscore namespace is
+    // reserved for Shopify's own internal attributes.
+    assert.doesNotMatch(CLICK_TOKEN_CART_ATTRIBUTE, /^__/);
+    assert.match(CLICK_TOKEN_CART_ATTRIBUTE, /^_[a-z0-9_]+$/);
+  });
+
+  test("the query param and the cart attribute are decoupled, not accidentally the same key", () => {
+    assert.notEqual(CLICK_TOKEN_QUERY_PARAM, CLICK_TOKEN_CART_ATTRIBUTE);
+    assert.equal(CLICK_TOKEN_CART_ATTRIBUTE, `_${CLICK_TOKEN_QUERY_PARAM}`);
   });
 });
 

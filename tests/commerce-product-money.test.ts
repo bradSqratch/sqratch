@@ -19,12 +19,29 @@ import { test, describe } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  decimalStringToBigIntMinorUnits,
   decimalStringToMinorUnits,
   formatMinorUnitPriceRange,
   providerPriceStringToMinorUnits,
   getCurrencyExponent,
   DEFAULT_MINOR_UNIT_EXPONENT,
 } from "../src/lib/commerce/money";
+
+describe("decimalStringToBigIntMinorUnits", () => {
+  test("preserves a provider order amount above catalog int4 range when it fits Postgres BigInt", () => {
+    assert.deepEqual(decimalStringToBigIntMinorUnits("25000000.00", 2), {
+      ok: true,
+      minorUnits: BigInt("2500000000"),
+    });
+  });
+
+  test("rejects an amount beyond the persisted Postgres BigInt range", () => {
+    assert.deepEqual(decimalStringToBigIntMinorUnits("92233720368547758.08", 2), {
+      ok: false,
+      reason: "OUT_OF_RANGE",
+    });
+  });
+});
 
 describe("decimalStringToMinorUnits", () => {
   test('"19.99" at exponent 2 -> 1999', () => {

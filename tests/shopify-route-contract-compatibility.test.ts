@@ -352,6 +352,10 @@ describe("brand/shopify/status route contract", () => {
       "shopifyAccessTokenExpiresAt",
       "shopifyGrantedScopes",
       "requiresReconnect",
+      "orderAttributionReady",
+      "themeTracking",
+      "overallConversionTrackingReady",
+      "shopifyAppEmbedDeepLink",
     ].sort();
 
     for (const { label, brand: brandOverrides } of cases) {
@@ -367,6 +371,7 @@ describe("brand/shopify/status route contract", () => {
             shopifyAuthMode: "LEGACY_OFFLINE",
             shopifyAccessTokenExpiresAt: null,
             shopifyGrantedScopes: "read_products,write_discounts",
+            shopifyClientId: null,
           };
         },
         async getConnectionSummary() {
@@ -423,6 +428,8 @@ describe("brand/shopify/status route contract", () => {
         brand.shopifyConnectionStatus === "REQUIRES_RECONNECT",
         label,
       );
+      assert.equal(json.data.themeTracking.state, "PERMISSION_REQUIRED", label);
+      assert.equal(json.data.overallConversionTrackingReady, false, label);
     }
   });
 
@@ -477,6 +484,7 @@ describe("brand/shopify/status route contract", () => {
           shopifyAuthMode: "LEGACY_OFFLINE" as const,
           shopifyAccessTokenExpiresAt: null,
           shopifyGrantedScopes: null,
+          shopifyClientId: null,
         };
       },
     };
@@ -526,6 +534,61 @@ describe("brand/shopify/status route contract", () => {
       disagreeingJson.data.shopifyConnectionStatus,
       "CONNECTED",
       "a stale/disagreeing mirror must never leak into the response",
+    );
+  });
+
+  test("3b. shopifyAppEmbedDeepLink is null unless BOTH shop domain and client id are usable", async () => {
+    const clientId = "0123456789abcdef0123456789abcdef";
+
+    async function deepLinkFor(
+      brandOverrides: Partial<BrandFixtureFields>,
+      shopifyClientId: string | null,
+    ): Promise<unknown> {
+      const brand = makeBrand(brandOverrides);
+      const response = await statusGetImpl(
+        makeStatusDeps({
+          async getContext() {
+            return makeContext(brand);
+          },
+          async findTokenExtra() {
+            return {
+              shopifyAuthMode: "LEGACY_OFFLINE" as const,
+              shopifyAccessTokenExpiresAt: null,
+              shopifyGrantedScopes: null,
+              shopifyClientId,
+            };
+          },
+          async getConnectionSummary() {
+            return legacyFallbackSummary(brand);
+          },
+        }),
+      );
+      assert.equal(response.status, 200);
+      return (await response.json()).data.shopifyAppEmbedDeepLink;
+    }
+
+    // Both present -> a fully-formed Theme Editor deep link.
+    assert.equal(
+      await deepLinkFor({}, clientId),
+      "https://test-shop.myshopify.com/admin/themes/current/editor" +
+        `?context=apps&activateAppId=${clientId}/sqratch-attribution-embed`,
+    );
+
+    // Missing client id (brand never completed an install that stamped it).
+    assert.equal(await deepLinkFor({}, null), null);
+
+    // Missing shop domain (never connected).
+    assert.equal(await deepLinkFor({ shopifyShopDomain: null }, clientId), null);
+
+    // Neither.
+    assert.equal(await deepLinkFor({ shopifyShopDomain: null }, null), null);
+
+    // Defense in depth: a corrupted row must yield null, never a 500 and never
+    // a link to a non-Shopify host.
+    assert.equal(await deepLinkFor({ shopifyShopDomain: "evil.com" }, clientId), null);
+    assert.equal(
+      await deepLinkFor({ shopifyShopDomain: "test-shop.myshopify.com" }, "not-a-client-id"),
+      null,
     );
   });
 });
