@@ -4,40 +4,27 @@
  * The provider-neutral commerce connection SERVICE — the single entry point
  * routes should use to ask "what is brand X's commerce connection", "is it
  * usable", and "what can this provider's adapter do", instead of each route
- * re-implementing provider selection and legacy/mirror preference logic by
- * hand.
+ * re-implementing provider selection logic by hand.
  *
  * This module is built ON TOP OF `./connection-resolver.ts` (never rewrites
- * or removes it): it reuses `mapLegacyBrandToConnectionSummary`,
- * `mapCommerceConnectionToSummary`, and `pickPreferredConnectionRow`
- * unchanged, and adds the CONSISTENCY-CHECKED preference + drift signal that
- * `resolveCommerceConnectionForBrand` (connection-resolver.ts's own
- * resolver, which always prefers the row when one exists) does not attempt.
+ * or removes it): it reuses `mapCommerceConnectionToSummary` and
+ * `pickPreferredConnectionRow` unchanged.
  *
  * ---------------------------------------------------------------------------
- * CONSISTENCY-CHECKED PREFERENCE (`getActiveCommerceConnection`)
+ * CANONICAL IS THE ONLY AUTHORITY (`getActiveCommerceConnection`)
  * ---------------------------------------------------------------------------
- * Every Shopify write path now dual-writes into `CommerceConnection` (see
- * `./connection-sync.ts`), but that mirror write is best-effort and can lag
- * or fail independently of the legacy `Brand.shopify*` write it mirrors. So
- * the row is only trusted when it AGREES with legacy truth:
+ * PHASE 14C-A: `CommerceConnection` is the SOLE runtime credential/connection
+ * authority. Every currently installed Shopify merchant already has a
+ * canonical `CommerceConnection` + `CommerceConnectionSecret`
+ * (operator-verified live DB evidence — see the Phase 14C-A brief) — there
+ * is no legitimate legacy source of truth left to fall back to:
  *
- *   - `CommerceConnection` row exists, `Brand.shopifyShopDomain` present,
- *     and the row's `externalAccountId` (normalized) equals the normalized
- *     legacy domain -> the row is used (no drift).
- *   - Anything else — the row's domain disagrees with legacy, the row
- *     exists but legacy has no domain on record, or legacy has a domain but
- *     no row exists yet — is treated as the mirror being stale. Legacy wins,
- *     and the disagreement is reported via `detectConnectionDrift` /
- *     the `drift` half of the internal resolution so a later reconciliation
- *     tool can act on it. Preferring a stale row here would be a
- *     user-visible behavior change, which Phase 2 must not introduce.
- *   - Both sides agreeing there is no connection at all is NOT drift.
+ *   - A `CommerceConnection` row exists -> it is used, unconditionally.
+ *   - No row exists -> `null`. `Brand.shopify*` is never read.
  *
- * Only SHOPIFY has a legacy source of truth to disagree with (see
- * connection-resolver.ts's own resolver) — for any other provider the row,
- * if one exists, is authoritative as-is and `detectConnectionDrift` always
- * reports `driftDetected: false`.
+ * `detectConnectionDrift` is retained only as an always-`driftDetected: false`
+ * diagnostic stub for callers that still reference it — there is nothing
+ * left to compare a canonical row against.
  *
  * Multiple `CommerceConnection` rows for the same (brandId, provider) are
  * resolved with `pickPreferredConnectionRow`'s existing tiebreak — this
@@ -46,29 +33,28 @@
  * ---------------------------------------------------------------------------
  * WHY `isConnectionUsable` DOESN'T CHECK A TOKEN FIELD
  * ---------------------------------------------------------------------------
- * Today's "is this brand's Shopify connection usable" gates (e.g.
- * `src/app/api/brand/shopify/products/route.ts`, the `CandidateBrand` check
- * in `src/lib/lesson-product-links.ts`) are a three-part AND: shop domain
- * present, access token present, status === CONNECTED. `CommerceConnectionSummary`
- * never carries a credential field by construction (see `./types.ts`), so
- * the token-presence leg cannot be expressed directly against a summary.
- * Instead this relies on an invariant every Shopify write path in this
- * codebase upholds (verified by inspection, not merely assumed):
- *   - `shopifyConnectionStatus` is set to `CONNECTED` ONLY in the same write
- *     that also sets a non-null access token
- *     (`src/lib/shopify-token-manager.ts` ~L421-432).
- *   - Every write that moves status AWAY from `CONNECTED` nulls the token in
- *     that SAME write: `DISCONNECTED`
- *     (`src/app/api/brand/shopify/disconnect/route.ts`), `UNINSTALLED`
- *     (`src/app/api/shopify/webhooks/app/uninstalled/route.ts`,
- *     `src/app/api/shopify/webhooks/shop/redact/route.ts`), and
- *     `REQUIRES_RECONNECT` (`shopify-token-manager.ts` ~L333-334).
+ * `CommerceConnectionSummary` never carries a credential field by
+ * construction (see `./types.ts`), so a token-presence leg cannot be
+ * expressed directly against a summary. Instead this relies on an
+ * invariant every write path upholds (verified by inspection, not merely
+ * assumed):
+ *   - `CommerceConnection.status` is set to `CONNECTED` ONLY in the same
+ *     transaction that also writes a `CommerceConnectionSecret` row
+ *     (`applyShopifyConnectionSyncFromInstall` in `./connection-sync.ts`),
+ *     or while healing a status-only scope-drift `REQUIRES_RECONNECT` where
+ *     a secret is already known to exist by construction
+ *     (`healShopifyCredentialConnected`, which never itself writes
+ *     CONNECTED without a pre-existing secret — see
+ *     `./providers/shopify-credential-store.ts`).
+ *   - Every path that moves status AWAY from `CONNECTED` deletes the secret
+ *     in the SAME transaction: `invalidateShopifyCredential` (disconnect /
+ *     `app/uninstalled` / `shop/redact` / embedded disconnect) and
+ *     `markShopifyCredentialRequiresReconnect` (`invalid_grant`) — both in
+ *     `./providers/shopify-credential-store.ts`.
  * So for any summary this service can produce, `status === "CONNECTED"` is
- * equivalent to "domain present + token present + status CONNECTED" — not
- * an approximation, a direct consequence of those write paths. This is also
- * why `connection-resolver.ts`'s own `LegacyBrandShopifyFields` type (which
- * `mapLegacyBrandToConnectionSummary` consumes) never includes the token
- * column either — that decision already encodes the same judgment.
+ * equivalent to "domain present + canonical credential present + status
+ * CONNECTED" — not an approximation, a direct consequence of those write
+ * paths.
  *
  * ---------------------------------------------------------------------------
  * `getCommerceCapabilities` NEVER THROWS (a deliberate, consistent choice)
@@ -102,21 +88,39 @@
  * runs), so importing this module never requires `DATABASE_URL`.
  */
 
-import { CommerceProvider } from "@prisma/client";
+import { CommerceProvider, type Prisma } from "@prisma/client";
 import type { CommerceAdapter } from "./adapter";
 import { defaultCommerceAdapterRegistry } from "./default-registry";
 import type { CommerceAdapterRegistry } from "./registry";
 import {
   mapCommerceConnectionToSummary,
-  mapLegacyBrandToConnectionSummary,
   pickPreferredConnectionRow,
   type CommerceConnectionRow,
-  type LegacyBrandShopifyFields,
 } from "./connection-resolver";
 import { normalizeExternalAccountId } from "./connection-sync";
 import type { CommerceCapabilities, CommerceConnectionSummary } from "./types";
 
-export type { CommerceConnectionRow, LegacyBrandShopifyFields } from "./connection-resolver";
+export type { CommerceConnectionRow } from "./connection-resolver";
+
+/**
+ * DIAGNOSTIC-ONLY subset of legacy `Brand` columns — used exclusively by
+ * `computeConnectionDrift`/`detectConnectionDrift` (see below) for the
+ * pre-column-drop reconciliation tool. Not a fallback data source: nothing
+ * in this file ever builds a `CommerceConnectionSummary` from this shape.
+ * Delete together with the reconciler once the columns are physically
+ * dropped (Phase 14C-B).
+ */
+export type LegacyBrandShopifyFields = {
+  id: string;
+  name: string | null;
+  shopifyShopDomain: string | null;
+  shopifyConnectionStatus: string;
+  shopifyInstalledAt: Date | null;
+  shopifyUninstalledAt: Date | null;
+  shopifyLastProductSyncAt: Date | null;
+  shopifyGrantedScopes: string | null;
+  shopifyCurrencyCode: string | null;
+};
 
 // ---------------------------------------------------------------------------
 // Drift signal (reused by a later reconciliation tool)
@@ -170,7 +174,7 @@ async function getPrisma() {
 }
 
 /** Shared `select` shape for a `CommerceConnectionRow` — kept in one place so the two default readers below can never drift apart field-by-field. */
-const CONNECTION_ROW_SELECT = {
+export const CONNECTION_ROW_SELECT = {
   id: true,
   brandId: true,
   provider: true,
@@ -184,6 +188,7 @@ const CONNECTION_ROW_SELECT = {
   uninstalledAt: true,
   lastProductSyncAt: true,
   createdAt: true,
+  providerMetadata: true,
 } as const;
 
 async function defaultFindConnectionRows(
@@ -222,6 +227,7 @@ async function defaultFindLegacyBrandFields(
       shopifyUninstalledAt: true,
       shopifyLastProductSyncAt: true,
       shopifyGrantedScopes: true,
+      shopifyCurrencyCode: true,
     },
   });
 }
@@ -240,103 +246,99 @@ function resolveServiceDeps(
 }
 
 // ---------------------------------------------------------------------------
-// Internal: the consistency-checked resolution shared by
-// getActiveCommerceConnection / getPrimaryCommerceConnection / detectConnectionDrift
+// Internal: canonical-only resolution shared by getActiveCommerceConnection
+// / getPrimaryCommerceConnection
 // ---------------------------------------------------------------------------
 
-type PreferredConnectionResolution = {
-  connection: CommerceConnectionSummary | null;
-  drift: CommerceConnectionDriftResult;
-};
-
+/**
+ * PHASE 14C-A: canonical-only. A `CommerceConnection` row is authoritative
+ * the moment it exists; no row means not connected, full stop — no legacy
+ * `Brand.shopify*` fallback (every live Shopify install already has a
+ * canonical row, operator-verified). A throw from the row lookup (e.g. a
+ * transient outage isolated to the `CommerceConnection` table) is treated
+ * the same as "no row" — this must never take down an availability-sensitive
+ * caller (like reward redemption) merely because this table hiccupped, and
+ * per the file header, "unknown" must fail closed (not connected), never be
+ * upgraded to "assume connected."
+ */
 async function resolvePreferredConnection(
   brandId: string,
   provider: CommerceProvider,
   deps: CommerceConnectionServiceDeps,
   rowFilter?: (row: CommerceConnectionRow) => boolean,
-): Promise<PreferredConnectionResolution> {
-  const rows = await deps.findConnectionRows(brandId, provider);
+): Promise<CommerceConnectionSummary | null> {
+  const rows = await deps.findConnectionRows(brandId, provider).catch(() => []);
   const candidateRows = rowFilter ? rows.filter(rowFilter) : rows;
   const preferredRow = pickPreferredConnectionRow(candidateRows);
+  return preferredRow ? mapCommerceConnectionToSummary(preferredRow) : null;
+}
 
+/**
+ * DIAGNOSTIC ONLY — used exclusively by the pre-column-drop reconciliation
+ * tool (`connection-reconciliation.ts` / `scripts/reconcile-commerce-connections.ts`)
+ * to report disagreement between a canonical row and the still-schema-present
+ * legacy `Brand.shopify*` columns, WITHOUT ever changing which connection
+ * `getActiveCommerceConnection`/`getPrimaryCommerceConnection` return (see
+ * `resolvePreferredConnection` above — fully decoupled from this function).
+ * This is not a fallback: it never substitutes a legacy value for a missing
+ * or disagreeing canonical one, it only reports the disagreement for an
+ * operator-run tool to act on. Must be deleted together with the reconciler
+ * once the Brand columns are physically dropped (Phase 14C-B) — at that
+ * point there is nothing left for it to compare against.
+ */
+async function computeConnectionDrift(
+  brandId: string,
+  provider: CommerceProvider,
+  deps: CommerceConnectionServiceDeps,
+): Promise<CommerceConnectionDriftResult> {
   if (provider !== CommerceProvider.SHOPIFY) {
-    // No legacy fallback exists for any other provider (see
-    // connection-resolver.ts's own resolver) — there is no second source of
-    // truth to disagree with, so the row (if any) is authoritative as-is.
-    return {
-      connection: preferredRow ? mapCommerceConnectionToSummary(preferredRow) : null,
-      drift: { driftDetected: false, brandId, provider },
-    };
+    return { driftDetected: false, brandId, provider };
   }
 
-  const legacyBrand = await deps.findLegacyBrandFields(brandId);
+  const rows = await deps.findConnectionRows(brandId, provider).catch(() => []);
+  const preferredRow = pickPreferredConnectionRow(rows);
+  const legacyBrand = await deps.findLegacyBrandFields(brandId).catch(() => null);
   const legacyDomain = legacyBrand?.shopifyShopDomain
     ? normalizeExternalAccountId(legacyBrand.shopifyShopDomain)
     : null;
-  const legacySummary = legacyBrand ? mapLegacyBrandToConnectionSummary(legacyBrand) : null;
 
-  if (!preferredRow) {
+  if (preferredRow) {
+    const rowExternalAccountId = normalizeExternalAccountId(preferredRow.externalAccountId);
     if (legacyDomain === null) {
-      // Both sides agree: no connection at all. Not drift.
-      return { connection: null, drift: { driftDetected: false, brandId, provider } };
-    }
-    // Legacy says connected; the mirror has no row yet (dual-write never ran,
-    // or the brand predates the backfill). Legacy wins; flagged so a
-    // reconciliation tool can create/backfill the missing row.
-    return {
-      connection: legacySummary,
-      drift: {
-        driftDetected: true,
-        brandId,
-        provider,
-        reason: "LEGACY_DOMAIN_WITHOUT_ROW",
-        rowExternalAccountId: null,
-        legacyExternalAccountId: legacyDomain,
-      },
-    };
-  }
-
-  const rowExternalAccountId = normalizeExternalAccountId(preferredRow.externalAccountId);
-
-  if (legacyDomain === null) {
-    // A CommerceConnection row exists but legacy has no domain on record
-    // (e.g. redacted, or relinked away since the row was written) — the
-    // mirror is stale relative to legacy. Legacy wins (there is nothing to
-    // be connected to from legacy's point of view), flagged as drift.
-    return {
-      connection: legacySummary, // null — legacyBrand has no domain
-      drift: {
+      return {
         driftDetected: true,
         brandId,
         provider,
         reason: "ROW_WITHOUT_LEGACY_DOMAIN",
         rowExternalAccountId,
         legacyExternalAccountId: null,
-      },
-    };
+      };
+    }
+    if (rowExternalAccountId !== legacyDomain) {
+      return {
+        driftDetected: true,
+        brandId,
+        provider,
+        reason: "ROW_LEGACY_MISMATCH",
+        rowExternalAccountId,
+        legacyExternalAccountId: legacyDomain,
+      };
+    }
+    return { driftDetected: false, brandId, provider };
   }
 
-  if (rowExternalAccountId === legacyDomain) {
-    // The mirror agrees with legacy truth — safe to prefer the row.
-    return {
-      connection: mapCommerceConnectionToSummary(preferredRow),
-      drift: { driftDetected: false, brandId, provider },
-    };
+  if (legacyDomain === null) {
+    // Both sides agree: no connection at all. Not drift.
+    return { driftDetected: false, brandId, provider };
   }
-
-  // Disagreement: the mirror is stale for this shop. Legacy wins per the
-  // dual-write rationale (every write path dual-writes, but the mirror is
-  // best-effort) — never silently trust a stale row.
+  // Legacy says connected; the canonical row hasn't been backfilled yet.
   return {
-    connection: legacySummary,
-    drift: {
-      driftDetected: true,
-      brandId,
-      provider,
-      reason: "ROW_LEGACY_MISMATCH",
-      rowExternalAccountId,
-      legacyExternalAccountId: legacyDomain,
-    },
+    driftDetected: true,
+    brandId,
+    provider,
+    reason: "LEGACY_DOMAIN_WITHOUT_ROW",
+    rowExternalAccountId: null,
+    legacyExternalAccountId: legacyDomain,
   };
 }
 
@@ -355,8 +357,187 @@ export async function getActiveCommerceConnection(
   provider: CommerceProvider = CommerceProvider.SHOPIFY,
   deps: Partial<CommerceConnectionServiceDeps> = {},
 ): Promise<CommerceConnectionSummary | null> {
-  const resolved = await resolvePreferredConnection(brandId, provider, resolveServiceDeps(deps));
-  return resolved.connection;
+  return resolvePreferredConnection(brandId, provider, resolveServiceDeps(deps));
+}
+
+/**
+ * Minimal structural shape a Prisma client (or `$transaction` callback's
+ * `tx`) must satisfy to resolve a canonical connection — deliberately NOT
+ * `PrismaClient`, so a `Prisma.TransactionClient` participating in an
+ * enclosing transaction satisfies it too.
+ */
+export type CommerceConnectionQueryClient = {
+  commerceConnection: {
+    findMany(args: {
+      where: { brandId: string; provider: CommerceProvider };
+      select: typeof CONNECTION_ROW_SELECT;
+    }): Promise<CommerceConnectionRow[]>;
+  };
+};
+
+/**
+ * PHASE 14C-A: resolves the canonical connection using an EXPLICITLY passed
+ * client instead of the module-singleton `prisma` — the only way a
+ * SERIALIZABLE business transaction (e.g. reward redemption's reservation
+ * transaction) can re-check canonical connection state INSIDE its own
+ * transaction, participating in its isolation/locking, rather than reading a
+ * pre-transaction snapshot that could have gone stale by the time the
+ * transaction commits. Reuses the exact same row select, tiebreak, and
+ * mapping the non-transactional lookups use — never a second, divergent
+ * selection policy. There is no legacy fallback here (see the file header:
+ * every live Shopify install already has a canonical row as of Phase 14C) —
+ * no row simply means not connected.
+ */
+export async function resolveCommerceConnectionSummaryWithClient(
+  client: CommerceConnectionQueryClient,
+  brandId: string,
+  provider: CommerceProvider = CommerceProvider.SHOPIFY,
+): Promise<CommerceConnectionSummary | null> {
+  const rows = await client.commerceConnection.findMany({
+    where: { brandId, provider },
+    select: CONNECTION_ROW_SELECT,
+  });
+  const preferredRow = pickPreferredConnectionRow(rows);
+  return preferredRow ? mapCommerceConnectionToSummary(preferredRow) : null;
+}
+
+// ---------------------------------------------------------------------------
+// Batch resolution — PHASE 14B.4C
+// ---------------------------------------------------------------------------
+
+/** Dependencies for the batch/bulk resolver — exactly one query total, never one per brand. */
+export type BatchCommerceConnectionServiceDeps = {
+  /** Loads every `CommerceConnection` row for ALL of `brandIds` at once. */
+  findConnectionRowsForBrands(
+    brandIds: string[],
+    provider: CommerceProvider,
+  ): Promise<CommerceConnectionRow[]>;
+};
+
+async function defaultFindConnectionRowsForBrands(
+  brandIds: string[],
+  provider: CommerceProvider,
+): Promise<CommerceConnectionRow[]> {
+  const prisma = await getPrisma();
+  return prisma.commerceConnection.findMany({
+    where: { brandId: { in: brandIds }, provider },
+    select: CONNECTION_ROW_SELECT,
+  });
+}
+
+const DEFAULT_BATCH_SERVICE_DEPS: BatchCommerceConnectionServiceDeps = {
+  findConnectionRowsForBrands: defaultFindConnectionRowsForBrands,
+};
+
+/**
+ * Batch/bulk canonical-only resolution for MANY brands in one call — no
+ * legacy `Brand.shopify*` fallback (Phase 14C-A) — with exactly ONE query
+ * total regardless of how many brand ids are passed, never one
+ * `CommerceConnection` query per brand/offer. Built for listing routes that
+ * must resolve connectivity across many brands at once (e.g. the public
+ * rewards feed) without an N+1 query pattern.
+ *
+ * A throw from the underlying query is treated the same as "found nothing
+ * for that batch" — never breaks the whole listing; "unknown" fails closed
+ * (not connected), it must never be upgraded to "assume connected."
+ *
+ * Returns a `Map<brandId, CommerceConnectionSummary>` — a brand absent from
+ * the map has no `CommerceConnection` row for this provider at all.
+ */
+export async function getActiveCommerceConnectionsForBrands(
+  brandIds: string[],
+  provider: CommerceProvider = CommerceProvider.SHOPIFY,
+  deps: Partial<BatchCommerceConnectionServiceDeps> = {},
+): Promise<Map<string, CommerceConnectionSummary>> {
+  const result = new Map<string, CommerceConnectionSummary>();
+  const uniqueBrandIds = [...new Set(brandIds)];
+  if (uniqueBrandIds.length === 0) {
+    return result;
+  }
+
+  const resolvedDeps: BatchCommerceConnectionServiceDeps = {
+    ...DEFAULT_BATCH_SERVICE_DEPS,
+    ...deps,
+  };
+
+  const rows = await resolvedDeps
+    .findConnectionRowsForBrands(uniqueBrandIds, provider)
+    .catch(() => [] as CommerceConnectionRow[]);
+
+  const rowsByBrand = new Map<string, CommerceConnectionRow[]>();
+  for (const row of rows) {
+    const existing = rowsByBrand.get(row.brandId);
+    if (existing) {
+      existing.push(row);
+    } else {
+      rowsByBrand.set(row.brandId, [row]);
+    }
+  }
+
+  for (const brandId of uniqueBrandIds) {
+    const preferredRow = pickPreferredConnectionRow(rowsByBrand.get(brandId) ?? []);
+    if (preferredRow) {
+      result.set(brandId, mapCommerceConnectionToSummary(preferredRow));
+    }
+  }
+
+  return result;
+}
+
+/**
+ * PHASE 14B.4C: records a freshly-learned currency code onto the canonical
+ * connection's `providerMetadata` — the exact same key
+ * `extractCurrencyCodeFromProviderMetadata` reads (see `./connection-resolver.ts`
+ * and `CommerceConnectionSummary.currencyCode`'s doc comment in `./types.ts`).
+ * Every canonical row is supposed to have this populated at install/sync time
+ * (`buildShopifyConnectionSyncInput(FromInstall)`), but a row synced from a
+ * legacy `Brand` that itself predates currency tracking can still have
+ * `currencyCode: null`. Callers use this to self-heal that gap in place,
+ * WITHOUT going through the full install/sync rewrite (which would also
+ * require re-supplying credential/scope/status facts this caller doesn't
+ * have) and WITHOUT adding a second currency field — merges into the
+ * existing `providerMetadata` object so unrelated keys (`authMode`) survive.
+ * Best-effort: a failure here should never fail the caller's own request,
+ * since the freshly-fetched currency value is still usable in-memory for
+ * that one response even if persisting it for future reads fails.
+ */
+export type RecordCommerceConnectionCurrencyCodeDeps = {
+  findProviderMetadata(connectionId: string): Promise<unknown>;
+  updateProviderMetadata(connectionId: string, providerMetadata: Record<string, unknown>): Promise<void>;
+};
+
+async function defaultFindProviderMetadata(connectionId: string): Promise<unknown> {
+  const prisma = await getPrisma();
+  const row = await prisma.commerceConnection.findUnique({
+    where: { id: connectionId },
+    select: { providerMetadata: true },
+  });
+  return row?.providerMetadata ?? null;
+}
+
+async function defaultUpdateProviderMetadata(
+  connectionId: string,
+  providerMetadata: Record<string, unknown>,
+): Promise<void> {
+  const prisma = await getPrisma();
+  await prisma.commerceConnection.update({
+    where: { id: connectionId },
+    data: { providerMetadata: providerMetadata as Prisma.InputJsonValue },
+  });
+}
+
+export async function recordCommerceConnectionCurrencyCode(
+  connectionId: string,
+  currencyCode: string,
+  deps: Partial<RecordCommerceConnectionCurrencyCodeDeps> = {},
+): Promise<void> {
+  const findProviderMetadata = deps.findProviderMetadata ?? defaultFindProviderMetadata;
+  const updateProviderMetadata = deps.updateProviderMetadata ?? defaultUpdateProviderMetadata;
+
+  const raw = await findProviderMetadata(connectionId);
+  const existing =
+    raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
+  await updateProviderMetadata(connectionId, { ...existing, currencyCode });
 }
 
 /**
@@ -376,45 +557,38 @@ export async function getCommerceConnectionById(
 }
 
 /**
- * Resolves the connection marked primary for (brandId, provider), using the
- * SAME consistency-checked preference as `getActiveCommerceConnection`
- * (restricted to rows with `isPrimary: true` before the tiebreak). Falls
- * back to the legacy-derived summary when no row is marked primary — which
- * is always `isPrimary: true` itself (see
- * `mapLegacyBrandToConnectionSummary`'s doc comment) — and to `null` when
- * neither exists. Never throws when nothing is marked primary; that is the
- * expected, common case for a brand that predates multi-store support.
+ * Resolves the connection marked primary for (brandId, provider) (restricted
+ * to rows with `isPrimary: true` before the tiebreak). Returns `null` when
+ * nothing is marked primary — no legacy fallback (Phase 14C-A).
  */
 export async function getPrimaryCommerceConnection(
   brandId: string,
   provider: CommerceProvider = CommerceProvider.SHOPIFY,
   deps: Partial<CommerceConnectionServiceDeps> = {},
 ): Promise<CommerceConnectionSummary | null> {
-  const resolved = await resolvePreferredConnection(
+  return resolvePreferredConnection(
     brandId,
     provider,
     resolveServiceDeps(deps),
     (row) => row.isPrimary,
   );
-  return resolved.connection;
 }
 
 /**
- * Reports whether (brandId, provider)'s `CommerceConnection` mirror agrees
- * with legacy `Brand.shopify*` truth — see the file header for the full
- * rule. Intended for reuse by a later reconciliation tool; deliberately does
- * NOT log anything itself (this can run on an ordinary page load, and
- * logging a drift signal on every such request — even at a low level —
- * would spam. A caller that wants to log a finding should do so itself,
- * e.g. from a periodic reconciliation job, not from this hot path).
+ * DIAGNOSTIC ONLY (see `computeConnectionDrift`'s doc comment above) —
+ * reports whether (brandId, provider)'s `CommerceConnection` mirror agrees
+ * with the still-schema-present legacy `Brand.shopify*` columns, for the
+ * pre-column-drop reconciliation tool. Never changes which connection
+ * `getActiveCommerceConnection`/`getPrimaryCommerceConnection` return.
+ * Deliberately does NOT log anything itself — a caller that wants to log a
+ * finding should do so itself, e.g. from the reconciliation job.
  */
 export async function detectConnectionDrift(
   brandId: string,
   provider: CommerceProvider = CommerceProvider.SHOPIFY,
   deps: Partial<CommerceConnectionServiceDeps> = {},
 ): Promise<CommerceConnectionDriftResult> {
-  const resolved = await resolvePreferredConnection(brandId, provider, resolveServiceDeps(deps));
-  return resolved.drift;
+  return computeConnectionDrift(brandId, provider, resolveServiceDeps(deps));
 }
 
 // ---------------------------------------------------------------------------
@@ -504,53 +678,15 @@ export function toSafeConnectionSummary(
   return summary;
 }
 
-// ---------------------------------------------------------------------------
-// Small pure helpers for the Task-2 low-risk cutover call sites
-// ---------------------------------------------------------------------------
-
 /**
- * Convenience combinator for callers that already hold a raw legacy Brand
- * row (e.g. a batch of candidate brands fetched in a single query) and want
- * the SAME connectivity decision `isConnectionUsable` makes, without
- * hand-building a `CommerceConnectionSummary` themselves. Equivalent to
- * `mapLegacyBrandToConnectionSummary(brand)` followed by `isConnectionUsable`,
- * treating `null` (no summary — no shop domain on record) as "not usable".
- * No I/O — pure, synchronous. Deliberately NOT `getActiveCommerceConnection`:
- * that function can prefer a `CommerceConnection` row whose `status` differs
- * from legacy even when its domain agrees (the consistency check only
- * compares `externalAccountId`), which would NOT reproduce today's
- * legacy-only gate exactly. This helper stays legacy-only on purpose so
- * low-risk connectivity gates keep byte-identical behavior.
- */
-export function isLegacyShopifyBrandConnectionUsable(brand: LegacyBrandShopifyFields): boolean {
-  const summary = mapLegacyBrandToConnectionSummary(brand);
-  return summary !== null && isConnectionUsable(summary);
-}
-
-/**
- * Extracts the provider-neutral `externalAccountId` (== normalized shop
- * domain, trim only) from a bare Shopify domain value — the same derivation
- * `mapLegacyBrandToConnectionSummary` uses internally — without requiring a
- * caller to supply the full `LegacyBrandShopifyFields` shape just to read
- * this one field. No I/O — pure, synchronous.
- */
-export function externalAccountIdFromShopDomain(
-  shopDomain: string | null | undefined,
-): string | null {
-  const trimmed = shopDomain?.trim();
-  return trimmed ? trimmed : null;
-}
-
-/**
- * Derives the storefront URL SQRATCH displays for a Shopify shop domain —
- * the exact `https://${domain}` formula used both by
- * `mapLegacyBrandToConnectionSummary` (`storefrontUrl`) and by
+ * Derives the storefront URL SQRATCH displays for a Shopify shop domain,
+ * exposed standalone for a caller that only needs the URL (not a full
+ * connectivity decision) from an already-fetched shop domain — e.g.
  * `src/app/api/rewards/shopify/redemptions/route.ts`'s `shopUrl` field,
- * exposed standalone for callers that only need the URL (not a full
- * connectivity decision) from an already-fetched shop domain. No I/O —
- * pure, synchronous. Deliberately does not trim/normalize `shopDomain` — it
- * reproduces the ORIGINAL literal `domain ? \`https://${domain}\` : null`
- * expression exactly, byte for byte.
+ * derived from the redemption's OWN historical shop-domain snapshot. No
+ * I/O — pure, synchronous. Deliberately does not trim/normalize
+ * `shopDomain` — reproduces the literal `domain ? \`https://${domain}\` :
+ * null` expression exactly, byte for byte.
  */
 export function deriveShopifyStorefrontUrl(
   shopDomain: string | null | undefined,

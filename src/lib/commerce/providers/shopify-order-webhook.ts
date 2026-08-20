@@ -1,19 +1,21 @@
 /**
  * src/lib/commerce/providers/shopify-order-webhook.ts
  *
- * Shared request handling for the three Shopify ORDER webhook routes
- * (`orders/create`, `orders/updated`, `refunds/create`). The routes themselves
- * are thin: each supplies its topic and its normalizer and nothing else, so
- * the verification, connection-resolution, and response semantics can never
- * drift apart between them.
+ * Shared request handling for the four Shopify ORDER webhook routes
+ * (`orders/create`, `orders/updated`, `refunds/create`,
+ * `order_transactions/create`). The routes themselves are thin: each supplies
+ * its topic and its normalizer and nothing else, so the verification,
+ * connection-resolution, financial-reconciliation, and response semantics can
+ * never drift apart between them.
  *
  * ===========================================================================
  * LIVE-CONFIGURATION PREREQUISITES
  * ===========================================================================
- * Phase 12 declares `orders/create`, `orders/updated`, and `refunds/create`
- * plus `read_orders` in both Shopify configurations. Delivery is live only
- * after the operator deploys that config, enables the Theme App Extension, and
- * each existing merchant reauthorizes to grant the new scope.
+ * Phase 12 declares `orders/create`, `orders/updated`, `refunds/create`, and
+ * `order_transactions/create` plus `read_orders` in both Shopify
+ * configurations. Delivery is live only after the operator deploys that
+ * config, enables the Theme App Extension, and each existing merchant
+ * reauthorizes to grant the new scope.
  *
  * ===========================================================================
  * VERIFICATION SEQUENCE — REUSED, NOT REIMPLEMENTED
@@ -321,6 +323,7 @@ async function runShopifyOrderWebhook(
   // may become non-null again before reaching ingestion.
   let finalOrder = order;
   let reconciliationOutcome: ReconcileShopifyOrderFinancialsResult["outcome"] | null = null;
+  let reconciliationReason: string | null = null;
   if (
     shopifyTopicRequiresFinancialReconciliation(topic, verification.payload) &&
     order.externalOrderId
@@ -331,6 +334,14 @@ async function runShopifyOrderWebhook(
       externalOrderId: order.externalOrderId,
     });
     reconciliationOutcome = reconciled.outcome;
+    // Classified diagnostic ONLY — one of the closed reason constants the
+    // reconciler already returns (NO_CREDENTIAL / INVALID_ORDER_ID /
+    // ORDER_NOT_FOUND / MALFORMED_SNAPSHOT / TRANSACTION_COUNT_LIMIT_EXCEEDED),
+    // never a provider error body, token, payload excerpt, or monetary
+    // value. Without this, every deferred reconciliation logged an
+    // indistinguishable "NOT_ELIGIBLE" and an operator could not tell a
+    // missing credential from a >=250-transaction fail-closed.
+    reconciliationReason = reconciled.outcome === "NOT_ELIGIBLE" ? reconciled.reason : null;
 
     if (reconciled.outcome === "TRANSIENT_FAILURE") {
       // Unproven. No claim is taken (ingest is never called), so Shopify's
@@ -390,6 +401,7 @@ async function runShopifyOrderWebhook(
     attributionLinked: outcome.attributionLinked,
     warnings,
     reconciliationOutcome,
+    reconciliationReason,
   });
 
   // 5. Settled -> 200; unproven -> 500 so Shopify redelivers. The unproven set
@@ -416,6 +428,12 @@ function logWebhook(
     warnings: readonly string[];
     /** Null when reconciliation was never attempted for this delivery. */
     reconciliationOutcome?: string | null;
+    /**
+     * The reconciler's own CLASSIFIED reason constant when it returned
+     * `NOT_ELIGIBLE`; null otherwise. A closed enum-like set — never a
+     * provider message, token, payload excerpt, or monetary value.
+     */
+    reconciliationReason?: string | null;
   } | null,
 ): void {
   // Sanitized: topic, shop domain, classified outcome/warning tags and counts
@@ -431,6 +449,7 @@ function logWebhook(
       attributionLinked: detail?.attributionLinked ?? false,
       warnings: detail?.warnings ?? [],
       reconciliationOutcome: detail?.reconciliationOutcome ?? null,
+      reconciliationReason: detail?.reconciliationReason ?? null,
     }),
   );
 }

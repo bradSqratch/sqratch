@@ -22,7 +22,6 @@ export async function GET() {
             id: true,
             name: true,
             logoUrl: true,
-            shopifyShopDomain: true,
           },
         },
         offer: {
@@ -55,7 +54,11 @@ export async function GET() {
         shopifyDiscountStatus: redemption.shopifyDiscountStatus,
         shopifyAsyncUsageCount: redemption.shopifyAsyncUsageCount,
         shopifyLastCheckedAt: redemption.shopifyLastCheckedAt,
-        shopUrl: deriveShopifyStorefrontUrl(redemption.brand.shopifyShopDomain),
+        // The redemption's OWN historical shop-domain snapshot (captured at
+        // redemption time) — never the brand's current domain, which could
+        // have relinked since. See src/lib/commerce/connection-service.ts's
+        // deriveShopifyStorefrontUrl doc comment.
+        shopUrl: deriveShopifyStorefrontUrl(redemption.shopifyShopDomain),
       })),
     });
   } catch (error) {

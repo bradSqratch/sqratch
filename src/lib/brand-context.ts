@@ -16,14 +16,6 @@ const BRAND_SELECT = {
   websiteUrl: true,
   logoUrl: true,
   coverImageUrl: true,
-  shopifyShopDomain: true,
-  shopifyAdminAccessTokenEncrypted: true,
-  shopifyInstalledAt: true,
-  shopifyDisconnectedAt: true,
-  shopifyUninstalledAt: true,
-  shopifyConnectionStatus: true,
-  shopifyLastProductSyncAt: true,
-  shopifyCurrencyCode: true,
 } as const;
 
 const ROLE_RANK: Record<BrandAccessRole, number> = {
@@ -47,14 +39,6 @@ export type ActiveBrandContext = {
       websiteUrl: string | null;
       logoUrl: string | null;
       coverImageUrl: string | null;
-      shopifyShopDomain: string | null;
-      shopifyAdminAccessTokenEncrypted: string | null;
-      shopifyInstalledAt: Date | null;
-      shopifyDisconnectedAt: Date | null;
-      shopifyUninstalledAt: Date | null;
-      shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED" | "REQUIRES_RECONNECT";
-      shopifyLastProductSyncAt: Date | null;
-      shopifyCurrencyCode: string | null;
     };
   } | null;
   brands: Array<{ id: string; name: string; slug: string; membershipRole: BrandAccessRole }>;

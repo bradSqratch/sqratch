@@ -88,8 +88,9 @@ export type NormalizedShopifyProduct = {
   // see `fetchNormalizedShopifyProducts` below. It is safe to use for
   // `priceText` display formatting (its only current consumer) but MUST NOT
   // be persisted as a product's real currency. A persistence layer should
-  // source currency from `Brand.shopifyCurrencyCode` instead, storing `null`
-  // when that is unknown.
+  // source currency from the canonical `CommerceConnectionSummary.currencyCode`
+  // instead (see `src/lib/commerce/product-sync.ts`), storing `null` when
+  // that is unknown.
   currency: string;
   variantIds: string[];
   /**

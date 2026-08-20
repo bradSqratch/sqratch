@@ -84,6 +84,7 @@ function makeRow(overrides: Partial<ShopifyCommerceConnectionRow> = {}): Shopify
     installedAt: new Date("2026-01-01T00:00:00Z"),
     uninstalledAt: null,
     lastProductSyncAt: null,
+    providerMetadata: { authMode: "LEGACY_OFFLINE", currencyCode: "USD" },
     ...overrides,
   };
 }
@@ -228,6 +229,7 @@ describe("ShopifyCommerceAdapter", () => {
       uninstalledAt: null,
       lastProductSyncAt: null,
       isLegacyFallback: false,
+      currencyCode: "USD",
     });
 
     const serialized = JSON.stringify(result.connection);

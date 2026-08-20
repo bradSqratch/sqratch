@@ -1,10 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
+import { CommerceProvider } from "@prisma/client";
 import {
   getBrandContextFailure,
   getBrandManagementContext,
 } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
-import { getShopifyShopCurrency, normalizeShopDomain } from "@/lib/shopify";
+import { getShopifyShopCurrencyWithAccessToken, normalizeShopDomain } from "@/lib/shopify";
+import { getValidAccessToken } from "@/lib/shopify-token-manager";
+import {
+  getActiveCommerceConnection,
+  isConnectionUsable,
+  recordCommerceConnectionCurrencyCode,
+} from "@/lib/commerce/connection-service";
 import {
   CLAIM_COUNTED_REDEMPTION_STATUSES,
   getRewardOfferAvailability,
@@ -13,18 +20,6 @@ import {
   validateProductsBelongToConnectedStore,
 } from "@/lib/reward-offers";
 import { computeShopifyRewardCompatibility } from "@/lib/shopify-reward-compatibility";
-
-function canActivateShopifyOffer(brand: {
-  shopifyConnectionStatus: string;
-  shopifyShopDomain: string | null;
-  shopifyAdminAccessTokenEncrypted: string | null;
-}) {
-  return (
-    brand.shopifyConnectionStatus === "CONNECTED" &&
-    Boolean(brand.shopifyShopDomain) &&
-    Boolean(brand.shopifyAdminAccessTokenEncrypted)
-  );
-}
 
 export async function GET() {
   try {
@@ -110,7 +105,15 @@ export async function GET() {
       statsByOffer.set(count.offerId, stats);
     }
 
-    const isConnected = canActivateShopifyOffer(brand);
+    // CANONICAL — the brand's commerce connection state is only ever known
+    // by resolving `CommerceConnection`, never by reading `Brand.shopify*`
+    // directly (see file header / AGENTS.md Commerce Invariants).
+    const connectionSummary = await getActiveCommerceConnection(
+      brand.id,
+      CommerceProvider.SHOPIFY,
+    );
+    const isConnected =
+      connectionSummary !== null && isConnectionUsable(connectionSummary);
 
     return NextResponse.json({
       data: offers.map((offer) => {
@@ -128,8 +131,8 @@ export async function GET() {
             sourceShopDomain: offer.sourceShopDomain,
           },
           shopifyConnected: isConnected,
-          currentShopDomain: brand.shopifyShopDomain,
-          currentStoreCurrency: brand.shopifyCurrencyCode,
+          currentShopDomain: connectionSummary?.externalAccountId ?? null,
+          currentStoreCurrency: connectionSummary?.currencyCode ?? null,
         });
 
         return {
@@ -168,20 +171,36 @@ export async function POST(request: NextRequest) {
     }
 
     const brand = context.membership.brand;
-    let shopCurrency = brand.shopifyCurrencyCode;
 
-    if (!shopCurrency && brand.shopifyShopDomain && brand.shopifyAdminAccessTokenEncrypted) {
+    // CANONICAL — see the GET handler's comment. `isConnected` and every
+    // domain/currency comparison below come from the SAME resolved
+    // connection, so a token/identity pairing can never be mixed across
+    // stores.
+    const connectionSummary = await getActiveCommerceConnection(
+      brand.id,
+      CommerceProvider.SHOPIFY,
+    );
+    const isConnected =
+      connectionSummary !== null && isConnectionUsable(connectionSummary);
+    let shopCurrency = connectionSummary?.currencyCode ?? null;
+
+    if (!shopCurrency && isConnected && connectionSummary) {
       try {
-        const currencyResult = await getShopifyShopCurrency({
-          shopDomain: brand.shopifyShopDomain,
-          encryptedToken: brand.shopifyAdminAccessTokenEncrypted,
-        });
-        if (currencyResult.ok) {
-          shopCurrency = currencyResult.currencyCode;
-          await prisma.brand.update({
-            where: { id: brand.id },
-            data: { shopifyCurrencyCode: shopCurrency },
+        const tokenResult = await getValidAccessToken(brand.id);
+        if (tokenResult.ok) {
+          const currencyResult = await getShopifyShopCurrencyWithAccessToken({
+            shopDomain: connectionSummary.externalAccountId,
+            accessToken: tokenResult.accessToken,
           });
+          if (currencyResult.ok) {
+            shopCurrency = currencyResult.currencyCode;
+            if (connectionSummary.id) {
+              await recordCommerceConnectionCurrencyCode(
+                connectionSummary.id,
+                shopCurrency,
+              );
+            }
+          }
         }
       } catch (err) {
         console.error("[brand/rewards/offers][POST] Error refreshing missing shop currency:", err);
@@ -196,18 +215,20 @@ export async function POST(request: NextRequest) {
     }
 
     const data = parsed.data;
-    const isConnected = canActivateShopifyOffer(brand);
     // Never trust a client-provided shop domain — always derive from the
-    // brand's own current connection state.
-    const sourceShopDomain = normalizeShopDomain(brand.shopifyShopDomain);
+    // brand's own current CANONICAL connection state.
+    const sourceShopDomain = normalizeShopDomain(
+      connectionSummary?.externalAccountId ?? null,
+    );
 
     if (
       data.appliesTo === "SPECIFIC_PRODUCTS" &&
       isConnected &&
+      connectionSummary &&
       data.products.length > 0
     ) {
       const validation = await validateProductsBelongToConnectedStore({
-        shopDomain: brand.shopifyShopDomain!,
+        shopDomain: connectionSummary.externalAccountId,
         brandId: brand.id,
         products: data.products,
       });
@@ -230,7 +251,7 @@ export async function POST(request: NextRequest) {
           sourceShopDomain,
         },
         shopifyConnected: isConnected,
-        currentShopDomain: brand.shopifyShopDomain,
+        currentShopDomain: connectionSummary?.externalAccountId ?? null,
         currentStoreCurrency: shopCurrency,
       });
 

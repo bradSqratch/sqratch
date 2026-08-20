@@ -357,6 +357,7 @@ class FakeStore {
       uninstalledAt: row.uninstalledAt,
       lastProductSyncAt: row.lastProductSyncAt,
       createdAt: row.createdAt,
+      providerMetadata: row.providerMetadata as Prisma.JsonValue,
     };
   }
 

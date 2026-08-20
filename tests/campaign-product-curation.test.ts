@@ -109,9 +109,6 @@ function access(campaigns: Array<{
       },
       candidateBrands: [{
         id: "brand-1", name: "Brand one", slug: "brand-one",
-        shopifyShopDomain: "store.example", shopifyConnectionStatus: "CONNECTED",
-        shopifyInstalledAt: new Date(), shopifyUninstalledAt: null,
-        shopifyLastProductSyncAt: null, shopifyGrantedScopes: "read_products",
       }],
       campaigns: campaigns.map((c, index) => campaign({ ...c, sortOrder: c.sortOrder ?? index })),
       // campaignContexts is the pre-computed eligible/ordered list — Phase 5

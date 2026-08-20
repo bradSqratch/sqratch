@@ -42,12 +42,6 @@ export async function GET() {
         websiteUrl: brand.websiteUrl,
         logoUrl: brand.logoUrl,
         coverImageUrl: brand.coverImageUrl,
-        shopifyShopDomain: brand.shopifyShopDomain,
-        shopifyInstalledAt: brand.shopifyInstalledAt,
-        shopifyDisconnectedAt: brand.shopifyDisconnectedAt,
-        shopifyUninstalledAt: brand.shopifyUninstalledAt,
-        shopifyConnectionStatus: brand.shopifyConnectionStatus,
-        shopifyLastProductSyncAt: brand.shopifyLastProductSyncAt,
       },
     });
   } catch (error) {

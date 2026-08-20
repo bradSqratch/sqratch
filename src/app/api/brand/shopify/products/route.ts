@@ -5,9 +5,8 @@ import {
   getBrandManagementContext,
   type BrandAdminContext,
 } from "@/lib/brand-auth";
-import prisma from "@/lib/prisma";
 import { fetchNormalizedShopifyProducts } from "@/lib/shopify-products";
-import { getActiveCommerceConnection } from "@/lib/commerce/connection-service";
+import { getActiveCommerceConnection, isConnectionUsable } from "@/lib/commerce/connection-service";
 import { defaultCommerceAdapterRegistry } from "@/lib/commerce/default-registry";
 import {
   CommerceConnectionNotFoundError,
@@ -52,19 +51,7 @@ export type BrandShopifyProductsDeps = {
   registry: CommerceAdapterRegistry;
   /** The legacy direct-fetch path, used whenever there is no real `CommerceConnection.id` to hand the adapter. */
   fetchProductsDirect: typeof fetchNormalizedShopifyProducts;
-  /** Stamps the legacy `Brand.shopifyLastProductSyncAt` / `shopifyConnectionStatus` columns after a successful sync. */
-  markLegacyProductSync(brandId: string): Promise<void>;
 };
-
-async function defaultMarkLegacyProductSync(brandId: string): Promise<void> {
-  await prisma.brand.update({
-    where: { id: brandId },
-    data: {
-      shopifyLastProductSyncAt: new Date(),
-      shopifyConnectionStatus: "CONNECTED",
-    },
-  });
-}
 
 const DEFAULT_DEPS: BrandShopifyProductsDeps = {
   getContext: getBrandManagementContext,
@@ -72,7 +59,6 @@ const DEFAULT_DEPS: BrandShopifyProductsDeps = {
     getActiveCommerceConnection(brandId, CommerceProvider.SHOPIFY),
   registry: defaultCommerceAdapterRegistry,
   fetchProductsDirect: fetchNormalizedShopifyProducts,
-  markLegacyProductSync: defaultMarkLegacyProductSync,
 };
 
 function mapCommerceProducts(
@@ -201,28 +187,27 @@ async function runAdapterSync(
   }
 }
 
+/**
+ * PHASE 14B.4B: takes the ALREADY-RESOLVED canonical `summary` (the route's
+ * own connectivity gate below resolves it first) rather than re-fetching —
+ * one canonical read per request, and the gate's decision can never drift
+ * from what this function acts on.
+ */
 async function resolveProducts(
   deps: BrandShopifyProductsDeps,
   brandId: string,
-  shopDomain: string,
+  summary: CommerceConnectionSummary,
 ): Promise<ProductsFetchOutcome> {
-  const summary = await deps.getConnectionSummary(brandId);
-
   // `syncProducts` needs a REAL `CommerceConnection.id`. When the resolved
-  // summary is a legacy fallback (`id === null` — no mirror row yet, or the
-  // mirror's shop domain disagreed with legacy and getActiveCommerceConnection
-  // already fell back to legacy), there is no id to hand the adapter, so this
+  // summary is a legacy fallback (`id === null` — no canonical row yet, a
+  // genuine pre-cutover brand), there is no id to hand the adapter, so this
   // falls back to the direct `fetchNormalizedShopifyProducts` path — the
-  // exact path this route used before the cutover. `summary === null` is
-  // folded into the same fallback: it should not occur here (the
-  // connectivity gate below already confirmed legacy has a shop domain and a
-  // CONNECTED status for this exact brandId/provider), but if it ever did,
-  // legacy is still the correct source of truth to fall back to.
-  if (summary && summary.id !== null) {
+  // exact path this route used before the cutover.
+  if (summary.id !== null) {
     return runAdapterSync(deps, { ...summary, id: summary.id });
   }
 
-  return runDirectFetch(deps, shopDomain, brandId);
+  return runDirectFetch(deps, summary.externalAccountId, brandId);
 }
 
 export async function GET() {
@@ -247,32 +232,29 @@ export async function productsGetImpl(
 
     const brand = context.membership.brand;
 
-    if (
-      !brand.shopifyShopDomain ||
-      !brand.shopifyAdminAccessTokenEncrypted ||
-      brand.shopifyConnectionStatus !== "CONNECTED"
-    ) {
+    // PHASE 14B.4B — CANONICAL GATE. `getActiveCommerceConnection` is
+    // genuinely canonical-first (see connection-service.ts): a
+    // `CommerceConnection` row always wins when one exists, and legacy
+    // `Brand.shopify*` is consulted only for a genuine pre-cutover brand.
+    // `isConnectionUsable` reproduces the exact three-part gate this route
+    // used to hand-roll against `Brand` columns (domain present + credential
+    // present + status CONNECTED) — see its own doc comment in
+    // connection-service.ts for the write-path invariant that makes
+    // `status === "CONNECTED"` alone equivalent to all three, for BOTH a
+    // canonical row and a legacy-fallback summary.
+    const summary = await deps.getConnectionSummary(brand.id);
+    if (!summary || !isConnectionUsable(summary)) {
       return NextResponse.json(
         { error: "Shopify is not connected for this brand." },
         { status: 400 },
       );
     }
 
-    const outcome = await resolveProducts(deps, brand.id, brand.shopifyShopDomain);
+    const outcome = await resolveProducts(deps, brand.id, summary);
 
     if (!outcome.ok) {
       return NextResponse.json({ error: outcome.error }, { status: outcome.status });
     }
-
-    // PRESERVED SIDE EFFECT: the legacy Brand columns are stamped exactly as
-    // before, on every successful sync regardless of which path produced it
-    // (adapter or direct-fetch). When the adapter path was used, it has
-    // ALREADY separately stamped CommerceConnection.lastProductSyncAt inside
-    // ShopifyCommerceAdapter.syncProducts (via its own markProductSync dep)
-    // — this is a required dual-write, not a duplicate: legacy stays
-    // authoritative for every route that reads Brand.shopify* directly, and
-    // the mirror stays current for the neutral service.
-    await deps.markLegacyProductSync(brand.id);
 
     return NextResponse.json({
       data: outcome.items,

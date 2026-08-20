@@ -5,7 +5,6 @@ import {
   findEmbeddedConnectedBrand,
   type EmbeddedConnectedBrand,
 } from "@/lib/shopify-embedded-connection";
-import { safeMarkShopifyCommerceConnectionDisconnected } from "@/lib/commerce/connection-sync";
 
 type EmbeddedDisconnectDependencies = {
   verifySessionTokenFromRequest: typeof verifySessionTokenFromRequest;
@@ -67,12 +66,6 @@ export async function embeddedDisconnectPostImpl(
       outcome: result.count === 1 ? "disconnected" : "already_disconnected",
       shop: verified.shop,
     });
-
-    // Provider-neutral CommerceConnection mirror (Phase 1 dual-write) — best
-    // effort, runs in its own transaction AFTER the one above has already
-    // committed, and can never fail this request (see connection-sync.ts).
-    // Must never throw: the legacy disconnect above already committed, so a throw here would wrongly surface as a 500 via the outer catch.
-    await safeMarkShopifyCommerceConnectionDisconnected(brand.id, "DISCONNECTED");
 
     return NextResponse.json({
       data: { linked: false, brandName: null, connectionStatus: null },

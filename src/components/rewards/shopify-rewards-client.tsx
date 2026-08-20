@@ -27,7 +27,6 @@ type ShopifyRewardOffer = {
     id: string;
     name: string;
     logoUrl: string | null;
-    shopifyShopDomain?: string | null;
   };
   shopUrl: string | null;
   pointsCost: number;

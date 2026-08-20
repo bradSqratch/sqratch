@@ -11,25 +11,14 @@ type LessonProductActor = {
 };
 
 /**
- * Includes every field `isLegacyShopifyBrandConnectionUsable` (and, via it,
- * `mapLegacyBrandToConnectionSummary`) needs to decide connectivity through
- * the provider-neutral commerce connection service — NOT
- * `shopifyAdminAccessTokenEncrypted`, which that service deliberately never
- * needs (see `src/lib/commerce/connection-service.ts`'s file header for why
- * `status` alone reproduces the old three-part check). None of these fields
- * are ever serialized directly — every consumer only ever projects
- * `{ id, name, slug }` out of a `CandidateBrand`.
+ * Every consumer only ever projects `{ id, name, slug }` out of a
+ * `CandidateBrand` — no connectivity/Shopify field is read here or by any
+ * downstream caller (PHASE 14C-A: confirmed dead, removed).
  */
 export type CandidateBrand = {
   id: string;
   name: string;
   slug: string;
-  shopifyShopDomain: string | null;
-  shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED" | "REQUIRES_RECONNECT";
-  shopifyInstalledAt: Date | null;
-  shopifyUninstalledAt: Date | null;
-  shopifyLastProductSyncAt: Date | null;
-  shopifyGrantedScopes: string | null;
 };
 
 export type LessonProductManagementContext = {
@@ -123,12 +112,6 @@ export async function getLessonProductManagementContext(
                           id: true,
                           name: true,
                           slug: true,
-                          shopifyShopDomain: true,
-                          shopifyConnectionStatus: true,
-                          shopifyInstalledAt: true,
-                          shopifyUninstalledAt: true,
-                          shopifyLastProductSyncAt: true,
-                          shopifyGrantedScopes: true,
                         },
                       },
                     },

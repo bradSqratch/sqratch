@@ -19,7 +19,6 @@ type BrandProfileResponse = {
   coverImageUrl: string | null;
   shopifyShopDomain: string | null;
   shopifyInstalledAt: string | null;
-  shopifyDisconnectedAt: string | null;
   shopifyUninstalledAt: string | null;
   shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED";
   shopifyLastProductSyncAt: string | null;
@@ -147,7 +146,6 @@ export function BrandShopifyClient({
       const updated = await fetchJson<{
         shopifyShopDomain: string | null;
         shopifyInstalledAt: string | null;
-        shopifyDisconnectedAt: string | null;
         shopifyUninstalledAt: string | null;
         shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED";
         shopifyLastProductSyncAt: string | null;

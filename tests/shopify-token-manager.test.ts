@@ -97,6 +97,7 @@ import {
   ownsRefreshLock,
   exchangeSessionTokenForOfflineToken,
   getValidAccessToken,
+  reconcileShopifyConnectionScopes,
   type ShopifyTokenResponse,
   type TokenEndpointFn,
 } from "../src/lib/shopify-token-manager";
@@ -731,7 +732,34 @@ describe("Token encryption integrity", () => {
 // call is faked to return `[]`, resolving "noop" immediately.
 // ---------------------------------------------------------------------------
 
-describe("getValidAccessToken → mirror orchestration", () => {
+describe("getValidAccessToken → CANONICAL credential authority + reverse mirror orchestration", () => {
+  /**
+   * PHASE 14B.2. This block previously modelled `Brand.shopify*` as the
+   * credential authority. Authority has now inverted, so the fixture models
+   * what production actually reads:
+   *
+   *   Brand  ->  CommerceConnection(SHOPIFY)  ->  CommerceConnectionSecret
+   *
+   * Every original invariant is preserved — one refresh winner, losers never
+   * refresh, stale writers never overwrite the winner, stale-lease takeover,
+   * permanent failure requires reconnect, LEGACY_OFFLINE short-circuits, and
+   * the compatibility mirror runs strictly AFTER the authoritative write and
+   * can never change the result. What changed is only WHERE each of those
+   * lives:
+   *
+   *   authoritative CAS   Brand.updateMany       -> CommerceConnectionSecret.updateMany
+   *   refresh lease       Brand.shopifyToken*    -> CommerceConnectionSecret.refreshLock*
+   *   the "mirror"        canonical sync (fwd)   -> Brand.update (REVERSE mirror)
+   *
+   * `ctx.brand` is deliberately left holding a DELIBERATELY STALE credential
+   * in most cases: that is now a feature, not fixture noise — it proves the
+   * canonical value wins (required test B) and that nothing silently reads
+   * the legacy copy.
+   *
+   * `loadShopifyCredential` is NEVER bypassed: the fixture mocks the same
+   * Prisma delegates production calls, and `DATABASE_URL` stays unreachable
+   * so any un-mocked DB access still fails loudly.
+   */
   type FakeMirrorBrandRow = {
     id: string;
     shopifyShopDomain: string | null;
@@ -748,49 +776,130 @@ describe("getValidAccessToken → mirror orchestration", () => {
     shopifyCurrencyCode: string | null;
   };
 
+  type FakeConnRow = {
+    id: string;
+    brandId: string;
+    provider: string;
+    status: string;
+    externalAccountId: string;
+    providerClientId: string | null;
+    grantedScopes: string[] | null;
+  };
+
+  type FakeSecretRow = {
+    connectionId: string;
+    encryptedPayload: string;
+    rotatedAt: Date | null;
+    expiresAt: Date | null;
+    refreshLockId: string | null;
+    refreshLockedUntil: Date | null;
+  };
+
+  type CanonicalTokens = {
+    accessToken: string;
+    accessTokenExpiresAt: Date | null;
+    refreshToken: string | null;
+    refreshTokenExpiresAt: Date | null;
+    authMode: string;
+  };
+
   type MirrorTestCtx = {
     brand: FakeMirrorBrandRow | null;
+    conn: FakeConnRow | null;
+    secret: FakeSecretRow | null;
     calls: string[];
+    /** "throw" makes the REVERSE mirror (Brand.update) fail. */
     mirrorBehavior: "shortCircuit" | "throw";
-    reloadBrandCount: number;
-    onReloadBrand: ((callIndex: number, brand: FakeMirrorBrandRow) => void) | null;
-    markDisconnectedConnectionRows: unknown[];
+    canonicalLoadCount: number;
+    /** Fires on each canonical load so a test can simulate a concurrent winner. */
+    onCanonicalLoad: ((callIndex: number, ctx: MirrorTestCtx) => void) | null;
   };
 
   let ctx: MirrorTestCtx;
 
-  function resetMirrorCtx(overrides: Partial<MirrorTestCtx> = {}) {
-    ctx = {
-      brand: null,
-      calls: [],
-      mirrorBehavior: "shortCircuit",
-      reloadBrandCount: 0,
-      onReloadBrand: null,
-      markDisconnectedConnectionRows: [],
-      ...overrides,
-    };
-  }
-
-  // Real wall-clock offsets — getValidAccessToken calls Date.now() itself
-  // internally (no injectable clock), unlike the fixed-NOW_MS pure-logic
-  // tests above.
   function realExpiry(offsetMs: number): Date {
     return new Date(Date.now() + offsetMs);
   }
 
-  function makeStaleExpiringBrand(
+  function encodeTokens(tokens: CanonicalTokens): string {
+    return encryptSecret(
+      JSON.stringify({
+        accessToken: tokens.accessToken,
+        accessTokenExpiresAt: tokens.accessTokenExpiresAt?.toISOString() ?? null,
+        refreshToken: tokens.refreshToken,
+        refreshTokenExpiresAt: tokens.refreshTokenExpiresAt?.toISOString() ?? null,
+        authMode: tokens.authMode,
+      }),
+    );
+  }
+
+  /**
+   * Decrypts the canonical payload and REVIVES its ISO date strings back into
+   * `Date` objects, so a decode -> patch -> encode round-trip stays
+   * type-faithful (the payload stores ISO strings; `CanonicalTokens` holds
+   * Dates).
+   */
+  function decodeTokens(secret: FakeSecretRow): CanonicalTokens {
+    const raw = JSON.parse(decryptSecret(secret.encryptedPayload)) as {
+      accessToken: string;
+      accessTokenExpiresAt: string | null;
+      refreshToken: string | null;
+      refreshTokenExpiresAt: string | null;
+      authMode: string;
+    };
+    return {
+      accessToken: raw.accessToken,
+      accessTokenExpiresAt: raw.accessTokenExpiresAt
+        ? new Date(raw.accessTokenExpiresAt)
+        : null,
+      refreshToken: raw.refreshToken,
+      refreshTokenExpiresAt: raw.refreshTokenExpiresAt
+        ? new Date(raw.refreshTokenExpiresAt)
+        : null,
+      authMode: raw.authMode,
+    };
+  }
+
+  /** Mutates the canonical secret's decrypted payload in place. */
+  function setCanonicalTokens(patch: Partial<CanonicalTokens>) {
+    if (!ctx.secret) return;
+    const current = decodeTokens(ctx.secret);
+    ctx.secret.encryptedPayload = encodeTokens({ ...current, ...patch });
+  }
+
+  function resetMirrorCtx(overrides: Partial<MirrorTestCtx> = {}) {
+    ctx = {
+      brand: null,
+      conn: null,
+      secret: null,
+      calls: [],
+      mirrorBehavior: "shortCircuit",
+      canonicalLoadCount: 0,
+      onCanonicalLoad: null,
+      ...overrides,
+    };
+  }
+
+  /**
+   * A brand whose LEGACY columns are deliberately stale/wrong. If any
+   * production read still trusted them, the tests below would return
+   * `shpat_STALE_BRAND_TOKEN_MUST_NOT_BE_USED` and fail loudly.
+   */
+  function makeStaleBrandMirror(
     overrides: Partial<FakeMirrorBrandRow> = {},
   ): FakeMirrorBrandRow {
     return {
       id: "brand-mirror-1",
       shopifyShopDomain: "mirror-shop.myshopify.com",
-      shopifyAdminAccessTokenEncrypted: encryptSecret("shpat_old_token"),
+      shopifyAdminAccessTokenEncrypted: encryptSecret(
+        "shpat_STALE_BRAND_TOKEN_MUST_NOT_BE_USED",
+      ),
       shopifyConnectionStatus: "CONNECTED",
       shopifyAuthMode: "EXPIRING_OFFLINE",
-      shopifyAccessTokenExpiresAt: realExpiry(-60_000), // already expired -> stale
-      shopifyRefreshTokenEncrypted: encryptSecret("shprt_old_refresh"),
+      shopifyAccessTokenExpiresAt: realExpiry(3_600_000),
+      shopifyRefreshTokenEncrypted: encryptSecret("shprt_STALE_BRAND_REFRESH"),
       shopifyRefreshTokenExpiresAt: realExpiry(7_776_000_000),
-      shopifyGrantedScopes: "read_products,read_themes,read_discounts,write_discounts",
+      shopifyGrantedScopes: "read_products,read_discounts,write_discounts",
       shopifyClientId: "client_abc",
       shopifyTokenRefreshLockedUntil: null,
       shopifyTokenRefreshLockId: null,
@@ -799,106 +908,232 @@ describe("getValidAccessToken → mirror orchestration", () => {
     };
   }
 
+  function makeCanonicalConn(overrides: Partial<FakeConnRow> = {}): FakeConnRow {
+    return {
+      id: "conn-mirror-1",
+      brandId: "brand-mirror-1",
+      provider: "SHOPIFY",
+      status: "CONNECTED",
+      externalAccountId: "mirror-shop.myshopify.com",
+      providerClientId: "client_abc",
+      grantedScopes: ["read_products", "read_themes", "read_discounts", "write_discounts"],
+      ...overrides,
+    };
+  }
+
+  /** Canonical secret whose access token is already EXPIRED -> refresh needed. */
+  function makeStaleCanonicalSecret(
+    overrides: Partial<FakeSecretRow> = {},
+  ): FakeSecretRow {
+    return {
+      connectionId: "conn-mirror-1",
+      encryptedPayload: encodeTokens({
+        accessToken: "shpat_old_token",
+        accessTokenExpiresAt: realExpiry(-60_000),
+        refreshToken: "shprt_old_refresh",
+        refreshTokenExpiresAt: realExpiry(7_776_000_000),
+        authMode: "EXPIRING_OFFLINE",
+      }),
+      rotatedAt: null,
+      expiresAt: null,
+      refreshLockId: null,
+      refreshLockedUntil: null,
+      ...overrides,
+    };
+  }
+
+  /** Sets up the standard "canonical stale, brand stale-and-wrong" scenario. */
+  function stdCanonicalScenario(overrides: Partial<MirrorTestCtx> = {}) {
+    resetMirrorCtx({
+      brand: makeStaleBrandMirror(),
+      conn: makeCanonicalConn(),
+      secret: makeStaleCanonicalSecret(),
+      ...overrides,
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Prisma delegate fakes — the SAME calls production makes.
+  // -------------------------------------------------------------------------
+
+  async function fakeConnFindFirst(args: {
+    where: { brandId: string; provider: string };
+  }) {
+    ctx.canonicalLoadCount += 1;
+    ctx.calls.push(`canonicalLoad#${ctx.canonicalLoadCount}`);
+    ctx.onCanonicalLoad?.(ctx.canonicalLoadCount, ctx);
+
+    if (
+      !ctx.conn ||
+      ctx.conn.brandId !== args.where.brandId ||
+      ctx.conn.provider !== args.where.provider
+    ) {
+      return null;
+    }
+    return {
+      id: ctx.conn.id,
+      brandId: ctx.conn.brandId,
+      status: ctx.conn.status,
+      externalAccountId: ctx.conn.externalAccountId,
+      providerClientId: ctx.conn.providerClientId,
+      grantedScopes: ctx.conn.grantedScopes,
+      secret: ctx.secret ? { encryptedPayload: ctx.secret.encryptedPayload } : null,
+    };
+  }
+
+  async function fakeConnUpdate(args: {
+    where: { id: string };
+    data: Record<string, unknown>;
+  }) {
+    ctx.calls.push("connStatusUpdate");
+    if (ctx.conn && ctx.conn.id === args.where.id) {
+      Object.assign(ctx.conn, args.data);
+    }
+    return ctx.conn;
+  }
+
+  // PHASE 14B.4B: `applyGrantedScopesUpdate` resolves the canonical
+  // connection by `(provider, externalAccountId)` directly, not by brandId —
+  // this is the SAME `ctx.conn` model `fakeConnFindFirst` above serves, just
+  // keyed differently, so both fakes must stay consistent with one another.
+  async function fakeConnFindUnique(args: {
+    where: { provider_externalAccountId?: { provider: string; externalAccountId: string } };
+  }) {
+    ctx.calls.push("scopesConnFindUnique");
+    const key = args.where.provider_externalAccountId;
+    if (
+      !key ||
+      !ctx.conn ||
+      ctx.conn.provider !== key.provider ||
+      ctx.conn.externalAccountId !== key.externalAccountId
+    ) {
+      return null;
+    }
+    return { id: ctx.conn.id, brandId: ctx.conn.brandId, status: ctx.conn.status };
+  }
+
+  async function fakeConnUpdateMany(args: {
+    where: { id: string; status?: unknown };
+    data: Record<string, unknown>;
+  }) {
+    ctx.calls.push("scopesConnUpdateMany");
+    if (!ctx.conn || ctx.conn.id !== args.where.id) return { count: 0 };
+    Object.assign(ctx.conn, args.data);
+    return { count: 1 };
+  }
+
+  async function fakeSecretFindUnique(args: { where: { connectionId: string } }) {
+    ctx.calls.push("leaseProbe");
+    if (!ctx.secret || ctx.secret.connectionId !== args.where.connectionId) return null;
+    return { ...ctx.secret };
+  }
+
+  async function fakeSecretUpdateMany(args: {
+    where: {
+      connectionId: string;
+      refreshLockId?: string;
+      OR?: Array<{ refreshLockedUntil: null | { lt: Date } }>;
+    };
+    data: Record<string, unknown>;
+  }) {
+    if (!ctx.secret || ctx.secret.connectionId !== args.where.connectionId) {
+      return { count: 0 };
+    }
+
+    // Lease acquisition: the OR[null, lt now] predicate.
+    if (args.where.OR) {
+      ctx.calls.push("acquireLease");
+      const lockFree =
+        ctx.secret.refreshLockedUntil === null ||
+        ctx.secret.refreshLockedUntil.getTime() < Date.now();
+      if (!lockFree) return { count: 0 };
+      Object.assign(ctx.secret, args.data);
+      return { count: 1 };
+    }
+
+    const ownsLease =
+      args.where.refreshLockId !== undefined &&
+      ctx.secret.refreshLockId !== null &&
+      ctx.secret.refreshLockId === args.where.refreshLockId;
+
+    if ("encryptedPayload" in args.data) {
+      // The AUTHORITATIVE rotation CAS.
+      ctx.calls.push("rotationCAS");
+      if (!ownsLease) return { count: 0 };
+      Object.assign(ctx.secret, args.data);
+      return { count: 1 };
+    }
+
+    // Lease release.
+    ctx.calls.push("releaseLease");
+    if (!ownsLease) return { count: 0 };
+    ctx.secret.refreshLockId = null;
+    ctx.secret.refreshLockedUntil = null;
+    return { count: 1 };
+  }
+
+  async function fakeSecretDeleteMany(args: {
+    where: { connectionId: string; refreshLockId?: string };
+  }) {
+    ctx.calls.push("clearCanonicalSecret");
+    if (!ctx.secret || ctx.secret.connectionId !== args.where.connectionId) {
+      return { count: 0 };
+    }
+    if (
+      args.where.refreshLockId !== undefined &&
+      ctx.secret.refreshLockId !== args.where.refreshLockId
+    ) {
+      return { count: 0 };
+    }
+    ctx.secret = null;
+    return { count: 1 };
+  }
+
   async function fakeBrandFindUnique(args: {
     where: { id: string };
     select?: Record<string, boolean>;
   }) {
-    const isReloadBrandShape =
-      !!args.select && "shopifyTokenRefreshLockId" in args.select;
-
-    if (isReloadBrandShape) {
-      ctx.reloadBrandCount += 1;
-      ctx.calls.push(`reloadBrand#${ctx.reloadBrandCount}`);
-      if (!ctx.brand) return null;
-      ctx.onReloadBrand?.(ctx.reloadBrandCount, ctx.brand);
-      return { ...ctx.brand };
-    }
-
-    // Any other select shape reaching prisma.brand.findUnique in these
-    // tests is the mirror's own findBrandForSync lookup — the only other
-    // caller of brand.findUnique in the whole call graph exercised here.
-    ctx.calls.push("mirrorFindBrand");
-    if (ctx.mirrorBehavior === "throw") {
-      throw new Error("simulated mirror DB failure");
-    }
-    return null;
+    ctx.calls.push("legacyBrandRead");
+    if (!ctx.brand || ctx.brand.id !== args.where.id) return null;
+    return { ...ctx.brand };
   }
 
-  async function fakeBrandUpdateMany(args: {
-    where: Record<string, unknown>;
+  /** The REVERSE compatibility mirror. */
+  async function fakeBrandUpdate(args: {
+    where: { id: string };
     data: Record<string, unknown>;
   }) {
-    if (!ctx.brand || args.where.id !== ctx.brand.id) {
-      return { count: 0 };
+    ctx.calls.push("reverseMirror");
+    if (ctx.mirrorBehavior === "throw") {
+      throw new Error("simulated compatibility-mirror DB failure");
     }
-
-    if ("shopifyAdminAccessTokenEncrypted" in args.data) {
-      // performTokenRefresh's authoritative CAS write.
-      ctx.calls.push("performTokenRefreshCAS");
-      const lockMatches =
-        ctx.brand.shopifyTokenRefreshLockId !== null &&
-        args.where.shopifyTokenRefreshLockId === ctx.brand.shopifyTokenRefreshLockId;
-      if (!lockMatches) return { count: 0 };
+    if (ctx.brand && ctx.brand.id === args.where.id) {
       Object.assign(ctx.brand, args.data);
-      return { count: 1 };
     }
-
-    if (args.data.shopifyTokenRefreshLockedUntil === null) {
-      // releaseRefreshLock.
-      ctx.calls.push("releaseRefreshLock");
-      const lockMatches =
-        args.where.shopifyTokenRefreshLockId === ctx.brand.shopifyTokenRefreshLockId;
-      if (!lockMatches) return { count: 0 };
-      ctx.brand.shopifyTokenRefreshLockedUntil = null;
-      ctx.brand.shopifyTokenRefreshLockId = null;
-      return { count: 1 };
-    }
-
-    // acquireRefreshLock CAS.
-    ctx.calls.push("acquireRefreshLock");
-    const lockFree =
-      !ctx.brand.shopifyTokenRefreshLockedUntil ||
-      ctx.brand.shopifyTokenRefreshLockedUntil.getTime() < Date.now();
-    if (!lockFree) return { count: 0 };
-    ctx.brand.shopifyTokenRefreshLockedUntil =
-      args.data.shopifyTokenRefreshLockedUntil as Date;
-    ctx.brand.shopifyTokenRefreshLockId = args.data.shopifyTokenRefreshLockId as string;
-    return { count: 1 };
+    return ctx.brand;
   }
 
-  // Backs BOTH transactions reachable from these tests: shopify-token-manager's
-  // own markRequiresReconnect (tx.brand.*, tx.brandRewardOffer.updateMany,
-  // tx.shopifyConnectionEvent.create) and connection-sync's
-  // applyMarkShopifyConnectionsDisconnected (tx.commerceConnection.findMany)
-  // reached via safeMarkShopifyCommerceConnectionDisconnected. A single
-  // shared in-memory store (ctx.brand) stands in for real transactional
-  // isolation, matching the level of fidelity the rest of this codebase's
-  // fake-tx test doubles use (see makeFakeConnectionSyncTx in
-  // tests/commerce-connection-compatibility.test.ts).
+  async function fakeBrandUpdateMany() {
+    // Reachable only on the LEGACY_COMPAT path, which the canonical scenarios
+    // below never take. Tagged so an accidental regression is visible.
+    ctx.calls.push("legacyBrandCAS");
+    return { count: 0 };
+  }
+
   async function fakeTransaction<T>(
     fn: (tx: Record<string, unknown>) => Promise<T>,
   ): Promise<T> {
     const tx = {
+      commerceConnection: { update: fakeConnUpdate },
+      commerceConnectionSecret: {
+        updateMany: fakeSecretUpdateMany,
+        deleteMany: fakeSecretDeleteMany,
+        findUnique: fakeSecretFindUnique,
+      },
       brand: {
-        findUnique: async () => (ctx.brand ? { ...ctx.brand } : null),
-        update: async (args: { data: Record<string, unknown> }) => {
-          ctx.calls.push("txBrandUpdate");
-          if (ctx.brand) Object.assign(ctx.brand, args.data);
-          return ctx.brand;
-        },
-        updateMany: async (args: {
-          where: Record<string, unknown>;
-          data: Record<string, unknown>;
-        }) => {
-          ctx.calls.push("txBrandUpdateManyCAS");
-          if (!ctx.brand || args.where.id !== ctx.brand.id) return { count: 0 };
-          const lockMatches =
-            ctx.brand.shopifyTokenRefreshLockId !== null &&
-            args.where.shopifyTokenRefreshLockId === ctx.brand.shopifyTokenRefreshLockId;
-          if (!lockMatches) return { count: 0 };
-          Object.assign(ctx.brand, args.data);
-          return { count: 1 };
-        },
+        findUnique: fakeBrandFindUnique,
+        update: fakeBrandUpdate,
+        updateMany: fakeBrandUpdateMany,
       },
       brandRewardOffer: {
         updateMany: async () => {
@@ -912,31 +1147,80 @@ describe("getValidAccessToken → mirror orchestration", () => {
           return {};
         },
       },
-      commerceConnection: {
-        findMany: async () => {
-          ctx.calls.push("mirrorMarkDisconnectedFindMany");
-          return ctx.markDisconnectedConnectionRows;
-        },
-      },
     };
     return fn(tx);
   }
 
   before(async () => {
     const prismaModule = (await import("../src/lib/prisma"))
-      .default as unknown as {
-      brand: Record<string, unknown>;
-      $transaction: unknown;
-    };
+      .default as unknown as Record<string, unknown>;
     prismaModule.brand = {
       findUnique: fakeBrandFindUnique,
+      update: fakeBrandUpdate,
       updateMany: fakeBrandUpdateMany,
+    };
+    prismaModule.commerceConnection = {
+      findFirst: fakeConnFindFirst,
+      update: fakeConnUpdate,
+      findUnique: fakeConnFindUnique,
+      updateMany: fakeConnUpdateMany,
+    };
+    prismaModule.commerceConnectionSecret = {
+      findUnique: fakeSecretFindUnique,
+      updateMany: fakeSecretUpdateMany,
+      deleteMany: fakeSecretDeleteMany,
     };
     prismaModule.$transaction = fakeTransaction;
   });
 
-  test("1. successful winner refresh calls the mirror exactly once, strictly after the CAS update resolves", async () => {
-    resetMirrorCtx({ brand: makeStaleExpiringBrand(), mirrorBehavior: "shortCircuit" });
+  // -------------------------------------------------------------------------
+  // A / B / C / D / E — canonical authority and rotation
+  // -------------------------------------------------------------------------
+
+  test("A. a FRESH canonical access token is returned with no refresh and no token-endpoint call", async () => {
+    stdCanonicalScenario({
+      secret: makeStaleCanonicalSecret(),
+    });
+    setCanonicalTokens({
+      accessToken: "shpat_canonical_fresh",
+      accessTokenExpiresAt: realExpiry(3_600_000),
+    });
+    const tokenEndpoint: TokenEndpointFn = async () => {
+      throw new Error("a fresh canonical token must never hit the token endpoint");
+    };
+
+    const result = await getValidAccessToken("brand-mirror-1", { tokenEndpoint });
+
+    assert.equal(result.ok, true);
+    if (result.ok) assert.equal(result.accessToken, "shpat_canonical_fresh");
+    assert.ok(!ctx.calls.includes("acquireLease"), "no lease is needed for a fresh token");
+    assert.ok(!ctx.calls.includes("rotationCAS"));
+  });
+
+  test("B. a deliberately STALE Brand credential is never used when a canonical credential exists", async () => {
+    stdCanonicalScenario();
+    setCanonicalTokens({
+      accessToken: "shpat_canonical_fresh",
+      accessTokenExpiresAt: realExpiry(3_600_000),
+    });
+
+    const result = await getValidAccessToken("brand-mirror-1", {
+      tokenEndpoint: async () => makeTokenResponse(),
+    });
+
+    assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.equal(result.accessToken, "shpat_canonical_fresh");
+      assert.notEqual(
+        result.accessToken,
+        "shpat_STALE_BRAND_TOKEN_MUST_NOT_BE_USED",
+        "the legacy Brand credential must never win over canonical",
+      );
+    }
+  });
+
+  test("C/D/E. a stale canonical token refreshes exactly once; the rotated access AND refresh token become canonical", async () => {
+    stdCanonicalScenario();
     const tokenEndpoint: TokenEndpointFn = async () => makeTokenResponse();
 
     const result = await getValidAccessToken("brand-mirror-1", { tokenEndpoint });
@@ -944,40 +1228,65 @@ describe("getValidAccessToken → mirror orchestration", () => {
     assert.equal(result.ok, true);
     if (result.ok) assert.equal(result.accessToken, "shpat_new_access_token");
 
-    const casIndex = ctx.calls.indexOf("performTokenRefreshCAS");
-    const mirrorIndex = ctx.calls.indexOf("mirrorFindBrand");
-    assert.ok(casIndex >= 0, "expected the authoritative CAS write to have run");
-    assert.ok(mirrorIndex >= 0, "expected the mirror to have been invoked");
-    assert.ok(mirrorIndex > casIndex, "the mirror must run strictly AFTER the CAS commit");
     assert.equal(
-      ctx.calls.filter((c) => c === "mirrorFindBrand").length,
+      ctx.calls.filter((c) => c === "rotationCAS").length,
       1,
-      "the mirror must be called exactly once",
+      "exactly one authoritative rotation",
+    );
+
+    // D + E: both rotated tokens are canonical, and visible together.
+    const persisted = decodeTokens(ctx.secret!);
+    assert.equal(persisted.accessToken, "shpat_new_access_token");
+    assert.equal(persisted.refreshToken, "shprt_new_refresh_token");
+    // The lease was released atomically with the rotation.
+    assert.equal(ctx.secret!.refreshLockId, null);
+    assert.equal(ctx.secret!.refreshLockedUntil, null);
+  });
+
+  // PHASE 14C-A: `mirrorCanonicalCredentialToBrand` (the "reverse mirror")
+  // was deleted from shopify-token-manager.ts entirely — every runtime
+  // reader of `Brand.shopify*` was migrated off it, so there is no longer
+  // anything for a rotated canonical token to mirror INTO. This test used
+  // to prove the mirror ran exactly once, strictly after the canonical
+  // CAS; it now proves the opposite (no mirror at all), matching the other
+  // "must not mirror" assertions already present throughout this file
+  // (F/G/H, 4a, 4b, K-superseded).
+  test("1. no compatibility mirror runs — the canonical CAS is the only write", async () => {
+    stdCanonicalScenario();
+
+    const result = await getValidAccessToken("brand-mirror-1", {
+      tokenEndpoint: async () => makeTokenResponse(),
+    });
+    assert.equal(result.ok, true);
+
+    assert.ok(
+      ctx.calls.includes("rotationCAS"),
+      "expected the authoritative canonical CAS to have run",
+    );
+    assert.ok(
+      !ctx.calls.includes("reverseMirror"),
+      "no legacy Brand mirror exists anymore to invoke",
     );
   });
 
-  test("2. a mirror that throws does not change getValidAccessToken's return value and does not propagate", async () => {
-    resetMirrorCtx({ brand: makeStaleExpiringBrand(), mirrorBehavior: "throw" });
-    const tokenEndpoint: TokenEndpointFn = async () => makeTokenResponse();
+  // -------------------------------------------------------------------------
+  // F / G / H — concurrency
+  // -------------------------------------------------------------------------
 
-    const result = await getValidAccessToken("brand-mirror-1", { tokenEndpoint });
-
-    assert.equal(result.ok, true, "a thrown mirror error must never surface as a failed refresh");
-    if (result.ok) assert.equal(result.accessToken, "shpat_new_access_token");
-    assert.ok(ctx.calls.includes("mirrorFindBrand"), "the mirror must still have been attempted");
-  });
-
-  test("3. a losing refresher that returns a valid token via the stale-writer/readWinnerToken path does NOT call the mirror", async () => {
-    resetMirrorCtx({ brand: makeStaleExpiringBrand(), mirrorBehavior: "shortCircuit" });
-    const winnerAccessToken = encryptSecret("shpat_from_other_winner");
+  test("F/G/H. a stale writer whose lease was taken over persists NOTHING and returns the WINNER's canonical token", async () => {
+    stdCanonicalScenario();
     const tokenEndpoint: TokenEndpointFn = async () => {
-      // Simulate another process's takeover winning the CAS race while this
-      // request's own token-endpoint call is in flight — its own final CAS
-      // write below will then find a superseded lock (count 0).
-      if (ctx.brand) {
-        ctx.brand.shopifyTokenRefreshLockId = "some-other-processes-lock";
-        ctx.brand.shopifyAdminAccessTokenEncrypted = winnerAccessToken;
-        ctx.brand.shopifyAccessTokenExpiresAt = realExpiry(3_600_000);
+      // Another process takes over the lease and rotates while this
+      // request's token-endpoint call is in flight.
+      if (ctx.secret) {
+        ctx.secret.refreshLockId = "some-other-processes-lock";
+        ctx.secret.encryptedPayload = encodeTokens({
+          accessToken: "shpat_from_other_winner",
+          accessTokenExpiresAt: realExpiry(3_600_000),
+          refreshToken: "shprt_winner_refresh",
+          refreshTokenExpiresAt: realExpiry(7_776_000_000),
+          authMode: "EXPIRING_OFFLINE",
+        });
       }
       return makeTokenResponse();
     };
@@ -985,28 +1294,40 @@ describe("getValidAccessToken → mirror orchestration", () => {
     const result = await getValidAccessToken("brand-mirror-1", { tokenEndpoint });
 
     assert.equal(result.ok, true);
-    if (result.ok) assert.equal(result.accessToken, "shpat_from_other_winner");
+    if (result.ok) {
+      assert.equal(
+        result.accessToken,
+        "shpat_from_other_winner",
+        "the loser must observe the winner's canonical token",
+      );
+    }
+    // H: the winner's payload survived — the loser overwrote nothing.
+    assert.equal(decodeTokens(ctx.secret!).accessToken, "shpat_from_other_winner");
+    assert.equal(decodeTokens(ctx.secret!).refreshToken, "shprt_winner_refresh");
     assert.ok(
-      !ctx.calls.includes("mirrorFindBrand"),
-      "a stale writer falling back to readWinnerToken must never call the mirror",
+      !ctx.calls.includes("reverseMirror"),
+      "a stale writer falling back to readWinnerToken must never mirror",
     );
   });
 
-  test("4a. fresh-after-wait loser path does NOT call the mirror", async () => {
-    resetMirrorCtx({
-      brand: makeStaleExpiringBrand({
-        shopifyTokenRefreshLockedUntil: realExpiry(10_000),
-        shopifyTokenRefreshLockId: "other-holder-lock",
+  test("4a. fresh-after-wait loser never refreshes and never mirrors", async () => {
+    stdCanonicalScenario({
+      secret: makeStaleCanonicalSecret({
+        refreshLockedUntil: realExpiry(10_000),
+        refreshLockId: "other-holder-lock",
       }),
-      mirrorBehavior: "shortCircuit",
-      onReloadBrand: (callIndex, brand) => {
-        if (callIndex === 2) {
-          // Simulate the lock holder finishing its refresh between this
-          // caller's failed acquire and waitForLockHolder's first poll.
-          brand.shopifyTokenRefreshLockedUntil = null;
-          brand.shopifyTokenRefreshLockId = null;
-          brand.shopifyAdminAccessTokenEncrypted = encryptSecret("shpat_refreshed_by_winner");
-          brand.shopifyAccessTokenExpiresAt = realExpiry(3_600_000); // fresh
+      onCanonicalLoad: (callIndex, c) => {
+        if (callIndex === 2 && c.secret) {
+          // The holder finishes between the failed acquire and the poll.
+          c.secret.refreshLockedUntil = null;
+          c.secret.refreshLockId = null;
+          c.secret.encryptedPayload = encodeTokens({
+            accessToken: "shpat_refreshed_by_winner",
+            accessTokenExpiresAt: realExpiry(3_600_000),
+            refreshToken: "shprt_winner_refresh",
+            refreshTokenExpiresAt: realExpiry(7_776_000_000),
+            authMode: "EXPIRING_OFFLINE",
+          });
         }
       },
     });
@@ -1018,25 +1339,29 @@ describe("getValidAccessToken → mirror orchestration", () => {
 
     assert.equal(result.ok, true);
     if (result.ok) assert.equal(result.accessToken, "shpat_refreshed_by_winner");
-    assert.ok(!ctx.calls.includes("performTokenRefreshCAS"), "a loser must never refresh itself");
-    assert.ok(!ctx.calls.includes("mirrorFindBrand"), "the fresh-after-wait loser must not mirror");
+    assert.ok(!ctx.calls.includes("rotationCAS"), "a loser must never refresh itself");
+    assert.ok(!ctx.calls.includes("reverseMirror"), "the fresh-after-wait loser must not mirror");
   });
 
-  test("4b. not-yet-expired-fallback loser path does NOT call the mirror", async () => {
-    resetMirrorCtx({
-      brand: makeStaleExpiringBrand({
-        shopifyTokenRefreshLockedUntil: realExpiry(10_000),
-        shopifyTokenRefreshLockId: "other-holder-lock",
+  test("4b. not-yet-expired-fallback loser never refreshes and never mirrors", async () => {
+    stdCanonicalScenario({
+      secret: makeStaleCanonicalSecret({
+        refreshLockedUntil: realExpiry(10_000),
+        refreshLockId: "other-holder-lock",
       }),
-      mirrorBehavior: "shortCircuit",
-      onReloadBrand: (callIndex, brand) => {
-        if (callIndex === 2) {
-          brand.shopifyTokenRefreshLockedUntil = null;
-          brand.shopifyTokenRefreshLockId = null;
-          // Within the 120s safety buffer (not "fresh") but not literally
-          // expired yet — the fallback branch, distinct from the fresh-token
-          // branch exercised by 4a.
-          brand.shopifyAccessTokenExpiresAt = realExpiry(30_000);
+      onCanonicalLoad: (callIndex, c) => {
+        if (callIndex === 2 && c.secret) {
+          c.secret.refreshLockedUntil = null;
+          c.secret.refreshLockId = null;
+          // Inside the 120s safety buffer but not literally expired — the
+          // fallback branch, distinct from 4a's fresh-token branch.
+          c.secret.encryptedPayload = encodeTokens({
+            accessToken: "shpat_within_buffer",
+            accessTokenExpiresAt: realExpiry(30_000),
+            refreshToken: "shprt_old_refresh",
+            refreshTokenExpiresAt: realExpiry(7_776_000_000),
+            authMode: "EXPIRING_OFFLINE",
+          });
         }
       },
     });
@@ -1047,139 +1372,315 @@ describe("getValidAccessToken → mirror orchestration", () => {
     const result = await getValidAccessToken("brand-mirror-1", { tokenEndpoint });
 
     assert.equal(result.ok, true);
-    assert.ok(!ctx.calls.includes("performTokenRefreshCAS"), "a loser must never refresh itself");
-    assert.ok(!ctx.calls.includes("mirrorFindBrand"), "the not-yet-expired loser must not mirror");
+    if (result.ok) assert.equal(result.accessToken, "shpat_within_buffer");
+    assert.ok(!ctx.calls.includes("rotationCAS"), "a loser must never refresh itself");
+    assert.ok(!ctx.calls.includes("reverseMirror"), "the not-yet-expired loser must not mirror");
   });
 
-  test("5. the takeover-lock winner path calls the mirror", async () => {
-    resetMirrorCtx({
-      brand: makeStaleExpiringBrand({
-        shopifyTokenRefreshLockedUntil: realExpiry(10_000),
-        shopifyTokenRefreshLockId: "other-holder-lock",
+  test("I. stale-lease TAKEOVER wins, rotates canonically, no mirror", async () => {
+    stdCanonicalScenario({
+      secret: makeStaleCanonicalSecret({
+        // An expired lease left behind by a crashed holder.
+        refreshLockedUntil: realExpiry(-1_000),
+        refreshLockId: "crashed-holder-lock",
       }),
-      mirrorBehavior: "shortCircuit",
-      onReloadBrand: (callIndex, brand) => {
-        if (callIndex === 2) {
-          // The other holder's lease lapsed without a successful refresh
-          // (crash / lease expiry) — lock released, token still expired, so
-          // this caller must take over the refresh itself.
-          brand.shopifyTokenRefreshLockedUntil = null;
-          brand.shopifyTokenRefreshLockId = null;
-        }
+    });
+
+    const result = await getValidAccessToken("brand-mirror-1", {
+      tokenEndpoint: async () => makeTokenResponse(),
+    });
+
+    assert.equal(result.ok, true);
+    if (result.ok) assert.equal(result.accessToken, "shpat_new_access_token");
+    assert.ok(
+      ctx.calls.includes("rotationCAS"),
+      "an expired lease must be takeable — a crash cannot deadlock the connection",
+    );
+    assert.ok(!ctx.calls.includes("reverseMirror"), "no legacy Brand mirror exists anymore");
+  });
+
+  test("5b. a connection missing only the OPTIONAL read_orders/read_themes scopes never trips REQUIRES_RECONNECT", async () => {
+    stdCanonicalScenario({
+      conn: makeCanonicalConn({
+        grantedScopes: ["read_products", "read_discounts", "write_discounts"],
+      }),
+    });
+
+    const result = await getValidAccessToken("brand-mirror-1", {
+      tokenEndpoint: async () => makeTokenResponse(),
+    });
+
+    assert.equal(result.ok, true, "baseline scopes are sufficient");
+    assert.ok(
+      !ctx.calls.includes("connectionEventCreate"),
+      "no REQUIRES_RECONNECT event may be recorded for a merely-additive missing scope",
+    );
+    assert.notEqual(ctx.conn!.status, "REQUIRES_RECONNECT");
+  });
+
+  // -------------------------------------------------------------------------
+  // K / L — permanent vs transient failure
+  // -------------------------------------------------------------------------
+
+  test("K. invalid_grant clears the CANONICAL secret, sets CommerceConnection.status REQUIRES_RECONNECT, records the loss event, no mirror", async () => {
+    stdCanonicalScenario();
+    const tokenEndpoint: TokenEndpointFn = async () => {
+      throw Object.assign(new Error("invalid_grant"), { status: 400 });
+    };
+
+    const result = await getValidAccessToken("brand-mirror-1", { tokenEndpoint });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.reason, "NEEDS_RECONNECT");
+
+    assert.equal(ctx.secret, null, "the canonical credential must be cleared");
+    assert.equal(ctx.conn!.status, "REQUIRES_RECONNECT");
+    // Connection-loss behavior preserved, inside the same transaction.
+    assert.ok(ctx.calls.includes("deactivateOffers"));
+    assert.ok(ctx.calls.includes("connectionEventCreate"));
+    assert.ok(!ctx.calls.includes("reverseMirror"), "no legacy Brand mirror exists anymore");
+  });
+
+  test("K. a SUPERSEDED holder cannot disconnect a merchant, and does not mirror", async () => {
+    stdCanonicalScenario();
+    const tokenEndpoint: TokenEndpointFn = async () => {
+      // Lease taken over mid-flight, then this caller's endpoint fails hard.
+      if (ctx.secret) ctx.secret.refreshLockId = "some-other-processes-lock";
+      throw Object.assign(new Error("invalid_grant"), { status: 400 });
+    };
+
+    const result = await getValidAccessToken("brand-mirror-1", { tokenEndpoint });
+
+    assert.equal(result.ok, false);
+    assert.ok(ctx.secret !== null, "a superseded holder must not clear the credential");
+    assert.notEqual(ctx.conn!.status, "REQUIRES_RECONNECT");
+    assert.ok(
+      !ctx.calls.includes("reverseMirror"),
+      "a failed canonical CAS must not trigger the status mirror",
+    );
+  });
+
+  test("L. a TRANSIENT refresh failure releases the lease and leaves the canonical credential intact", async () => {
+    stdCanonicalScenario();
+    const tokenEndpoint: TokenEndpointFn = async () => {
+      throw Object.assign(new Error("503 upstream"), { status: 503 });
+    };
+
+    const result = await getValidAccessToken("brand-mirror-1", { tokenEndpoint });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.reason, "NEEDS_RECONNECT");
+
+    assert.ok(ctx.secret !== null, "a transient failure must NEVER clear the credential");
+    assert.notEqual(
+      ctx.conn!.status,
+      "REQUIRES_RECONNECT",
+      "a transient failure must never falsely disconnect a merchant",
+    );
+    assert.ok(ctx.calls.includes("releaseLease"), "the lease must be released for the next attempt");
+    assert.equal(ctx.secret!.refreshLockId, null);
+  });
+
+  // -------------------------------------------------------------------------
+  // X / T / 7 — no legacy lease dependency, provider isolation, LEGACY_OFFLINE
+  // -------------------------------------------------------------------------
+
+  test("X. no canonical request touches Brand.shopifyTokenRefreshLockId/LockedUntil", async () => {
+    stdCanonicalScenario();
+
+    await getValidAccessToken("brand-mirror-1", {
+      tokenEndpoint: async () => makeTokenResponse(),
+    });
+
+    assert.ok(
+      !ctx.calls.includes("legacyBrandCAS"),
+      "the legacy Brand lease CAS must never run when a canonical credential exists",
+    );
+    assert.equal(ctx.brand!.shopifyTokenRefreshLockId, null);
+    assert.equal(ctx.brand!.shopifyTokenRefreshLockedUntil, null);
+  });
+
+  test("T. a COMMERCE7 connection is invisible to Shopify token logic (no canonical Shopify credential -> NOT_CONNECTED)", async () => {
+    resetMirrorCtx({
+      brand: null,
+      conn: makeCanonicalConn({ id: "conn-c7", provider: "COMMERCE7" }),
+      secret: makeStaleCanonicalSecret({ connectionId: "conn-c7" }),
+    });
+
+    const result = await getValidAccessToken("brand-mirror-1", {
+      tokenEndpoint: async () => {
+        throw new Error("Commerce7 must never enter Shopify refresh logic");
       },
     });
-    const tokenEndpoint: TokenEndpointFn = async () => makeTokenResponse();
 
-    const result = await getValidAccessToken("brand-mirror-1", { tokenEndpoint });
-
-    assert.equal(result.ok, true);
-    if (result.ok) assert.equal(result.accessToken, "shpat_new_access_token");
-    assert.ok(
-      ctx.calls.includes("performTokenRefreshCAS"),
-      "the takeover winner must have performed the CAS refresh itself",
-    );
-    const casIndex = ctx.calls.indexOf("performTokenRefreshCAS");
-    const mirrorIndex = ctx.calls.indexOf("mirrorFindBrand");
-    assert.ok(mirrorIndex >= 0, "the takeover winner must call the mirror");
-    assert.ok(mirrorIndex > casIndex, "the mirror must run strictly after the takeover CAS commit");
-    assert.equal(ctx.calls.filter((c) => c === "mirrorFindBrand").length, 1);
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.reason, "NOT_CONNECTED");
+    assert.ok(!ctx.calls.includes("acquireLease"));
+    assert.ok(!ctx.calls.includes("rotationCAS"));
   });
 
-  test("5b. missing read_orders and read_themes never triggers the REQUIRES_RECONNECT scope-check branch", async () => {
-    resetMirrorCtx({
-      brand: makeStaleExpiringBrand({
-        // Baseline-only: this is the exact regression scenario — a store
-        // that has never seen (or hasn't yet approved) the read_orders /
-        // read_themes managed-installation prompt.
-        shopifyGrantedScopes: "read_products,read_discounts,write_discounts",
+  test("Q. a CORRUPT canonical secret fails closed and NEVER falls back to the stale Brand credential", async () => {
+    stdCanonicalScenario({
+      secret: makeStaleCanonicalSecret({
+        encryptedPayload: "not-valid-gcm-ciphertext",
       }),
-      mirrorBehavior: "shortCircuit",
     });
-    const tokenEndpoint: TokenEndpointFn = async () => makeTokenResponse();
 
-    const result = await getValidAccessToken("brand-mirror-1", { tokenEndpoint });
+    const result = await getValidAccessToken("brand-mirror-1", {
+      tokenEndpoint: async () => makeTokenResponse(),
+    });
 
-    assert.equal(result.ok, true, "a baseline-sufficient store must get a token, not NEEDS_RECONNECT");
-    if (result.ok) assert.equal(result.accessToken, "shpat_new_access_token");
+    assert.equal(result.ok, false, "a corrupt canonical secret must fail closed");
+    if (!result.ok) assert.equal(result.reason, "NEEDS_RECONNECT");
+    // The decisive assertion: the stale Brand token was NOT resurrected.
     assert.ok(
-      !ctx.calls.includes("txBrandUpdateManyCAS"),
-      "the scope-check path must never reach markRequiresReconnect's CAS for a baseline-sufficient grant",
+      !ctx.calls.includes("legacyBrandRead") ||
+        !ctx.calls.includes("acquireLease"),
+      "a corrupt canonical secret must not start a legacy refresh",
+    );
+    assert.ok(!ctx.calls.includes("rotationCAS"));
+  });
+
+  test("AH. THE RESURRECTION GUARD: a revoked canonical connection with NO secret is never rescued from a stale Brand mirror", async () => {
+    // This is the exact post-invalidation state every credential-destruction
+    // path now produces: the canonical connection survives in a terminal
+    // status, its `CommerceConnectionSecret` is gone, and the legacy `Brand`
+    // mirror may still hold a working token (its write can lag, fail, or be
+    // rolled back independently). `NO_SECRET` alone is ambiguous — it is also
+    // what a never-backfilled pre-cutover brand looks like — so the canonical
+    // STATUS has to decide. If it did not, a disconnected merchant would keep
+    // authenticating on the mirror.
+    for (const [status, expected] of [
+      ["DISCONNECTED", "NOT_CONNECTED"],
+      ["UNINSTALLED", "NOT_CONNECTED"],
+      ["REQUIRES_RECONNECT", "NEEDS_RECONNECT"],
+      // Neither of these is a usable connected state either.
+      ["PENDING", "NOT_CONNECTED"],
+      ["ERROR", "NOT_CONNECTED"],
+    ] as const) {
+      resetMirrorCtx({
+        // The mirror is deliberately still CONNECTED and still holds a token.
+        brand: makeStaleBrandMirror(),
+        conn: makeCanonicalConn({ status }),
+        secret: null,
+      });
+
+      const result = await getValidAccessToken("brand-mirror-1", {
+        tokenEndpoint: async () => {
+          throw new Error(`a ${status} connection must never refresh`);
+        },
+      });
+
+      assert.equal(result.ok, false, `${status} must not yield a token`);
+      if (!result.ok) assert.equal(result.reason, expected, `${status} classification`);
+      assert.ok(
+        !ctx.calls.includes("acquireLease") && !ctx.calls.includes("rotationCAS"),
+        `${status} must not start a refresh`,
+      );
+    }
+  });
+
+  // PHASE 14C-A: the legacy compatibility fallback for a "genuinely
+  // pre-cutover brand" (CONNECTED canonical row, no secret) was removed
+  // entirely — the operator verified via live SQL that no such brand
+  // exists anymore (every currently CONNECTED brand already has a
+  // canonical secret). A CONNECTED-but-unbackfilled connection is now
+  // simply NOT_CONNECTED, fail-closed, never rescued from `Brand` — this
+  // replaces the old "AI." test, which asserted the opposite (that the
+  // stale Brand token WAS used).
+  test("AI. a CONNECTED canonical row with no secret is NOT_CONNECTED — never rescued from the legacy Brand credential", async () => {
+    resetMirrorCtx({
+      brand: makeStaleBrandMirror(),
+      conn: makeCanonicalConn({ status: "CONNECTED" }),
+      secret: null,
+    });
+
+    const result = await getValidAccessToken("brand-mirror-1", {
+      tokenEndpoint: async () => {
+        throw new Error("must never attempt a refresh with no canonical secret");
+      },
+    });
+
+    assert.equal(result.ok, false);
+    if (!result.ok) assert.equal(result.reason, "NOT_CONNECTED");
+  });
+
+  test("W. scope reconciliation uses the CANONICAL credential even while CommerceConnection.status is REQUIRES_RECONNECT", async () => {
+    // The scope-drift signature: status REQUIRES_RECONNECT but a credential is
+    // still on file. `reconcileShopifyConnectionScopes` must be able to see
+    // PAST the status gate that `getValidAccessToken` honors — otherwise a
+    // false REQUIRES_RECONNECT could never self-heal. This asserts the
+    // canonical credential is what it reaches for, not the legacy Brand copy.
+    stdCanonicalScenario({
+      conn: makeCanonicalConn({ status: "REQUIRES_RECONNECT" }),
+    });
+    setCanonicalTokens({
+      accessToken: "shpat_canonical_under_reconnect",
+      accessTokenExpiresAt: realExpiry(3_600_000),
+      authMode: "LEGACY_OFFLINE",
+    });
+
+    let tokenSeenByShopify: string | null = null;
+    const result = await reconcileShopifyConnectionScopes("brand-mirror-1", {
+      fetchImpl: (async (_url: string, init?: RequestInit) => {
+        const headers = (init?.headers ?? {}) as Record<string, string>;
+        tokenSeenByShopify = headers["X-Shopify-Access-Token"] ?? null;
+        return new Response(
+          JSON.stringify({
+            data: {
+              currentAppInstallation: {
+                accessScopes: [
+                  { handle: "read_products" },
+                  { handle: "read_discounts" },
+                  { handle: "write_discounts" },
+                ],
+              },
+            },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }) as unknown as typeof fetch,
+    });
+
+    assert.notEqual(
+      result.outcome,
+      "NOT_ELIGIBLE",
+      "a canonical credential under REQUIRES_RECONNECT must still be reconcilable",
     );
     assert.equal(
-      ctx.brand?.shopifyConnectionStatus,
-      "CONNECTED",
-      "status must remain CONNECTED throughout — this is precisely the bug: an optional, additive scope must never flip it",
+      tokenSeenByShopify,
+      "shpat_canonical_under_reconnect",
+      "the CANONICAL token must be the one proven against Shopify",
+    );
+    assert.notEqual(
+      tokenSeenByShopify,
+      "shpat_STALE_BRAND_TOKEN_MUST_NOT_BE_USED",
+      "the stale legacy Brand token must never be used for reconciliation",
     );
   });
 
-  test("6a. a successful markRequiresReconnect (permanent refresh failure) triggers the status mirror", async () => {
-    resetMirrorCtx({ brand: makeStaleExpiringBrand(), mirrorBehavior: "shortCircuit" });
-    const tokenEndpoint: TokenEndpointFn = async () => {
-      const err = Object.assign(new Error("invalid_grant"), { status: 400 });
-      throw err;
-    };
-
-    const result = await getValidAccessToken("brand-mirror-1", { tokenEndpoint });
-
-    assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.reason, "NEEDS_RECONNECT");
-    assert.ok(
-      ctx.calls.includes("txBrandUpdateManyCAS"),
-      "markRequiresReconnect's own CAS must have run",
-    );
-    assert.ok(
-      ctx.calls.includes("mirrorMarkDisconnectedFindMany"),
-      "a successful markRequiresReconnect must trigger the status mirror",
-    );
-  });
-
-  test("6b. a failed markRequiresReconnect CAS (superseded lock) does NOT trigger the status mirror", async () => {
-    resetMirrorCtx({ brand: makeStaleExpiringBrand(), mirrorBehavior: "shortCircuit" });
-    const tokenEndpoint: TokenEndpointFn = async () => {
-      // Simulate another process's takeover superseding this caller's lock
-      // while its own (failing) token-endpoint call is in flight, so
-      // markRequiresReconnect's CAS below finds a mismatched lock (count 0).
-      if (ctx.brand) {
-        ctx.brand.shopifyTokenRefreshLockId = "some-other-processes-lock";
-      }
-      const err = Object.assign(new Error("invalid_grant"), { status: 400 });
-      throw err;
-    };
-
-    const result = await getValidAccessToken("brand-mirror-1", { tokenEndpoint });
-
-    assert.equal(result.ok, false);
-    if (!result.ok) assert.equal(result.reason, "NEEDS_RECONNECT");
-    assert.ok(
-      ctx.calls.includes("txBrandUpdateManyCAS"),
-      "markRequiresReconnect's own CAS must still have been attempted",
-    );
-    assert.ok(
-      !ctx.calls.includes("mirrorMarkDisconnectedFindMany"),
-      "a superseded (failed-CAS) markRequiresReconnect must never trigger the status mirror",
-    );
-  });
-
-  test("7. LEGACY_OFFLINE never reaches the mirror", async () => {
-    resetMirrorCtx({
-      brand: makeStaleExpiringBrand({
-        shopifyAuthMode: "LEGACY_OFFLINE",
-        shopifyAccessTokenExpiresAt: null, // LEGACY_OFFLINE tokens never expire
-      }),
-      mirrorBehavior: "shortCircuit",
+  test("7. LEGACY_OFFLINE returns the canonical token immediately, touching no lease/CAS/mirror logic", async () => {
+    stdCanonicalScenario();
+    setCanonicalTokens({
+      accessToken: "shpat_legacy_offline_canonical",
+      accessTokenExpiresAt: null,
+      refreshToken: null,
+      refreshTokenExpiresAt: null,
+      authMode: "LEGACY_OFFLINE",
     });
-    const tokenEndpoint: TokenEndpointFn = async () => {
-      throw new Error("LEGACY_OFFLINE must never call the token endpoint");
-    };
 
-    const result = await getValidAccessToken("brand-mirror-1", { tokenEndpoint });
+    const result = await getValidAccessToken("brand-mirror-1", {
+      tokenEndpoint: async () => {
+        throw new Error("LEGACY_OFFLINE must never refresh");
+      },
+    });
 
     assert.equal(result.ok, true);
-    if (result.ok) assert.equal(result.accessToken, "shpat_old_token");
+    if (result.ok) assert.equal(result.accessToken, "shpat_legacy_offline_canonical");
     assert.deepEqual(
       ctx.calls,
-      ["reloadBrand#1"],
-      "LEGACY_OFFLINE must return immediately after its single reloadBrand read, touching no lock/CAS/mirror logic at all",
+      ["canonicalLoad#1"],
+      "LEGACY_OFFLINE must return after its single canonical read, touching no lock/CAS/mirror logic",
     );
   });
 });

@@ -1,28 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
+import { CommerceProvider } from "@prisma/client";
 import {
   getBrandContextFailure,
   getBrandManagementContext,
 } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
-import { getShopifyShopCurrency, normalizeShopDomain } from "@/lib/shopify";
+import { getShopifyShopCurrencyWithAccessToken, normalizeShopDomain } from "@/lib/shopify";
+import { getValidAccessToken } from "@/lib/shopify-token-manager";
+import {
+  getActiveCommerceConnection,
+  isConnectionUsable,
+  recordCommerceConnectionCurrencyCode,
+} from "@/lib/commerce/connection-service";
 import {
   resolveRewardOfferUpdate,
   serializeRewardOffer,
   validateProductsBelongToConnectedStore,
 } from "@/lib/reward-offers";
 import { normalizeCurrency } from "@/lib/shopify-reward-compatibility";
-
-function canActivateShopifyOffer(brand: {
-  shopifyConnectionStatus: string;
-  shopifyShopDomain: string | null;
-  shopifyAdminAccessTokenEncrypted: string | null;
-}) {
-  return (
-    brand.shopifyConnectionStatus === "CONNECTED" &&
-    Boolean(brand.shopifyShopDomain) &&
-    Boolean(brand.shopifyAdminAccessTokenEncrypted)
-  );
-}
 
 async function getOwnedOffer(offerId: string, brandId: string) {
   return prisma.brandRewardOffer.findFirst({
@@ -67,28 +62,44 @@ export async function PUT(
     }
 
     const brand = auth.membership.brand;
-    let shopCurrency = brand.shopifyCurrencyCode;
 
-    if (!shopCurrency && brand.shopifyShopDomain && brand.shopifyAdminAccessTokenEncrypted) {
+    // CANONICAL — `isConnected` and every domain/currency comparison below
+    // come from the SAME resolved connection (see AGENTS.md Commerce
+    // Invariants: current canonical connection is the only authority here).
+    const connectionSummary = await getActiveCommerceConnection(
+      brand.id,
+      CommerceProvider.SHOPIFY,
+    );
+    const isConnected =
+      connectionSummary !== null && isConnectionUsable(connectionSummary);
+    let shopCurrency = connectionSummary?.currencyCode ?? null;
+
+    if (!shopCurrency && isConnected && connectionSummary) {
       try {
-        const currencyResult = await getShopifyShopCurrency({
-          shopDomain: brand.shopifyShopDomain,
-          encryptedToken: brand.shopifyAdminAccessTokenEncrypted,
-        });
-        if (currencyResult.ok) {
-          shopCurrency = currencyResult.currencyCode;
-          await prisma.brand.update({
-            where: { id: brand.id },
-            data: { shopifyCurrencyCode: shopCurrency },
+        const tokenResult = await getValidAccessToken(brand.id);
+        if (tokenResult.ok) {
+          const currencyResult = await getShopifyShopCurrencyWithAccessToken({
+            shopDomain: connectionSummary.externalAccountId,
+            accessToken: tokenResult.accessToken,
           });
+          if (currencyResult.ok) {
+            shopCurrency = currencyResult.currencyCode;
+            if (connectionSummary.id) {
+              await recordCommerceConnectionCurrencyCode(
+                connectionSummary.id,
+                shopCurrency,
+              );
+            }
+          }
         }
       } catch (err) {
         console.error("[brand/rewards/offers/[offerId]][PUT] Error refreshing missing shop currency:", err);
       }
     }
 
-    const isConnected = canActivateShopifyOffer(brand);
-    const currentShopDomain = normalizeShopDomain(brand.shopifyShopDomain);
+    const currentShopDomain = normalizeShopDomain(
+      connectionSummary?.externalAccountId ?? null,
+    );
     const currentStoreCurrency = normalizeCurrency(shopCurrency);
 
     const body = await request.json().catch(() => null);

@@ -52,10 +52,43 @@ const FAKE_SHOP_DOMAIN = "products-test-shop.myshopify.com";
 const FAKE_ACCESS_TOKEN = "shpat_products_test_token";
 
 let originalBrandDelegate: unknown;
+let originalCommerceConnectionDelegate: unknown;
 
 before(async () => {
   const prismaModule = (await import("../src/lib/prisma")).default as unknown as {
     brand: Record<string, unknown>;
+    commerceConnection: Record<string, unknown>;
+  };
+  // PHASE 14B: `getValidAccessToken` resolves the CANONICAL credential first
+  // (`CommerceConnection` -> `CommerceConnectionSecret`), so this harness
+  // models the canonical row rather than only the legacy `Brand` mirror. The
+  // `Brand` fake below is retained deliberately: it holds the SAME token, so
+  // any regression that starts reading it instead still yields a working
+  // fetch, while the canonical row proves this suite runs on the real
+  // authority path.
+  originalCommerceConnectionDelegate = prismaModule.commerceConnection;
+  prismaModule.commerceConnection = {
+    async findFirst() {
+      return {
+        id: "conn-products-test-1",
+        brandId: FAKE_BRAND_ID,
+        status: "CONNECTED",
+        externalAccountId: FAKE_SHOP_DOMAIN,
+        providerClientId: "client_products_test",
+        grantedScopes: ["read_products", "read_discounts", "write_discounts"],
+        secret: {
+          encryptedPayload: encryptSecret(
+            JSON.stringify({
+              accessToken: FAKE_ACCESS_TOKEN,
+              accessTokenExpiresAt: null,
+              refreshToken: null,
+              refreshTokenExpiresAt: null,
+              authMode: "LEGACY_OFFLINE",
+            }),
+          ),
+        },
+      };
+    },
   };
   originalBrandDelegate = prismaModule.brand;
   prismaModule.brand = {
@@ -82,8 +115,10 @@ before(async () => {
 afterAll(async () => {
   const prismaModule = (await import("../src/lib/prisma")).default as unknown as {
     brand: unknown;
+    commerceConnection: unknown;
   };
   prismaModule.brand = originalBrandDelegate;
+  prismaModule.commerceConnection = originalCommerceConnectionDelegate;
 });
 
 // ---------------------------------------------------------------------------

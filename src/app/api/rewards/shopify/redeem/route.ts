@@ -25,7 +25,12 @@ import {
   type ShopifyRewardCompatibilityReason,
 } from "@/lib/shopify-reward-compatibility";
 import { idempotencyMatch } from "@/lib/redemption-idempotency";
-import { getActiveCommerceConnection } from "@/lib/commerce/connection-service";
+import {
+  getActiveCommerceConnection,
+  isConnectionUsable,
+  resolveCommerceConnectionSummaryWithClient,
+} from "@/lib/commerce/connection-service";
+import { normalizeExternalAccountId } from "@/lib/commerce/connection-sync";
 import { defaultCommerceAdapterRegistry } from "@/lib/commerce/default-registry";
 import {
   CommerceConnectionNotFoundError,
@@ -221,18 +226,18 @@ export async function issueDiscountViaAdapter(
 /**
  * Fail-safe wrapper around `commerceDeps.getConnectionSummary` — matches the
  * `safe*` wrapper idiom in `src/lib/commerce/connection-sync.ts` (catch and
- * sanitized-log every failure, NEVER throw into the caller). The
- * `CommerceConnection` row this reads is a BEST-EFFORT, eventually
- * consistent MIRROR of legacy `Brand.shopify*` truth (see
- * `connection-service.ts`'s own file header) — it must never be able to
- * fail a real redemption on the money path. ANY error resolving it falls
- * back to `null`, which the caller already treats as "no usable
- * CommerceConnection.id — use the legacy direct
- * `createShopifyRewardDiscountCode` path" (see `summary.id === null`
- * below), i.e. exactly the pre-cutover behavior. Deliberately called
+ * sanitized-log every failure, NEVER throw into the caller). ANY error
+ * resolving it falls back to `null`, which the caller already treats as "no
+ * usable CommerceConnection.id — use the legacy direct
+ * `createShopifyRewardDiscountCode` path" (see `summary.id === null` below)
+ * with `discountConfig.shopDomain`/`tokenResult.accessToken`, both of which
+ * are ALREADY canonically resolved by the time this is consulted (the
+ * former inside the reservation transaction, the latter via
+ * `getValidAccessToken`) — so a failure here degrades to a different but
+ * still fully canonical code path, never to a legacy `Brand` read. Called
  * OUTSIDE the Serializable reservation transaction (same as the unwrapped
- * call was) so a slow or failing mirror lookup can never lengthen or
- * interfere with it.
+ * call was) so a slow or failing lookup can never lengthen or interfere
+ * with it.
  */
 async function safeGetCommerceConnectionSummary(
   getConnectionSummary: ShopifyRewardRedeemCommerceDeps["getConnectionSummary"],
@@ -247,6 +252,35 @@ async function safeGetCommerceConnectionSummary(
     // `safe*` wrappers already apply to mirror-table failures).
     console.error("[rewards/shopify/redeem][commerce-mirror]", {
       outcome: "connection_summary_lookup_failed",
+      brandId,
+    });
+    return null;
+  }
+}
+
+/**
+ * PHASE 14C-A: CANONICAL CONNECTION GATE, FAIL-CLOSED. Every currently
+ * installed Shopify merchant already has a canonical `CommerceConnection` +
+ * `CommerceConnectionSecret` (operator-verified live DB evidence) — there is
+ * no legitimate legacy source of truth left to fall back to. A failure to
+ * resolve the canonical connection is therefore treated as NOT CONNECTED,
+ * the same as a genuine disconnection, rather than rescued by a `Brand`
+ * read: on a money-adjacent gate, "unknown" must never be upgraded to
+ * "assume connected, proceed" once `Brand` is no longer an independent
+ * source of truth (that would be the fail-OPEN direction). This replaces
+ * the Phase 14B.4B "Priority-1" legacy-fallback behavior — see
+ * tests/shopify-reward-adapter-cutover.test.ts's updated "mirror outage"
+ * test for the new contract.
+ */
+async function resolveGateConnectionSummary(
+  getConnectionSummary: ShopifyRewardRedeemCommerceDeps["getConnectionSummary"],
+  brandId: string,
+): Promise<CommerceConnectionSummary | null> {
+  try {
+    return await getConnectionSummary(brandId);
+  } catch {
+    console.error("[rewards/shopify/redeem][commerce-gate]", {
+      outcome: "connection_summary_lookup_failed_fail_closed",
       brandId,
     });
     return null;
@@ -438,16 +472,6 @@ export async function redeemImpl(
         id: offerId,
       },
       include: {
-        brand: {
-          select: {
-            id: true,
-            name: true,
-            shopifyShopDomain: true,
-            shopifyAdminAccessTokenEncrypted: true,
-            shopifyConnectionStatus: true,
-            shopifyCurrencyCode: true,
-          },
-        },
         products: true,
       },
     });
@@ -489,11 +513,18 @@ export async function redeemImpl(
         ? rewardContext.campaignIds[0]
         : null;
 
-    if (
-      offer.brand.shopifyConnectionStatus !== "CONNECTED" ||
-      !offer.brand.shopifyShopDomain ||
-      !offer.brand.shopifyAdminAccessTokenEncrypted
-    ) {
+    // PHASE 14B.4B — CANONICAL CONNECTION GATE. `getActiveCommerceConnection`
+    // is genuinely canonical-first (see connection-service.ts): a
+    // `CommerceConnection` row always wins when one exists, and legacy
+    // `Brand.shopify*` is consulted only for a genuine pre-cutover brand.
+    // This is a read-only PRE-check — the Serializable transaction below
+    // re-derives its own connectivity/compatibility snapshot fresh, exactly
+    // as before, as defense in depth against a change that races this check.
+    const initialSummary = await resolveGateConnectionSummary(
+      commerceDeps.getConnectionSummary,
+      offer.brandId,
+    );
+    if (!initialSummary || !isConnectionUsable(initialSummary)) {
       return NextResponse.json(
         { error: "Shopify is not connected for this brand." },
         { status: 400 },
@@ -503,6 +534,8 @@ export async function redeemImpl(
     // Compute compatibility before beginning the reservation — repeated
     // again with freshly loaded data inside the Serializable transaction
     // below as defense in depth against a change that races this check.
+    // Sourced from the CANONICAL summary (shop domain, currency) — never
+    // `Brand.shopify*` directly.
     const initialCompatibility = computeShopifyRewardCompatibility({
       offer: {
         discountType: offer.discountType,
@@ -512,8 +545,8 @@ export async function redeemImpl(
         sourceShopDomain: offer.sourceShopDomain,
       },
       shopifyConnected: true,
-      currentShopDomain: offer.brand.shopifyShopDomain,
-      currentStoreCurrency: offer.brand.shopifyCurrencyCode,
+      currentShopDomain: initialSummary.externalAccountId,
+      currentStoreCurrency: initialSummary.currencyCode,
     });
 
     if (!initialCompatibility.compatible) {
@@ -631,10 +664,6 @@ export async function redeemImpl(
               brand: {
                 select: {
                   name: true,
-                  shopifyConnectionStatus: true,
-                  shopifyShopDomain: true,
-                  shopifyAdminAccessTokenEncrypted: true,
-                  shopifyCurrencyCode: true,
                 },
               },
               products: {
@@ -649,12 +678,24 @@ export async function redeemImpl(
             throw new Error("OFFER_NOT_AVAILABLE");
           }
 
+          // PHASE 14C-A: resolved INSIDE the Serializable transaction, via
+          // the transaction's own `tx` client, so this participates in the
+          // transaction's isolation/locking instead of reading a
+          // pre-transaction snapshot that could have gone stale by commit
+          // time — this IS the transaction-time recheck the pre-transaction
+          // gate above deliberately does not substitute for. No legacy
+          // Brand fallback: every live Shopify install already has a
+          // canonical row (operator-verified), so no row means not
+          // connected, full stop.
+          const currentSummary = await resolveCommerceConnectionSummaryWithClient(
+            tx,
+            currentOffer.brandId,
+            CommerceProvider.SHOPIFY,
+          );
           const shopifyConnected =
-            currentOffer.brand.shopifyConnectionStatus === "CONNECTED" &&
-            Boolean(currentOffer.brand.shopifyShopDomain) &&
-            Boolean(currentOffer.brand.shopifyAdminAccessTokenEncrypted);
+            currentSummary !== null && isConnectionUsable(currentSummary);
 
-          if (!shopifyConnected) {
+          if (!shopifyConnected || !currentSummary) {
             throw new Error("SHOPIFY_DISCONNECTED");
           }
 
@@ -674,8 +715,8 @@ export async function redeemImpl(
               sourceShopDomain: currentOffer.sourceShopDomain,
             },
             shopifyConnected,
-            currentShopDomain: currentOffer.brand.shopifyShopDomain,
-            currentStoreCurrency: currentOffer.brand.shopifyCurrencyCode,
+            currentShopDomain: currentSummary.externalAccountId,
+            currentStoreCurrency: currentSummary.currencyCode,
           });
 
           if (!currentCompatibility.compatible) {
@@ -733,7 +774,7 @@ export async function redeemImpl(
               discountAmountCents: currentOffer.discountAmountCents,
               discountPercentageBasisPoints: currentOffer.discountPercentageBasisPoints,
               currencyCode: currentOffer.currencyCode,
-              shopifyShopDomain: currentOffer.brand.shopifyShopDomain!,
+              shopifyShopDomain: currentSummary.externalAccountId,
             },
           });
 
@@ -772,7 +813,7 @@ export async function redeemImpl(
             redemption: debitedRedemption,
             discountConfig: {
               brandName: currentOffer.brand.name,
-              shopDomain: currentOffer.brand.shopifyShopDomain!,
+              shopDomain: currentSummary.externalAccountId,
               brandId: currentOffer.brandId,
               title: currentOffer.title,
               codeValidDays: currentOffer.codeValidDays,
@@ -920,6 +961,58 @@ export async function redeemImpl(
       commerceDeps.getConnectionSummary,
       discountConfig.brandId,
     );
+
+    // PHASE 14B.4B — STRUCTURAL GUARD: a canonical token must never be paired
+    // with a shop domain that didn't resolve it. `tokenResult.accessToken`
+    // was resolved by `getValidAccessToken`, which as of Phase 14B is
+    // canonical-first; `discountConfig.shopDomain` was captured earlier in
+    // this request's reservation. Both should always agree — but if a
+    // canonical connection exists whose shop domain DISAGREES with the
+    // reservation's domain (e.g. a relink raced this request), the adapter
+    // path below would issue a discount against `commerceSummary.id`'s shop
+    // using a token that may not even belong to it. Refuse and refund rather
+    // than risk that pairing, making it structurally impossible to reach
+    // `issueDiscountViaAdapter`/`createShopifyRewardDiscountCode` with a
+    // token/domain pair that was never jointly resolved.
+    if (
+      commerceSummary &&
+      commerceSummary.id !== null &&
+      normalizeExternalAccountId(commerceSummary.externalAccountId) !==
+        normalizeExternalAccountId(discountConfig.shopDomain)
+    ) {
+      const refunded = await prisma.$transaction(async (tx) => {
+        const current = await tx.shopifyRewardRedemption.findUnique({
+          where: { id: redemption.id },
+          select: { status: true },
+        });
+        if (current?.status !== "POINTS_DEBITED") {
+          return tx.shopifyRewardRedemption.findUniqueOrThrow({
+            where: { id: redemption.id },
+          });
+        }
+        await refundShopifyRewardPoints({
+          userId: user.id,
+          points: discountConfig.pointsCost,
+          shopifyRewardRedemptionId: redemption.id,
+          campaignId: deterministicCampaignId,
+          db: tx,
+        });
+        return tx.shopifyRewardRedemption.update({
+          where: { id: redemption.id },
+          data: {
+            status: "REFUNDED",
+            errorMessage: "Shopify connection changed during redemption.",
+          },
+        });
+      });
+      return NextResponse.json(
+        {
+          error: "Could not create the Shopify discount code. Points were refunded.",
+          data: serializeRedemption(refunded),
+        },
+        { status: 502 },
+      );
+    }
 
     const discount: DiscountCreationOutcome =
       commerceSummary && commerceSummary.id !== null

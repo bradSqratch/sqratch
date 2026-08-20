@@ -19,7 +19,9 @@ import {
   resolveInstallConnectionEventType,
   resolveLastKnownShopDomain,
 } from "@/lib/shopify-connection-transitions";
-import { safeSyncShopifyCommerceConnection } from "@/lib/commerce/connection-sync";
+import { applyShopifyConnectionSyncFromInstall } from "@/lib/commerce/connection-sync";
+import { extractCurrencyCodeFromProviderMetadata } from "@/lib/commerce/connection-resolver";
+import { decryptSecret } from "@/lib/crypto";
 
 
 // Re-export types for backward compatibility if needed elsewhere
@@ -195,39 +197,24 @@ export async function installationsPostImpl(
       });
     }
 
-    // ---------------------------------------------------------------------------
-    // Build the brand update data object branched by token shape.
-    // ---------------------------------------------------------------------------
-  const sharedBrandData = {
-    shopifyShopDomain: payload.shop,
-    shopifyInstalledAt: new Date(),
-    shopifyDisconnectedAt: null,
-    shopifyUninstalledAt: null,
-    shopifyConnectionStatus: "CONNECTED" as const,
-    shopifyCurrencyCode,
-    shopifyClientId: null,
-    shopifyTokenRefreshLockedUntil: null,
-    shopifyTokenRefreshLockId: null,
-  };
-
-    const tokenBrandData =
+    // The canonical credential, decrypted once from the authenticated pending
+    // install. This is what establishes runtime authority below — no legacy
+    // `Brand` write exists anymore for it to compete with. Never logged.
+    const canonicalCredential =
       payload.shape === "EXPIRING"
         ? {
-            shopifyAdminAccessTokenEncrypted: payload.encryptedAccessToken,
-            shopifyAccessTokenExpiresAt: new Date(payload.accessTokenExpiresAt),
-            shopifyRefreshTokenEncrypted: payload.encryptedRefreshToken,
-            shopifyRefreshTokenExpiresAt: new Date(payload.refreshTokenExpiresAt),
-            shopifyGrantedScopes: payload.grantedScopes,
-            shopifyClientId: payload.clientId,
-            shopifyAuthMode: "EXPIRING_OFFLINE" as const,
+            authMode: "EXPIRING_OFFLINE" as const,
+            accessToken: decryptSecret(payload.encryptedAccessToken),
+            accessTokenExpiresAt: new Date(payload.accessTokenExpiresAt),
+            refreshToken: decryptSecret(payload.encryptedRefreshToken),
+            refreshTokenExpiresAt: new Date(payload.refreshTokenExpiresAt),
           }
         : {
-            shopifyAdminAccessTokenEncrypted: payload.encryptedToken,
-            shopifyRefreshTokenEncrypted: null,
-            shopifyAccessTokenExpiresAt: null,
-            shopifyRefreshTokenExpiresAt: null,
-            shopifyGrantedScopes: null,
-            shopifyAuthMode: "LEGACY_OFFLINE" as const,
+            authMode: "LEGACY_OFFLINE" as const,
+            accessToken: decryptSecret(payload.encryptedToken),
+            accessTokenExpiresAt: null,
+            refreshToken: null,
+            refreshTokenExpiresAt: null,
           };
 
     const brand = await prisma.$transaction(async (tx) => {
@@ -277,64 +264,66 @@ export async function installationsPostImpl(
         throw new Error("UNAUTHORIZED_BRAND");
       }
 
-      const owner = await tx.brand.findFirst({
-        where: { shopifyShopDomain: currentPayload.shop },
-        select: { id: true, shopifyConnectionStatus: true },
+      const newShopDomain = normalizeShopDomain(payload.shop) ?? payload.shop;
+
+      // PHASE 14C-A: CANONICAL-ONLY conflict detection — no legacy `Brand`
+      // read. Every live Shopify install already has a canonical
+      // `CommerceConnection` (operator-verified), so the shop-ownership
+      // conflict check must compare against the canonical row, not a Brand
+      // mirror that is no longer written on every lifecycle event.
+      const owner = await tx.commerceConnection.findFirst({
+        where: { provider: "SHOPIFY", externalAccountId: newShopDomain },
+        select: {
+          id: true,
+          brandId: true,
+          status: true,
+          providerClientId: true,
+          providerMetadata: true,
+        },
       });
 
-      if (owner && owner.id !== destinationBrandId) {
-        if (owner.shopifyConnectionStatus !== "UNINSTALLED") {
+      if (owner && owner.brandId !== destinationBrandId) {
+        if (owner.status !== "UNINSTALLED") {
           throw new Error("SHOP_ALREADY_LINKED");
         }
 
-        const ownerBefore = await tx.brand.findUnique({
-          where: { id: owner.id },
-          select: {
-            shopifyShopDomain: true,
-            shopifyCurrencyCode: true,
-            shopifyClientId: true,
-          },
-        });
-
-        await tx.brand.update({
-          where: { id: owner.id },
-          data: {
-            shopifyShopDomain: null,
-            shopifyAdminAccessTokenEncrypted: null,
-            shopifyRefreshTokenEncrypted: null,
-            shopifyAccessTokenExpiresAt: null,
-            shopifyRefreshTokenExpiresAt: null,
-            shopifyGrantedScopes: null,
-            shopifyClientId: null,
-            shopifyTokenRefreshLockedUntil: null,
-            shopifyTokenRefreshLockId: null,
-            shopifyDisconnectedAt: now,
-            shopifyUninstalledAt: null,
-            shopifyConnectionStatus: "DISCONNECTED",
-          },
-        });
-
         // The owner brand is losing its Shopify connection to make room for
-        // this relink — deactivate its offers and record the loss just like
-        // any other disconnect, even though it was already UNINSTALLED.
+        // this relink — the row itself is reassigned to the destination
+        // brand by the canonical sync upsert below (keyed on
+        // externalAccountId, see connection-sync.ts). Deactivate the owner's
+        // offers and record the loss just like any other disconnect, even
+        // though it was already UNINSTALLED.
         await recordShopifyConnectionLoss(tx, {
-          brandId: owner.id,
+          brandId: owner.brandId,
           eventType: "DISCONNECTED",
           snapshot: {
-            shopDomain: ownerBefore?.shopifyShopDomain ?? currentPayload.shop,
-            currencyCode: ownerBefore?.shopifyCurrencyCode ?? null,
-            shopifyClientId: ownerBefore?.shopifyClientId ?? null,
+            shopDomain: newShopDomain,
+            currencyCode: extractCurrencyCodeFromProviderMetadata(owner.providerMetadata),
+            shopifyClientId: owner.providerClientId,
           },
         });
       }
 
-      const destinationBefore = await tx.brand.findUnique({
+      // `name`/`slug` are read for the connection's cosmetic display name and
+      // the response payload only — neither contributes to credential or
+      // status authority. `findUniqueOrThrow` matches the prior behavior of
+      // throwing (caught by the generic 500 below) if the brand vanished
+      // between the access check above and here.
+      const destination = await tx.brand.findUniqueOrThrow({
         where: { id: destinationBrandId },
-        select: { shopifyShopDomain: true, shopifyCurrencyCode: true },
+        select: { name: true, slug: true },
+      });
+
+      // PHASE 14C-A: the destination brand's PREVIOUS Shopify state (if any)
+      // is read from its OWN canonical connection, not `Brand`.
+      const destinationConnection = await tx.commerceConnection.findFirst({
+        where: { brandId: destinationBrandId, provider: "SHOPIFY" },
+        orderBy: [{ isPrimary: "desc" }, { installedAt: "desc" }, { createdAt: "desc" }],
+        select: { externalAccountId: true, providerMetadata: true },
       });
 
       let previousShopDomain = normalizeShopDomain(
-        destinationBefore?.shopifyShopDomain ?? null,
+        destinationConnection?.externalAccountId ?? null,
       );
       if (!previousShopDomain) {
         previousShopDomain = await resolveLastKnownShopDomain(
@@ -343,7 +332,6 @@ export async function installationsPostImpl(
         );
       }
 
-      const newShopDomain = normalizeShopDomain(payload.shop) ?? payload.shop;
       const connectionEventType = resolveInstallConnectionEventType(
         previousShopDomain,
         newShopDomain,
@@ -351,13 +339,30 @@ export async function installationsPostImpl(
       const finalShopifyClientId =
         payload.shape === "EXPIRING" ? payload.clientId : null;
 
-      const updated = await tx.brand.update({
-        where: { id: destinationBrandId },
-        data: {
-          ...sharedBrandData,
-          ...tokenBrandData,
-        },
-        select: { id: true, name: true, slug: true },
+      // ---------------------------------------------------------------------
+      // PHASE 14C-A — CANONICAL CREDENTIAL IS THE ONLY WRITE.
+      // ---------------------------------------------------------------------
+      // The canonical `CommerceConnection` + `CommerceConnectionSecret` are
+      // written from the AUTHENTICATED PENDING-INSTALL PAYLOAD, inside this
+      // same Serializable transaction. No circular derivation (nothing here
+      // re-reads `Brand.shopify*` to build this write), and no window: if
+      // this write fails, the install fails, which is correct — an install
+      // that cannot establish a canonical credential has not connected
+      // anything. `Brand.shopify*` is not written anywhere in this handler.
+      await applyShopifyConnectionSyncFromInstall(tx, destinationBrandId, {
+        shopDomain: newShopDomain,
+        brandDisplayName: destination.name,
+        providerClientId: finalShopifyClientId,
+        authMode: canonicalCredential.authMode,
+        currencyCode: shopifyCurrencyCode,
+        grantedScopes:
+          payload.shape === "EXPIRING" ? payload.grantedScopes : null,
+        installedAt: now,
+        lastProductSyncAt: null,
+        accessToken: canonicalCredential.accessToken,
+        accessTokenExpiresAt: canonicalCredential.accessTokenExpiresAt,
+        refreshToken: canonicalCredential.refreshToken,
+        refreshTokenExpiresAt: canonicalCredential.refreshTokenExpiresAt,
       });
 
       // Reward offers stay inactive through every install/reconnect/relink —
@@ -368,7 +373,9 @@ export async function installationsPostImpl(
         shopDomain: newShopDomain,
         previousShopDomain,
         currencyCode: shopifyCurrencyCode,
-        previousCurrencyCode: destinationBefore?.shopifyCurrencyCode ?? null,
+        previousCurrencyCode: extractCurrencyCodeFromProviderMetadata(
+          destinationConnection?.providerMetadata ?? null,
+        ),
         shopifyClientId: finalShopifyClientId,
       });
 
@@ -378,13 +385,8 @@ export async function installationsPostImpl(
         throw new Error("PENDING_INSTALL_UNAVAILABLE");
       }
 
-      return updated;
+      return { id: destinationBrandId, name: destination.name, slug: destination.slug };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
-
-    // Provider-neutral CommerceConnection mirror (Phase 1 dual-write) — best
-    // effort, runs in its own transaction AFTER the one above has already
-    // committed, and can never fail this request (see connection-sync.ts).
-    await safeSyncShopifyCommerceConnection(brand.id);
 
     // Sanitized state-transition log — no tokens, no encrypted values.
     console.log("[shopify/installations]", {

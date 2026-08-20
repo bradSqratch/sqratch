@@ -1,13 +1,12 @@
 import { NextResponse } from "next/server";
-import { CommerceProvider, type ShopifyAuthMode } from "@prisma/client";
+import { CommerceProvider } from "@prisma/client";
 import {
   getBrandContextFailure,
   getBrandManagementContext,
   type BrandAdminContext,
 } from "@/lib/brand-auth";
-import prisma from "@/lib/prisma";
 import { getActiveCommerceConnection } from "@/lib/commerce/connection-service";
-import { mapLegacyShopifyStatusToCommerceStatus } from "@/lib/commerce/connection-resolver";
+import { loadShopifyCredential } from "@/lib/commerce/providers/shopify-credential-store";
 import {
   SQRATCH_ATTRIBUTION_EMBED_BLOCK_HANDLE,
   buildThemeEditorAppEmbedDeepLink,
@@ -20,22 +19,19 @@ import type {
   CommerceThemeTrackingReadiness,
 } from "@/lib/commerce/types";
 
-/** The `Brand.shopify*` columns not selected by `getBrandManagementContext`. */
-type BrandTokenExtra = {
-  shopifyAuthMode: ShopifyAuthMode;
-  shopifyAccessTokenExpiresAt: Date | null;
-  shopifyGrantedScopes: string | null;
-  /** Client id of the app this brand installed under, stamped at connect time. */
-  shopifyClientId: string | null;
-};
-
+/**
+ * PHASE 14C-A — no `Brand.shopify*` field is read anywhere in this route.
+ * Every readiness/status/scope/token/client-id field comes from
+ * `CommerceConnection` (via `getActiveCommerceConnection`) and
+ * `CommerceConnectionSecret` classification (via `loadShopifyCredential`).
+ */
 export type BrandShopifyStatusDeps = {
   /** Resolves the acting brand-admin context. Defaults to `getBrandManagementContext`. */
   getContext(): Promise<BrandAdminContext | null>;
-  /** Loads the token-derived `Brand` columns `getBrandManagementContext` doesn't select. */
-  findTokenExtra(brandId: string): Promise<BrandTokenExtra | null>;
   /** Resolves the brand's provider-neutral Shopify connection summary. */
   getConnectionSummary(brandId: string): Promise<CommerceConnectionSummary | null>;
+  /** Classifies the canonical Shopify credential (presence, authMode, expiry, scopes). Defaults to `loadShopifyCredential`. */
+  getCredential(brandId: string): ReturnType<typeof loadShopifyCredential>;
   getThemeReadiness?(input: {
     brandId: string;
     shopDomain: string;
@@ -46,7 +42,7 @@ export type BrandShopifyStatusDeps = {
    * Attempts to heal a false, scope-drift-caused `REQUIRES_RECONNECT` by
    * proving the stored credential still works against Shopify and
    * reconciling `CommerceConnection.grantedScopes` to Shopify's authoritative
-   * set. Only ever called when the stored status is `REQUIRES_RECONNECT`.
+   * set. Only ever called when the CANONICAL status is `REQUIRES_RECONNECT`.
    * Optional so a test can omit it entirely when reconciliation isn't the
    * behavior under test. Defaults to `reconcileShopifyConnectionScopes`.
    */
@@ -54,18 +50,6 @@ export type BrandShopifyStatusDeps = {
     brandId: string,
   ): Promise<{ healedConnection: boolean; grantedScopes: string[] } | null>;
 };
-
-async function defaultFindTokenExtra(brandId: string): Promise<BrandTokenExtra | null> {
-  return prisma.brand.findUnique({
-    where: { id: brandId },
-    select: {
-      shopifyAuthMode: true,
-      shopifyAccessTokenExpiresAt: true,
-      shopifyGrantedScopes: true,
-      shopifyClientId: true,
-    },
-  });
-}
 
 async function defaultReconcileScopes(
   brandId: string,
@@ -78,20 +62,12 @@ async function defaultReconcileScopes(
 
 const DEFAULT_DEPS: BrandShopifyStatusDeps = {
   getContext: getBrandManagementContext,
-  findTokenExtra: defaultFindTokenExtra,
-    getConnectionSummary: (brandId) =>
+  getConnectionSummary: (brandId) =>
     getActiveCommerceConnection(brandId, CommerceProvider.SHOPIFY),
+  getCredential: (brandId) => loadShopifyCredential(brandId),
   getThemeReadiness: (input) => getShopifyThemeTrackingReadiness(input),
   reconcileScopes: defaultReconcileScopes,
 };
-
-/** `Date | null` equality by timestamp — `null` only equals `null`. */
-function sameInstant(a: Date | null, b: Date | null): boolean {
-  if (a === null || b === null) {
-    return a === b;
-  }
-  return a.getTime() === b.getTime();
-}
 
 export async function GET() {
   return statusGetImpl();
@@ -113,85 +89,60 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
 
     const brand = context.membership.brand;
 
-    // Fetch the additional fields that brand-auth doesn't include in its
-    // select. Token-derived (hasShopifyAccessToken, shopifyAuthMode,
-    // shopifyAccessTokenExpiresAt, shopifyGrantedScopes, requiresReconnect)
-    // — these stay legacy-authoritative for the whole of Phase 2; this
-    // route never reads CommerceConnectionSecret.
-    const brandExtra = await deps.findTokenExtra(brand.id);
-
-    // Mutable local views of legacy connection status: `brand` itself (from
-    // `getContext()`, already fetched above) is never re-read, so a
-    // successful healing attempt below is reflected by reassigning these
-    // rather than re-running full context/session resolution a second time.
-    let legacyConnectionStatus: string = brand.shopifyConnectionStatus;
-    let requiresReconnect = legacyConnectionStatus === "REQUIRES_RECONNECT";
+    // CANONICAL FIRST. `getActiveCommerceConnection` is genuinely
+    // canonical-first as of Phase 14B.4B: a `CommerceConnection` row always
+    // wins when one exists, with no legacy-agreement check — a stale
+    // `Brand.shopify*` mirror can no longer override or disagree-with-and-win
+    // over it. Legacy is consulted only for a genuine pre-cutover brand (no
+    // canonical row at all), inside `getActiveCommerceConnection` itself.
+    const summary = await deps.getConnectionSummary(brand.id);
+    let connectionStatus: string = summary?.status ?? "DISCONNECTED";
+    let requiresReconnect = connectionStatus === "REQUIRES_RECONNECT";
+    let reconciledScopes: string[] | null = null;
 
     // SAFETY NET against a missed/delayed `app/scopes_update` delivery (see
     // that route's file header), and the HEALING PATH for a connection that
     // was ALREADY stuck in a false, scope-drift-caused `REQUIRES_RECONNECT`
     // before that root cause was fixed (see
     // `reconcileShopifyConnectionScopes`'s doc comment in
-    // `shopify-token-manager.ts`). Only ever attempted when the stored status
-    // is currently `REQUIRES_RECONNECT` — a normal `CONNECTED` load never
-    // pays for the extra live Shopify API call this can make. Never throws:
-    // a failed reconciliation attempt (genuine credential failure, or a
-    // transient error) leaves every field exactly as it already was, so this
-    // route's response is never worse than before the attempt.
+    // `shopify-token-manager.ts`). Only ever attempted when the CANONICAL
+    // status is currently `REQUIRES_RECONNECT` — a normal `CONNECTED` load
+    // never pays for the extra live Shopify API call this can make. Never
+    // throws: a failed reconciliation attempt (genuine credential failure, or
+    // a transient error) leaves every field exactly as it already was, so
+    // this route's response is never worse than before the attempt.
     if (requiresReconnect && deps.reconcileScopes) {
       const reconciled = await deps.reconcileScopes(brand.id).catch(() => null);
       if (reconciled?.healedConnection) {
-        legacyConnectionStatus = "CONNECTED";
+        connectionStatus = "CONNECTED";
         requiresReconnect = false;
+        reconciledScopes = reconciled.grantedScopes;
       }
     }
 
-    // Connection identity/metadata (shop domain, install/uninstall
-    // timestamps, status, last product sync) is sourced from the
-    // provider-neutral service. `CommerceConnectionSummary` has no
-    // credential field and — by construction — carries no
-    // `shopifyDisconnectedAt` / `shopifyCurrencyCode` at all (see
-    // src/lib/commerce/types.ts), so those two fields always come straight
-    // from the legacy Brand columns already loaded by
-    // getBrandManagementContext; there is nothing to cut over for them.
-    //
-    // For the remaining fields, `getActiveCommerceConnection`'s own
-    // consistency check (see connection-service.ts's file header) only
-    // verifies that the mirror's shop domain agrees with legacy — it does
-    // NOT re-verify that the mirror's status/timestamps are still in sync
-    // (the CommerceConnection dual-write is best-effort and can lag or fail
-    // independently of the legacy write it mirrors). So each field below is
-    // only taken from the summary once it is verified, field-by-field, to
-    // already equal what legacy says; on any mismatch this falls back to
-    // the legacy value. Per the Phase-2 instruction that correctness beats
-    // architectural purity for this route, that means the emitted response
-    // is always identical to the legacy-only computation this route used
-    // before the cutover — a later reconciliation tool, not this route, is
-    // responsible for actually repairing a stale mirror.
-    const summary = await deps.getConnectionSummary(brand.id);
-    const mirrorTrusted =
-      summary !== null &&
-      !summary.isLegacyFallback &&
-      summary.status === mapLegacyShopifyStatusToCommerceStatus(legacyConnectionStatus) &&
-      sameInstant(summary.installedAt, brand.shopifyInstalledAt) &&
-      sameInstant(summary.uninstalledAt, brand.shopifyUninstalledAt) &&
-      sameInstant(summary.lastProductSyncAt, brand.shopifyLastProductSyncAt);
+    // Canonical credential classification — presence, auth mode, expiry.
+    // NEVER reads `Brand.shopifyAdminAccessTokenEncrypted`; token PRESENCE is
+    // read from `CommerceConnectionSecret`'s mere existence via
+    // `loadShopifyCredential`, never decrypted for display purposes beyond
+    // what that function already returns for expiry/authMode. Fetched AFTER
+    // the healing attempt above so a status heal is reflected here too (a
+    // heal never rewrites the credential itself — see
+    // `healShopifyCredentialConnected` — only status, so freshness here is
+    // about the status/summary having just changed, not the credential).
+    const credential = await deps.getCredential(brand.id);
+    const hasShopifyAccessToken =
+      credential.outcome === "OK" && credential.credential.accessToken !== null;
+    const shopifyAuthMode = credential.outcome === "OK" ? credential.credential.authMode : "LEGACY_OFFLINE";
+    const shopifyAccessTokenExpiresAt =
+      credential.outcome === "OK" ? credential.credential.accessTokenExpiresAt : null;
 
-    // shopifyShopDomain deliberately stays on the legacy literal value even
-    // when the mirror is otherwise trusted: `CommerceConnection.externalAccountId`
-    // is written normalized (trim + lowercase — see
-    // connection-sync.ts's normalizeExternalAccountId), while legacy
-    // `Brand.shopifyShopDomain` has no such normalization guarantee at this
-    // layer. Preferring legacy here removes any risk of a case-only diff
-    // changing this user-visible field, at zero cost (both already refer to
-    // the same shop).
-    const shopifyShopDomain = brand.shopifyShopDomain;
-    const shopifyInstalledAt = mirrorTrusted ? summary.installedAt : brand.shopifyInstalledAt;
-    const shopifyUninstalledAt = mirrorTrusted ? summary.uninstalledAt : brand.shopifyUninstalledAt;
-    const shopifyConnectionStatus = mirrorTrusted ? summary.status : legacyConnectionStatus;
-    const shopifyLastProductSyncAt = mirrorTrusted
-      ? summary.lastProductSyncAt
-      : brand.shopifyLastProductSyncAt;
+    const providerClientId =
+      credential.outcome === "OK" ? credential.credential.providerClientId : null;
+
+    const shopifyShopDomain = summary?.externalAccountId ?? null;
+    const canonicalGrantedScopes = reconciledScopes ?? summary?.grantedScopes ?? [];
+    const shopifyGrantedScopes =
+      canonicalGrantedScopes.length > 0 ? canonicalGrantedScopes.join(",") : null;
 
     // Additive: the Theme Editor deep link that opens this shop's current
     // theme with the SQRATCH app-embed block pre-selected, so the merchant can
@@ -203,10 +154,10 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
     // builder rejects the pair; a null link simply means the UI cannot offer
     // the button yet, and must never be an error for this route.
     const deepLink =
-      shopifyShopDomain && brandExtra?.shopifyClientId
+      shopifyShopDomain && providerClientId
         ? buildThemeEditorAppEmbedDeepLink({
             shopDomain: shopifyShopDomain,
-            apiKey: brandExtra.shopifyClientId,
+            apiKey: providerClientId,
             blockHandle: SQRATCH_ATTRIBUTION_EMBED_BLOCK_HANDLE,
           })
         : null;
@@ -222,24 +173,23 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
     // server-derived construction as the Theme Editor link above; null under
     // the same conditions.
     const appHomeLink =
-      shopifyShopDomain && brandExtra?.shopifyClientId
+      shopifyShopDomain && providerClientId
         ? buildShopifyAdminAppHomeDeepLink({
             shopDomain: shopifyShopDomain,
-            apiKey: brandExtra.shopifyClientId,
+            apiKey: providerClientId,
           })
         : null;
     const shopifyPermissionApprovalUrl =
       appHomeLink !== null && appHomeLink.ok ? appHomeLink.url : null;
 
-    const canonicalGrantedScopes = summary?.grantedScopes ?? [];
     const orderAttributionReady = canonicalGrantedScopes.includes("read_orders");
     const themeVerificationScopeReady = canonicalGrantedScopes.includes("read_themes");
     const themeTracking =
-      shopifyShopDomain && brandExtra?.shopifyClientId && deps.getThemeReadiness
+      shopifyShopDomain && providerClientId && deps.getThemeReadiness
         ? await deps.getThemeReadiness({
             brandId: brand.id,
             shopDomain: shopifyShopDomain,
-            apiKey: brandExtra.shopifyClientId,
+            apiKey: providerClientId,
             grantedScopes: canonicalGrantedScopes,
           })
         : {
@@ -255,21 +205,17 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
         name: brand.name,
         slug: brand.slug,
         shopifyShopDomain,
-        shopifyInstalledAt,
-        shopifyDisconnectedAt: brand.shopifyDisconnectedAt,
-        shopifyUninstalledAt,
-        shopifyConnectionStatus,
-        hasShopifyAccessToken: Boolean(
-          brand.shopifyAdminAccessTokenEncrypted,
-        ),
-        shopifyLastProductSyncAt,
-        shopifyCurrencyCode: brand.shopifyCurrencyCode,
-        // Additive fields — token mode and reconnect state. Legacy-only, per
-        // the Phase-2 instruction that token-derived fields never come from
-        // the neutral service (which never reads CommerceConnectionSecret).
-        shopifyAuthMode: brandExtra?.shopifyAuthMode ?? "LEGACY_OFFLINE",
-        shopifyAccessTokenExpiresAt: brandExtra?.shopifyAccessTokenExpiresAt ?? null,
-        shopifyGrantedScopes: brandExtra?.shopifyGrantedScopes ?? null,
+        shopifyInstalledAt: summary?.installedAt ?? null,
+        shopifyUninstalledAt: summary?.uninstalledAt ?? null,
+        shopifyConnectionStatus: connectionStatus,
+        hasShopifyAccessToken,
+        shopifyLastProductSyncAt: summary?.lastProductSyncAt ?? null,
+        // The single canonical currency representation — see
+        // `CommerceConnectionSummary.currencyCode`'s doc comment.
+        shopifyCurrencyCode: summary?.currencyCode ?? null,
+        shopifyAuthMode,
+        shopifyAccessTokenExpiresAt,
+        shopifyGrantedScopes,
         requiresReconnect,
         // Additive capability: legacy installs keep product sync/rewards but
         // cannot receive conversion attribution until they grant read_orders.
@@ -288,7 +234,7 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
         // UI's Approve-permissions CTA is only meaningful for an
         // already-connected store.
         shopifyPermissionsNeedApproval:
-          shopifyConnectionStatus === "CONNECTED" &&
+          connectionStatus === "CONNECTED" &&
           (!orderAttributionReady || !themeVerificationScopeReady),
         // Deep link into Shopify Admin's App Home — Shopify shows its own
         // native permission-approval screen here when one is pending. Null

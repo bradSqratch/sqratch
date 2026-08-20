@@ -23,7 +23,6 @@ export type ExperienceCampaignRow = {
     brand: {
       id: string;
       name: string;
-      shopifyShopDomain: string | null;
     } | null;
   };
 };
@@ -54,7 +53,6 @@ export async function loadExperienceCampaignRows(
             select: {
               id: true,
               name: true,
-              shopifyShopDomain: true,
             },
           },
         },

@@ -1,21 +1,23 @@
 /**
  * src/lib/commerce/connection-sync.ts
  *
- * The Phase-1 dual-write: keeps a `CommerceConnection` (+
- * `CommerceConnectionSecret`) mirror of the legacy `Brand.shopify*` columns
- * in sync, without ever being on the critical path of an install/disconnect
- * request.
+ * PHASE 14C-A: no runtime route calls a Brand-sourced dual-write anymore —
+ * every request-serving path establishes `CommerceConnection` +
+ * `CommerceConnectionSecret` directly from authenticated provider facts
+ * (`applyShopifyConnectionSyncFromInstall`, called by the installations
+ * route from the pending-install payload). The Brand-sourced builders
+ * (`buildShopifyConnectionSyncInput`, `syncShopifyCommerceConnectionForBrand`,
+ * `rebuildShopifyConnectionSecretForBrand`) remain — legitimately — as the
+ * pure/transactional core the pre-column-drop reconciliation tool
+ * (`connection-reconciliation.ts` / `scripts/reconcile-commerce-connections.ts`)
+ * depends on to detect and (optionally) repair drift while the Brand columns
+ * still physically exist. They must be deleted together with that tool once
+ * the columns are dropped (Phase 14C-B) — at that point there is no legacy
+ * source left to sync FROM.
  *
- * CRITICAL ORDERING RULE (Phase-1 decision D2): every call into this module
- * from a route MUST happen AFTER the existing legacy-column transaction has
- * committed, never inside it. In Postgres a failed statement aborts the
- * whole enclosing transaction, so running this dual-write inside the
- * existing Serializable install transaction could turn a working install
- * into a failed one over a mirror-table hiccup. `safeSyncShopifyCommerceConnection`
- * / `safeMarkShopifyCommerceConnectionDisconnected` /
- * `safeDeleteShopifyCommerceConnectionByShopDomain` are the only entry
- * points routes should call — each is a single best-effort, non-throwing
- * operation that runs in its OWN transaction, separate from the caller's.
+ * `safeDeleteShopifyCommerceConnectionByShopDomain` remains load-bearing:
+ * it backs the `shop/redact` GDPR erasure path, a genuine privacy
+ * obligation independent of runtime authority.
  *
  * IDEMPOTENCY: the write path is keyed on `CommerceConnection`'s
  * `@@unique([provider, externalAccountId])` constraint via
@@ -223,6 +225,81 @@ export function buildShopifyConnectionSyncInput(
   };
 }
 
+/**
+ * PHASE 14B.3 — the INSTALL-FACTS shape.
+ *
+ * Everything needed to write the canonical connection + credential using ONLY
+ * data that came out of the authenticated install / token exchange itself.
+ * Deliberately has no `Brand.shopify*` field on it: the canonical row must
+ * never be derived from the legacy mirror, or the mirror would be the real
+ * authority with an extra hop (and a stale mirror could walk canonical state
+ * backwards). `brandDisplayName` is cosmetic only — it feeds
+ * `deriveShopifyDisplayName` and never influences credential or status.
+ *
+ * Tokens here are PLAINTEXT (already decrypted by the caller from the pending
+ * install / exchange response) and are re-encrypted as one blob before they
+ * reach the DB. Never log this object.
+ */
+export type ShopifyInstallFacts = {
+  shopDomain: string;
+  brandDisplayName: string | null;
+  providerClientId: string | null;
+  authMode: ShopifyAuthMode | string;
+  currencyCode: string | null;
+  /** Space/comma-delimited scope string exactly as the provider returned it. */
+  grantedScopes: string | null;
+  installedAt: Date;
+  lastProductSyncAt: Date | null;
+  accessToken: string;
+  accessTokenExpiresAt: Date | null;
+  refreshToken: string | null;
+  refreshTokenExpiresAt: Date | null;
+};
+
+/**
+ * Pure builder for the install path. Same output shape as
+ * `buildShopifyConnectionSyncInput`, but sourced from install facts rather
+ * than from `Brand`. Status is always `CONNECTED` and `uninstalledAt` is
+ * always cleared — a successful install IS the authoritative connect event.
+ */
+export function buildShopifyConnectionSyncInputFromInstall(
+  facts: ShopifyInstallFacts,
+): ShopifyConnectionSyncInput | null {
+  const shopDomain = facts.shopDomain
+    ? normalizeExternalAccountId(facts.shopDomain)
+    : null;
+  if (!shopDomain || !facts.accessToken) {
+    return null;
+  }
+
+  return {
+    externalAccountId: shopDomain,
+    displayName: deriveShopifyDisplayName(shopDomain, facts.brandDisplayName),
+    storefrontUrl: `https://${shopDomain}`,
+    providerClientId: facts.providerClientId,
+    status: "CONNECTED",
+    installedAt: facts.installedAt,
+    uninstalledAt: null,
+    lastProductSyncAt: facts.lastProductSyncAt,
+    grantedScopes: normalizeLegacyGrantedScopes(facts.grantedScopes),
+    providerMetadata: {
+      authMode: facts.authMode,
+      currencyCode: facts.currencyCode,
+    },
+    secretPayload: {
+      accessToken: facts.accessToken,
+      accessTokenExpiresAt: facts.accessTokenExpiresAt
+        ? facts.accessTokenExpiresAt.toISOString()
+        : null,
+      refreshToken: facts.refreshToken,
+      refreshTokenExpiresAt: facts.refreshTokenExpiresAt
+        ? facts.refreshTokenExpiresAt.toISOString()
+        : null,
+      authMode: facts.authMode,
+    },
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Result types
 // ---------------------------------------------------------------------------
@@ -232,11 +309,6 @@ export type ShopifyConnectionSyncResult = {
   connectionId: string | null;
   isPrimary: boolean;
   secretWritten: boolean;
-};
-
-export type ShopifyConnectionMarkDisconnectedResult = {
-  outcome: "updated" | "noop";
-  count: number;
 };
 
 export type ShopifyConnectionDeleteResult = {
@@ -343,6 +415,18 @@ async function applyShopifyConnectionSync(
   if (input.secretPayload) {
     const encryptedPayload = encryptSecret(JSON.stringify(input.secretPayload));
     const now = new Date();
+    // PHASE 14B.3 P1 FIX: a fresh credential write ALWAYS clears any held
+    // refresh lease. Without this, a lease acquired against the PRIOR
+    // payload (e.g. an in-flight refresh outstanding at the moment of a
+    // reconnect or relink) survives untouched — `update` only assigns the
+    // fields listed, so an existing `refreshLockId`/`refreshLockedUntil`
+    // would otherwise persist across this write. That stale lease later lets
+    // `persistRotatedShopifyCredential`'s CAS (`WHERE refreshLockId = <old
+    // lockId>`) still match, so the old refresher's stale-writer rotation
+    // would silently overwrite the credential just installed here — on
+    // relink, that can place a PRIOR BRAND's rotated token onto the new
+    // brand's connection. Resetting the lease to null makes that CAS match
+    // nothing, so the old holder is correctly rejected as superseded.
     await tx.commerceConnectionSecret.upsert({
       where: { connectionId: connection.id },
       create: {
@@ -355,6 +439,8 @@ async function applyShopifyConnectionSync(
         encryptedPayload,
         keyVersion: 1,
         rotatedAt: now,
+        refreshLockId: null,
+        refreshLockedUntil: null,
       },
     });
   } else {
@@ -373,39 +459,6 @@ async function applyShopifyConnectionSync(
     isPrimary,
     secretWritten: input.secretPayload !== null,
   };
-}
-
-async function applyMarkShopifyConnectionsDisconnected(
-  tx: TxClient,
-  brandId: string,
-  status: CommerceConnectionStatus,
-): Promise<ShopifyConnectionMarkDisconnectedResult> {
-  const rows = await tx.commerceConnection.findMany({
-    where: { brandId, provider: CommerceProvider.SHOPIFY },
-    select: { id: true },
-  });
-
-  if (rows.length === 0) {
-    return { outcome: "noop", count: 0 };
-  }
-
-  const ids = rows.map((row) => row.id);
-  // Mirrors the legacy semantics: UNINSTALLED stamps uninstalledAt; every
-  // other status (DISCONNECTED, REQUIRES_RECONNECT, etc.) clears it, same
-  // as `buildLocalShopifyDisconnectData` / the manual disconnect routes do
-  // for `Brand.shopifyUninstalledAt`.
-  const uninstalledAt = status === "UNINSTALLED" ? new Date() : null;
-
-  await tx.commerceConnection.updateMany({
-    where: { id: { in: ids } },
-    data: { status, uninstalledAt },
-  });
-
-  await tx.commerceConnectionSecret.deleteMany({
-    where: { connectionId: { in: ids } },
-  });
-
-  return { outcome: "updated", count: ids.length };
 }
 
 /**
@@ -592,26 +645,43 @@ export async function syncShopifyCommerceConnectionForBrand(
 }
 
 /**
- * Marks every existing `CommerceConnection` row for (brandId, SHOPIFY) with
- * the given neutral status, stamps/clears `uninstalledAt` to match, and
- * deletes their secret. Used by the plain disconnect paths, where the
- * legacy `Brand.shopifyShopDomain` has already been nulled by the time this
- * runs (so a full `syncShopifyCommerceConnectionForBrand` rebuild has
- * nothing to key off of).
+ * PHASE 14B.3 — CANONICAL-FIRST INSTALL WRITE.
  *
- * A no-op (never a throw) when no `CommerceConnection` row exists for the
- * brand — e.g. the original dual-write never ran or already failed once;
- * the backfill script or a later lifecycle event will reconcile it.
+ * Writes the canonical `CommerceConnection` + `CommerceConnectionSecret` for
+ * an install / reconnect / relink from INSTALL FACTS ONLY, inside the caller's
+ * own transaction (so it commits atomically with the install claim and can
+ * never leave a claimed install without a canonical credential).
+ *
+ * This is the deliberate exception to this file's "never inside the caller's
+ * transaction" rule, and the reason for the exception is that the rule was
+ * written when this module produced a best-effort MIRROR. It no longer does:
+ * as of Phase 14B the credential written here IS the runtime authority
+ * (`resolveRuntimeCredential` reads exactly this row), so it must not be
+ * possible for the install to commit and this write to be lost. A failure
+ * here correctly fails the install, because an install that cannot establish
+ * a canonical credential has not actually connected anything.
+ *
+ * No retry loop wraps this, unlike `syncShopifyCommerceConnectionForBrand`:
+ * the caller owns the transaction, so a primary-assignment conflict (P2002 on
+ * the partial unique index) or serialization failure aborts the caller's
+ * transaction and must be surfaced to the caller to retry as a whole. The
+ * install route already maps P2002/P2034 onto a 409 that the client retries.
  */
-export async function markShopifyCommerceConnectionDisconnected(
+export async function applyShopifyConnectionSyncFromInstall(
+  tx: TxClient,
   brandId: string,
-  status: CommerceConnectionStatus,
-  deps: Partial<ConnectionSyncDeps> = {},
-): Promise<ShopifyConnectionMarkDisconnectedResult> {
-  const resolvedDeps: ConnectionSyncDeps = { ...DEFAULT_SYNC_DEPS, ...deps };
-  return resolvedDeps.runTransaction((tx) =>
-    applyMarkShopifyConnectionsDisconnected(tx, brandId, status),
-  );
+  facts: ShopifyInstallFacts,
+): Promise<ShopifyConnectionSyncResult> {
+  const input = buildShopifyConnectionSyncInputFromInstall(facts);
+  if (!input) {
+    return {
+      outcome: "skipped_no_shop_domain",
+      connectionId: null,
+      isPrimary: false,
+      secretWritten: false,
+    };
+  }
+  return applyShopifyConnectionSync(tx, brandId, input);
 }
 
 /**
@@ -839,51 +909,6 @@ export async function rebuildShopifyConnectionSecretForBrand(
 // ---------------------------------------------------------------------------
 // Best-effort wrappers (per Phase-1 decision D2 — call these from routes)
 // ---------------------------------------------------------------------------
-
-/**
- * Best-effort wrapper for `syncShopifyCommerceConnectionForBrand`. Catches
- * and sanitized-logs every failure; NEVER throws. Call this AFTER the
- * legacy-column transaction has already committed — never from inside it.
- */
-export async function safeSyncShopifyCommerceConnection(
-  brandId: string,
-  deps: Partial<ConnectionSyncDeps> = {},
-): Promise<void> {
-  try {
-    await syncShopifyCommerceConnectionForBrand(brandId, deps);
-  } catch {
-    // Sanitized: brandId + a fixed outcome tag only. Never the caught
-    // error object — encryptSecret/decryptSecret failures, while unlikely
-    // to embed secret material in their message, are deliberately never
-    // risked here. The legacy write already committed; this mirror can be
-    // repaired by the backfill script or the next lifecycle event.
-    console.error("[commerce/connection-sync]", {
-      outcome: "sync_failed",
-      brandId,
-      provider: "SHOPIFY",
-    });
-  }
-}
-
-/**
- * Best-effort wrapper for `markShopifyCommerceConnectionDisconnected`.
- * Catches and sanitized-logs every failure; NEVER throws.
- */
-export async function safeMarkShopifyCommerceConnectionDisconnected(
-  brandId: string,
-  status: CommerceConnectionStatus,
-  deps: Partial<ConnectionSyncDeps> = {},
-): Promise<void> {
-  try {
-    await markShopifyCommerceConnectionDisconnected(brandId, status, deps);
-  } catch {
-    console.error("[commerce/connection-sync]", {
-      outcome: "mark_disconnected_failed",
-      brandId,
-      provider: "SHOPIFY",
-    });
-  }
-}
 
 /**
  * Best-effort wrapper for `deleteShopifyCommerceConnectionByShopDomain`.

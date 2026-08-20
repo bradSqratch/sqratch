@@ -25,7 +25,6 @@ type ShopifyRewardOffer = {
     id: string;
     name: string;
     logoUrl: string | null;
-    shopifyShopDomain?: string | null;
   };
   pointsCost: number;
   discountType: "FIXED_AMOUNT" | "PERCENTAGE";

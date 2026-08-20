@@ -28,6 +28,8 @@ interface MockedPrismaClient {
   campaignUnlock: Record<string, (...args: unknown[]) => unknown>;
   brandRewardOffer: Record<string, (...args: unknown[]) => unknown>;
   shopifyConnectionEvent: Record<string, (...args: unknown[]) => unknown>;
+  commerceConnection: Record<string, (...args: unknown[]) => unknown>;
+  commerceConnectionSecret: Record<string, (...args: unknown[]) => unknown>;
   userPointAccount: Record<string, (...args: unknown[]) => unknown>;
   lessonProgress: Record<string, (...args: unknown[]) => unknown>;
   userSession: Record<string, (...args: unknown[]) => unknown>;
@@ -227,6 +229,47 @@ before(async () => {
   prismaModule.commerceConnection = {
     findMany: async () => [],
     findUnique: async () => null,
+    // PHASE 14B.2: `loadShopifyCredential` joins `secret` via `findFirst`.
+    // Null keeps this harness on the classified NO_CONNECTION compatibility
+    // branch, which is exactly the "pre-cutover legacy path" this stub already
+    // documents itself as modelling.
+    findFirst: async () => null,
+    update: async () => ({}),
+    // PHASE 14B.3: the install route now writes the canonical connection
+    // INSIDE its transaction, from install facts. These stay throwing
+    // tripwires by default so any OTHER route that starts writing canonical
+    // connection rows fails loudly here; the install tests override them
+    // with `t.mock.method` and assert on the ordering.
+    count: async () => {
+      throw new Error("canonical connection must not be counted on the legacy path");
+    },
+    updateMany: async () => {
+      throw new Error("canonical connection must not be updated on the legacy path");
+    },
+    upsert: async () => {
+      throw new Error("canonical connection must not be written on the legacy path");
+    },
+    // shop/redact's GDPR erasure. Default no-op so the legacy-path redact
+    // tests (which assert on the Brand scrub) are unaffected.
+    deleteMany: async () => ({ count: 0 }),
+  };
+  // No canonical secret exists on the legacy path, so the canonical
+  // lease/rotation calls must be unreachable. Throwing (rather than returning
+  // a benign value) makes a regression that started using the canonical lease
+  // for a legacy-compat brand fail loudly instead of passing silently.
+  prismaModule.commerceConnectionSecret = {
+    findUnique: async () => {
+      throw new Error("canonical secret must not be read on the legacy path");
+    },
+    updateMany: async () => {
+      throw new Error("canonical lease must not be used on the legacy path");
+    },
+    deleteMany: async () => {
+      throw new Error("canonical secret must not be cleared on the legacy path");
+    },
+    upsert: async () => {
+      throw new Error("canonical secret must not be written on the legacy path");
+    },
   };
 
   // Import route handlers
@@ -251,18 +294,68 @@ before(async () => {
   authOptions = (await import("../src/app/api/auth/[...nextauth]/options")).authOptions as never;
 });
 
+/**
+ * PHASE 14B.3 — models the CANONICAL install write the installations route
+ * now performs inside its own transaction, and records an ordered call log so
+ * a test can assert that canonical writes happen BEFORE the legacy `Brand`
+ * mirror. Returns the log; the caller wires `brand.update` to push into it.
+ */
+function mockCanonicalInstallWrites(
+  t: { mock: { method: (o: object, m: string, i: unknown) => void } },
+): string[] {
+  const log: string[] = [];
+  t.mock.method(prisma.commerceConnection, "findUnique", async () => {
+    log.push("canonical:findUnique");
+    return null;
+  });
+  t.mock.method(prisma.commerceConnection, "count", async () => {
+    log.push("canonical:count");
+    return 0;
+  });
+  t.mock.method(prisma.commerceConnection, "updateMany", async () => {
+    log.push("canonical:clearOtherPrimary");
+    return { count: 0 };
+  });
+  t.mock.method(prisma.commerceConnection, "upsert", async (args: unknown) => {
+    const typed = args as {
+      create: { externalAccountId: string; brandId: string; status: string };
+    };
+    log.push(
+      `canonical:upsert:${typed.create.brandId}:${typed.create.externalAccountId}:${typed.create.status}`,
+    );
+    return { id: "conn-canonical" };
+  });
+  t.mock.method(prisma.commerceConnectionSecret, "upsert", async (args: unknown) => {
+    const typed = args as { where: { connectionId: string }; create: { encryptedPayload: string } };
+    // The payload must be ENCRYPTED, never a plaintext token.
+    assert.ok(!typed.create.encryptedPayload.includes("mock-token"));
+    log.push(`canonical:secret:${typed.where.connectionId}`);
+    return {};
+  });
+  return log;
+}
+
 // Helpers
 function buildWebhookHmac(body: string, secret: string = "test-api-secret"): string {
   return crypto.createHmac("sha256", secret).update(body).digest("base64");
 }
 
-function makeWebhookRequest(url: string, body: string, hmac: string | null, shop: string = "store.myshopify.com"): NextRequest {
+function makeWebhookRequest(
+  url: string,
+  body: string,
+  hmac: string | null,
+  shop: string = "store.myshopify.com",
+  triggeredAt?: string,
+): NextRequest {
   const headers = new Headers();
   headers.set("content-type", "application/json");
   if (hmac) {
     headers.set("x-shopify-hmac-sha256", hmac);
   }
   headers.set("x-shopify-shop-domain", shop);
+  if (triggeredAt) {
+    headers.set("x-shopify-triggered-at", triggeredAt);
+  }
   return new NextRequest(url, {
     method: "POST",
     headers,
@@ -304,25 +397,39 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     assert.equal(res.status, 401);
   });
 
+  // PHASE 14C-A: app/uninstalled is canonical-only now — no legacy `Brand`
+  // read or write anywhere in the handler (see route.ts's own header
+  // comment). "Clears active credentials" means: the canonical connection's
+  // status transitions to UNINSTALLED and its `CommerceConnectionSecret` row
+  // is deleted.
   test("app/uninstalled webhook clears active credentials", async (t) => {
     const payload = JSON.stringify({ test: "data" });
     const hmac = buildWebhookHmac(payload);
     const req = makeWebhookRequest("http://localhost/api/shopify/webhooks/app/uninstalled", payload, hmac, "uninstall-shop.myshopify.com");
 
-    t.mock.method(prisma.brand, "findUnique", async () => ({
-      id: "brand-uninstall",
-      shopifyCurrencyCode: "USD",
-      shopifyClientId: "client-x",
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
+      id: "conn-uninstall",
+      brandId: "brand-uninstall",
+    }));
+    t.mock.method(prisma.commerceConnection, "findUnique", async () => ({
+      id: "conn-uninstall",
+      brandId: "brand-uninstall",
+      installedAt: null,
     }));
 
-    let updateCalled = false;
+    let statusUpdateCalled = false;
     let capturedData: unknown = null;
-
-    t.mock.method(prisma.brand, "update", async (args: unknown) => {
+    t.mock.method(prisma.commerceConnection, "update", async (args: unknown) => {
       const typedArgs = args as { data?: Record<string, unknown> };
-      updateCalled = true;
+      statusUpdateCalled = true;
       capturedData = typedArgs.data;
-      return { id: "brand-uninstall" };
+      return {};
+    });
+
+    let secretDeleted = false;
+    t.mock.method(prisma.commerceConnectionSecret, "deleteMany", async () => {
+      secretDeleted = true;
+      return { count: 1 };
     });
 
     let connectionEventRecorded = false;
@@ -334,13 +441,196 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
 
     const res = await appUninstalledPOST(req);
     assert.equal(res.status, 200);
-    assert.ok(updateCalled);
+    assert.ok(statusUpdateCalled);
+    assert.ok(secretDeleted);
     assert.ok(connectionEventRecorded);
-    const data = capturedData as { shopifyConnectionStatus: string; shopifyAdminAccessTokenEncrypted: string | null; shopifyRefreshTokenEncrypted: string | null };
+    const data = capturedData as { status: string; uninstalledAt?: Date };
     assert.ok(data);
-    assert.equal(data.shopifyConnectionStatus, "UNINSTALLED");
-    assert.equal(data.shopifyAdminAccessTokenEncrypted, null);
-    assert.equal(data.shopifyRefreshTokenEncrypted, null);
+    assert.equal(data.status, "UNINSTALLED");
+    assert.ok(data.uninstalledAt instanceof Date);
+  });
+
+  test("AE. app/uninstalled revokes the CANONICAL credential first, by shop domain, writing the loss event exactly once", async (t) => {
+    const payload = JSON.stringify({ test: "data" });
+    const hmac = buildWebhookHmac(payload);
+    const req = makeWebhookRequest("http://localhost/api/shopify/webhooks/app/uninstalled", payload, hmac, "uninstall-shop.myshopify.com");
+
+    const order: string[] = [];
+
+    // A canonical connection EXISTS for the uninstalled shop.
+    t.mock.method(prisma.commerceConnection, "findFirst", async (args: unknown) => {
+      const typed = args as {
+        where: { provider: string; externalAccountId?: string; brandId?: string };
+      };
+      // Terminal webhooks are shop-keyed, never brand-keyed: after a relink the
+      // brand no longer holds this domain, so a brandId selector would revoke
+      // the wrong store (or nothing at all).
+      assert.equal(typed.where.externalAccountId, "uninstall-shop.myshopify.com");
+      assert.equal(typed.where.brandId, undefined);
+      order.push("canonical:findFirst");
+      return { id: "conn-uninstall", brandId: "brand-uninstall" };
+    });
+    // Re-selected fresh INSIDE invalidateShopifyCredential's transaction (the
+    // P1 freshness fence). `installedAt: null` means the fence never
+    // activates here, matching this test sending no `X-Shopify-Triggered-At`.
+    t.mock.method(prisma.commerceConnection, "findUnique", async () => ({
+      id: "conn-uninstall",
+      brandId: "brand-uninstall",
+      installedAt: null,
+    }));
+    t.mock.method(prisma.commerceConnection, "update", async (args: unknown) => {
+      const typed = args as { data: { status: string; uninstalledAt?: Date } };
+      assert.equal(typed.data.status, "UNINSTALLED");
+      assert.ok(typed.data.uninstalledAt instanceof Date);
+      order.push("canonical:status");
+      return {};
+    });
+    t.mock.method(prisma.commerceConnectionSecret, "deleteMany", async () => {
+      order.push("canonical:secretDeleted");
+      return { count: 1 };
+    });
+
+    const events: string[] = [];
+    t.mock.method(prisma.shopifyConnectionEvent, "create", async (args: unknown) => {
+      const typed = args as { data: { eventType: string; brandId: string } };
+      // No decrypted credential material may ever reach connection history.
+      const serialized = JSON.stringify(typed.data);
+      assert.doesNotMatch(serialized, /shpat_|shprt_|accessToken|refreshToken/);
+      events.push(`${typed.data.eventType}:${typed.data.brandId}`);
+      order.push("lossEvent");
+      return {};
+    });
+
+    const res = await appUninstalledPOST(req);
+    assert.equal(res.status, 200);
+
+    // PHASE 14C-A: canonical status transition + secret deletion precede the
+    // loss event, and there is no legacy Brand mirror step left at all — the
+    // event is written exactly once.
+    assert.deepEqual(order, [
+      "canonical:findFirst",
+      "canonical:status",
+      "canonical:secretDeleted",
+      "lossEvent",
+    ]);
+    assert.deepEqual(events, ["UNINSTALLED:brand-uninstall"]);
+  });
+
+  test("AQ. P1 FIX (independent review): a REDELIVERED app/uninstalled arriving after a reinstall is ignored end-to-end — no canonical write, no Brand mirror write", async (t) => {
+    const payload = JSON.stringify({ test: "data" });
+    const hmac = buildWebhookHmac(payload);
+    // Shopify originally triggered this uninstall at 11:00. Retries redeliver
+    // the SAME triggered-at. The merchant reinstalled at 12:00 — BEFORE this
+    // (delayed) delivery reaches the app.
+    const req = makeWebhookRequest(
+      "http://localhost/api/shopify/webhooks/app/uninstalled",
+      payload,
+      hmac,
+      "reinstalled-shop.myshopify.com",
+      "2026-03-01T11:00:00.000000000Z",
+    );
+
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
+      id: "conn-reinstalled",
+      brandId: "brand-reinstalled",
+    }));
+    t.mock.method(prisma.commerceConnection, "findUnique", async () => ({
+      id: "conn-reinstalled",
+      brandId: "brand-reinstalled",
+      // The connection was reinstalled AFTER Shopify triggered this event.
+      installedAt: new Date("2026-03-01T12:00:00.000Z"),
+    }));
+
+    let canonicalWriteAttempted = false;
+    t.mock.method(prisma.commerceConnection, "update", async () => {
+      canonicalWriteAttempted = true;
+      return {};
+    });
+    t.mock.method(prisma.commerceConnectionSecret, "deleteMany", async () => {
+      canonicalWriteAttempted = true;
+      return { count: 0 };
+    });
+
+    let brandMirrorWriteAttempted = false;
+    t.mock.method(prisma.brand, "findUnique", async () => {
+      // If the route reaches the legacy Brand lookup at all for a STALE
+      // event, that is itself the bug: it means the fence didn't short-
+      // circuit the whole handler.
+      brandMirrorWriteAttempted = true;
+      return null;
+    });
+
+    let eventWritten = false;
+    t.mock.method(prisma.shopifyConnectionEvent, "create", async () => {
+      eventWritten = true;
+      return {};
+    });
+
+    const res = await appUninstalledPOST(req);
+
+    // Still acknowledged — a genuine, HMAC-verified delivery must not be
+    // retried by Shopify just because it turned out to be stale.
+    assert.equal(res.status, 200);
+    assert.ok(!canonicalWriteAttempted, "the stale event must not touch the canonical connection");
+    assert.ok(!brandMirrorWriteAttempted, "the stale event must not touch the legacy Brand mirror either");
+    assert.ok(!eventWritten, "no connection-loss event for a state change that never happened");
+  });
+
+  test("AF. shop/redact revokes the canonical credential BEFORE the Brand scrub and before erasing the row", async (t) => {
+    const payload = JSON.stringify({ shop_id: 1, shop_domain: "redact-shop.myshopify.com" });
+    const hmac = buildWebhookHmac(payload);
+    const req = makeWebhookRequest("http://localhost/api/shopify/webhooks/shop/redact", payload, hmac, "redact-shop.myshopify.com");
+
+    const order: string[] = [];
+
+    t.mock.method(prisma.tokenStore, "findMany", async () => []);
+    t.mock.method(prisma.commerceConnection, "findFirst", async (args: unknown) => {
+      const typed = args as { where: { externalAccountId?: string } };
+      assert.equal(typed.where.externalAccountId, "redact-shop.myshopify.com");
+      return { id: "conn-redact", brandId: "brand-redact" };
+    });
+    t.mock.method(prisma.commerceConnection, "findUnique", async () => ({
+      id: "conn-redact",
+      brandId: "brand-redact",
+      installedAt: null,
+    }));
+    t.mock.method(prisma.commerceConnection, "update", async (args: unknown) => {
+      const typed = args as { data: { status: string } };
+      assert.equal(typed.data.status, "UNINSTALLED");
+      order.push("canonical:status");
+      return {};
+    });
+    t.mock.method(prisma.commerceConnectionSecret, "deleteMany", async () => {
+      order.push("canonical:secretDeleted");
+      return { count: 1 };
+    });
+    t.mock.method(prisma.commerceConnection, "deleteMany", async () => {
+      order.push("canonical:rowErased");
+      return { count: 1 };
+    });
+
+    t.mock.method(prisma.brand, "findFirst", async () => ({ id: "brand-redact" }));
+    t.mock.method(prisma.brand, "update", async () => {
+      order.push("brandScrub");
+      return { id: "brand-redact" };
+    });
+    t.mock.method(prisma.shopifyRewardRedemption, "updateMany", async () => ({ count: 0 }));
+    t.mock.method(prisma.brandRewardOffer, "updateMany", async () => ({ count: 0 }));
+    t.mock.method(prisma.shopifyConnectionEvent, "updateMany", async () => ({ count: 0 }));
+
+    const res = await shopRedactPOST(req);
+    assert.equal(res.status, 200);
+
+    // The status transition + secret delete must land BEFORE the Brand scrub.
+    // Erasing the connection row first would leave NO_CONNECTION — the one
+    // canonical state that still permits the legacy Brand fallback — so a
+    // failed scrub could then resurrect the credential.
+    assert.deepEqual(order, [
+      "canonical:status",
+      "canonical:secretDeleted",
+      "brandScrub",
+      "canonical:rowErased",
+    ]);
   });
 
   test("duplicate app/uninstalled delivery is idempotent (succeeds without error)", async (t) => {
@@ -349,16 +639,22 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     const req1 = makeWebhookRequest("http://localhost/api/shopify/webhooks/app/uninstalled", payload, hmac, "uninstall-shop.myshopify.com");
     const req2 = makeWebhookRequest("http://localhost/api/shopify/webhooks/app/uninstalled", payload, hmac, "uninstall-shop.myshopify.com");
 
-    t.mock.method(prisma.brand, "findUnique", async () => ({
-      id: "brand-uninstall",
-      shopifyCurrencyCode: "USD",
-      shopifyClientId: "client-x",
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
+      id: "conn-uninstall",
+      brandId: "brand-uninstall",
+    }));
+    t.mock.method(prisma.commerceConnection, "findUnique", async () => ({
+      id: "conn-uninstall",
+      brandId: "brand-uninstall",
+      installedAt: null,
     }));
 
+    t.mock.method(prisma.commerceConnectionSecret, "deleteMany", async () => ({ count: 1 }));
+
     let callCount = 0;
-    t.mock.method(prisma.brand, "update", async () => {
+    t.mock.method(prisma.commerceConnection, "update", async () => {
       callCount++;
-      return { id: "brand-uninstall" };
+      return {};
     });
 
     const res1 = await appUninstalledPOST(req1);
@@ -367,6 +663,8 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     const res2 = await appUninstalledPOST(req2);
     assert.equal(res2.status, 200);
 
+    // Each delivery re-applies the same canonical status transition — a
+    // second, identical UNINSTALLED write is a safe no-op, not an error.
     assert.equal(callCount, 2);
   });
 
@@ -375,19 +673,24 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     const hmac = buildWebhookHmac(payload);
     const req = makeWebhookRequest("http://localhost/api/shopify/webhooks/app/uninstalled", payload, hmac, "uninstall-shop.myshopify.com");
 
-    t.mock.method(prisma.brand, "findUnique", async () => ({
-      id: "brand-uninstall",
-      shopifyCurrencyCode: "USD",
-      shopifyClientId: "client-x",
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
+      id: "conn-uninstall",
+      brandId: "brand-uninstall",
+    }));
+    t.mock.method(prisma.commerceConnection, "findUnique", async () => ({
+      id: "conn-uninstall",
+      brandId: "brand-uninstall",
+      installedAt: null,
     }));
 
-    let brandUpdateCalled = false;
+    let canonicalUpdateCalled = false;
     let otherModelsTouched = false;
 
-    t.mock.method(prisma.brand, "update", async () => {
-      brandUpdateCalled = true;
-      return { id: "brand-uninstall" };
+    t.mock.method(prisma.commerceConnection, "update", async () => {
+      canonicalUpdateCalled = true;
+      return {};
     });
+    t.mock.method(prisma.commerceConnectionSecret, "deleteMany", async () => ({ count: 1 }));
 
     // We verify no delete calls or mutations on other business models like PointTransaction
     t.mock.method(prisma.pointTransaction, "deleteMany", async () => {
@@ -397,7 +700,7 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
 
     const res = await appUninstalledPOST(req);
     assert.equal(res.status, 200);
-    assert.ok(brandUpdateCalled);
+    assert.ok(canonicalUpdateCalled);
     assert.ok(!otherModelsTouched);
   });
 
@@ -604,10 +907,42 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
   });
 
   test("embedded disconnect deactivates offers and records one DISCONNECTED event", async (t) => {
-    t.mock.method(prisma.brand, "findFirst", async () => ({
-      shopifyCurrencyCode: "CAD",
+    // PHASE 14C-A: eligibility resolves canonical-first through
+    // findEmbeddedConnectedBrand -> CommerceConnection[provider,externalAccountId];
+    // `commerceConnection.findUnique` is called with EITHER that composite
+    // key (eligibility) or a plain `{id}` (invalidateShopifyCredential's own
+    // internal freshness re-read inside its transaction).
+    t.mock.method(prisma.commerceConnection, "findUnique", async (args: unknown) => {
+      const typed = args as {
+        where: {
+          provider_externalAccountId?: { provider: string; externalAccountId: string };
+          id?: string;
+        };
+      };
+      if (typed.where.provider_externalAccountId) {
+        return {
+          brandId: "brand-embedded",
+          status: "CONNECTED",
+          providerClientId: "client-embedded",
+          providerMetadata: { authMode: "EXPIRING_OFFLINE", currencyCode: "CAD" },
+        };
+      }
+      return { id: "conn-embedded", brandId: "brand-embedded", installedAt: null };
+    });
+    t.mock.method(prisma.brand, "findUnique", async () => ({
+      id: "brand-embedded",
+      name: "Embedded Brand",
     }));
-    t.mock.method(prisma.brand, "updateMany", async () => ({ count: 1 }));
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
+      id: "conn-embedded",
+      brandId: "brand-embedded",
+    }));
+    t.mock.method(prisma.commerceConnection, "update", async (args: unknown) => {
+      const typed = args as { data: { status: string } };
+      assert.equal(typed.data.status, "DISCONNECTED");
+      return {};
+    });
+    t.mock.method(prisma.commerceConnectionSecret, "deleteMany", async () => ({ count: 1 }));
 
     let deactivateCalled = false;
     t.mock.method(prisma.brandRewardOffer, "updateMany", async (args: unknown) => {
@@ -640,6 +975,84 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
     assert.equal(result.count, 1);
     assert.ok(deactivateCalled);
     assert.ok(eventRecorded);
+  });
+
+  test("AG. embedded disconnect revokes the CANONICAL credential first, and only for an eligible connection", async (t) => {
+    const order: string[] = [];
+
+    // PHASE 14B.4B: eligibility now resolves canonical-first through
+    // findEmbeddedConnectedBrand -> CommerceConnection[provider,externalAccountId],
+    // never an independent Brand.shopify* predicate.
+    t.mock.method(prisma.commerceConnection, "findUnique", async (args: unknown) => {
+      const typed = args as {
+        where: {
+          provider_externalAccountId?: { provider: string; externalAccountId: string };
+          id?: string;
+        };
+      };
+      if (typed.where.provider_externalAccountId) {
+        // findEmbeddedConnectedBrand's canonical eligibility lookup.
+        assert.equal(typed.where.provider_externalAccountId.provider, "SHOPIFY");
+        assert.equal(
+          typed.where.provider_externalAccountId.externalAccountId,
+          "embedded-shop.myshopify.com",
+        );
+        order.push("eligibilityCheck:connFindUnique");
+        return {
+          brandId: "brand-embedded",
+          status: "CONNECTED",
+          providerClientId: "client-embedded",
+          providerMetadata: { authMode: "EXPIRING_OFFLINE" },
+        };
+      }
+      // invalidateShopifyCredential's own internal freshness re-read
+      // (by id, inside its transaction) — see its P1 staleness fence.
+      return { id: "conn-embedded", brandId: "brand-embedded", installedAt: null };
+    });
+    t.mock.method(prisma.brand, "findUnique", async (args: unknown) => {
+      const typed = args as { where: { id: string } };
+      assert.equal(typed.where.id, "brand-embedded");
+      order.push("eligibilityCheck:brandFindUnique");
+      return { id: "brand-embedded", name: "Embedded Brand" };
+    });
+    // invalidateShopifyCredential's OWN internal lookup, keyed by brandId —
+    // distinct from the eligibility check above.
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
+      id: "conn-embedded",
+      brandId: "brand-embedded",
+    }));
+    t.mock.method(prisma.commerceConnection, "update", async (args: unknown) => {
+      const typed = args as { data: { status: string } };
+      assert.equal(typed.data.status, "DISCONNECTED");
+      order.push("canonical:status");
+      return {};
+    });
+    t.mock.method(prisma.commerceConnectionSecret, "deleteMany", async () => {
+      order.push("canonical:secretDeleted");
+      return { count: 1 };
+    });
+    t.mock.method(prisma.brandRewardOffer, "updateMany", async () => ({ count: 1 }));
+    t.mock.method(prisma.shopifyConnectionEvent, "create", async () => {
+      order.push("lossEvent");
+      return {};
+    });
+
+    const result = await disconnectEmbeddedConnectedBrand({
+      brandId: "brand-embedded",
+      shopDomain: "embedded-shop.myshopify.com",
+      clientId: "client-embedded",
+    });
+
+    assert.equal(result.count, 1);
+    // PHASE 14C-A: no legacy Brand mirror step left at all — canonical
+    // eligibility, canonical status/secret revocation, then the loss event.
+    assert.deepEqual(order, [
+      "eligibilityCheck:connFindUnique",
+      "eligibilityCheck:brandFindUnique",
+      "canonical:status",
+      "canonical:secretDeleted",
+      "lossEvent",
+    ]);
   });
 
   test("embedded disconnect is idempotent: a second call on an already-disconnected brand writes nothing", async (t) => {
@@ -900,16 +1313,16 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
       },
     ]);
 
-    t.mock.method(prisma.brand, "findFirst", async () => null); // no conflicting shop link
-    t.mock.method(prisma.brand, "findUnique", async () => null); // brand-123 has no prior Shopify connection
+    // PHASE 14C-A: conflict/prior-connection detection is canonical-only now
+    // (`tx.commerceConnection.findFirst`), which defaults to `null` in
+    // `before()` — no conflicting owner, and brand-123 has no prior Shopify
+    // connection.
+    t.mock.method(prisma.brand, "findUniqueOrThrow", async () => ({
+      name: "Brand Test",
+      slug: "brand-test",
+    }));
 
-    t.mock.method(prisma.brand, "update", async (args: unknown) => {
-      const typedArgs = args as { where: { id: string }; data: { shopifyShopDomain: string; shopifyCurrencyCode: string } };
-      assert.equal(typedArgs.where.id, "brand-123");
-      assert.equal(typedArgs.data.shopifyShopDomain, "test-install.myshopify.com");
-      assert.equal(typedArgs.data.shopifyCurrencyCode, "USD");
-      return { id: "brand-123", name: "Brand Test", slug: "brand-test" };
-    });
+    const callLog = mockCanonicalInstallWrites(t);
 
     t.mock.method(prisma.tokenStore, "delete", async () => ({}));
 
@@ -929,6 +1342,18 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
     assert.equal(res.status, 200);
     const json = await res.json();
     assert.equal(json.data.brand.id, "brand-123");
+
+    // Y. CANONICAL-ONLY INSTALL (PHASE 14C-A). The canonical connection AND
+    // its credential are the only write — no legacy Brand mirror step is
+    // left at all — and the connection is created CONNECTED for the
+    // destination brand.
+    assert.deepEqual(callLog, [
+      "canonical:findUnique",
+      "canonical:count",
+      "canonical:clearOtherPrimary",
+      "canonical:upsert:brand-123:test-install.myshopify.com:CONNECTED",
+      "canonical:secret:conn-canonical",
+    ]);
   });
 
   test("duplicate shop link connects conflict fails with 409", async (t) => {
@@ -964,10 +1389,13 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
       },
     ]);
 
-    // Active conflicting shop domain linked to another brand
-    t.mock.method(prisma.brand, "findFirst", async () => ({
-      id: "brand-456",
-      shopifyConnectionStatus: "CONNECTED",
+    // Active conflicting shop domain linked to another brand's canonical connection.
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
+      id: "conn-456",
+      brandId: "brand-456",
+      status: "CONNECTED",
+      providerClientId: null,
+      providerMetadata: null,
     }));
 
     const res = await installationsPOST(req, { params: Promise.resolve({ installId: "install-session-id" }) });
@@ -1009,40 +1437,40 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
       },
     ]);
 
-    // Conflicting shop link is UNINSTALLED (so we can relink it)
-    t.mock.method(prisma.brand, "findFirst", async () => ({
-      id: "brand-456",
-      shopifyConnectionStatus: "UNINSTALLED",
-    }));
-
-    t.mock.method(prisma.brand, "findUnique", async (args: unknown) => {
-      const typedArgs = args as { where: { id: string } };
-      if (typedArgs.where.id === "brand-456") {
+    // Conflicting shop link's canonical connection is UNINSTALLED (so we can
+    // relink it) — distinguish the owner-conflict lookup (keyed on
+    // externalAccountId) from the destination's own prior-connection lookup
+    // (keyed on brandId), which the SAME `findFirst` delegate also serves.
+    t.mock.method(prisma.commerceConnection, "findFirst", async (args: unknown) => {
+      const typed = args as { where: { externalAccountId?: string; brandId?: string } };
+      if (typed.where.externalAccountId !== undefined) {
         return {
-          shopifyShopDomain: "test-install.myshopify.com",
-          shopifyCurrencyCode: "CAD",
-          shopifyClientId: "old-client",
+          id: "conn-456",
+          brandId: "brand-456",
+          status: "UNINSTALLED",
+          providerClientId: "old-client",
+          providerMetadata: { currencyCode: "CAD" },
         };
       }
-      return null; // brand-123 (destination) has no prior Shopify connection
+      // brand-123 (destination) has no prior Shopify connection.
+      return null;
     });
 
-    let conflictingBrandCleared = false;
-    let mainBrandUpdated = false;
+    t.mock.method(prisma.brand, "findUniqueOrThrow", async () => ({
+      name: "Brand Test",
+      slug: "brand-test",
+    }));
 
-    // We override brand.update and brand.updateMany to check relink transaction
-    t.mock.method(prisma.brand, "update", async (args: unknown) => {
-      const typedArgs = args as { where: { id: string }; data: { shopifyShopDomain: string | null } };
-      // First transaction call clears conflicting brand-456, second links brand-123
-      if (typedArgs.where.id === "brand-456") {
-        conflictingBrandCleared = true;
-        assert.equal(typedArgs.data.shopifyShopDomain, null);
-      } else if (typedArgs.where.id === "brand-123") {
-        mainBrandUpdated = true;
-        assert.equal(typedArgs.data.shopifyShopDomain, "test-install.myshopify.com");
+    let conflictingBrandLossRecorded = false;
+    t.mock.method(prisma.shopifyConnectionEvent, "create", async (args: unknown) => {
+      const typed = args as { data: { brandId: string; eventType: string } };
+      if (typed.data.brandId === "brand-456" && typed.data.eventType === "DISCONNECTED") {
+        conflictingBrandLossRecorded = true;
       }
-      return { id: typedArgs.where.id };
+      return {};
     });
+
+    const callLog = mockCanonicalInstallWrites(t);
 
     t.mock.method(prisma.tokenStore, "delete", async () => ({}));
 
@@ -1060,8 +1488,20 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
 
     const res = await installationsPOST(req, { params: Promise.resolve({ installId: "install-session-id" }) });
     assert.equal(res.status, 200);
-    assert.ok(conflictingBrandCleared);
-    assert.ok(mainBrandUpdated);
+    assert.ok(conflictingBrandLossRecorded);
+
+    // Z. RELINK is canonical-only too (PHASE 14C-A): the previous owner's
+    // loss is recorded (offers deactivated, DISCONNECTED event), then the
+    // SAME canonical connection row (keyed on shop domain) is reassigned to
+    // the destination brand with a fresh credential — no legacy Brand mirror
+    // write anywhere.
+    assert.deepEqual(callLog, [
+      "canonical:findUnique",
+      "canonical:count",
+      "canonical:clearOtherPrimary",
+      "canonical:upsert:brand-123:test-install.myshopify.com:CONNECTED",
+      "canonical:secret:conn-canonical",
+    ]);
   });
 });
 
@@ -1088,52 +1528,78 @@ describe("Route Scenario 3: Shopify Token Refresh", () => {
     clearMocks();
   });
 
+  // PHASE 14C-A: `getValidAccessToken` resolves and rotates the credential
+  // canonically now — `CommerceConnection` + `CommerceConnectionSecret`
+  // (whose `refreshLockId`/`refreshLockedUntil` columns ARE the CAS lease;
+  // see shopify-credential-store.ts) — there is no `Brand.shopify*` fallback
+  // or mirror write left in this path at all.
+  function encodeExpiringCredential(fields: {
+    accessToken: string;
+    accessTokenExpiresAt: Date;
+    refreshToken: string;
+    refreshTokenExpiresAt: Date;
+  }): string {
+    return encryptSecret(
+      JSON.stringify({
+        accessToken: fields.accessToken,
+        accessTokenExpiresAt: fields.accessTokenExpiresAt.toISOString(),
+        refreshToken: fields.refreshToken,
+        refreshTokenExpiresAt: fields.refreshTokenExpiresAt.toISOString(),
+        authMode: "EXPIRING_OFFLINE",
+      }),
+    );
+  }
+
+  const SUFFICIENT_SCOPES = [
+    "read_products",
+    "read_orders",
+    "read_themes",
+    "read_discounts",
+    "write_discounts",
+  ];
+
   test("single-request refresh updates stale token", async (t) => {
     const brandId = "brand-refresh-1";
-    const brandRecord = {
-      id: brandId,
-      shopifyShopDomain: "test-shop.myshopify.com",
-      shopifyAdminAccessTokenEncrypted: encryptSecret("old-access-token"),
-      shopifyConnectionStatus: "CONNECTED",
-      shopifyAuthMode: "EXPIRING_OFFLINE",
-      shopifyAccessTokenExpiresAt: new Date(Date.now() - 10000), // expired
-      shopifyRefreshTokenEncrypted: encryptSecret("old-refresh-token"),
-      shopifyRefreshTokenExpiresAt: new Date(Date.now() + 1000000),
-      shopifyGrantedScopes: "read_products,read_orders,read_themes,read_discounts,write_discounts",
-      shopifyClientId: "client-id",
-      shopifyTokenRefreshLockedUntil: null as Date | null,
-      shopifyTokenRefreshLockId: null as string | null,
-    };
+    const connectionId = "conn-refresh-1";
+    let encryptedPayload = encodeExpiringCredential({
+      accessToken: "old-access-token",
+      accessTokenExpiresAt: new Date(Date.now() - 10000), // expired
+      refreshToken: "old-refresh-token",
+      refreshTokenExpiresAt: new Date(Date.now() + 1000000),
+    });
 
-    t.mock.method(prisma.brand, "findUnique", async () => brandRecord);
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
+      id: connectionId,
+      brandId,
+      status: "CONNECTED",
+      externalAccountId: "test-shop.myshopify.com",
+      providerClientId: "client-id",
+      grantedScopes: SUFFICIENT_SCOPES,
+      providerMetadata: null,
+      secret: { encryptedPayload },
+    }));
 
     let lockId: string | null = null;
-    t.mock.method(prisma.brand, "updateMany", async (args: unknown) => {
-      const typedArgs = args as { data: Record<string, unknown>; where: Record<string, unknown> };
-      if (typedArgs.data.shopifyTokenRefreshLockId) {
-        lockId = typedArgs.data.shopifyTokenRefreshLockId as string;
-        brandRecord.shopifyTokenRefreshLockedUntil = typedArgs.data.shopifyTokenRefreshLockedUntil as Date;
-        brandRecord.shopifyTokenRefreshLockId = lockId;
+    t.mock.method(prisma.commerceConnectionSecret, "updateMany", async (args: unknown) => {
+      const typed = args as { where: { refreshLockId?: string }; data: Record<string, unknown> };
+      if (typed.data.refreshLockId && typed.data.refreshLockedUntil) {
+        lockId = typed.data.refreshLockId as string;
         return { count: 1 };
       }
-      if (typedArgs.where.shopifyTokenRefreshLockId === lockId) {
-        brandRecord.shopifyAdminAccessTokenEncrypted = typedArgs.data.shopifyAdminAccessTokenEncrypted as string;
-        brandRecord.shopifyAccessTokenExpiresAt = typedArgs.data.shopifyAccessTokenExpiresAt as Date;
-        brandRecord.shopifyRefreshTokenEncrypted = typedArgs.data.shopifyRefreshTokenEncrypted as string;
-        brandRecord.shopifyRefreshTokenExpiresAt = typedArgs.data.shopifyRefreshTokenExpiresAt as Date;
-        brandRecord.shopifyTokenRefreshLockedUntil = null;
-        brandRecord.shopifyTokenRefreshLockId = null;
-        return { count: 1 };
+      if (typed.where.refreshLockId !== lockId) return { count: 0 };
+      if (typeof typed.data.encryptedPayload === "string") {
+        encryptedPayload = typed.data.encryptedPayload;
       }
-      return { count: 0 };
+      return { count: 1 };
     });
+    t.mock.method(prisma.commerceConnection, "update", async () => ({}));
 
     const mockTokenEndpoint = async (shop: string, body: Record<string, string | number>) => {
       assert.equal(shop, "test-shop.myshopify.com");
       assert.equal(body.refresh_token, "old-refresh-token");
       return {
         access_token: "new-access-token",
-        scope: "read_products,read_orders,read_themes,read_discounts,write_discounts",
+        scope: SUFFICIENT_SCOPES.join(","),
         expires_in: 3600,
         refresh_token: "new-refresh-token",
         refresh_token_expires_in: 86400,
@@ -1147,37 +1613,39 @@ describe("Route Scenario 3: Shopify Token Refresh", () => {
 
   test("concurrent refresh locks: second request waits and re-reads", async (t) => {
     const brandId = "brand-refresh-2";
-    const brandRecord = {
-      id: brandId,
-      shopifyShopDomain: "test-shop.myshopify.com",
-      shopifyAdminAccessTokenEncrypted: encryptSecret("old-access-token"),
-      shopifyConnectionStatus: "CONNECTED",
-      shopifyAuthMode: "EXPIRING_OFFLINE",
-      shopifyAccessTokenExpiresAt: new Date(Date.now() - 10000), // expired
-      shopifyRefreshTokenEncrypted: encryptSecret("old-refresh-token"),
-      shopifyRefreshTokenExpiresAt: new Date(Date.now() + 1000000),
-      shopifyGrantedScopes: "read_products,read_orders,read_themes,read_discounts,write_discounts",
-      shopifyClientId: "client-id",
-      shopifyTokenRefreshLockedUntil: null as Date | null,
-      shopifyTokenRefreshLockId: null as string | null,
-    };
-
-    let findUniqueCallCount = 0;
-    t.mock.method(prisma.brand, "findUnique", async () => {
-      findUniqueCallCount++;
-      if (findUniqueCallCount > 1) {
-        brandRecord.shopifyAdminAccessTokenEncrypted = encryptSecret("concurrent-new-token");
-        brandRecord.shopifyAccessTokenExpiresAt = new Date(Date.now() + 3600 * 1000);
-        brandRecord.shopifyTokenRefreshLockedUntil = null;
-        brandRecord.shopifyTokenRefreshLockId = null;
-      }
-      return brandRecord;
+    const connectionId = "conn-refresh-2";
+    let encryptedPayload = encodeExpiringCredential({
+      accessToken: "old-access-token",
+      accessTokenExpiresAt: new Date(Date.now() - 10000), // expired
+      refreshToken: "old-refresh-token",
+      refreshTokenExpiresAt: new Date(Date.now() + 1000000),
     });
 
-    t.mock.method(prisma.brand, "updateMany", async () => {
-      brandRecord.shopifyTokenRefreshLockedUntil = new Date(Date.now() + 30000);
-      brandRecord.shopifyTokenRefreshLockId = "other-lock-id";
-      return { count: 0 };
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
+      id: connectionId,
+      brandId,
+      status: "CONNECTED",
+      externalAccountId: "test-shop.myshopify.com",
+      providerClientId: "client-id",
+      grantedScopes: SUFFICIENT_SCOPES,
+      providerMetadata: null,
+      secret: { encryptedPayload },
+    }));
+
+    // Another caller already holds the lease — this request can never win it.
+    t.mock.method(prisma.commerceConnectionSecret, "updateMany", async () => ({ count: 0 }));
+
+    // The FIRST poll (isCredentialRefreshLeaseHeld) observes the concurrent
+    // winner having already finished: the lease is released and the new
+    // token is already in place.
+    t.mock.method(prisma.commerceConnectionSecret, "findUnique", async () => {
+      encryptedPayload = encodeExpiringCredential({
+        accessToken: "concurrent-new-token",
+        accessTokenExpiresAt: new Date(Date.now() + 3600 * 1000),
+        refreshToken: "old-refresh-token",
+        refreshTokenExpiresAt: new Date(Date.now() + 1000000),
+      });
+      return { refreshLockedUntil: null };
     });
 
     const mockTokenEndpoint = async () => {
@@ -1191,48 +1659,48 @@ describe("Route Scenario 3: Shopify Token Refresh", () => {
 
   test("stale writer protection: retrieves winner token", async (t) => {
     const brandId = "brand-refresh-3";
-    const brandRecord = {
-      id: brandId,
-      shopifyShopDomain: "test-shop.myshopify.com",
-      shopifyAdminAccessTokenEncrypted: encryptSecret("old-access-token"),
-      shopifyConnectionStatus: "CONNECTED",
-      shopifyAuthMode: "EXPIRING_OFFLINE",
-      shopifyAccessTokenExpiresAt: new Date(Date.now() - 10000), // expired
-      shopifyRefreshTokenEncrypted: encryptSecret("old-refresh-token"),
-      shopifyRefreshTokenExpiresAt: new Date(Date.now() + 1000000),
-      shopifyGrantedScopes: "read_products,read_orders,read_themes,read_discounts,write_discounts",
-      shopifyClientId: "client-id",
-      shopifyTokenRefreshLockedUntil: null as Date | null,
-      shopifyTokenRefreshLockId: null as string | null,
-    };
+    const connectionId = "conn-refresh-3";
 
-    let findUniqueCallCount = 0;
-    t.mock.method(prisma.brand, "findUnique", async () => {
-      findUniqueCallCount++;
-      if (findUniqueCallCount > 1) {
-        return {
-          ...brandRecord,
-          shopifyAdminAccessTokenEncrypted: encryptSecret("winner-token"),
-          shopifyAccessTokenExpiresAt: new Date(Date.now() + 3600 * 1000),
-          shopifyConnectionStatus: "CONNECTED",
-        };
-      }
-      return brandRecord;
+    let findFirstCallCount = 0;
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => {
+      findFirstCallCount++;
+      const encryptedPayload =
+        findFirstCallCount > 1
+          ? encodeExpiringCredential({
+              accessToken: "winner-token",
+              accessTokenExpiresAt: new Date(Date.now() + 3600 * 1000),
+              refreshToken: "old-refresh-token",
+              refreshTokenExpiresAt: new Date(Date.now() + 1000000),
+            })
+          : encodeExpiringCredential({
+              accessToken: "old-access-token",
+              accessTokenExpiresAt: new Date(Date.now() - 10000), // expired
+              refreshToken: "old-refresh-token",
+              refreshTokenExpiresAt: new Date(Date.now() + 1000000),
+            });
+      return {
+        id: connectionId,
+        brandId,
+        status: "CONNECTED",
+        externalAccountId: "test-shop.myshopify.com",
+        providerClientId: "client-id",
+        grantedScopes: SUFFICIENT_SCOPES,
+        providerMetadata: null,
+        secret: { encryptedPayload },
+      };
     });
 
-    t.mock.method(prisma.brand, "updateMany", async (args: unknown) => {
-      const typedArgs = args as { data: Record<string, unknown> };
-      if (typedArgs.data.shopifyTokenRefreshLockId) {
-        brandRecord.shopifyTokenRefreshLockedUntil = typedArgs.data.shopifyTokenRefreshLockedUntil as Date;
-        brandRecord.shopifyTokenRefreshLockId = typedArgs.data.shopifyTokenRefreshLockId as string;
-        return { count: 1 };
-      }
+    t.mock.method(prisma.commerceConnectionSecret, "updateMany", async (args: unknown) => {
+      const typed = args as { data: Record<string, unknown> };
+      // This caller wins the lease...
+      if (typed.data.refreshLockId && typed.data.refreshLockedUntil) return { count: 1 };
+      // ...but loses the persist race — another writer took over the lease first.
       return { count: 0 };
     });
 
     const mockTokenEndpoint = async () => ({
       access_token: "failed-stale-token",
-      scope: "read_products,read_orders,read_themes,read_discounts,write_discounts",
+      scope: SUFFICIENT_SCOPES.join(","),
       expires_in: 3600,
       refresh_token: "new-refresh-token",
       refresh_token_expires_in: 86400,
@@ -1244,25 +1712,26 @@ describe("Route Scenario 3: Shopify Token Refresh", () => {
   });
 
   test("brand isolation: Brand A refresh does not touch Brand B", async (t) => {
-    const brandRecordA = {
-      id: "brand-A",
-      shopifyShopDomain: "shop-A.myshopify.com",
-      shopifyAdminAccessTokenEncrypted: encryptSecret("token-A"),
-      shopifyConnectionStatus: "CONNECTED",
-      shopifyAuthMode: "EXPIRING_OFFLINE",
-      shopifyAccessTokenExpiresAt: new Date(Date.now() + 3600 * 1000),
-      shopifyRefreshTokenEncrypted: encryptSecret("refresh-A"),
-      shopifyRefreshTokenExpiresAt: new Date(Date.now() + 1000000),
-      shopifyGrantedScopes: "read_products,read_orders,read_themes,read_discounts,write_discounts",
-      shopifyClientId: "client-A",
-      shopifyTokenRefreshLockedUntil: null as Date | null,
-      shopifyTokenRefreshLockId: null as string | null,
-    };
-
-    t.mock.method(prisma.brand, "findUnique", async (args: unknown) => {
-      const typedArgs = args as { where: { id: string } };
-      if (typedArgs.where.id === "brand-A") return brandRecordA;
-      return null;
+    t.mock.method(prisma.commerceConnection, "findFirst", async (args: unknown) => {
+      const typedArgs = args as { where: { brandId: string } };
+      if (typedArgs.where.brandId !== "brand-A") return null;
+      return {
+        id: "conn-A",
+        brandId: "brand-A",
+        status: "CONNECTED",
+        externalAccountId: "shop-A.myshopify.com",
+        providerClientId: "client-A",
+        grantedScopes: SUFFICIENT_SCOPES,
+        providerMetadata: null,
+        secret: {
+          encryptedPayload: encodeExpiringCredential({
+            accessToken: "token-A",
+            accessTokenExpiresAt: new Date(Date.now() + 3600 * 1000),
+            refreshToken: "refresh-A",
+            refreshTokenExpiresAt: new Date(Date.now() + 1000000),
+          }),
+        },
+      };
     });
 
     const res = await getValidAccessToken("brand-A");
@@ -1272,42 +1741,46 @@ describe("Route Scenario 3: Shopify Token Refresh", () => {
 
   test("REQUIRES_RECONNECT transition on permanent failure (400)", async (t) => {
     const brandId = "brand-reconnect";
-    const brandRecord = {
-      id: brandId,
-      shopifyShopDomain: "test-shop.myshopify.com",
-      shopifyAdminAccessTokenEncrypted: encryptSecret("old-access-token") as string | null,
-      shopifyConnectionStatus: "CONNECTED",
-      shopifyAuthMode: "EXPIRING_OFFLINE",
-      shopifyAccessTokenExpiresAt: new Date(Date.now() - 10000), // expired
-      shopifyRefreshTokenEncrypted: encryptSecret("old-refresh-token") as string | null,
-      shopifyRefreshTokenExpiresAt: new Date(Date.now() + 1000000),
-      shopifyGrantedScopes: "read_products,read_orders,read_themes,read_discounts,write_discounts",
-      shopifyClientId: "client-id",
-      shopifyTokenRefreshLockedUntil: null as Date | null,
-      shopifyTokenRefreshLockId: null as string | null,
-    };
+    const connectionId = "conn-reconnect";
 
-    t.mock.method(prisma.brand, "findUnique", async () => brandRecord);
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
+      id: connectionId,
+      brandId,
+      status: "CONNECTED",
+      externalAccountId: "test-shop.myshopify.com",
+      providerClientId: "client-id",
+      grantedScopes: SUFFICIENT_SCOPES,
+      providerMetadata: null,
+      secret: {
+        encryptedPayload: encodeExpiringCredential({
+          accessToken: "old-access-token",
+          accessTokenExpiresAt: new Date(Date.now() - 10000), // expired
+          refreshToken: "old-refresh-token",
+          refreshTokenExpiresAt: new Date(Date.now() + 1000000),
+        }),
+      },
+    }));
 
-    let lockId: string | null = null;
-    let markRequiresReconnectCalled = false;
-
-    t.mock.method(prisma.brand, "updateMany", async (args: unknown) => {
-      const typedArgs = args as { data: Record<string, unknown> };
-      if (typedArgs.data.shopifyTokenRefreshLockId) {
-        lockId = typedArgs.data.shopifyTokenRefreshLockId as string;
-        brandRecord.shopifyTokenRefreshLockedUntil = typedArgs.data.shopifyTokenRefreshLockedUntil as Date;
-        brandRecord.shopifyTokenRefreshLockId = lockId;
-        return { count: 1 };
-      }
-      if (typedArgs.data.shopifyConnectionStatus === "REQUIRES_RECONNECT") {
-        markRequiresReconnectCalled = true;
-        brandRecord.shopifyConnectionStatus = "REQUIRES_RECONNECT";
-        brandRecord.shopifyAdminAccessTokenEncrypted = null;
-        brandRecord.shopifyRefreshTokenEncrypted = null;
-        return { count: 1 };
-      }
+    t.mock.method(prisma.commerceConnectionSecret, "updateMany", async (args: unknown) => {
+      const typed = args as { data: Record<string, unknown> };
+      // Lease acquire succeeds; there is no persist call on this failure path.
+      if (typed.data.refreshLockId && typed.data.refreshLockedUntil) return { count: 1 };
       return { count: 0 };
+    });
+
+    let markRequiresReconnectCalled = false;
+    t.mock.method(prisma.commerceConnectionSecret, "deleteMany", async (args: unknown) => {
+      const typed = args as { where: { connectionId: string } };
+      assert.equal(typed.where.connectionId, connectionId);
+      markRequiresReconnectCalled = true;
+      return { count: 1 };
+    });
+
+    t.mock.method(prisma.commerceConnection, "update", async (args: unknown) => {
+      assert.ok(markRequiresReconnectCalled);
+      const typedArgs = args as { data: { status: string } };
+      assert.equal(typedArgs.data.status, "REQUIRES_RECONNECT");
+      return {};
     });
 
     let offersDeactivatedAfterGuard = false;
@@ -1360,8 +1833,44 @@ describe("Route Scenario 4: Reward Redemption", () => {
     clearMocks();
   });
 
+  /**
+   * PHASE 14B.4B: the redeem route's connection gate now resolves through
+   * `getActiveCommerceConnection`, which reads `CommerceConnection` FIRST —
+   * mocks a matching CONNECTED row so tests written against the legacy
+   * `offer.brand.shopify*` gate keep exercising the SAME "connected" state
+   * canonically instead of falling through to a real (blocked) DB read.
+   */
+  function mockCanonicalConnection(
+    t: { mock: { method: (o: object, m: string, i: unknown) => void } },
+    input: { brandId: string; shopDomain: string; currencyCode: string | null },
+  ) {
+    t.mock.method(prisma.commerceConnection, "findMany", async () => [
+      {
+        id: `conn-${input.brandId}`,
+        brandId: input.brandId,
+        provider: "SHOPIFY",
+        status: "CONNECTED",
+        displayName: input.shopDomain,
+        externalAccountId: input.shopDomain,
+        storefrontUrl: `https://${input.shopDomain}`,
+        isPrimary: true,
+        grantedScopes: [],
+        installedAt: new Date("2026-01-01T00:00:00Z"),
+        uninstalledAt: null,
+        lastProductSyncAt: null,
+        createdAt: new Date("2026-01-01T00:00:00Z"),
+        providerMetadata: { authMode: "LEGACY_OFFLINE", currencyCode: input.currencyCode },
+      },
+    ]);
+  }
+
   test("point checks: returns 409 when user has insufficient points", async (t) => {
     setupMocks({ user: { id: "user-123", role: "USER" } });
+    mockCanonicalConnection(t, {
+      brandId: "brand-123",
+      shopDomain: "test-shop.myshopify.com",
+      currencyCode: "USD",
+    });
 
     t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async () => null);
 
@@ -1426,6 +1935,13 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
   test("redemption blocks a fixed-amount reward whose currency no longer matches the connected store", async (t) => {
     setupMocks({ user: { id: "user-123", role: "USER" } });
+    // Store currency has drifted to CAD since this USD offer was created —
+    // the canonical connection is what the route now checks against.
+    mockCanonicalConnection(t, {
+      brandId: "brand-123",
+      shopDomain: "test-shop.myshopify.com",
+      currencyCode: "CAD",
+    });
 
     t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async () => null);
 
@@ -1496,6 +2012,52 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
   test("redemption allows a percentage reward with no minimum subtotal despite a stored currency difference", async (t) => {
     setupMocks({ user: { id: "user-123", role: "USER" } });
+    // Store currency has drifted to CAD, but this offer isn't currency-dependent.
+    mockCanonicalConnection(t, {
+      brandId: "brand-123",
+      shopDomain: "test-shop.myshopify.com",
+      currencyCode: "CAD",
+    });
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
+      id: "conn-brand-123",
+      brandId: "brand-123",
+      status: "CONNECTED",
+      externalAccountId: "test-shop.myshopify.com",
+      providerClientId: null,
+      grantedScopes: [],
+      providerMetadata: null,
+      secret: {
+        encryptedPayload: encryptSecret(
+          JSON.stringify({
+            accessToken: "token-123",
+            accessTokenExpiresAt: null,
+            refreshToken: null,
+            refreshTokenExpiresAt: null,
+            authMode: "LEGACY_OFFLINE",
+          }),
+        ),
+      },
+    }));
+    // A real canonical connection (via mockCanonicalConnection's `findMany`)
+    // means the route takes the ADAPTER discount-issuance path — the
+    // adapter's own `loadConnection` reads `commerceConnection.findUnique`
+    // by id, separately from the credential/gate lookups above.
+    t.mock.method(prisma.commerceConnection, "findUnique", async () => ({
+      id: "conn-brand-123",
+      brandId: "brand-123",
+      provider: "SHOPIFY",
+      status: "CONNECTED",
+      displayName: "test-shop.myshopify.com",
+      externalAccountId: "test-shop.myshopify.com",
+      storefrontUrl: "https://test-shop.myshopify.com",
+      isPrimary: true,
+      grantedScopes: [],
+      installedAt: new Date("2026-01-01T00:00:00Z"),
+      uninstalledAt: null,
+      lastProductSyncAt: null,
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      providerMetadata: null,
+    }));
 
     t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async () => null);
 
@@ -1606,6 +2168,11 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
   test("redemption blocks a specific-products reward whose sourceShopDomain no longer matches the connected store", async (t) => {
     setupMocks({ user: { id: "user-123", role: "USER" } });
+    mockCanonicalConnection(t, {
+      brandId: "brand-123",
+      shopDomain: "test-shop.myshopify.com",
+      currencyCode: "CAD",
+    });
 
     t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async () => null);
 
@@ -1759,6 +2326,47 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
   test("successful redemption creates shopify discount and debits points", async (t) => {
     setupMocks({ user: { id: "user-123", role: "USER" } });
+    mockCanonicalConnection(t, {
+      brandId: "brand-123",
+      shopDomain: "test-shop.myshopify.com",
+      currencyCode: "USD",
+    });
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
+      id: "conn-brand-123",
+      brandId: "brand-123",
+      status: "CONNECTED",
+      externalAccountId: "test-shop.myshopify.com",
+      providerClientId: null,
+      grantedScopes: [],
+      providerMetadata: null,
+      secret: {
+        encryptedPayload: encryptSecret(
+          JSON.stringify({
+            accessToken: "token-123",
+            accessTokenExpiresAt: null,
+            refreshToken: null,
+            refreshTokenExpiresAt: null,
+            authMode: "LEGACY_OFFLINE",
+          }),
+        ),
+      },
+    }));
+    t.mock.method(prisma.commerceConnection, "findUnique", async () => ({
+      id: "conn-brand-123",
+      brandId: "brand-123",
+      provider: "SHOPIFY",
+      status: "CONNECTED",
+      displayName: "test-shop.myshopify.com",
+      externalAccountId: "test-shop.myshopify.com",
+      storefrontUrl: "https://test-shop.myshopify.com",
+      isPrimary: true,
+      grantedScopes: [],
+      installedAt: new Date("2026-01-01T00:00:00Z"),
+      uninstalledAt: null,
+      lastProductSyncAt: null,
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      providerMetadata: null,
+    }));
 
     t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async () => null);
 
@@ -1879,6 +2487,47 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
   test("Shopify failure causes points refund and records REFUNDED status", async (t) => {
     setupMocks({ user: { id: "user-123", role: "USER" } });
+    mockCanonicalConnection(t, {
+      brandId: "brand-123",
+      shopDomain: "test-shop.myshopify.com",
+      currencyCode: "USD",
+    });
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
+      id: "conn-brand-123",
+      brandId: "brand-123",
+      status: "CONNECTED",
+      externalAccountId: "test-shop.myshopify.com",
+      providerClientId: null,
+      grantedScopes: [],
+      providerMetadata: null,
+      secret: {
+        encryptedPayload: encryptSecret(
+          JSON.stringify({
+            accessToken: "token-123",
+            accessTokenExpiresAt: null,
+            refreshToken: null,
+            refreshTokenExpiresAt: null,
+            authMode: "LEGACY_OFFLINE",
+          }),
+        ),
+      },
+    }));
+    t.mock.method(prisma.commerceConnection, "findUnique", async () => ({
+      id: "conn-brand-123",
+      brandId: "brand-123",
+      provider: "SHOPIFY",
+      status: "CONNECTED",
+      displayName: "test-shop.myshopify.com",
+      externalAccountId: "test-shop.myshopify.com",
+      storefrontUrl: "https://test-shop.myshopify.com",
+      isPrimary: true,
+      grantedScopes: [],
+      installedAt: new Date("2026-01-01T00:00:00Z"),
+      uninstalledAt: null,
+      lastProductSyncAt: null,
+      createdAt: new Date("2026-01-01T00:00:00Z"),
+      providerMetadata: null,
+    }));
 
     t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async (args: unknown) => {
       const typedArgs = args as { where?: { id?: string } };
@@ -2018,29 +2667,47 @@ describe("Route Scenario 4: Reward Redemption", () => {
     assert.ok(statusRefunded);
   });
 
+  // PHASE 14C-A: the refresh-status route resolves connectivity through
+  // canonical `getActiveCommerceConnection` (no Brand fallback), guarded
+  // against the redemption's OWN historical `shopifyShopDomain` snapshot
+  // (not `Brand.shopifyShopDomain`), and the access token through canonical
+  // `getValidAccessToken`.
   test("stuck redemption status refresh is derived as USED", async (t) => {
     setupMocks({ user: { id: "user-123", role: "USER" } });
+    mockCanonicalConnection(t, {
+      brandId: "brand-123",
+      shopDomain: "test-shop.myshopify.com",
+      currencyCode: "USD",
+    });
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
+      id: "conn-brand-123",
+      brandId: "brand-123",
+      status: "CONNECTED",
+      externalAccountId: "test-shop.myshopify.com",
+      providerClientId: null,
+      grantedScopes: [],
+      providerMetadata: null,
+      secret: {
+        encryptedPayload: encryptSecret(
+          JSON.stringify({
+            accessToken: "token-123",
+            accessTokenExpiresAt: null,
+            refreshToken: null,
+            refreshTokenExpiresAt: null,
+            authMode: "LEGACY_OFFLINE",
+          }),
+        ),
+      },
+    }));
 
     t.mock.method(prisma.shopifyRewardRedemption, "findFirst", async () => ({
       id: "redemption-refresh",
       userId: "user-123",
       brandId: "brand-123",
       shopifyDiscountNodeId: "gid://shopify/DiscountCodeNode/123",
+      shopifyShopDomain: "test-shop.myshopify.com",
       status: "ISSUED",
       code: "TEST-CODE-REFRESH",
-      brand: {
-        shopifyShopDomain: "test-shop.myshopify.com",
-        shopifyAdminAccessTokenEncrypted: encryptSecret("token-123"),
-        shopifyConnectionStatus: "CONNECTED",
-      },
-    }));
-
-    t.mock.method(prisma.brand, "findUnique", async () => ({
-      id: "brand-123",
-      shopifyShopDomain: "test-shop.myshopify.com",
-      shopifyAdminAccessTokenEncrypted: encryptSecret("token-123"),
-      shopifyConnectionStatus: "CONNECTED",
-      shopifyAuthMode: "LEGACY_OFFLINE",
     }));
 
     globalThis.fetch = async () => ({

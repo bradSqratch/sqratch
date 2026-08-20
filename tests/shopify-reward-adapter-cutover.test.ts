@@ -157,6 +157,23 @@ before(async () => {
     };
   }
 
+  // PHASE 14B: `getValidAccessToken` now resolves canonical-FIRST via
+  // `loadShopifyCredential`, which joins `CommerceConnection` -> secret with a
+  // `findFirst`. Returning null keeps this harness on the classified
+  // NO_CONNECTION compatibility branch — the pre-cutover legacy credential
+  // path these redeem-route tests are written against — instead of reaching
+  // the blocked DATABASE_URL. The canonical secret delegate stays a throwing
+  // tripwire so a regression that starts using canonical credentials here
+  // fails loudly rather than silently passing.
+  (prismaModule.commerceConnection as Record<string, unknown>).findFirst =
+    async () => null;
+  prismaModule.commerceConnectionSecret = {
+    findUnique: stub("commerceConnectionSecret", "findUnique"),
+    upsert: stub("commerceConnectionSecret", "upsert"),
+    updateMany: stub("commerceConnectionSecret", "updateMany"),
+    deleteMany: stub("commerceConnectionSecret", "deleteMany"),
+  };
+
   prismaModule.$transaction = (arg: unknown) => {
     if (typeof arg === "function") {
       return (arg as (tx: unknown) => unknown)(prismaModule);
@@ -256,6 +273,103 @@ function connectedBrandRow(overrides: Record<string, unknown> = {}) {
     shopifyTokenRefreshLockedUntil: null,
     shopifyTokenRefreshLockId: null,
     ...overrides,
+  };
+}
+
+/**
+ * PHASE 14C-A: a real `CommerceConnection` row, matching `CONNECTION_ROW_SELECT`
+ * (`src/lib/commerce/connection-service.ts`). The reservation transaction's
+ * OWN canonical check (`resolveCommerceConnectionSummaryWithClient`) is not
+ * mockable via `commerceDepsOverrides` — it always queries
+ * `tx.commerceConnection.findMany` directly (the same mocked delegate as the
+ * top-level `prisma.commerceConnection`, since this file's fake
+ * `$transaction` just hands back the same object). So ANY end-to-end test
+ * whose reservation must succeed needs this wired, regardless of what
+ * `getConnectionSummary` override (if any) is also in play.
+ */
+function connectionRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "conn-1",
+    brandId: "brand-1",
+    provider: CommerceProvider.SHOPIFY,
+    status: "CONNECTED",
+    displayName: "test-shop",
+    externalAccountId: SHOP_DOMAIN,
+    storefrontUrl: `https://${SHOP_DOMAIN}`,
+    isPrimary: true,
+    grantedScopes: [],
+    installedAt: new Date("2026-01-01T00:00:00.000Z"),
+    uninstalledAt: null,
+    lastProductSyncAt: null,
+    createdAt: new Date("2026-01-01T00:00:00.000Z"),
+    providerMetadata: { currencyCode: "USD" },
+    ...overrides,
+  };
+}
+
+/** Wires `prisma.commerceConnection.findMany` so the reservation transaction's own canonical check succeeds. */
+function wireConnectedCommerceConnection(
+  t: import("node:test").TestContext,
+  overrides: Record<string, unknown> = {},
+) {
+  t.mock.method(prisma.commerceConnection, "findMany", async () => [connectionRow(overrides)]);
+}
+
+/**
+ * PHASE 14C-A: `getValidAccessToken` resolves canonical-ONLY now, via
+ * `loadShopifyCredential`'s own `commerceConnection.findFirst` (joined to a
+ * nested `secret`) — there is no `Brand.shopify*` credential fallback left.
+ * `before()` defaults this `findFirst` to `null` (NOT_CONNECTED) as a safe,
+ * loud default; any test whose token resolution must actually SUCCEED needs
+ * to override it with a real row carrying a decryptable secret, which is
+ * what this wires. Every end-to-end test below that expects to reach
+ * token-dependent logic (the adapter path, the direct-call fallback, the
+ * domain-mismatch guard, an adapter/legacy failure) needs this — otherwise
+ * it risks passing for the WRONG reason, since a token failure produces the
+ * exact same generic 502 "Could not create the Shopify discount code.
+ * Points were refunded." response as every other refund path.
+ */
+function wireCanonicalCredential(
+  t: import("node:test").TestContext,
+  accessToken = "token-abc",
+) {
+  t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
+    id: "conn-1",
+    brandId: "brand-1",
+    status: "CONNECTED",
+    externalAccountId: SHOP_DOMAIN,
+    providerClientId: null,
+    grantedScopes: [],
+    secret: {
+      encryptedPayload: encryptSecret(
+        JSON.stringify({
+          accessToken,
+          accessTokenExpiresAt: null,
+          refreshToken: null,
+          refreshTokenExpiresAt: null,
+          authMode: "LEGACY_OFFLINE",
+        }),
+      ),
+    },
+  }));
+}
+
+/**
+ * A `getConnectionSummary` override that answers differently on its FIRST
+ * call (the pre-transaction gate, `resolveGateConnectionSummary`) than on
+ * every call after (the post-token discount-path decision,
+ * `safeGetCommerceConnectionSummary`) — used to model a real canonical
+ * connection that backed the reservation, but whose summary lookup then
+ * fails/changes for the SEPARATE post-commit query.
+ */
+function throttledConnectionSummary(
+  first: CommerceConnectionSummary | null,
+  after: CommerceConnectionSummary | null,
+): () => Promise<CommerceConnectionSummary | null> {
+  let calls = 0;
+  return async () => {
+    calls += 1;
+    return calls === 1 ? first : after;
   };
 }
 
@@ -373,6 +487,7 @@ function makeConnectionSummary(
     uninstalledAt: null,
     lastProductSyncAt: null,
     isLegacyFallback: false,
+    currencyCode: null,
     ...overrides,
   };
 }
@@ -461,6 +576,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
             installedAt: null,
             uninstalledAt: null,
             lastProductSyncAt: null,
+            providerMetadata: null,
           }),
         }),
     });
@@ -520,6 +636,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
             installedAt: null,
             uninstalledAt: null,
             lastProductSyncAt: null,
+            providerMetadata: null,
           }),
         }),
     });
@@ -578,6 +695,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
             installedAt: null,
             uninstalledAt: null,
             lastProductSyncAt: null,
+            providerMetadata: null,
           }),
         }),
     });
@@ -637,6 +755,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
             installedAt: null,
             uninstalledAt: null,
             lastProductSyncAt: null,
+            providerMetadata: null,
           }),
         }),
     });
@@ -924,7 +1043,18 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     clearSession();
   });
 
-  test("legacy path (no CommerceConnection.id, default deps) issues a discount exactly as before the cutover", async (t) => {
+  // PHASE 14C-A: there is no more Brand-only "legacy" connection state — a
+  // brand with zero canonical `CommerceConnection` rows is simply not
+  // connected, full stop (the reservation transaction's own canonical check
+  // fails closed with SHOPIFY_DISCONNECTED before token resolution is even
+  // reached). The direct-`createShopifyRewardDiscountCode`-call branch
+  // (`commerceSummary.id === null` at the discount-issuance decision) still
+  // exists structurally, but is now reachable only when a REAL canonical
+  // connection already backed the reservation and the SEPARATE, later
+  // `getConnectionSummary` call (outside the transaction) fails or races to
+  // empty — never from a Brand-credentialed-but-connection-less brand. These
+  // two tests model exactly that surviving scenario.
+  test("direct-call fallback: reservation succeeds via a real canonical connection, but the post-commit summary lookup comes back empty -> issues via the direct call", async (t) => {
     setupSession("user-1");
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => defaultOffer());
     t.mock.method(prisma.campaign, "findUnique", async () => ({
@@ -933,8 +1063,8 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
       unlocks: [{ id: "unlock-1" }],
     }));
     t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-1" }));
-    t.mock.method(prisma.brand, "findUnique", async () => connectedBrandRow());
-    t.mock.method(prisma.commerceConnection, "findMany", async () => []);
+    wireConnectedCommerceConnection(t);
+    wireCanonicalCredential(t);
     const updateCalls = wireRedemption(t, {
       id: "redemption-legacy",
       code: "TEST-LEGACY",
@@ -954,14 +1084,16 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
       campaignId: "campaign-1",
     });
 
-    const res = await redeemPOST(req);
+    const res = await redeemPOST(req, {
+      getConnectionSummary: throttledConnectionSummary(makeConnectionSummary(), null),
+    });
     assert.equal(res.status, 200);
     const json = (await res.json()) as { data: { status: string } };
     assert.equal(json.data.status, "ISSUED");
     assert.ok(updateCalls.some((call) => call.status === "ISSUED"));
   });
 
-  test("legacy path Shopify failure -> refund + REFUNDED + 502, unaffected by the cutover", async (t) => {
+  test("direct-call fallback + Shopify failure -> refund + REFUNDED + 502, unaffected by the cutover", async (t) => {
     setupSession("user-1");
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => defaultOffer());
     t.mock.method(prisma.campaign, "findUnique", async () => ({
@@ -970,8 +1102,8 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
       unlocks: [{ id: "unlock-1" }],
     }));
     t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-1" }));
-    t.mock.method(prisma.brand, "findUnique", async () => connectedBrandRow());
-    t.mock.method(prisma.commerceConnection, "findMany", async () => []);
+    wireConnectedCommerceConnection(t);
+    wireCanonicalCredential(t);
     const updateCalls = wireRedemption(t, {
       id: "redemption-legacy-fail",
       code: "TEST-LEGACY-FAIL",
@@ -997,7 +1129,9 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
       campaignId: "campaign-1",
     });
 
-    const res = await redeemPOST(req);
+    const res = await redeemPOST(req, {
+      getConnectionSummary: throttledConnectionSummary(makeConnectionSummary(), null),
+    });
     assert.equal(res.status, 502);
     const json = (await res.json()) as { error: string; data: { status: string } };
     assert.equal(json.error, "Could not create the Shopify discount code. Points were refunded.");
@@ -1016,6 +1150,8 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     }));
     t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-1" }));
     t.mock.method(prisma.brand, "findUnique", async () => connectedBrandRow());
+    wireConnectedCommerceConnection(t);
+    wireCanonicalCredential(t);
     const updateCalls = wireRedemption(t, {
       id: "redemption-adapter",
       code: "TEST-ADAPTER",
@@ -1070,6 +1206,75 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     assert.ok(updateCalls.some((call) => call.status === "ISSUED"));
   });
 
+  test("H. STRUCTURAL GUARD: a canonical connection whose shop domain disagrees with the reservation's domain refuses and refunds — never issues a discount", async (t) => {
+    setupSession("user-1");
+    t.mock.method(prisma.brandRewardOffer, "findUnique", async () => defaultOffer());
+    t.mock.method(prisma.campaign, "findUnique", async () => ({
+      id: "campaign-1",
+      brandId: "brand-1",
+      unlocks: [{ id: "unlock-1" }],
+    }));
+    t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-1" }));
+    t.mock.method(prisma.brand, "findUnique", async () => connectedBrandRow());
+    wireConnectedCommerceConnection(t);
+    wireCanonicalCredential(t);
+    const updateCalls = wireRedemption(t, {
+      id: "redemption-domain-mismatch",
+      code: "TEST-MISMATCH",
+      offerId: "offer-1",
+      pointsCost: 50,
+      discountType: "PERCENTAGE",
+      discountAmountCents: null,
+      discountPercentageBasisPoints: 1000,
+      currencyCode: "USD",
+    });
+
+    let fetchCalled = false;
+    globalThis.fetch = (async () => {
+      fetchCalled = true;
+      throw new Error("must never reach Shopify when the token/domain pairing is untrustworthy");
+    }) as typeof fetch;
+
+    let adapterCalled = false;
+    const registry = createCommerceAdapterRegistry({
+      [CommerceProvider.SHOPIFY]: () =>
+        makeFakeAdapter({
+          createDiscount: async () => {
+            adapterCalled = true;
+            throw new Error("must never be called when the domain guard trips");
+          },
+        }),
+    });
+
+    let pointsRefunded = false;
+    t.mock.method(prisma.userPointAccount, "update", async () => {
+      pointsRefunded = true;
+      return {};
+    });
+
+    const req = makeJsonRequest("http://localhost/api/rewards/shopify/redeem", {
+      offerId: "offer-1",
+      idempotencyKey: "idem-domain-mismatch",
+      campaignId: "campaign-1",
+    });
+
+    // A canonical connection EXISTS (real id) but for a DIFFERENT shop than
+    // the one the reservation captured — e.g. a relink raced this request.
+    const res = await redeemPOST(req, {
+      getConnectionSummary: async () => makeConnectionSummary({ externalAccountId: "other-shop.myshopify.com" }),
+      registry,
+    });
+
+    assert.equal(res.status, 502);
+    const json = (await res.json()) as { error: string; data: { status: string } };
+    assert.equal(json.error, "Could not create the Shopify discount code. Points were refunded.");
+    assert.equal(json.data.status, "REFUNDED");
+    assert.ok(pointsRefunded);
+    assert.equal(fetchCalled, false, "the legacy path must never run with a mismatched domain");
+    assert.equal(adapterCalled, false, "the adapter must never run with a mismatched domain");
+    assert.ok(updateCalls.some((call) => call.status === "REFUNDED"));
+  });
+
   test("adapter error -> points refunded, status REFUNDED, and the exact 502 response the legacy path would have produced", async (t) => {
     setupSession("user-1");
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => defaultOffer());
@@ -1080,6 +1285,8 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     }));
     t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-1" }));
     t.mock.method(prisma.brand, "findUnique", async () => connectedBrandRow());
+    wireConnectedCommerceConnection(t);
+    wireCanonicalCredential(t);
     const updateCalls = wireRedemption(t, {
       id: "redemption-adapter-fail",
       code: "TEST-ADAPTER-FAIL",
@@ -1141,6 +1348,8 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     }));
     t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-1" }));
     t.mock.method(prisma.brand, "findUnique", async () => connectedBrandRow());
+    wireConnectedCommerceConnection(t);
+    wireCanonicalCredential(t);
     wireRedemption(t, {
       id: "redemption-no-capability",
       code: "TEST-NO-CAP",
@@ -1202,9 +1411,14 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
       unlocks: [{ id: "unlock-1" }],
     }));
     t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-1" }));
-    // getValidAccessToken's own reload sees no brand at all -> NOT_CONNECTED,
-    // which must be caught BEFORE either discount-issuance path runs.
-    t.mock.method(prisma.brand, "findUnique", async () => null);
+    // PHASE 14C-A: getValidAccessToken resolves canonical-ONLY now, via
+    // loadShopifyCredential's own findFirst (defaulted to `null` in
+    // before() below) -> NO_CONNECTION -> NOT_CONNECTED, independent of the
+    // reservation's own connectivity proof (`commerceConnection.findMany`,
+    // wired below to a REAL connected row so the reservation itself
+    // succeeds) — which must be caught BEFORE either discount-issuance path
+    // runs.
+    wireConnectedCommerceConnection(t);
     const updateCalls = wireRedemption(t, {
       id: "redemption-token-fail",
       code: "TEST-TOKEN-FAIL",
@@ -1228,7 +1442,18 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
       throw new Error("must never reach Shopify when the token itself is unavailable");
     }) as typeof fetch;
 
-    let mirrorCalled = false;
+    // PHASE 14B.4B: the canonical connection summary IS now consulted
+    // EARLY — as the canonical connectivity GATE (see redeem/route.ts's
+    // `resolveGateConnectionSummary`), not merely for the post-token
+    // discount-issuance decision. `getConnectionSummary` here reports a
+    // genuinely usable connection so the gate passes and the flow proceeds
+    // to the REAL determinant of connectivity: `getValidAccessToken`, whose
+    // own Brand lookup is mocked to `null` above. This isolates the
+    // property this test is actually about — that a token-resolution
+    // failure independent of the connection summary still produces the
+    // exact 502/refund outcome — from the (now expected) fact that the
+    // summary is read at least once before that point.
+    let mirrorCallCount = 0;
     const req = makeJsonRequest("http://localhost/api/rewards/shopify/redeem", {
       offerId: "offer-1",
       idempotencyKey: "idem-token-fail",
@@ -1237,7 +1462,7 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
 
     const res = await redeemPOST(req, {
       getConnectionSummary: async () => {
-        mirrorCalled = true;
+        mirrorCallCount += 1;
         return makeConnectionSummary();
       },
     });
@@ -1248,7 +1473,7 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     assert.equal(json.data.status, "REFUNDED");
     assert.ok(pointsRefunded);
     assert.equal(fetchCalled, false);
-    assert.equal(mirrorCalled, false, "the commerce-connection mirror must not even be consulted once the token resolution itself has failed");
+    assert.ok(mirrorCallCount >= 1, "the canonical connection gate must consult the summary at least once");
     assert.ok(updateCalls.some((call) => call.status === "REFUNDED"));
   });
 
@@ -1262,6 +1487,8 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     }));
     t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-1" }));
     t.mock.method(prisma.brand, "findUnique", async () => connectedBrandRow());
+    wireConnectedCommerceConnection(t);
+    wireCanonicalCredential(t);
 
     let existingRow: Record<string, unknown> | null = null;
     t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async (args: unknown) => {
@@ -1353,7 +1580,13 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     assert.equal(json1.data.id, json2.data.id);
   });
 
-  test("Priority-1 property: a throwing commerce-connection mirror lookup still lets the redemption succeed via the legacy fallback", async (t) => {
+  // PHASE 14C-A: `resolveGateConnectionSummary` is now FAIL-CLOSED (see its
+  // doc comment in route.ts) — a throwing lookup is treated as NOT
+  // CONNECTED, the same as a genuine disconnection, never rescued by a
+  // `Brand` read (there is no legitimate legacy source of truth left). This
+  // replaces the old Phase 14B.4B "Priority-1 legacy-fallback" contract this
+  // test used to assert.
+  test("PHASE 14C-A: a throwing commerce-connection lookup fails CLOSED at the gate — 400, no reservation, no points debited, no discount call", async (t) => {
     setupSession("user-1");
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => defaultOffer());
     t.mock.method(prisma.campaign, "findUnique", async () => ({
@@ -1363,9 +1596,10 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     }));
     t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-1" }));
     t.mock.method(prisma.brand, "findUnique", async () => connectedBrandRow());
+    wireConnectedCommerceConnection(t);
     const updateCalls = wireRedemption(t, {
-      id: "redemption-mirror-throws",
-      code: "TEST-MIRROR-THROWS",
+      id: "redemption-gate-throws",
+      code: "TEST-GATE-THROWS",
       offerId: "offer-1",
       pointsCost: 50,
       discountType: "PERCENTAGE",
@@ -1374,23 +1608,35 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
       currencyCode: "USD",
     });
 
-    globalThis.fetch = (async () => successfulDiscountFetchResponse()) as typeof fetch;
+    let fetchCalled = false;
+    globalThis.fetch = (async () => {
+      fetchCalled = true;
+      throw new Error("must never reach Shopify when the gate fails closed");
+    }) as typeof fetch;
+
+    let pointsDebited = false;
+    t.mock.method(prisma.userPointAccount, "updateMany", async () => {
+      pointsDebited = true;
+      return { count: 1 };
+    });
 
     const req = makeJsonRequest("http://localhost/api/rewards/shopify/redeem", {
       offerId: "offer-1",
-      idempotencyKey: "idem-mirror-throws",
+      idempotencyKey: "idem-gate-throws",
       campaignId: "campaign-1",
     });
 
     const res = await redeemPOST(req, {
       getConnectionSummary: async () => {
-        throw new Error("simulated CommerceConnection mirror outage (e.g. DB unreachable)");
+        throw new Error("simulated CommerceConnection lookup outage (e.g. DB unreachable)");
       },
     });
 
-    assert.equal(res.status, 200);
-    const json = (await res.json()) as { data: { status: string } };
-    assert.equal(json.data.status, "ISSUED");
-    assert.ok(updateCalls.some((call) => call.status === "ISSUED"));
+    assert.equal(res.status, 400);
+    const json = (await res.json()) as { error: string };
+    assert.equal(json.error, "Shopify is not connected for this brand.");
+    assert.equal(fetchCalled, false, "a fail-closed gate must never reach Shopify");
+    assert.equal(pointsDebited, false, "a fail-closed gate must never begin the reservation at all");
+    assert.equal(updateCalls.length, 0, "no redemption row is ever created when the gate fails closed");
   });
 });

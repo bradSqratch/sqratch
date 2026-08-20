@@ -1,4 +1,5 @@
 process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
+process.env.APP_ENCRYPTION_KEY = "test-encryption-key-for-scopes-update-tests";
 
 /**
  * tests/shopify-scopes-update-webhook.test.ts
@@ -6,26 +7,34 @@ process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blo
  * Covers the `app/scopes_update` webhook route
  * (`src/app/api/shopify/webhooks/app/scopes_update/route.ts`) and the
  * compare-and-swap scope write it delegates to
- * (`applyGrantedScopesUpdate` in `src/lib/shopify-token-manager.ts`).
+ * (`applyGrantedScopesUpdate` in `src/lib/shopify-token-manager.ts`), plus the
+ * scope-drift healing path (`healScopeDriftReconnect`).
  *
  * TESTING APPROACH — REAL CODE PATH, FAKE STORAGE.
  * Every case below drives the REAL exported `POST` through the REAL
  * `verifyShopifyWebhookRequest` and the REAL `applyGrantedScopesUpdate`.
- * Nothing about verification or the CAS write is stubbed. The only substitution
- * is the Prisma `brand` delegate itself, swapped on the shared prisma singleton
- * exactly as `tests/integration-coverage.test.ts` already does, and backed by an
- * in-memory table whose `updateMany` faithfully evaluates the SAME `where`
- * predicates Prisma would (AND across `id`, `shopifyShopDomain`, and the
- * `{ not: ... }` status filter). That is what makes the tenant-isolation and
- * CAS-scoping assertions meaningful rather than tautological: a route that
- * widened its `where` would actually write more rows in this harness.
+ * Nothing about verification or the CAS write is stubbed.
+ *
+ * PHASE 14C-A: this route resolves identity SOLELY through canonical
+ * `CommerceConnection` (`provider` + `externalAccountId`) — there is no
+ * `Brand.shopify*` read or write anywhere in this path any more, so the fake
+ * storage below models only the canonical `CommerceConnection` /
+ * `CommerceConnectionSecret` tables, not `Brand`. The in-memory `updateMany`
+ * faithfully evaluates the SAME `where` predicates Prisma would (AND across
+ * `id`, `brandId`, `provider`, `externalAccountId`, and the `{ not: ... }`
+ * status filter). That is what makes the tenant-isolation and CAS-scoping
+ * assertions meaningful rather than tautological: a route that widened its
+ * `where` would actually write more rows in this harness.
  *
  * Every "valid signature" case computes a GENUINE HMAC with node:crypto over
- * the exact raw body bytes — never a stubbed verifier.
+ * the exact raw body bytes — never a stubbed verifier. The healing tests use a
+ * genuinely `encryptSecret`-encrypted payload so `loadShopifyCredential`
+ * exercises real decryption, not a stub.
  *
  * DATABASE_URL above is a deliberately unroutable address (port 1). No test
- * here reaches a socket: the brand delegate is replaced before the route is
- * imported, and no other delegate is touched by this route.
+ * here reaches a socket: the `commerceConnection` / `commerceConnectionSecret`
+ * delegates are replaced before the route is imported, and `$transaction` is
+ * replaced with an in-memory equivalent for the healing path's event record.
  */
 
 import { test, describe, before, beforeEach } from "node:test";
@@ -36,42 +45,49 @@ import { join } from "node:path";
 
 import { NextRequest } from "next/server";
 
+import { encryptSecret } from "../src/lib/crypto";
+
 // ---------------------------------------------------------------------------
-// In-memory Brand table + Prisma delegate stub
+// In-memory CommerceConnection table + Prisma delegate stub
 // ---------------------------------------------------------------------------
 
-interface FakeBrand {
+interface FakeConnection {
   id: string;
-  shopifyShopDomain: string | null;
-  shopifyConnectionStatus: string;
-  shopifyGrantedScopes: string | null;
+  brandId: string;
+  provider: string;
+  externalAccountId: string;
+  status: string;
+  grantedScopes: string[];
+  providerClientId: string | null;
   /**
-   * Present alongside `REQUIRES_RECONNECT` only for a scope-drift false
-   * alarm (a genuine credential failure always clears this in the same write
-   * that sets `REQUIRES_RECONNECT` — see `markRequiresReconnect` in
-   * `src/lib/shopify-token-manager.ts`). The route's healing pre-check reads
-   * this field directly.
+   * Whether a `CommerceConnectionSecret` row exists for this connection.
+   * Present (`true`) alongside `REQUIRES_RECONNECT` only for a scope-drift
+   * false alarm (a genuine credential failure always clears the secret in
+   * the same write that sets `REQUIRES_RECONNECT` — see
+   * `markRequiresReconnectCanonical` in `src/lib/shopify-token-manager.ts`).
+   * `applyGrantedScopesUpdate` reads this presence directly (never decrypts)
+   * to compute `wasScopeDriftReconnect`; `healScopeDriftReconnect`'s
+   * `loadShopifyCredential` call decrypts it for real.
    */
-  shopifyAdminAccessTokenEncrypted: string | null;
-  shopifyCurrencyCode?: string | null;
-  shopifyClientId?: string | null;
+  hasSecret: boolean;
 }
 
 interface FindUniqueArgs {
-  where: { shopifyShopDomain: string };
-  select: Record<string, boolean>;
+  where: { provider_externalAccountId: { provider: string; externalAccountId: string } };
 }
 
 interface UpdateManyArgs {
   where: {
     id?: string;
-    shopifyShopDomain?: string;
-    shopifyConnectionStatus?: { not?: string };
+    brandId?: string;
+    provider?: string;
+    externalAccountId?: string;
+    status?: string | { not?: string };
   };
-  data: { shopifyGrantedScopes?: string };
+  data: { grantedScopes?: string[]; status?: string };
 }
 
-let brands: FakeBrand[] = [];
+let connections: FakeConnection[] = [];
 let findUniqueCalls: FindUniqueArgs[] = [];
 let updateManyCalls: UpdateManyArgs[] = [];
 /** Per-test hooks so a race or a transient failure can be simulated. */
@@ -80,68 +96,92 @@ let updateManyThrows: Error | null = null;
 
 /**
  * Faithful (for the predicates this route uses) evaluation of a Prisma
- * `updateMany` where clause: every stated predicate must hold, AND-wise.
- * A `where` that omitted `id` would therefore genuinely match on domain alone
+ * `updateMany` where clause: every stated predicate must hold, AND-wise. A
+ * `where` that omitted `id` would therefore genuinely match on domain alone
  * here — which is exactly the widening the CAS tests below are designed to
  * catch rather than assume away.
  */
-function matchesWhere(brand: FakeBrand, where: UpdateManyArgs["where"]): boolean {
-  if (where.id !== undefined && brand.id !== where.id) return false;
-  if (
-    where.shopifyShopDomain !== undefined &&
-    brand.shopifyShopDomain !== where.shopifyShopDomain
-  ) {
+function matchesConnectionWhere(conn: FakeConnection, where: UpdateManyArgs["where"]): boolean {
+  if (where.id !== undefined && conn.id !== where.id) return false;
+  if (where.brandId !== undefined && conn.brandId !== where.brandId) return false;
+  if (where.provider !== undefined && conn.provider !== where.provider) return false;
+  if (where.externalAccountId !== undefined && conn.externalAccountId !== where.externalAccountId) {
     return false;
   }
-  const statusNot = where.shopifyConnectionStatus?.not;
-  if (statusNot !== undefined && brand.shopifyConnectionStatus === statusNot) {
-    return false;
+  if (where.status !== undefined) {
+    if (typeof where.status === "string") {
+      if (conn.status !== where.status) return false;
+    } else if (where.status.not !== undefined && conn.status === where.status.not) {
+      return false;
+    }
   }
   return true;
 }
 
-const brandDelegateStub = {
+/** A validly `encryptSecret`-encrypted payload, decryptable by `loadShopifyCredential`. */
+function validEncryptedSecretPayload(): string {
+  return encryptSecret(
+    JSON.stringify({
+      accessToken: "shpat_scope_drift_test_token",
+      accessTokenExpiresAt: null,
+      refreshToken: null,
+      refreshTokenExpiresAt: null,
+      authMode: "LEGACY_OFFLINE",
+    }),
+  );
+}
+
+const commerceConnectionDelegateStub = {
+  // Used by `applyGrantedScopesUpdate`'s identity resolution:
+  // `(provider, externalAccountId)` -> `{id, brandId, status}`.
   findUnique: async (args: FindUniqueArgs) => {
     findUniqueCalls.push(args);
+    const { provider, externalAccountId } = args.where.provider_externalAccountId;
     const match =
-      brands.find(
-        (brand) => brand.shopifyShopDomain === args.where.shopifyShopDomain,
+      connections.find(
+        (conn) => conn.provider === provider && conn.externalAccountId === externalAccountId,
       ) ?? null;
+    const result = match ? { id: match.id, brandId: match.brandId, status: match.status } : null;
     // Fires AFTER the row is resolved but BEFORE the caller can write, so a
     // test can mutate the table exactly in the window a real concurrent
     // transaction would.
     onFindUnique?.(args);
-    // Returns the full matched row (a superset of any real `select`) so the
-    // route's own additional pre-read (status + token presence, for the
-    // healing check) sees real values rather than `undefined`.
-    return match ? { ...match } : null;
+    return result;
   },
+  // Used by `healShopifyCredentialConnected` (brandId+provider -> {id}) and
+  // by `loadShopifyCredential` (brandId+provider -> full row + nested
+  // secret). Returns the full shape (a superset of either real `select`) so
+  // both callers see real values rather than `undefined`.
+  findFirst: async (args: { where: { brandId: string; provider: string } }) => {
+    const match =
+      connections.find(
+        (conn) => conn.brandId === args.where.brandId && conn.provider === args.where.provider,
+      ) ?? null;
+    if (!match) return null;
+    return {
+      id: match.id,
+      brandId: match.brandId,
+      status: match.status,
+      externalAccountId: match.externalAccountId,
+      providerClientId: match.providerClientId,
+      grantedScopes: match.grantedScopes,
+      secret: match.hasSecret ? { encryptedPayload: validEncryptedSecretPayload() } : null,
+    };
+  },
+  // Backs BOTH the scope-cache CAS write (`applyGrantedScopesUpdate`) and the
+  // status heal (`healShopifyCredentialConnected`) — the two real callers of
+  // `commerceConnection.updateMany` on this path.
   updateMany: async (args: UpdateManyArgs) => {
     updateManyCalls.push(args);
     if (updateManyThrows) {
       throw updateManyThrows;
     }
-    const matched = brands.filter((brand) => matchesWhere(brand, args.where));
-    for (const brand of matched) {
-      if (args.data.shopifyGrantedScopes !== undefined) {
-        brand.shopifyGrantedScopes = args.data.shopifyGrantedScopes;
-      }
+    const matched = connections.filter((conn) => matchesConnectionWhere(conn, args.where));
+    for (const conn of matched) {
+      if (args.data.grantedScopes !== undefined) conn.grantedScopes = args.data.grantedScopes;
+      if (args.data.status !== undefined) conn.status = args.data.status;
     }
     return { count: matched.length };
-  },
-};
-
-// The Phase 12.2 writer first checks the canonical neutral connection cache.
-// These legacy-focused cases intentionally model pre-cutover brands, so the
-// connection lookup returns no row and the real code exercises its documented
-// compatibility mirror path without opening a database socket.
-let canonicalConnection: { id: string; brandId: string; grantedScopes: string[] } | null = null;
-const commerceConnectionDelegateStub = {
-  findUnique: async () => canonicalConnection,
-  updateMany: async (args: { data: { grantedScopes?: string[] } }) => {
-    if (!canonicalConnection) return { count: 0 };
-    canonicalConnection.grantedScopes = args.data.grantedScopes ?? [];
-    return { count: 1 };
   },
 };
 
@@ -224,14 +264,15 @@ function readSource(relPath: string): string {
   return readFileSync(join(REPO_ROOT, relPath), "utf8");
 }
 
-function brand(id: string): FakeBrand {
-  const found = brands.find((b) => b.id === id);
-  assert.ok(found, `expected fixture brand ${id}`);
+function connectionFor(brandId: string): FakeConnection {
+  const found = connections.find((c) => c.brandId === brandId);
+  assert.ok(found, `expected fixture connection for ${brandId}`);
   return found!;
 }
 
 // ---------------------------------------------------------------------------
-// Module wiring: replace the brand delegate BEFORE importing the route.
+// Module wiring: replace the commerceConnection delegate BEFORE importing
+// the route.
 // ---------------------------------------------------------------------------
 
 let POST: (request: NextRequest) => Promise<Response>;
@@ -240,8 +281,13 @@ let extractCurrentScopes: (payload: unknown) => string | null;
 before(async () => {
   const prismaModule = (await import("../src/lib/prisma"))
     .default as unknown as Record<string, unknown>;
-  prismaModule.brand = brandDelegateStub;
   prismaModule.commerceConnection = commerceConnectionDelegateStub;
+  prismaModule.commerceConnectionSecret = {
+    findUnique: async (args: { where: { connectionId: string } }) => {
+      const match = connections.find((conn) => conn.id === args.where.connectionId);
+      return match && match.hasSecret ? { connectionId: match.id } : null;
+    },
+  };
   prismaModule.$transaction = fakeTransaction;
 
   const route = await import("../src/app/api/shopify/webhooks/app/scopes_update/route");
@@ -252,68 +298,48 @@ before(async () => {
 let connectionEventCreateCalls: Array<{ brandId: string; eventType: string }> = [];
 
 beforeEach(() => {
-  brands = [
+  connections = [
     {
-      id: "brand-a",
-      shopifyShopDomain: SHOP_A,
-      shopifyConnectionStatus: "CONNECTED",
-      shopifyGrantedScopes: "read_products,read_discounts,write_discounts",
-      shopifyAdminAccessTokenEncrypted: "encrypted-token-a",
-      shopifyCurrencyCode: "USD",
-      shopifyClientId: "abcdef0123456789abcdef0123456789",
+      id: "connection-a",
+      brandId: "brand-a",
+      provider: "SHOPIFY",
+      externalAccountId: SHOP_A,
+      status: "CONNECTED",
+      grantedScopes: ["read_products", "read_discounts", "write_discounts"],
+      providerClientId: "abcdef0123456789abcdef0123456789",
+      hasSecret: true,
     },
     {
-      id: "brand-b",
-      shopifyShopDomain: SHOP_B,
-      shopifyConnectionStatus: "CONNECTED",
-      shopifyGrantedScopes: "read_products",
-      shopifyAdminAccessTokenEncrypted: "encrypted-token-b",
-      shopifyCurrencyCode: "USD",
-      shopifyClientId: "abcdef0123456789abcdef0123456789",
+      id: "connection-b",
+      brandId: "brand-b",
+      provider: "SHOPIFY",
+      externalAccountId: SHOP_B,
+      status: "CONNECTED",
+      grantedScopes: ["read_products"],
+      providerClientId: "abcdef0123456789abcdef0123456789",
+      hasSecret: true,
     },
   ];
   findUniqueCalls = [];
   updateManyCalls = [];
   onFindUnique = null;
   updateManyThrows = null;
-  canonicalConnection = null;
   connectionEventCreateCalls = [];
 });
 
 /**
- * Backs `healScopeDriftReconnect`'s transaction. Shares the SAME `brands`
- * in-memory table as the non-transactional stubs above (a real Postgres
- * transaction would see the same committed rows either way), so a heal
- * triggered through this mock is genuinely observable via `brand("brand-a")`
- * afterward, not merely asserted against a separate, disconnected fixture.
+ * Backs `healScopeDriftReconnect`'s transaction (`recordShopifyConnectionInstall`).
+ * Shares the SAME `connections` in-memory table as the non-transactional
+ * stubs above (a real Postgres transaction would see the same committed rows
+ * either way), so a heal triggered through this mock is genuinely observable
+ * via `connectionFor("brand-a")` afterward, not merely asserted against a
+ * separate, disconnected fixture. `recordShopifyConnectionInstall` never
+ * touches `Brand` — only reward offers and the connection-history event.
  */
 async function fakeTransaction<T>(
   fn: (tx: Record<string, unknown>) => Promise<T>,
 ): Promise<T> {
   const tx = {
-    brand: {
-      findUnique: async (args: { where: { id: string } }) => {
-        const match = brands.find((b) => b.id === args.where.id) ?? null;
-        return match ? { ...match } : null;
-      },
-      updateMany: async (args: {
-        where: { id: string; shopifyConnectionStatus?: string };
-        data: Record<string, unknown>;
-      }) => {
-        const matched = brands.filter((b) => {
-          if (b.id !== args.where.id) return false;
-          if (
-            args.where.shopifyConnectionStatus !== undefined &&
-            b.shopifyConnectionStatus !== args.where.shopifyConnectionStatus
-          ) {
-            return false;
-          }
-          return true;
-        });
-        for (const b of matched) Object.assign(b, args.data);
-        return { count: matched.length };
-      },
-    },
     // recordShopifyConnectionInstall deactivates reward offers before
     // recording the event (existing, deliberate behavior for every
     // install/reconnect/relink — see shopify-connection-transitions.ts).
@@ -336,11 +362,11 @@ async function fakeTransaction<T>(
 }
 
 // ---------------------------------------------------------------------------
-// 1. Valid HMAC + known shop -> 200 and the cached scopes match `current`.
+// 1. Valid HMAC + known shop -> 200 and the canonical scopes match `current`.
 // ---------------------------------------------------------------------------
 
-describe("1. valid signature + known shop domain synchronizes the cached scopes", () => {
-  test("200 and shopifyGrantedScopes becomes the comma-joined `current` list", async () => {
+describe("1. valid signature + known shop domain synchronizes the canonical scopes", () => {
+  test("200 and CommerceConnection.grantedScopes becomes the `current` list", async () => {
     await withShopifyApiSecret(SECRET, async () => {
       const payload = {
         id: 9001,
@@ -356,10 +382,13 @@ describe("1. valid signature + known shop domain synchronizes the cached scopes"
 
       assert.equal(response.status, 200);
       assert.equal(await response.text(), "");
-      assert.equal(
-        brand("brand-a").shopifyGrantedScopes,
-        "read_products,read_orders,read_themes,read_discounts,write_discounts",
-      );
+      assert.deepEqual(connectionFor("brand-a").grantedScopes, [
+        "read_products",
+        "read_orders",
+        "read_themes",
+        "read_discounts",
+        "write_discounts",
+      ]);
     });
   });
 
@@ -370,22 +399,25 @@ describe("1. valid signature + known shop domain synchronizes the cached scopes"
       );
 
       assert.equal(response.status, 200);
-      assert.equal(brand("brand-a").shopifyGrantedScopes, "read_orders");
+      assert.deepEqual(connectionFor("brand-a").grantedScopes, ["read_orders"]);
       // The lookup key handed to Prisma is the normalized form, never the raw header.
-      assert.equal(findUniqueCalls[0].where.shopifyShopDomain, SHOP_A);
+      assert.equal(
+        findUniqueCalls[0].where.provider_externalAccountId.externalAccountId,
+        SHOP_A,
+      );
       const line = logged.find((l) => l.includes("app/scopes_update"));
       assert.ok(line, "expected a sanitized audit log line");
       assert.equal((JSON.parse(line!) as { shopDomain?: string }).shopDomain, SHOP_A);
     });
   });
 
-  test("an empty `current` array is honored as a real revocation, stored as an empty string", async () => {
+  test("an empty `current` array is honored as a real revocation, stored as an empty scope list", async () => {
     await withShopifyApiSecret(SECRET, async () => {
       const response = (await captureConsole(() => POST(signedRequest({ current: [] }, SHOP_A))))
         .result;
 
       assert.equal(response.status, 200);
-      assert.equal(brand("brand-a").shopifyGrantedScopes, "");
+      assert.deepEqual(connectionFor("brand-a").grantedScopes, []);
     });
   });
 
@@ -395,18 +427,23 @@ describe("1. valid signature + known shop domain synchronizes the cached scopes"
       await captureConsole(() => POST(signedRequest(payload, SHOP_A)));
       await captureConsole(() => POST(signedRequest(payload, SHOP_A)));
 
-      assert.equal(brand("brand-a").shopifyGrantedScopes, "read_products,read_orders");
+      assert.deepEqual(connectionFor("brand-a").grantedScopes, ["read_products", "read_orders"]);
       assert.equal(updateManyCalls.length, 2);
     });
   });
 
-  test("a real CommerceConnection receives the canonical JSON scope array", async () => {
-    canonicalConnection = { id: "connection-a", brandId: "brand-a", grantedScopes: ["read_products"] };
-    await withShopifyApiSecret(SECRET, async () => {
-      const response = await POST(signedRequest({ current: ["read_products", "read_themes"] }, SHOP_A));
-      assert.equal(response.status, 200);
-      assert.deepEqual(canonicalConnection?.grantedScopes, ["read_products", "read_themes"]);
-    });
+  // -------------------------------------------------------------------------
+  // C. PHASE 14C-A tripwire — this route (and, transitively, the writers it
+  // calls) must never reintroduce a runtime read/write of any Brand.shopify*
+  // field. Canonical `CommerceConnection` is the sole authority; there is no
+  // legacy fallback left to bypass.
+  // -------------------------------------------------------------------------
+  test("C. PHASE 14C-A tripwire: the route never references a Brand.shopify* field", () => {
+    const source = readSource("src/app/api/shopify/webhooks/app/scopes_update/route.ts");
+    assert.doesNotMatch(
+      source,
+      /\bshopify(ShopDomain|AdminAccessTokenEncrypted|InstalledAt|LastProductSyncAt|DisconnectedAt|UninstalledAt|ConnectionStatus|CurrencyCode|AccessTokenExpiresAt|AuthMode|ClientId|GrantedScopes|RefreshTokenEncrypted|RefreshTokenExpiresAt|TokenRefreshLockId|TokenRefreshLockedUntil)\b/,
+    );
   });
 });
 
@@ -415,7 +452,7 @@ describe("1. valid signature + known shop domain synchronizes the cached scopes"
 // ---------------------------------------------------------------------------
 
 describe("2. signature failure rejects with 401 before any storage access", () => {
-  test("an invalid signature returns 401 and never reads or writes a brand row", async () => {
+  test("an invalid signature returns 401 and never reads or writes a connection row", async () => {
     await withShopifyApiSecret(SECRET, async () => {
       const rawBody = JSON.stringify({ current: ["read_orders"] });
       const response = await POST(
@@ -429,14 +466,15 @@ describe("2. signature failure rejects with 401 before any storage access", () =
       assert.equal(response.status, 401);
       assert.equal(findUniqueCalls.length, 0);
       assert.equal(updateManyCalls.length, 0);
-      assert.equal(
-        brand("brand-a").shopifyGrantedScopes,
-        "read_products,read_discounts,write_discounts",
-      );
+      assert.deepEqual(connectionFor("brand-a").grantedScopes, [
+        "read_products",
+        "read_discounts",
+        "write_discounts",
+      ]);
     });
   });
 
-  test("a missing signature header returns 401 and never reads or writes a brand row", async () => {
+  test("a missing signature header returns 401 and never reads or writes a connection row", async () => {
     await withShopifyApiSecret(SECRET, async () => {
       const response = await POST(
         buildRequest({
@@ -483,11 +521,12 @@ describe("3. an unknown shop is a deterministic no-op, acknowledged with 200", (
       assert.equal(response.status, 200);
       assert.equal(findUniqueCalls.length, 1);
       assert.equal(updateManyCalls.length, 0);
-      assert.equal(
-        brand("brand-a").shopifyGrantedScopes,
-        "read_products,read_discounts,write_discounts",
-      );
-      assert.equal(brand("brand-b").shopifyGrantedScopes, "read_products");
+      assert.deepEqual(connectionFor("brand-a").grantedScopes, [
+        "read_products",
+        "read_discounts",
+        "write_discounts",
+      ]);
+      assert.deepEqual(connectionFor("brand-b").grantedScopes, ["read_products"]);
       const line = logged.find((l) => l.includes("app/scopes_update"));
       assert.equal((JSON.parse(line!) as { outcome?: string }).outcome, "UNKNOWN_SHOP");
     });
@@ -515,10 +554,11 @@ describe("3. an unknown shop is a deterministic no-op, acknowledged with 200", (
 
       assert.equal(response.status, 200);
       assert.equal(updateManyCalls.length, 0);
-      assert.equal(
-        brand("brand-a").shopifyGrantedScopes,
-        "read_products,read_discounts,write_discounts",
-      );
+      assert.deepEqual(connectionFor("brand-a").grantedScopes, [
+        "read_products",
+        "read_discounts",
+        "write_discounts",
+      ]);
     });
   });
 
@@ -541,10 +581,11 @@ describe("3. an unknown shop is a deterministic no-op, acknowledged with 200", (
           `expected no write for ${JSON.stringify(payload)}`,
         );
       }
-      assert.equal(
-        brand("brand-a").shopifyGrantedScopes,
-        "read_products,read_discounts,write_discounts",
-      );
+      assert.deepEqual(connectionFor("brand-a").grantedScopes, [
+        "read_products",
+        "read_discounts",
+        "write_discounts",
+      ]);
     });
   });
 });
@@ -583,11 +624,11 @@ describe("4. tenant isolation: a signed payload for shop A can never reach brand
 
       assert.equal(response.status, 200);
       // A got the new list...
-      assert.equal(brand("brand-a").shopifyGrantedScopes, "read_products,read_orders");
+      assert.deepEqual(connectionFor("brand-a").grantedScopes, ["read_products", "read_orders"]);
       // ...and B is untouched, exactly as seeded.
-      assert.equal(brand("brand-b").shopifyGrantedScopes, "read_products");
-      assert.equal(brand("brand-b").shopifyConnectionStatus, "CONNECTED");
-      assert.equal(brand("brand-b").shopifyShopDomain, SHOP_B);
+      assert.deepEqual(connectionFor("brand-b").grantedScopes, ["read_products"]);
+      assert.equal(connectionFor("brand-b").status, "CONNECTED");
+      assert.equal(connectionFor("brand-b").externalAccountId, SHOP_B);
     });
   });
 
@@ -600,11 +641,12 @@ describe("4. tenant isolation: a signed payload for shop A can never reach brand
       );
 
       assert.equal(response.status, 200);
-      assert.equal(brand("brand-b").shopifyGrantedScopes, "read_orders");
-      assert.equal(
-        brand("brand-a").shopifyGrantedScopes,
-        "read_products,read_discounts,write_discounts",
-      );
+      assert.deepEqual(connectionFor("brand-b").grantedScopes, ["read_orders"]);
+      assert.deepEqual(connectionFor("brand-a").grantedScopes, [
+        "read_products",
+        "read_discounts",
+        "write_discounts",
+      ]);
     });
   });
 
@@ -613,9 +655,9 @@ describe("4. tenant isolation: a signed payload for shop A can never reach brand
       await captureConsole(() => POST(signedRequest({ current: ["read_orders"] }, SHOP_A)));
 
       assert.equal(updateManyCalls.length, 1);
-      const matched = brands.filter((b) => matchesWhere(b, updateManyCalls[0].where));
+      const matched = connections.filter((c) => matchesConnectionWhere(c, updateManyCalls[0].where));
       assert.deepEqual(
-        matched.map((b) => b.id),
+        matched.map((c) => c.brandId),
         ["brand-a"],
       );
     });
@@ -627,27 +669,31 @@ describe("4. tenant isolation: a signed payload for shop A can never reach brand
 // ---------------------------------------------------------------------------
 
 describe("5. the scope write is a compare-and-swap pinned to the resolved row's id", () => {
-  test("the updateMany where clause carries the resolved id plus the CAS guards, and nothing else", async () => {
+  test("the updateMany where clause carries the resolved connection's own id plus the CAS guards, and nothing else", async () => {
     await withShopifyApiSecret(SECRET, async () => {
       await captureConsole(() => POST(signedRequest({ current: ["read_orders"] }, SHOP_A)));
 
       assert.equal(updateManyCalls.length, 1);
       const { where, data } = updateManyCalls[0];
 
-      // Pinned to the row resolved from the VERIFIED shop domain — not to the
-      // domain string alone, and not to anything the payload supplied.
-      assert.equal(where.id, "brand-a");
-      assert.equal(where.shopifyShopDomain, SHOP_A);
-      assert.deepEqual(where.shopifyConnectionStatus, { not: "UNINSTALLED" });
+      // Pinned to the CONNECTION resolved from the VERIFIED shop domain — not
+      // to the domain string alone, and not to anything the payload supplied.
+      assert.equal(where.id, "connection-a");
+      assert.equal(where.brandId, "brand-a");
+      assert.equal(where.provider, "SHOPIFY");
+      assert.equal(where.externalAccountId, SHOP_A);
+      assert.deepEqual(where.status, { not: "UNINSTALLED" });
       assert.deepEqual(Object.keys(where).sort(), [
+        "brandId",
+        "externalAccountId",
         "id",
-        "shopifyConnectionStatus",
-        "shopifyShopDomain",
+        "provider",
+        "status",
       ]);
 
       // And the write itself touches ONLY the cached scope column — no status
       // transition, no token field, no other column.
-      assert.deepEqual(Object.keys(data), ["shopifyGrantedScopes"]);
+      assert.deepEqual(Object.keys(data), ["grantedScopes"]);
     });
   });
 
@@ -657,7 +703,7 @@ describe("5. the scope write is a compare-and-swap pinned to the resolved row's 
       // under us AFTER it was resolved. The CAS guard must make the write a
       // no-op rather than landing on a shop it was not authenticated for.
       onFindUnique = () => {
-        brand("brand-a").shopifyShopDomain = "relinked-elsewhere.myshopify.com";
+        connectionFor("brand-a").externalAccountId = "relinked-elsewhere.myshopify.com";
       };
 
       const { result: response, logged } = await captureConsole(() =>
@@ -666,11 +712,12 @@ describe("5. the scope write is a compare-and-swap pinned to the resolved row's 
 
       assert.equal(response.status, 200);
       assert.equal(updateManyCalls.length, 1);
-      assert.equal(
-        brand("brand-a").shopifyGrantedScopes,
-        "read_products,read_discounts,write_discounts",
-      );
-      assert.equal(brand("brand-b").shopifyGrantedScopes, "read_products");
+      assert.deepEqual(connectionFor("brand-a").grantedScopes, [
+        "read_products",
+        "read_discounts",
+        "write_discounts",
+      ]);
+      assert.deepEqual(connectionFor("brand-b").grantedScopes, ["read_products"]);
       const line = logged.find((l) => l.includes("app/scopes_update"));
       assert.equal((JSON.parse(line!) as { outcome?: string }).outcome, "SUPERSEDED");
     });
@@ -679,15 +726,15 @@ describe("5. the scope write is a compare-and-swap pinned to the resolved row's 
   test("a late delivery cannot resurrect scopes on an already-uninstalled row", async () => {
     await withShopifyApiSecret(SECRET, async () => {
       // app/uninstalled ran first: it clears scopes but PRESERVES the domain.
-      brand("brand-a").shopifyConnectionStatus = "UNINSTALLED";
-      brand("brand-a").shopifyGrantedScopes = null;
+      connectionFor("brand-a").status = "UNINSTALLED";
+      connectionFor("brand-a").grantedScopes = [];
 
       const { result: response } = await captureConsole(() =>
         POST(signedRequest({ current: ["read_products", "read_orders"] }, SHOP_A)),
       );
 
       assert.equal(response.status, 200);
-      assert.equal(brand("brand-a").shopifyGrantedScopes, null);
+      assert.deepEqual(connectionFor("brand-a").grantedScopes, []);
     });
   });
 });
@@ -724,7 +771,7 @@ describe("6. only a transient storage failure asks Shopify to retry", () => {
       updateManyThrows = null;
       const second = (await captureConsole(() => POST(signedRequest(payload, SHOP_A)))).result;
       assert.equal(second.status, 200);
-      assert.equal(brand("brand-a").shopifyGrantedScopes, "read_products,read_orders");
+      assert.deepEqual(connectionFor("brand-a").grantedScopes, ["read_products", "read_orders"]);
     });
   });
 });
@@ -837,7 +884,7 @@ describe("8. the topic is declared in both configs and bound to this route by PA
       );
 
       assert.equal(response.status, 200);
-      assert.equal(brand("brand-a").shopifyGrantedScopes, "read_orders");
+      assert.deepEqual(connectionFor("brand-a").grantedScopes, ["read_orders"]);
       const line = logged.find((l) => l.includes('"topic"'));
       assert.equal((JSON.parse(line!) as { topic?: string }).topic, "app/scopes_update");
     });
@@ -865,10 +912,10 @@ describe("8. the topic is declared in both configs and bound to this route by PA
 // ---------------------------------------------------------------------------
 
 describe("9. healing a scope-drift false REQUIRES_RECONNECT", () => {
-  test("a REQUIRES_RECONNECT brand with a credential still on file is healed to CONNECTED, with a RECONNECTED event", async () => {
-    brand("brand-a").shopifyConnectionStatus = "REQUIRES_RECONNECT";
-    // Token deliberately left non-null (see the FakeBrand doc comment) — this
-    // is the scope-drift signature, never a genuine credential failure.
+  test("a REQUIRES_RECONNECT connection with a secret still on file is healed to CONNECTED, with a RECONNECTED event", async () => {
+    connectionFor("brand-a").status = "REQUIRES_RECONNECT";
+    // hasSecret deliberately stays true (see the FakeConnection doc comment)
+    // — this is the scope-drift signature, never a genuine credential failure.
 
     const rawBody = JSON.stringify({ current: ["read_products", "read_orders", "read_discounts", "write_discounts"] });
     const response = await withShopifyApiSecret(SECRET, () =>
@@ -877,19 +924,24 @@ describe("9. healing a scope-drift false REQUIRES_RECONNECT", () => {
 
     assert.equal(response.status, 200);
     assert.equal(
-      brand("brand-a").shopifyConnectionStatus,
+      connectionFor("brand-a").status,
       "CONNECTED",
       "a scope-drift REQUIRES_RECONNECT must heal once new scopes are applied",
     );
-    assert.equal(brand("brand-a").shopifyGrantedScopes, "read_products,read_orders,read_discounts,write_discounts");
+    assert.deepEqual(connectionFor("brand-a").grantedScopes, [
+      "read_products",
+      "read_orders",
+      "read_discounts",
+      "write_discounts",
+    ]);
     assert.equal(connectionEventCreateCalls.length, 1);
     assert.equal(connectionEventCreateCalls[0]!.brandId, "brand-a");
     assert.equal(connectionEventCreateCalls[0]!.eventType, "RECONNECTED");
   });
 
-  test("a REQUIRES_RECONNECT brand with NO credential on file (a genuine failure) is never healed", async () => {
-    brand("brand-a").shopifyConnectionStatus = "REQUIRES_RECONNECT";
-    brand("brand-a").shopifyAdminAccessTokenEncrypted = null;
+  test("a REQUIRES_RECONNECT connection with NO secret on file (a genuine failure) is never healed", async () => {
+    connectionFor("brand-a").status = "REQUIRES_RECONNECT";
+    connectionFor("brand-a").hasSecret = false;
 
     const response = await withShopifyApiSecret(SECRET, () =>
       POST(signedRequest({ current: ["read_products", "read_orders"] }, SHOP_A)),
@@ -897,24 +949,24 @@ describe("9. healing a scope-drift false REQUIRES_RECONNECT", () => {
 
     assert.equal(response.status, 200);
     assert.equal(
-      brand("brand-a").shopifyConnectionStatus,
+      connectionFor("brand-a").status,
       "REQUIRES_RECONNECT",
-      "a genuine credential failure (token already cleared) must never be healed by this webhook",
+      "a genuine credential failure (secret already cleared) must never be healed by this webhook",
     );
     assert.equal(connectionEventCreateCalls.length, 0);
     // The scope cache is still updated — this webhook's cache-sync job is
     // unconditional; only the STATUS heal is gated on the scope-drift proof.
-    assert.equal(brand("brand-a").shopifyGrantedScopes, "read_products,read_orders");
+    assert.deepEqual(connectionFor("brand-a").grantedScopes, ["read_products", "read_orders"]);
   });
 
-  test("an already-CONNECTED brand is never touched by the healing path (no spurious event)", async () => {
+  test("an already-CONNECTED connection is never touched by the healing path (no spurious event)", async () => {
     // brand-a starts CONNECTED (see beforeEach).
     const response = await withShopifyApiSecret(SECRET, () =>
       POST(signedRequest({ current: ["read_products", "read_discounts", "write_discounts"] }, SHOP_A)),
     );
 
     assert.equal(response.status, 200);
-    assert.equal(brand("brand-a").shopifyConnectionStatus, "CONNECTED");
+    assert.equal(connectionFor("brand-a").status, "CONNECTED");
     assert.equal(
       connectionEventCreateCalls.length,
       0,
@@ -923,22 +975,22 @@ describe("9. healing a scope-drift false REQUIRES_RECONNECT", () => {
   });
 
   test("healing tenant isolation: a signed payload for shop A's scope-drift row never heals or events brand B", async () => {
-    brand("brand-a").shopifyConnectionStatus = "REQUIRES_RECONNECT";
-    brand("brand-b").shopifyConnectionStatus = "REQUIRES_RECONNECT";
-    brand("brand-b").shopifyGrantedScopes = "read_products";
+    connectionFor("brand-a").status = "REQUIRES_RECONNECT";
+    connectionFor("brand-b").status = "REQUIRES_RECONNECT";
+    connectionFor("brand-b").grantedScopes = ["read_products"];
 
     const response = await withShopifyApiSecret(SECRET, () =>
       POST(signedRequest({ current: ["read_products", "read_orders"] }, SHOP_A)),
     );
 
     assert.equal(response.status, 200);
-    assert.equal(brand("brand-a").shopifyConnectionStatus, "CONNECTED");
+    assert.equal(connectionFor("brand-a").status, "CONNECTED");
     assert.equal(
-      brand("brand-b").shopifyConnectionStatus,
+      connectionFor("brand-b").status,
       "REQUIRES_RECONNECT",
       "a delivery naming shop A must never heal, event, or otherwise touch brand B's row",
     );
-    assert.equal(brand("brand-b").shopifyGrantedScopes, "read_products");
+    assert.deepEqual(connectionFor("brand-b").grantedScopes, ["read_products"]);
     assert.equal(connectionEventCreateCalls.length, 1);
     assert.equal(connectionEventCreateCalls[0]!.brandId, "brand-a");
   });

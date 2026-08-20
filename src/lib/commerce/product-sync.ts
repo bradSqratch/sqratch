@@ -72,9 +72,24 @@
  * Shopify it is a hardcoded `"USD"` default unless a caller explicitly
  * supplies `options.currency` to `fetchNormalizedShopifyProducts`, which
  * nothing in this codebase does (see that file's own warning comment).
- * Instead, currency comes from `Brand.shopifyCurrencyCode`
- * (`deps.getBrandCurrencyCode`), fetched once per sync (not once per
- * product). When that is `null`/unknown, EVERY product for this brand gets
+ * Instead, currency comes from the ALREADY-RESOLVED
+ * `CommerceConnectionSummary.currencyCode` (`summary.currencyCode`,
+ * sourced from `CommerceConnection.providerMetadata.currencyCode` — the
+ * single canonical currency representation, see `./types.ts`) —
+ * `syncBrandCommerceProducts` already resolves `summary` before this sync
+ * even starts, so this is a pure pass-through, not a second read. This
+ * module deliberately does NOT attempt a live self-heal fetch when it is
+ * `null`: doing so would require importing Shopify-specific token/currency
+ * resolution into a module whose entire contract is provider-neutral (see
+ * the file header above — adapter access only, never a hard-coded Shopify
+ * import). The self-heal that DOES exist (`getValidAccessToken` +
+ * `getShopifyShopCurrencyWithAccessToken` + `recordCommerceConnectionCurrencyCode`,
+ * see `src/app/api/brand/rewards/offers/route.ts`) lives at the Shopify-aware
+ * routes that actually need it, and its write lands in the same canonical
+ * field this module reads — so a gap closed there is visible here on the
+ * very next sync with no duplicated logic. Fetched once per sync (not once
+ * per product). When `summary.currencyCode` is `null`/unknown, EVERY
+ * product for this brand gets
  * `currencyCode: null`, `priceMinMinor: null`, `priceMaxMinor: null`,
  * `priceMinorUnitExponent: null` — never a guessed "USD", and never an
  * amount stored without a currency to name its unit. When the brand currency
@@ -262,8 +277,6 @@ export type ProductSyncDeps = {
   ): Promise<CommerceConnectionSummary | null>;
   /** Resolves the adapter for `provider`. Throws `UnsupportedProviderError` for an unregistered provider (COMMERCE7 today). Never itself makes a network call. */
   getAdapter(summary: CommerceConnectionSummary): CommerceAdapter;
-  /** Reads `Brand.shopifyCurrencyCode` (or the provider-neutral equivalent), `null` if unknown. */
-  getBrandCurrencyCode(brandId: string): Promise<string | null>;
   /** Loads every existing `ConnectedCommerceProduct` row for this connection, keyed for change detection. */
   findExistingProducts(connectionId: string): Promise<ExistingConnectedProductRow[]>;
   /** Creates the `RUNNING` `CommerceProductSyncRun` row. */
@@ -330,15 +343,6 @@ async function defaultGetActiveConnection(
 
 function defaultGetAdapter(summary: CommerceConnectionSummary): CommerceAdapter {
   return getAdapterForConnection(summary);
-}
-
-async function defaultGetBrandCurrencyCode(brandId: string): Promise<string | null> {
-  const prisma = await getPrisma();
-  const brand = await prisma.brand.findUnique({
-    where: { id: brandId },
-    select: { shopifyCurrencyCode: true },
-  });
-  return brand?.shopifyCurrencyCode ?? null;
 }
 
 async function defaultFindExistingProducts(
@@ -453,7 +457,6 @@ async function defaultMarkUnavailableExcept(
 const DEFAULT_PRODUCT_SYNC_DEPS: ProductSyncDeps = {
   getActiveConnection: defaultGetActiveConnection,
   getAdapter: defaultGetAdapter,
-  getBrandCurrencyCode: defaultGetBrandCurrencyCode,
   findExistingProducts: defaultFindExistingProducts,
   createSyncRun: defaultCreateSyncRun,
   finalizeSyncRun: defaultFinalizeSyncRun,
@@ -485,8 +488,9 @@ type ComputedPrice = {
 };
 
 /**
- * Resolves currency + minor-unit prices from `Brand.shopifyCurrencyCode`,
- * NEVER from `CommerceProduct.currency`. Returns every field `null` when
+ * Resolves currency + minor-unit prices from the canonical
+ * `CommerceConnectionSummary.currencyCode`, NEVER from
+ * `CommerceProduct.currency`. Returns every field `null` when
  * `brandCurrencyCode` is unknown — see the file header's MONEY / CURRENCY
  * section for why.
  */
@@ -1015,13 +1019,22 @@ export async function syncBrandCommerceProducts(
     throw new UnsupportedCapabilityError(provider, "canSyncProducts");
   }
 
-  return runProductSync(brandId, provider, connectionId, adapter, options, resolvedDeps);
+  return runProductSync(
+    brandId,
+    provider,
+    connectionId,
+    summary.currencyCode,
+    adapter,
+    options,
+    resolvedDeps,
+  );
 }
 
 async function runProductSync(
   brandId: string,
   provider: CommerceProvider,
   connectionId: string,
+  currencyCode: string | null,
   adapter: CommerceAdapter,
   options: SyncBrandCommerceProductsOptions,
   deps: ProductSyncDeps,
@@ -1078,12 +1091,11 @@ async function runProductSync(
   const requestedLimit: number | null = catalog.requestedLimit;
 
   try {
-    const brandCurrencyCode = await deps.getBrandCurrencyCode(brandId);
     const existingRows = await deps.findExistingProducts(connectionId);
     const existingByKey = new Map(existingRows.map((row) => [row.externalKey, row]));
 
     for (const product of catalog.products) {
-      const computed = computeProductFields(product, brandCurrencyCode);
+      const computed = computeProductFields(product, currencyCode);
       const existing = existingByKey.get(computed.externalKey) ?? null;
       const decision = decideProductWrite(existing, computed, now, run.id);
 

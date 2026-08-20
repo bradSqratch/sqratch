@@ -67,6 +67,7 @@ import {
   type PublicCampaignScopedContent,
 } from "@/lib/campaign-context";
 import { isCampaignAssignmentCatalogAuthorized } from "@/lib/commerce/campaign-assignment-authorization";
+import { providerTrustsSuppliedStorefrontUrl } from "@/lib/commerce/provider-capabilities";
 
 /**
  * Per-IP click budget. Generous enough that no real visitor is ever stopped,
@@ -290,11 +291,19 @@ function validateDestination(
     return null;
   }
 
-  // Shopify's API can return a merchant's primary custom-domain URL rather
-  // than the connection's immutable *.myshopify.com account host. It is safe
-  // to honor that only when the synchronized row records that Shopify itself
+  // Some providers legitimately return a merchant's primary CUSTOM-DOMAIN URL
+  // rather than the connection's immutable account host (Shopify's
+  // `Product.onlineStoreUrl` is the current example). Honoring that is a
+  // per-provider SECURITY decision, so it lives in one reviewed place rather
+  // than as an inline provider equality check here — see
+  // `providerTrustsSuppliedStorefrontUrl` in `./provider-capabilities.ts`,
+  // where every provider must answer explicitly and unknown ones fail closed.
+  // It applies only when the synchronized row records that the provider
   // supplied the exact URL; a synthesized fallback remains host-pinned below.
-  if (provider === "SHOPIFY" && hasProviderSuppliedStorefrontUrl) {
+  if (
+    providerTrustsSuppliedStorefrontUrl(provider) &&
+    hasProviderSuppliedStorefrontUrl
+  ) {
     return parsed.protocol === "https:" && parsed.hostname ? parsed : null;
   }
 

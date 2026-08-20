@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { ShopifyRewardRedemptionStatus } from "@prisma/client";
+import { CommerceProvider, ShopifyRewardRedemptionStatus } from "@prisma/client";
 import prisma from "@/lib/prisma";
 import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
 
 import { getShopifyDiscountUsageStatus } from "@/lib/shopify-discounts";
 import { getValidAccessToken } from "@/lib/shopify-token-manager";
 import { canRefresh, assertTransition } from "@/lib/reward-redemption-state";
+import { getActiveCommerceConnection, isConnectionUsable } from "@/lib/commerce/connection-service";
+import { normalizeExternalAccountId } from "@/lib/commerce/connection-sync";
 
 export async function POST(
   request: NextRequest,
@@ -31,15 +33,6 @@ export async function refreshStatusImpl(
       where: {
         id: redemptionId,
         userId: session.user.id,
-      },
-      include: {
-        brand: {
-          select: {
-            shopifyShopDomain: true,
-            shopifyAdminAccessTokenEncrypted: true,
-            shopifyConnectionStatus: true,
-          },
-        },
       },
     });
 
@@ -81,11 +74,28 @@ export async function refreshStatusImpl(
       );
     }
 
+    // PHASE 14C-A: connectivity is resolved canonically — no legacy Brand
+    // fallback (every live Shopify install already has a canonical
+    // CommerceConnection, operator-verified). `redemption.shopifyShopDomain`
+    // is the REDEMPTION's OWN historical snapshot (captured at redemption
+    // time — see the reservation transaction in redeem/route.ts), never
+    // Brand's. The STRUCTURAL GUARD below enforces the intended security
+    // contract directly: the historical redemption domain must match the
+    // CURRENT canonical domain before a canonical token (paired with that
+    // same canonical connection) is ever used against it — a relink between
+    // redemption and refresh must refuse, never silently call the wrong
+    // store or pair a token with an unverified domain.
+    const canonicalConnection = await getActiveCommerceConnection(
+      redemption.brandId,
+      CommerceProvider.SHOPIFY,
+    ).catch(() => null);
+
     if (
       !redemption.shopifyDiscountNodeId ||
-      redemption.brand.shopifyConnectionStatus !== "CONNECTED" ||
-      !redemption.brand.shopifyShopDomain ||
-      !redemption.brand.shopifyAdminAccessTokenEncrypted
+      !canonicalConnection ||
+      !isConnectionUsable(canonicalConnection) ||
+      normalizeExternalAccountId(canonicalConnection.externalAccountId) !==
+        normalizeExternalAccountId(redemption.shopifyShopDomain)
     ) {
       return NextResponse.json(
         { error: "Shopify discount status cannot be refreshed right now." },
@@ -102,7 +112,7 @@ export async function refreshStatusImpl(
     }
 
     const status = await getShopifyDiscountUsageStatus({
-      shopDomain: redemption.brand.shopifyShopDomain,
+      shopDomain: canonicalConnection.externalAccountId,
       accessToken: tokenResult.accessToken,
       discountNodeId: redemption.shopifyDiscountNodeId,
     });

@@ -13,17 +13,21 @@
  * DATABASE_URL check at module load time.
  */
 
-import { encryptSecret, decryptSecret } from "@/lib/crypto";
-import { randomUUID } from "node:crypto";
 import {
   recordShopifyConnectionLoss,
   recordShopifyConnectionInstall,
 } from "@/lib/shopify-connection-transitions";
-import {
-  safeSyncShopifyCommerceConnection,
-  safeMarkShopifyCommerceConnectionDisconnected,
-} from "@/lib/commerce/connection-sync";
+import type { Prisma } from "@prisma/client";
 import { SHOPIFY_API_VERSION } from "@/lib/shopify";
+import {
+  loadShopifyCredential,
+  acquireCredentialRefreshLease,
+  releaseCredentialRefreshLease,
+  isCredentialRefreshLeaseHeld,
+  persistRotatedShopifyCredential,
+  markShopifyCredentialRequiresReconnect,
+  healShopifyCredentialConnected,
+} from "@/lib/commerce/providers/shopify-credential-store";
 
 // ---------------------------------------------------------------------------
 // Lazy DB access — import only when a DB operation is needed
@@ -249,167 +253,230 @@ async function defaultTokenEndpoint(
 // Internal DB helpers
 // ---------------------------------------------------------------------------
 
-type BrandShopifyFields = {
-  id: string;
-  shopifyShopDomain: string | null;
-  shopifyAdminAccessTokenEncrypted: string | null;
-  shopifyConnectionStatus: string;
-  shopifyAuthMode: string;
-  shopifyAccessTokenExpiresAt: Date | null;
-  shopifyRefreshTokenEncrypted: string | null;
-  shopifyRefreshTokenExpiresAt: Date | null;
-  shopifyGrantedScopes: string | null;
-  shopifyClientId: string | null;
-  shopifyTokenRefreshLockedUntil: Date | null;
-  shopifyTokenRefreshLockId: string | null;
-  shopifyCurrencyCode: string | null;
+// ---------------------------------------------------------------------------
+// PHASE 14C-A: CANONICAL CREDENTIAL AUTHORITY — SOLE SOURCE
+// ---------------------------------------------------------------------------
+//
+// Runtime credential resolution is:
+//
+//   brandId -> CommerceConnection (SHOPIFY) -> CommerceConnectionSecret
+//           -> decrypted provider credential
+//
+// `Brand.shopify*` is not read or written anywhere in this resolution path.
+// Every currently installed Shopify merchant already has a canonical
+// CommerceConnection + CommerceConnectionSecret (operator-verified live DB
+// evidence) — there is no legitimate legacy source of truth left to fall
+// back to.
+//
+// FAIL-CLOSED POLICY:
+//   NO_CONNECTION / NO_SECRET (CONNECTED) -> NOT_CONNECTED. "Unknown" is
+//     never upgraded to "assume connected."
+//   NO_SECRET (REQUIRES_RECONNECT)        -> NEEDS_RECONNECT.
+//   CORRUPT_SECRET                        -> NEEDS_RECONNECT. FAIL CLOSED.
+//   database error                        -> propagates (never mistaken for
+//     "absent").
+//   canonical REQUIRES_RECONNECT / DISCONNECTED / UNINSTALLED
+//                                          -> honored as-is.
+
+/** Where a resolved runtime credential came from — always canonical (Phase 14C-A). */
+type RuntimeCredentialSource = "CANONICAL";
+
+type RuntimeCredential = {
+  brandId: string;
+  /** Non-null only for CANONICAL — it is the lease/write key. */
+  connectionId: string | null;
+  source: RuntimeCredentialSource;
+  shopDomain: string | null;
+  providerClientId: string | null;
+  /** Normalized to the legacy vocabulary the branches below already speak. */
+  connectionStatus: string;
+  grantedScopes: string | null;
+  authMode: string;
+  accessToken: string | null;
+  accessTokenExpiresAt: Date | null;
+  refreshToken: string | null;
+  refreshTokenExpiresAt: Date | null;
+  currencyCode: string | null;
 };
 
+type ResolveRuntimeCredentialResult =
+  | { outcome: "OK"; credential: RuntimeCredential }
+  | { outcome: "NOT_CONNECTED" }
+  | { outcome: "NEEDS_RECONNECT" };
+
 /**
- * Fetches fresh brand shopify fields from DB.
+ * Maps `CommerceConnectionStatus` onto the legacy status vocabulary the
+ * existing branches compare against, so the state machine below is unchanged
+ * by the storage cutover. `PENDING`/`ERROR` have no legacy equivalent and are
+ * treated as "not usable", which is the conservative reading.
  */
-async function reloadBrand(
-  brandId: string,
-): Promise<BrandShopifyFields | null> {
-  const db = await getDb();
-  return db.brand.findUnique({
-    where: { id: brandId },
-    select: {
-      id: true,
-      shopifyShopDomain: true,
-      shopifyAdminAccessTokenEncrypted: true,
-      shopifyConnectionStatus: true,
-      shopifyAuthMode: true,
-      shopifyAccessTokenExpiresAt: true,
-      shopifyRefreshTokenEncrypted: true,
-      shopifyRefreshTokenExpiresAt: true,
-      shopifyGrantedScopes: true,
-      shopifyClientId: true,
-      shopifyTokenRefreshLockedUntil: true,
-      shopifyTokenRefreshLockId: true,
-      shopifyCurrencyCode: true,
-    },
-  });
+function normalizeCanonicalStatus(status: string): string {
+  switch (status) {
+    case "CONNECTED":
+      return "CONNECTED";
+    case "REQUIRES_RECONNECT":
+      return "REQUIRES_RECONNECT";
+    case "UNINSTALLED":
+      return "UNINSTALLED";
+    default:
+      return "DISCONNECTED";
+  }
 }
 
 /**
- * Attempts to acquire the refresh lock via a compare-and-swap UPDATE.
- * Returns the unique lease ID if this process now holds the lock, otherwise null.
+ * THE resolution point. Resolves the live Shopify credential canonically —
+ * no legacy `Brand` fallback (Phase 14C-A, see above).
  */
-async function acquireRefreshLock(
+async function resolveRuntimeCredential(
   brandId: string,
+): Promise<ResolveRuntimeCredentialResult> {
+  const canonical = await loadShopifyCredential(brandId);
+
+  if (canonical.outcome === "CORRUPT_SECRET") {
+    // FAIL CLOSED — see the FALLBACK POLICY block above. Never consult Brand.
+    return { outcome: "NEEDS_RECONNECT" };
+  }
+
+  if (canonical.outcome === "OK") {
+    const c = canonical.credential;
+    const status = normalizeCanonicalStatus(c.status);
+
+    if (status === "REQUIRES_RECONNECT") {
+      return { outcome: "NEEDS_RECONNECT" };
+    }
+    if (!c.accessToken || status === "DISCONNECTED" || status === "UNINSTALLED") {
+      return { outcome: "NOT_CONNECTED" };
+    }
+
+    return {
+      outcome: "OK",
+      credential: {
+        brandId,
+        connectionId: c.connectionId,
+        source: "CANONICAL",
+        shopDomain: c.shopDomain,
+        providerClientId: c.providerClientId,
+        connectionStatus: status,
+        grantedScopes: c.grantedScopes,
+        authMode: c.authMode,
+        accessToken: c.accessToken,
+        accessTokenExpiresAt: c.accessTokenExpiresAt,
+        refreshToken: c.refreshToken,
+        refreshTokenExpiresAt: c.refreshTokenExpiresAt,
+        // `CommerceConnection.providerMetadata.currencyCode` — see
+        // `loadShopifyCredential`'s `ShopifyCredential.currencyCode`. Used
+        // only to populate connection-loss/heal event snapshots
+        // (`ShopifyConnectionEvent`); `null` there is fine (no
+        // `Brand.shopifyCurrencyCode` fallback, Phase 14C-A).
+        currencyCode: c.currencyCode,
+      },
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // NO_CONNECTION / NO_SECRET — PHASE 14C-A: no legacy Brand fallback.
+  // Every live Shopify install already has a canonical CommerceConnection +
+  // CommerceConnectionSecret (operator-verified) — there is no legitimate
+  // pre-cutover record left to fall back to. A canonical connection that is
+  // CONNECTED but has no secret (NO_SECRET) is therefore just as
+  // "not connected" as one that genuinely has no row at all; this also
+  // preserves the DISCONNECT/UNINSTALL RESURRECTION GUARD's fail-closed
+  // property (a revoked connection's absent secret is never rescued from
+  // anywhere).
+  if (canonical.outcome === "NO_SECRET") {
+    const canonicalStatus = normalizeCanonicalStatus(canonical.status);
+    if (canonicalStatus === "REQUIRES_RECONNECT") {
+      return { outcome: "NEEDS_RECONNECT" };
+    }
+    return { outcome: "NOT_CONNECTED" };
+  }
+
+  return { outcome: "NOT_CONNECTED" };
+}
+
+/**
+ * PHASE 14C-A: every resolved credential is canonical, so this always leases
+ * on `CommerceConnectionSecret` — a Postgres compare-and-swap, no in-memory
+ * or process-local mutex, so serverless instances coordinate through the
+ * database. `connectionId` is guaranteed non-null for any resolved
+ * credential (see `resolveRuntimeCredential`).
+ */
+async function acquireLeaseFor(
+  credential: RuntimeCredential,
   nowMs: number,
 ): Promise<string | null> {
-  const db = await getDb();
-  const now = new Date(nowMs);
-  const lockUntil = new Date(nowMs + LOCK_DURATION_MS);
-  const lockId = randomUUID();
-
-  const result = await db.brand.updateMany({
-    where: {
-      id: brandId,
-      OR: [
-        { shopifyTokenRefreshLockedUntil: null },
-        { shopifyTokenRefreshLockedUntil: { lt: now } },
-      ],
-    },
-    data: {
-      shopifyTokenRefreshLockedUntil: lockUntil,
-      shopifyTokenRefreshLockId: lockId,
-    },
-  });
-
-  return result.count === 1 ? lockId : null;
+  if (!credential.connectionId) {
+    return null;
+  }
+  return acquireCredentialRefreshLease(
+    credential.connectionId,
+    nowMs,
+    LOCK_DURATION_MS,
+  );
 }
 
-/**
- * Releases the refresh lock (sets it to null).
- */
-async function releaseRefreshLock(
-  brandId: string,
+async function releaseLeaseFor(
+  credential: RuntimeCredential,
   lockId: string,
 ): Promise<void> {
-  const db = await getDb();
-  await db.brand.updateMany({
-    where: { id: brandId, shopifyTokenRefreshLockId: lockId },
-    data: {
-      shopifyTokenRefreshLockedUntil: null,
-      shopifyTokenRefreshLockId: null,
-    },
-  });
+  if (!credential.connectionId) {
+    return;
+  }
+  await releaseCredentialRefreshLease(credential.connectionId, lockId);
 }
 
 /**
- * Waits for another process holding the lock to finish refreshing.
- * Returns the re-read brand data after the wait.
+ * PHASE 14C-A: waits for the current lease holder to finish, then
+ * re-resolves the credential CANONICALLY so the waiter observes whatever the
+ * winner actually persisted. The liveness probe polls
+ * `CommerceConnectionSecret`, the same storage the lease lives in — Postgres
+ * compare-and-swap coordinated.
  */
-async function waitForLockHolder(
-  brandId: string,
-): Promise<BrandShopifyFields | null> {
+async function waitForLeaseHolder(
+  credential: RuntimeCredential,
+): Promise<ResolveRuntimeCredentialResult> {
   const deadline = Date.now() + LOCK_WAIT_MS;
   while (Date.now() < deadline) {
     await new Promise((resolve) => setTimeout(resolve, LOCK_POLL_INTERVAL_MS));
-    const brand = await reloadBrand(brandId);
-    if (!brand) return null;
-    // If lock is released, the refresh is done (or the holder crashed)
-    const lockHeld =
-      brand.shopifyTokenRefreshLockedUntil &&
-      brand.shopifyTokenRefreshLockedUntil.getTime() > Date.now();
-    if (!lockHeld) return brand;
+
+    const held = credential.connectionId
+      ? await isCredentialRefreshLeaseHeld(credential.connectionId, Date.now())
+      : false;
+
+    if (!held) {
+      return resolveRuntimeCredential(credential.brandId);
+    }
   }
-  // Deadline passed — return whatever is in the DB now
-  return reloadBrand(brandId);
+  // Deadline passed — return whatever is canonical now.
+  return resolveRuntimeCredential(credential.brandId);
 }
 
 /**
- * Persists a failed-reconnect state: marks the brand REQUIRES_RECONNECT
- * and clears all token fields atomically. Reward offer deactivation and the
- * connection-history event are written in the same transaction, after the
- * refresh-lock compare-and-swap guard (`shopifyTokenRefreshLockId: lockId`)
- * succeeds — a stale/superseded lock holder writes nothing.
+ * PHASE 14C-A: the sole permanent-failure path. Clears the canonical
+ * credential and moves `CommerceConnection.status` to REQUIRES_RECONNECT
+ * under the caller's lease, recording the connection-loss event (which also
+ * deactivates the brand's reward offers) inside the SAME transaction.
+ * CAS-guarded, so a superseded lease holder can never disconnect a merchant
+ * another caller just refreshed.
  */
-async function markRequiresReconnect(
-  brandId: string,
+async function markRequiresReconnectCanonical(
+  credential: RuntimeCredential,
   lockId: string,
 ): Promise<boolean> {
-  const db = await getDb();
-
-  return db.$transaction(async (tx) => {
-    const before = await tx.brand.findUnique({
-      where: { id: brandId },
-      select: {
-        shopifyShopDomain: true,
-        shopifyCurrencyCode: true,
-        shopifyClientId: true,
-      },
-    });
-
-    const result = await tx.brand.updateMany({
-      where: { id: brandId, shopifyTokenRefreshLockId: lockId },
-      data: {
-        shopifyConnectionStatus: "REQUIRES_RECONNECT",
-        shopifyAdminAccessTokenEncrypted: null,
-        shopifyRefreshTokenEncrypted: null,
-        shopifyAccessTokenExpiresAt: null,
-        shopifyRefreshTokenExpiresAt: null,
-        shopifyTokenRefreshLockedUntil: null,
-        shopifyTokenRefreshLockId: null,
-      },
-    });
-
-    if (result.count === 1) {
-      await recordShopifyConnectionLoss(tx, {
-        brandId,
+  return markShopifyCredentialRequiresReconnect({
+    connectionId: credential.connectionId!,
+    lockId,
+    onCleared: async (tx) => {
+      await recordShopifyConnectionLoss(tx as Prisma.TransactionClient, {
+        brandId: credential.brandId,
         eventType: "REQUIRES_RECONNECT",
         snapshot: {
-          shopDomain: before?.shopifyShopDomain ?? null,
-          currencyCode: before?.shopifyCurrencyCode ?? null,
-          shopifyClientId: before?.shopifyClientId ?? null,
+          shopDomain: credential.shopDomain,
+          currencyCode: credential.currencyCode,
+          shopifyClientId: credential.providerClientId,
         },
       });
-    }
-
-    return result.count === 1;
+    },
   });
 }
 
@@ -420,28 +487,28 @@ async function markRequiresReconnect(
  * Throws with { permanent: false } on transient errors.
  */
 async function performTokenRefresh(
-  brand: BrandShopifyFields,
+  credential: RuntimeCredential,
   lockId: string,
   tokenEndpoint: TokenEndpointFn,
 ): Promise<string> {
-  if (!brand.shopifyRefreshTokenEncrypted) {
+  if (!credential.refreshToken) {
     throw Object.assign(new Error("No refresh token available"), {
       permanent: true,
     });
   }
 
-  const shop = brand.shopifyShopDomain!;
-  const clientId = brand.shopifyClientId;
+  const shop = credential.shopDomain!;
+  const clientId = credential.providerClientId;
   const clientSecret = process.env.SHOPIFY_API_SECRET;
 
   if (!clientId || !clientSecret) {
     throw Object.assign(
-      new Error("Missing SHOPIFY_API_SECRET env or shopifyClientId on brand"),
+      new Error("Missing SHOPIFY_API_SECRET env or provider client id"),
       { permanent: false },
     );
   }
 
-  const refreshToken = decryptSecret(brand.shopifyRefreshTokenEncrypted);
+  const refreshToken = credential.refreshToken;
 
   let tokenResponse: ShopifyTokenResponse;
   try {
@@ -463,65 +530,70 @@ async function performTokenRefresh(
   const nowMs = Date.now();
   const newAccessToken = tokenResponse.access_token;
   const newRefreshToken = tokenResponse.refresh_token;
+  const accessTokenExpiresAt = computeExpiresAt(tokenResponse.expires_in, nowMs);
+  const refreshTokenExpiresAt = computeExpiresAt(
+    tokenResponse.refresh_token_expires_in,
+    nowMs,
+  );
 
-  // Encrypt both tokens before persisting — NEVER store plain text
-  const encryptedAccessToken = encryptSecret(newAccessToken);
-  const encryptedRefreshToken = encryptSecret(newRefreshToken);
+  // -------------------------------------------------------------------------
+  // CANONICAL WRITE FIRST. The rotated access token and its rotated refresh
+  // token are persisted together, under this caller's lease, and the lease is
+  // released in the same statement — so a reader can never observe one
+  // without the other, and a superseded refresher writes NOTHING.
+  // -------------------------------------------------------------------------
+  if (!credential.connectionId) {
+    throw Object.assign(new Error("No canonical connection to refresh"), {
+      permanent: true,
+    });
+  }
 
-  const db = await getDb();
-  const result = await db.brand.updateMany({
-    where: {
-      id: brand.id,
-      shopifyTokenRefreshLockId: lockId,
+  const persisted = await persistRotatedShopifyCredential({
+    connectionId: credential.connectionId,
+    lockId,
+    write: {
+      authMode: credential.authMode,
+      accessToken: newAccessToken,
+      accessTokenExpiresAt,
+      refreshToken: newRefreshToken,
+      refreshTokenExpiresAt,
     },
-    data: {
-      shopifyAdminAccessTokenEncrypted: encryptedAccessToken,
-      shopifyAccessTokenExpiresAt: computeExpiresAt(
-        tokenResponse.expires_in,
-        nowMs,
-      ),
-      shopifyRefreshTokenEncrypted: encryptedRefreshToken,
-      shopifyRefreshTokenExpiresAt: computeExpiresAt(
-        tokenResponse.refresh_token_expires_in,
-        nowMs,
-      ),
-      shopifyGrantedScopes: tokenResponse.scope,
-      shopifyConnectionStatus: "CONNECTED",
-      shopifyTokenRefreshLockedUntil: null, // release lock atomically with save
-      shopifyTokenRefreshLockId: null,
-    },
+    grantedScopes: tokenResponse.scope,
   });
 
-  if (result.count !== 1) {
+  if (!persisted) {
     throw Object.assign(
       new Error("Shopify token refresh lease was superseded"),
-      {
-        staleWriter: true,
-        permanent: false,
-      },
+      { staleWriter: true, permanent: false },
     );
   }
 
   return newAccessToken;
 }
 
+/**
+ * After losing a rotation race, re-resolve the CANONICAL credential to pick up
+ * whatever the winner just persisted. Goes through the same canonical-first
+ * resolver, so a loser can never read a stale legacy copy of a token the
+ * winner already rotated away.
+ */
 async function readWinnerToken(
   brandId: string,
 ): Promise<GetValidAccessTokenResult | null> {
-  const current = await reloadBrand(brandId);
-  if (!current) return { ok: false, reason: "NOT_CONNECTED" };
-  if (current.shopifyConnectionStatus === "REQUIRES_RECONNECT") {
+  const resolved = await resolveRuntimeCredential(brandId);
+  if (resolved.outcome === "NOT_CONNECTED") {
+    return { ok: false, reason: "NOT_CONNECTED" };
+  }
+  if (resolved.outcome === "NEEDS_RECONNECT") {
     return { ok: false, reason: "NEEDS_RECONNECT" };
   }
+  const current = resolved.credential;
   if (
-    current.shopifyAdminAccessTokenEncrypted &&
-    current.shopifyAccessTokenExpiresAt &&
-    current.shopifyAccessTokenExpiresAt.getTime() > Date.now()
+    current.accessToken &&
+    current.accessTokenExpiresAt &&
+    current.accessTokenExpiresAt.getTime() > Date.now()
   ) {
-    return {
-      ok: true,
-      accessToken: decryptSecret(current.shopifyAdminAccessTokenEncrypted),
-    };
+    return { ok: true, accessToken: current.accessToken };
   }
   return null;
 }
@@ -545,32 +617,22 @@ export async function getValidAccessToken(
 ): Promise<GetValidAccessTokenResult> {
   const tokenEndpoint = options?.tokenEndpoint ?? defaultTokenEndpoint;
 
-  const brand = await reloadBrand(brandId);
-
-  if (!brand) {
+  // PHASE 14B: canonical-first resolution. Everything below operates on the
+  // resolved credential, never on `Brand.shopify*` directly.
+  const resolved = await resolveRuntimeCredential(brandId);
+  if (resolved.outcome === "NOT_CONNECTED") {
     return { ok: false, reason: "NOT_CONNECTED" };
   }
-
-  // Not connected at all
-  if (
-    !brand.shopifyAdminAccessTokenEncrypted ||
-    brand.shopifyConnectionStatus === "DISCONNECTED" ||
-    brand.shopifyConnectionStatus === "UNINSTALLED"
-  ) {
-    return { ok: false, reason: "NOT_CONNECTED" };
-  }
-
-  // Already marked as needing reconnect
-  if (brand.shopifyConnectionStatus === "REQUIRES_RECONNECT") {
+  if (resolved.outcome === "NEEDS_RECONNECT") {
     return { ok: false, reason: "NEEDS_RECONNECT" };
   }
+  const credential = resolved.credential;
 
   // ---------------------------------------------------------------------------
   // LEGACY_OFFLINE path — custom apps, non-expiring tokens (no refresh)
   // ---------------------------------------------------------------------------
-  if (brand.shopifyAuthMode === "LEGACY_OFFLINE") {
-    const token = decryptSecret(brand.shopifyAdminAccessTokenEncrypted);
-    return { ok: true, accessToken: token };
+  if (credential.authMode === "LEGACY_OFFLINE") {
+    return { ok: true, accessToken: credential.accessToken! };
   }
 
   // ---------------------------------------------------------------------------
@@ -578,183 +640,136 @@ export async function getValidAccessToken(
   // ---------------------------------------------------------------------------
 
   // Scope check — if missing required scopes, treat as NEEDS_RECONNECT
-  if (!options?.skipScopeCheck && !hasSufficientScopes(brand.shopifyGrantedScopes)) {
+  if (!options?.skipScopeCheck && !hasSufficientScopes(credential.grantedScopes)) {
     const db = await getDb();
+
+    // Tokens are NOT cleared on this path (only the status changes — the
+    // credential is granted-but-insufficient).
     await db.$transaction(async (tx) => {
-      await tx.brand.update({
-        where: { id: brand.id },
-        data: { shopifyConnectionStatus: "REQUIRES_RECONNECT" },
+      await tx.commerceConnection.update({
+        where: { id: credential.connectionId! },
+        data: { status: "REQUIRES_RECONNECT" },
       });
       await recordShopifyConnectionLoss(tx, {
-        brandId: brand.id,
+        brandId,
         eventType: "REQUIRES_RECONNECT",
         snapshot: {
-          shopDomain: brand.shopifyShopDomain,
-          currencyCode: brand.shopifyCurrencyCode,
-          shopifyClientId: brand.shopifyClientId,
+          shopDomain: credential.shopDomain,
+          currencyCode: credential.currencyCode,
+          shopifyClientId: credential.providerClientId,
         },
       });
     });
-    // Best-effort mirror: the legacy transaction above already committed the
-    // REQUIRES_RECONNECT status change. Tokens are NOT cleared on this path
-    // (only the status changes — the brand still has a granted-but-insufficient
-    // token), so a fresh full re-sync (not the disconnect-and-clear-secret
-    // helper) is what correctly reflects that on the CommerceConnection
-    // mirror. Never throws, never affects the return value below.
-    await safeSyncShopifyCommerceConnection(brand.id).catch(() => {});
     return { ok: false, reason: "NEEDS_RECONNECT" };
   }
 
   const nowMs = Date.now();
 
   // Token is still fresh — return it immediately without a network call
-  if (isAccessTokenFresh(brand.shopifyAccessTokenExpiresAt, nowMs)) {
-    const token = decryptSecret(brand.shopifyAdminAccessTokenEncrypted);
-    return { ok: true, accessToken: token };
+  if (isAccessTokenFresh(credential.accessTokenExpiresAt, nowMs)) {
+    return { ok: true, accessToken: credential.accessToken! };
   }
 
-  // Token is stale — need to refresh. Try to acquire the DB compare-and-swap lock.
-  const lockId = await acquireRefreshLock(brand.id, nowMs);
+  // Token is stale — need to refresh. Try to acquire the DB compare-and-swap lease.
+  const lockId = await acquireLeaseFor(credential, nowMs);
 
   if (!lockId) {
-    // Another request holds the lock — wait for it to finish
-    const refreshedBrand = await waitForLockHolder(brand.id);
-    if (!refreshedBrand) {
+    // Another request holds the lease — wait for it to finish
+    const refreshed = await waitForLeaseHolder(credential);
+    if (refreshed.outcome === "NOT_CONNECTED") {
       return { ok: false, reason: "NOT_CONNECTED" };
     }
-    if (refreshedBrand.shopifyConnectionStatus === "REQUIRES_RECONNECT") {
+    if (refreshed.outcome === "NEEDS_RECONNECT") {
       return { ok: false, reason: "NEEDS_RECONNECT" };
     }
+    const after = refreshed.credential;
+
     // If a fresh token is now present, use it
-    if (
-      refreshedBrand.shopifyAdminAccessTokenEncrypted &&
-      isAccessTokenFresh(refreshedBrand.shopifyAccessTokenExpiresAt, Date.now())
-    ) {
-      const token = decryptSecret(
-        refreshedBrand.shopifyAdminAccessTokenEncrypted,
-      );
-      return { ok: true, accessToken: token };
+    if (after.accessToken && isAccessTokenFresh(after.accessTokenExpiresAt, Date.now())) {
+      return { ok: true, accessToken: after.accessToken };
     }
     // Fallback: token not yet expired (but within safety buffer) — still usable
     if (
-      refreshedBrand.shopifyAdminAccessTokenEncrypted &&
-      refreshedBrand.shopifyAccessTokenExpiresAt &&
-      refreshedBrand.shopifyAccessTokenExpiresAt.getTime() > Date.now()
+      after.accessToken &&
+      after.accessTokenExpiresAt &&
+      after.accessTokenExpiresAt.getTime() > Date.now()
     ) {
-      const token = decryptSecret(
-        refreshedBrand.shopifyAdminAccessTokenEncrypted,
-      );
-      return { ok: true, accessToken: token };
+      return { ok: true, accessToken: after.accessToken };
     }
 
     // Token still appears expired after waiting — try to take over the refresh
-    const recheck = await reloadBrand(brand.id);
-    if (!recheck) return { ok: false, reason: "NOT_CONNECTED" };
+    const rechecked = await resolveRuntimeCredential(brandId);
+    if (rechecked.outcome === "NOT_CONNECTED") {
+      return { ok: false, reason: "NOT_CONNECTED" };
+    }
+    if (rechecked.outcome === "NEEDS_RECONNECT") {
+      return { ok: false, reason: "NEEDS_RECONNECT" };
+    }
+    const recheck = rechecked.credential;
 
-    const takeoverLockId = await acquireRefreshLock(recheck.id, Date.now());
+    const takeoverLockId = await acquireLeaseFor(recheck, Date.now());
     if (!takeoverLockId) {
-      // Could not acquire lock again — give up gracefully
+      // Could not acquire the lease again — give up gracefully
       if (
-        recheck.shopifyAdminAccessTokenEncrypted &&
-        recheck.shopifyAccessTokenExpiresAt &&
-        recheck.shopifyAccessTokenExpiresAt.getTime() > Date.now()
+        recheck.accessToken &&
+        recheck.accessTokenExpiresAt &&
+        recheck.accessTokenExpiresAt.getTime() > Date.now()
       ) {
-        const token = decryptSecret(recheck.shopifyAdminAccessTokenEncrypted);
-        return { ok: true, accessToken: token };
+        return { ok: true, accessToken: recheck.accessToken };
       }
       return { ok: false, reason: "NEEDS_RECONNECT" };
     }
 
-    try {
-      const accessToken = await performTokenRefresh(
-        recheck,
-        takeoverLockId,
-        tokenEndpoint,
-      );
-      // Best-effort mirror — runs strictly AFTER performTokenRefresh's CAS
-      // updateMany has committed (count === 1, or it would have thrown
-      // staleWriter above). Re-reads the Brand row fresh internally, so it
-      // mirrors the winning rotation, never an in-memory snapshot. Never
-      // throws, never changes the return value below.
-      await safeSyncShopifyCommerceConnection(recheck.id).catch(() => {});
-      return { ok: true, accessToken };
-    } catch (err: unknown) {
-      if ((err as { staleWriter?: boolean }).staleWriter) {
-        return (
-          (await readWinnerToken(recheck.id)) ?? {
-            ok: false,
-            reason: "NEEDS_RECONNECT",
-          }
-        );
-      }
-      const isPermanent = (err as { permanent?: boolean }).permanent ?? false;
-      if (isPermanent) {
-        const marked = await markRequiresReconnect(recheck.id, takeoverLockId);
-        if (!marked) {
-          return (
-            (await readWinnerToken(recheck.id)) ?? {
-              ok: false,
-              reason: "NEEDS_RECONNECT",
-            }
-          );
-        }
-        // Best-effort mirror — only after the CAS-guarded markRequiresReconnect
-        // actually committed (count === 1). Tokens were cleared on the Brand
-        // row by that same transaction, so the disconnect helper (which also
-        // deletes the secret mirror) matches legacy truth exactly.
-        await safeMarkShopifyCommerceConnectionDisconnected(
-          recheck.id,
-          "REQUIRES_RECONNECT",
-        ).catch(() => {});
-        return { ok: false, reason: "NEEDS_RECONNECT" };
-      }
-      await releaseRefreshLock(recheck.id, takeoverLockId).catch(() => {});
-      return { ok: false, reason: "NEEDS_RECONNECT" };
-    }
+    return runRefreshUnderLease(recheck, takeoverLockId, tokenEndpoint);
   }
 
-  // We hold the lock — perform the refresh
+  // We hold the lease — perform the refresh
+  return runRefreshUnderLease(credential, lockId, tokenEndpoint);
+}
+
+/**
+ * The shared refresh body used by both the direct-lease and takeover-lease
+ * paths. Extracted so the two callers can never drift apart — the duplicated
+ * copies they replaced were a standing maintenance hazard in a function where
+ * every branch is safety-critical.
+ */
+async function runRefreshUnderLease(
+  credential: RuntimeCredential,
+  lockId: string,
+  tokenEndpoint: TokenEndpointFn,
+): Promise<GetValidAccessTokenResult> {
   try {
-    const accessToken = await performTokenRefresh(brand, lockId, tokenEndpoint);
-    // Best-effort mirror — runs strictly AFTER performTokenRefresh's CAS
-    // updateMany has committed (count === 1, or it would have thrown
-    // staleWriter above). Re-reads the Brand row fresh internally, so it
-    // mirrors the winning rotation, never an in-memory snapshot. Never
-    // throws, never changes the return value below.
-    await safeSyncShopifyCommerceConnection(brand.id).catch(() => {});
+    const accessToken = await performTokenRefresh(credential, lockId, tokenEndpoint);
     return { ok: true, accessToken };
   } catch (err: unknown) {
     if ((err as { staleWriter?: boolean }).staleWriter) {
       return (
-        (await readWinnerToken(brand.id)) ?? {
+        (await readWinnerToken(credential.brandId)) ?? {
           ok: false,
           reason: "NEEDS_RECONNECT",
         }
       );
     }
+
     const isPermanent = (err as { permanent?: boolean }).permanent ?? false;
     if (isPermanent) {
-      const marked = await markRequiresReconnect(brand.id, lockId);
+      const marked = await markRequiresReconnectCanonical(credential, lockId);
+
       if (!marked) {
         return (
-          (await readWinnerToken(brand.id)) ?? {
+          (await readWinnerToken(credential.brandId)) ?? {
             ok: false,
             reason: "NEEDS_RECONNECT",
           }
         );
       }
-      // Best-effort mirror — only after the CAS-guarded markRequiresReconnect
-      // actually committed (count === 1). Tokens were cleared on the Brand
-      // row by that same transaction, so the disconnect helper (which also
-      // deletes the secret mirror) matches legacy truth exactly.
-      await safeMarkShopifyCommerceConnectionDisconnected(
-        brand.id,
-        "REQUIRES_RECONNECT",
-      ).catch(() => {});
       return { ok: false, reason: "NEEDS_RECONNECT" };
     }
-    // Transient failure — release lock and return a soft error
-    await releaseRefreshLock(brand.id, lockId).catch(() => {});
+
+    // Transient failure — release the lease and return a soft error. The
+    // credential is left intact: a transient failure must never disconnect a
+    // merchant.
+    await releaseLeaseFor(credential, lockId).catch(() => {});
     return { ok: false, reason: "NEEDS_RECONNECT" };
   }
 }
@@ -838,8 +853,8 @@ export type ApplyGrantedScopesUpdateResult =
 
 /**
  * Synchronizes Shopify's granted scopes into canonical
- * `CommerceConnection.grantedScopes`. A legacy `Brand.shopifyGrantedScopes`
- * mirror is maintained only for older token lifecycle code.
+ * `CommerceConnection.grantedScopes` — the sole provider-neutral readiness
+ * authority (Phase 14C-A; no legacy `Brand.shopifyGrantedScopes` mirror).
  *
  * This grants nothing and authorizes nothing. Under Shopify-managed
  * installation, Shopify itself decides what an installation holds and then
@@ -848,24 +863,24 @@ export type ApplyGrantedScopesUpdateResult =
  * therefore deliberately a pure cache write: no status transition, no
  * connection-history event, no reward-offer side effect.
  *
- * SHOP DOMAIN IS THE ONLY IDENTITY INPUT. The brand row is resolved solely from
- * `shopDomain` (the value the caller took from the HMAC-verified
- * `X-Shopify-Shop-Domain` header) via the `@unique` `Brand.shopifyShopDomain`
- * column. No id, no payload field, and no other caller-suppliable value can
- * select or influence which row is written.
+ * CANONICAL IDENTITY RESOLUTION. `shopDomain` (the value the caller took
+ * from the HMAC-verified `X-Shopify-Shop-Domain` header) resolves DIRECTLY
+ * to `CommerceConnection` via `(provider, externalAccountId)`. No canonical
+ * row for this domain means `UNKNOWN_SHOP` — every live Shopify install
+ * already has a canonical connection (operator-verified).
  *
  * The write mirrors `performTokenRefresh`'s compare-and-swap shape: an
  * `updateMany` whose `where` re-states the resolved row's OWN id plus the
  * predicates that must still hold at write time, so it can never widen to a
  * second tenant and never races a concurrent refresh into a wrong row.
  *   - `id` pins the write to exactly the row resolved above.
- *   - `shopifyShopDomain` is the optimistic-concurrency guard: if the row was
- *     relinked or redacted (domain nulled/changed) between the read and the
+ *   - `externalAccountId` is the optimistic-concurrency guard: if the row was
+ *     relinked or redacted (domain reassigned) between the read and the
  *     write, the write matches nothing rather than landing on a shop it was
  *     not authenticated for.
- *   - `shopifyConnectionStatus: { not: "UNINSTALLED" }` stops a late/reordered
- *     delivery from resurrecting scopes on a row whose uninstall handler has
- *     already cleared them.
+ *   - `status: { not: "UNINSTALLED" }` stops a late/reordered delivery from
+ *     resurrecting scopes on a row whose uninstall handler has already
+ *     cleared them.
  * A zero-count outcome is a deterministic SUPERSEDED no-op, not a failure.
  *
  * `grantedScopes` must already be the comma-separated form Shopify returns in
@@ -885,48 +900,48 @@ export async function applyGrantedScopesUpdate(input: {
   }
 
   const db = await getDb();
-
-  const brand = await db.brand.findUnique({
-    where: { shopifyShopDomain: shopDomain },
-    select: { id: true, shopifyConnectionStatus: true, shopifyAdminAccessTokenEncrypted: true },
-  });
-
-  if (!brand) {
-    return { applied: false, reason: "UNKNOWN_SHOP" };
-  }
-
-  // See `ApplyGrantedScopesUpdateResult.wasScopeDriftReconnect`'s doc comment.
-  const wasScopeDriftReconnect =
-    brand.shopifyConnectionStatus === "REQUIRES_RECONNECT" &&
-    brand.shopifyAdminAccessTokenEncrypted !== null;
-
   const normalizedScopes = input.grantedScopes
     .split(",")
     .map((scope) => scope.trim())
     .filter(Boolean);
 
-  // CommerceConnection.grantedScopes is the canonical provider-neutral cache.
-  // The legacy Brand mirror is retained only for older token lifecycle code.
+  // CommerceConnection.grantedScopes is the sole provider-neutral cache.
   const connectionModel = (db as typeof db & {
     commerceConnection?: typeof db.commerceConnection;
   }).commerceConnection;
   const connection = connectionModel
     ? await connectionModel.findUnique({
-    where: {
-      provider_externalAccountId: {
-        provider: "SHOPIFY",
-        externalAccountId: shopDomain,
-      },
-    },
-    select: { id: true, brandId: true },
+        where: {
+          provider_externalAccountId: {
+            provider: "SHOPIFY",
+            externalAccountId: shopDomain,
+          },
+        },
+        select: { id: true, brandId: true, status: true },
       })
     : null;
 
-  if (connection && connection.brandId === brand.id) {
+  if (connection) {
+    // See `ApplyGrantedScopesUpdateResult.wasScopeDriftReconnect`'s doc
+    // comment: the scope-drift signature is REQUIRES_RECONNECT with a
+    // credential still on file. Read from the canonical secret's mere
+    // presence — never decrypted — right before the write below.
+    const secretModel = (db as typeof db & {
+      commerceConnectionSecret?: typeof db.commerceConnectionSecret;
+    }).commerceConnectionSecret;
+    const hasCanonicalSecret = secretModel
+      ? (await secretModel.findUnique({
+          where: { connectionId: connection.id },
+          select: { connectionId: true },
+        })) !== null
+      : false;
+    const wasScopeDriftReconnect =
+      connection.status === "REQUIRES_RECONNECT" && hasCanonicalSecret;
+
     const result = await connectionModel!.updateMany({
       where: {
         id: connection.id,
-        brandId: brand.id,
+        brandId: connection.brandId,
         provider: "SHOPIFY",
         externalAccountId: shopDomain,
         status: { not: "UNINSTALLED" },
@@ -935,38 +950,13 @@ export async function applyGrantedScopesUpdate(input: {
     });
     if (result.count !== 1) return { applied: false, reason: "SUPERSEDED" };
 
-    // Compatibility mirror for legacy token checks. Never use this as the
-    // provider-neutral readiness authority.
-    await db.brand.updateMany({
-      where: {
-        id: brand.id,
-        shopifyShopDomain: shopDomain,
-        shopifyConnectionStatus: { not: "UNINSTALLED" },
-      },
-      data: { shopifyGrantedScopes: normalizedScopes.join(",") },
-    });
-    return { applied: true, brandId: brand.id, wasScopeDriftReconnect };
+    return { applied: true, brandId: connection.brandId, wasScopeDriftReconnect };
   }
 
-  // A connection row for the same external shop but a different brand is
-  // inconsistent state; never fall back to a tenant-wide legacy write.
-  if (connection && connection.brandId !== brand.id) {
-    return { applied: false, reason: "SUPERSEDED" };
-  }
-
-  // Pre-cutover installations may not have a CommerceConnection row yet.
-  const result = await db.brand.updateMany({
-    where: {
-      id: brand.id,
-      shopifyShopDomain: shopDomain,
-      shopifyConnectionStatus: { not: "UNINSTALLED" },
-    },
-    data: { shopifyGrantedScopes: normalizedScopes.join(",") },
-  });
-
-  return result.count === 1
-    ? { applied: true, brandId: brand.id, wasScopeDriftReconnect }
-    : { applied: false, reason: "SUPERSEDED" };
+  // PHASE 14C-A: no canonical connection exists for this domain — no legacy
+  // Brand fallback (every live Shopify install already has a canonical
+  // connection, operator-verified).
+  return { applied: false, reason: "UNKNOWN_SHOP" };
 }
 
 // ---------------------------------------------------------------------------
@@ -976,7 +966,7 @@ export async function applyGrantedScopesUpdate(input: {
 /**
  * CAS-guarded transition of a scope-drift-caused `REQUIRES_RECONNECT` back to
  * `CONNECTED`, plus a truthful `RECONNECTED` `ShopifyConnectionEvent` — the
- * mirror image of `markRequiresReconnect`.
+ * mirror image of `markRequiresReconnectCanonical`.
  *
  * ONLY call this once genuine positive evidence exists that this
  * `REQUIRES_RECONNECT` carries the scope-drift signature (not a genuine
@@ -993,12 +983,14 @@ export async function applyGrantedScopesUpdate(input: {
  *     `app/scopes_update` delivery is itself Shopify's own authenticated
  *     notification that this exact installation is live, and the token
  *     presence alone already rules out a genuine credential failure (see
- *     `markRequiresReconnect`, which always clears the token for that case).
+ *     `markRequiresReconnectCanonical`, which always clears the credential
+ *     for that case).
  *
- * The `where: { id, shopifyConnectionStatus: "REQUIRES_RECONNECT" }` guard
- * means this is a safe no-op (`healed: false`) if the row already moved on
- * (healed by a concurrent request, or freshly disconnected/uninstalled) —
- * it can never resurrect a status a different, more recent write chose.
+ * The canonical CAS guard (`healShopifyCredentialConnected`, keyed on
+ * `CommerceConnection.status === "REQUIRES_RECONNECT"`) means this is a
+ * safe no-op (`healed: false`) if the row already moved on (healed by a
+ * concurrent request, or freshly disconnected/uninstalled) — it can never
+ * resurrect a status a different, more recent write chose.
  *
  * Reward offers are NOT reactivated here, matching `recordShopifyConnectionInstall`'s
  * existing, deliberate behavior for every install/reconnect/relink: a Brand
@@ -1010,54 +1002,37 @@ export async function applyGrantedScopesUpdate(input: {
  * Brand Admin action, not auto-reversed by this fix.
  */
 export async function healScopeDriftReconnect(brandId: string): Promise<boolean> {
-  const db = await getDb();
+  // PHASE 14C-A: CANONICAL-ONLY heal — targeted status write, CAS-guarded on
+  // `CommerceConnection.status === "REQUIRES_RECONNECT"` (see
+  // `healShopifyCredentialConnected`), so this is a safe no-op if the row
+  // already moved on. No legacy `Brand` read or write.
+  const canonicalHeal = await healShopifyCredentialConnected(brandId);
 
-  const healed = await db.$transaction(async (tx) => {
-    const before = await tx.brand.findUnique({
-      where: { id: brandId },
-      select: {
-        shopifyShopDomain: true,
-        shopifyCurrencyCode: true,
-        shopifyClientId: true,
-      },
-    });
-
-    if (!before?.shopifyShopDomain) {
-      return false;
-    }
-
-    const result = await tx.brand.updateMany({
-      where: { id: brandId, shopifyConnectionStatus: "REQUIRES_RECONNECT" },
-      data: { shopifyConnectionStatus: "CONNECTED" },
-    });
-
-    if (result.count !== 1) {
-      return false;
-    }
-
-    // Same shop, same currency, same client id — this heals a status flag,
-    // it does not represent any actual change of shop identity.
-    await recordShopifyConnectionInstall(tx, {
-      brandId,
-      eventType: "RECONNECTED",
-      shopDomain: before.shopifyShopDomain,
-      previousShopDomain: before.shopifyShopDomain,
-      currencyCode: before.shopifyCurrencyCode,
-      previousCurrencyCode: before.shopifyCurrencyCode,
-      shopifyClientId: before.shopifyClientId,
-    });
-
-    return true;
-  });
-
-  if (healed) {
-    // Best-effort mirror — re-reads the Brand row fresh internally, so it
-    // picks up the CONNECTED status this transaction just committed. Never
-    // throws, never affects the return value below.
-    await safeSyncShopifyCommerceConnection(brandId).catch(() => {});
+  if (canonicalHeal.outcome !== "HEALED") {
+    return false;
   }
 
-  return healed;
+  // Same shop, same currency, same client id — this heals a status flag, it
+  // does not represent any actual change of shop identity. Sourced fresh
+  // from the just-healed canonical credential, never from `Brand`.
+  const healedCredential = await loadShopifyCredential(brandId);
+  if (healedCredential.outcome === "OK") {
+    const db = await getDb();
+    const c = healedCredential.credential;
+    await db.$transaction((tx) =>
+      recordShopifyConnectionInstall(tx, {
+        brandId,
+        eventType: "RECONNECTED",
+        shopDomain: c.shopDomain,
+        previousShopDomain: c.shopDomain,
+        currencyCode: c.currencyCode,
+        previousCurrencyCode: c.currencyCode,
+        shopifyClientId: c.providerClientId,
+      }),
+    );
+  }
+
+  return true;
 }
 
 /**
@@ -1124,7 +1099,10 @@ async function fetchShopifyCurrentAppInstallationScopes(
 
 export type ReconcileShopifyConnectionScopesResult =
   | { outcome: "RECONCILED"; healedConnection: boolean; grantedScopes: string[] }
-  | { outcome: "NOT_ELIGIBLE"; reason: "NO_BRAND" | "NO_SHOP_DOMAIN" | "NOT_SCOPE_DRIFT" }
+  | {
+      outcome: "NOT_ELIGIBLE";
+      reason: "NO_BRAND" | "NO_SHOP_DOMAIN" | "NOT_SCOPE_DRIFT" | "TERMINAL";
+    }
   | { outcome: "CREDENTIAL_INVALID" };
 
 /**
@@ -1132,8 +1110,8 @@ export type ReconcileShopifyConnectionScopesResult =
  * works against Shopify by actually using it (a real Admin API call, not
  * merely a stored expiry timestamp), fetches Shopify's own current
  * `accessScopes` for the installation, persists them as the canonical
- * `CommerceConnection.grantedScopes` (+ legacy mirror) via
- * `applyGrantedScopesUpdate`, and — ONLY when this brand's `REQUIRES_RECONNECT`
+ * `CommerceConnection.grantedScopes` via `applyGrantedScopesUpdate`, and —
+ * ONLY when this brand's `REQUIRES_RECONNECT`
  * carries the scope-drift signature (status is `REQUIRES_RECONNECT` while a
  * credential is still on file; a GENUINE credential failure always clears the
  * token in the same write that sets `REQUIRES_RECONNECT`, see
@@ -1157,43 +1135,71 @@ export async function reconcileShopifyConnectionScopes(
   brandId: string,
   deps: { tokenEndpoint?: TokenEndpointFn; fetchImpl?: typeof fetch } = {},
 ): Promise<ReconcileShopifyConnectionScopesResult> {
-  const brand = await reloadBrand(brandId);
-  if (!brand) {
+  // PHASE 14B.4B — CANONICAL ELIGIBILITY. Whether this brand is even a
+  // candidate for reconciliation is now decided from the CANONICAL
+  // connection/secret, not `Brand.shopify*` — eligibility used to be a
+  // legacy-only gate even though the credential resolved below already came
+  // from the canonical store. Obtained via the low-level load (not
+  // `resolveRuntimeCredential`), precisely because that function's own
+  // REQUIRES_RECONNECT guard is exactly the sticky gate this reconciliation
+  // exists to get past. A corrupt canonical secret fails closed here too —
+  // it is never "rescued" from the legacy row.
+  const canonicalForReconcile = await loadShopifyCredential(brandId);
+  if (canonicalForReconcile.outcome === "CORRUPT_SECRET") {
+    return { outcome: "CREDENTIAL_INVALID" };
+  }
+
+  let wasRequiresReconnect: boolean;
+  let reconcileCredential: RuntimeCredential;
+
+  if (canonicalForReconcile.outcome === "OK") {
+    wasRequiresReconnect =
+      normalizeCanonicalStatus(canonicalForReconcile.credential.status) ===
+      "REQUIRES_RECONNECT";
+    reconcileCredential = {
+      brandId,
+      connectionId: canonicalForReconcile.credential.connectionId,
+      source: "CANONICAL",
+      shopDomain: canonicalForReconcile.credential.shopDomain,
+      providerClientId: canonicalForReconcile.credential.providerClientId,
+      connectionStatus: normalizeCanonicalStatus(
+        canonicalForReconcile.credential.status,
+      ),
+      grantedScopes: canonicalForReconcile.credential.grantedScopes,
+      authMode: canonicalForReconcile.credential.authMode,
+      accessToken: canonicalForReconcile.credential.accessToken,
+      accessTokenExpiresAt:
+        canonicalForReconcile.credential.accessTokenExpiresAt,
+      refreshToken: canonicalForReconcile.credential.refreshToken,
+      refreshTokenExpiresAt:
+        canonicalForReconcile.credential.refreshTokenExpiresAt,
+      currencyCode: canonicalForReconcile.credential.currencyCode,
+    };
+  } else {
+    // PHASE 14C-A: no legacy Brand fallback. NO_CONNECTION means there is no
+    // canonical connection to reconcile at all. NO_SECRET whose status is
+    // terminal (DISCONNECTED / UNINSTALLED / anything but CONNECTED or
+    // REQUIRES_RECONNECT) is authoritative about its own revocation. A
+    // CONNECTED-or-REQUIRES_RECONNECT NO_SECRET row has no credential to
+    // test either way — every live merchant has a secret whenever its
+    // status implies one (operator-verified), so this is not expected in
+    // practice, only handled defensively.
     return { outcome: "NOT_ELIGIBLE", reason: "NO_BRAND" };
   }
-  if (!brand.shopifyShopDomain) {
-    return { outcome: "NOT_ELIGIBLE", reason: "NO_SHOP_DOMAIN" };
-  }
 
-  const wasRequiresReconnect = brand.shopifyConnectionStatus === "REQUIRES_RECONNECT";
-
-  // The scope-drift signature: a genuine credential failure always clears
-  // shopifyAdminAccessTokenEncrypted in the SAME write that sets
-  // REQUIRES_RECONNECT (markRequiresReconnect above). A token still present
-  // alongside REQUIRES_RECONNECT can therefore only mean the softer
-  // scope-check path set it — there is no other code path that produces this
-  // combination. Anything else (no prior REQUIRES_RECONNECT at all, or
-  // REQUIRES_RECONNECT with no token) is not this function's job to touch.
-  if (wasRequiresReconnect && !brand.shopifyAdminAccessTokenEncrypted) {
-    return { outcome: "NOT_ELIGIBLE", reason: "NOT_SCOPE_DRIFT" };
-  }
-  if (!brand.shopifyAdminAccessTokenEncrypted) {
+  if (!reconcileCredential.accessToken || !reconcileCredential.shopDomain) {
     return { outcome: "NOT_ELIGIBLE", reason: "NOT_SCOPE_DRIFT" };
   }
 
-  // Obtain a token to test with. Bypasses getValidAccessToken entirely — that
-  // function's own REQUIRES_RECONNECT guard is exactly the sticky gate this
-  // reconciliation exists to get past, and skipScopeCheck alone would not
-  // help here since the block above already proved a token exists.
   let accessToken: string;
-  if (brand.shopifyAuthMode === "LEGACY_OFFLINE") {
-    accessToken = decryptSecret(brand.shopifyAdminAccessTokenEncrypted);
+  if (reconcileCredential.authMode === "LEGACY_OFFLINE") {
+    accessToken = reconcileCredential.accessToken;
   } else {
     const nowMs = Date.now();
-    if (isAccessTokenFresh(brand.shopifyAccessTokenExpiresAt, nowMs)) {
-      accessToken = decryptSecret(brand.shopifyAdminAccessTokenEncrypted);
+    if (isAccessTokenFresh(reconcileCredential.accessTokenExpiresAt, nowMs)) {
+      accessToken = reconcileCredential.accessToken;
     } else {
-      const lockId = await acquireRefreshLock(brand.id, nowMs);
+      const lockId = await acquireLeaseFor(reconcileCredential, nowMs);
       if (!lockId) {
         // A concurrent request already holds the refresh lock — do not wait
         // or contend for it here; this is an opportunistic reconciliation,
@@ -1203,12 +1209,12 @@ export async function reconcileShopifyConnectionScopes(
       }
       try {
         accessToken = await performTokenRefresh(
-          brand,
+          reconcileCredential,
           lockId,
           deps.tokenEndpoint ?? defaultTokenEndpoint,
         );
       } catch {
-        await releaseRefreshLock(brand.id, lockId).catch(() => {});
+        await releaseLeaseFor(reconcileCredential, lockId).catch(() => {});
         // Deliberately does NOT call markRequiresReconnect on a refresh
         // failure here — that is getValidAccessToken's own responsibility on
         // its normal cycle. This function only ever adds positive evidence
@@ -1219,7 +1225,7 @@ export async function reconcileShopifyConnectionScopes(
   }
 
   const scopesResult = await fetchShopifyCurrentAppInstallationScopes(
-    brand.shopifyShopDomain,
+    reconcileCredential.shopDomain,
     accessToken,
     deps.fetchImpl,
   );
@@ -1228,7 +1234,7 @@ export async function reconcileShopifyConnectionScopes(
   }
 
   const applied = await applyGrantedScopesUpdate({
-    shopDomain: brand.shopifyShopDomain,
+    shopDomain: reconcileCredential.shopDomain,
     grantedScopes: scopesResult.scopes.join(","),
   });
 
@@ -1243,6 +1249,3 @@ export async function reconcileShopifyConnectionScopes(
     grantedScopes: scopesResult.scopes,
   };
 }
-
-// Re-export encryptSecret so callers saving tokens can use the same lib
-export { encryptSecret };

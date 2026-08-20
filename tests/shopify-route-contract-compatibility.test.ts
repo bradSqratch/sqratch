@@ -12,10 +12,9 @@ process.env.APP_ENCRYPTION_KEY = "dummy-encryption-key-at-least-32-chars-long";
  *   - src/app/api/brand/shopify/products/route.ts
  *
  * No real DB and no real network anywhere in this file — every DB-backed or
- * network-backed dependency (`getContext`, `findTokenExtra`,
- * `getConnectionSummary`, `registry`, `fetchProductsDirect`,
- * `markLegacyProductSync`) is injected via the routes' own
- * `Partial<...Deps>` parameter, the same idiom already used by
+ * network-backed dependency (`getContext`, `getConnectionSummary`,
+ * `getCredential`, `registry`, `fetchProductsDirect`) is injected via the
+ * routes' own `Partial<...Deps>` parameter, the same idiom already used by
  * `tests/commerce-connection-service.test.ts` and
  * `tests/shopify-commerce-adapter.test.ts`. Both route impls
  * (`statusGetImpl` / `productsGetImpl`) are pre-existing-shaped DI wrappers
@@ -102,7 +101,32 @@ before(async () => {
 
 type BrandFixtureFields = NonNullable<BrandAdminContext["membership"]>["brand"];
 
-function makeBrand(overrides: Partial<BrandFixtureFields> = {}): BrandFixtureFields {
+/**
+ * PHASE 14C-A: `Brand.shopify*` fields no longer exist on the real
+ * `BrandAdminContext["membership"]["brand"]` type (brand-auth.ts /
+ * brand-context.ts no longer select them). Test fixtures in this file still
+ * thread a shopify-shaped state object through to derive the INJECTED
+ * `CommerceConnectionSummary` these route tests provide via DI — the routes
+ * themselves never read `Brand.shopify*` (they never did, even
+ * pre-cutover, for status/products — connectivity always came through the
+ * injected `getConnectionSummary`), so this is purely a test-fixture
+ * convenience, kept as an intersection type so `makeBrand`'s existing
+ * call sites (dozens, throughout this file) don't all need touching.
+ */
+type LegacyShopifyFixtureFields = {
+  shopifyShopDomain: string | null;
+  shopifyAdminAccessTokenEncrypted: string | null;
+  shopifyInstalledAt: Date | null;
+  shopifyDisconnectedAt: Date | null;
+  shopifyUninstalledAt: Date | null;
+  shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED" | "REQUIRES_RECONNECT";
+  shopifyLastProductSyncAt: Date | null;
+  shopifyCurrencyCode: string | null;
+};
+
+type FullBrandFixture = BrandFixtureFields & LegacyShopifyFixtureFields;
+
+function makeBrand(overrides: Partial<FullBrandFixture> = {}): FullBrandFixture {
   return {
     id: "brand-1",
     name: "Acme",
@@ -123,7 +147,7 @@ function makeBrand(overrides: Partial<BrandFixtureFields> = {}): BrandFixtureFie
   };
 }
 
-function makeContext(brand: BrandFixtureFields | null): BrandAdminContext {
+function makeContext(brand: FullBrandFixture | null): BrandAdminContext {
   return {
     userId: "user-1",
     selectionRequired: false,
@@ -135,7 +159,7 @@ function makeContext(brand: BrandFixtureFields | null): BrandAdminContext {
 }
 
 function makeSummary(
-  brand: BrandFixtureFields,
+  brand: FullBrandFixture,
   overrides: Partial<CommerceConnectionSummary> = {},
 ): CommerceConnectionSummary {
   return {
@@ -152,11 +176,12 @@ function makeSummary(
     uninstalledAt: brand.shopifyUninstalledAt,
     lastProductSyncAt: brand.shopifyLastProductSyncAt,
     isLegacyFallback: false,
+    currencyCode: brand.shopifyCurrencyCode,
     ...overrides,
   };
 }
 
-function legacyFallbackSummary(brand: BrandFixtureFields): CommerceConnectionSummary | null {
+function legacyFallbackSummary(brand: FullBrandFixture): CommerceConnectionSummary | null {
   if (!brand.shopifyShopDomain) {
     return null;
   }
@@ -169,16 +194,42 @@ function makeStatusDeps(overrides: Partial<BrandShopifyStatusDeps> = {}): BrandS
     async getContext() {
       throw new Error("getContext should not be called in this test");
     },
-    async findTokenExtra() {
-      throw new Error("findTokenExtra should not be called in this test");
-    },
     async getConnectionSummary() {
       throw new Error("getConnectionSummary should not be called in this test");
+    },
+    async getCredential() {
+      throw new Error("getCredential should not be called in this test");
     },
     async reconcileScopes() {
       throw new Error("reconcileScopes should not be called in this test");
     },
     ...overrides,
+  };
+}
+
+/** A canonical credential present and usable — the common "connected" shape. */
+function okCredential(overrides: Partial<{
+  accessToken: string | null;
+  authMode: string;
+  accessTokenExpiresAt: Date | null;
+  providerClientId: string | null;
+}> = {}) {
+  return {
+    outcome: "OK" as const,
+    credential: {
+      connectionId: "conn-1",
+      brandId: "brand-1",
+      shopDomain: "test-shop.myshopify.com",
+      providerClientId: overrides.providerClientId ?? null,
+      status: "CONNECTED" as const,
+      grantedScopes: "read_products,write_discounts",
+      authMode: overrides.authMode ?? "LEGACY_OFFLINE",
+      accessToken: overrides.accessToken ?? "shpat_test_token",
+      accessTokenExpiresAt: overrides.accessTokenExpiresAt ?? null,
+      refreshToken: null,
+      refreshTokenExpiresAt: null,
+      currencyCode: null,
+    },
   };
 }
 
@@ -193,9 +244,6 @@ function makeProductsDeps(overrides: Partial<BrandShopifyProductsDeps> = {}): Br
     registry: createCommerceAdapterRegistry({}),
     async fetchProductsDirect() {
       throw new Error("fetchProductsDirect should not be called in this test");
-    },
-    async markLegacyProductSync() {
-      throw new Error("markLegacyProductSync should not be called in this test");
     },
     ...overrides,
   };
@@ -251,6 +299,7 @@ function fakeConnectionRow(
     installedAt: new Date("2026-01-01T00:00:00Z"),
     uninstalledAt: null,
     lastProductSyncAt: null,
+    providerMetadata: { authMode: "LEGACY_OFFLINE", currencyCode: "USD" },
     ...overrides,
   };
 }
@@ -303,7 +352,7 @@ describe("brand/shopify/status route contract", () => {
   test("1. exact key set + values for connected / disconnected / uninstalled / requires-reconnect / never-connected", async () => {
     const cases: Array<{
       label: string;
-      brand: Partial<BrandFixtureFields>;
+      brand: Partial<FullBrandFixture>;
     }> = [
       { label: "connected", brand: { shopifyConnectionStatus: "CONNECTED" } },
       {
@@ -345,7 +394,6 @@ describe("brand/shopify/status route contract", () => {
       "slug",
       "shopifyShopDomain",
       "shopifyInstalledAt",
-      "shopifyDisconnectedAt",
       "shopifyUninstalledAt",
       "shopifyConnectionStatus",
       "hasShopifyAccessToken",
@@ -366,22 +414,32 @@ describe("brand/shopify/status route contract", () => {
 
     for (const { label, brand: brandOverrides } of cases) {
       const brand = makeBrand(brandOverrides);
-      const summary = legacyFallbackSummary(brand);
+      // PHASE 14B.4B: the summary is now the CANONICAL source for identity,
+      // status, and grantedScopes — `findTokenExtra` no longer carries any of
+      // this. `legacyFallbackSummary` models a genuine pre-cutover brand
+      // (no CommerceConnection row), which is the correct fixture shape for
+      // a response contract test that must stay byte-identical to today's
+      // behavior for a brand that predates the cutover.
+      const summary = brand.shopifyShopDomain
+        ? makeSummary(brand, {
+            id: null,
+            isLegacyFallback: true,
+            grantedScopes: ["read_products", "write_discounts"],
+          })
+        : null;
+      const hasToken = Boolean(brand.shopifyAdminAccessTokenEncrypted);
 
       const deps = makeStatusDeps({
         async getContext() {
           return makeContext(brand);
         },
-        async findTokenExtra() {
-          return {
-            shopifyAuthMode: "LEGACY_OFFLINE",
-            shopifyAccessTokenExpiresAt: null,
-            shopifyGrantedScopes: "read_products,write_discounts",
-            shopifyClientId: null,
-          };
-        },
         async getConnectionSummary() {
           return summary;
+        },
+        async getCredential() {
+          return hasToken
+            ? okCredential({ accessToken: "shpat_test_token" })
+            : { outcome: "NO_CONNECTION" as const };
         },
         // Exercised only by the "requires-reconnect" case (see the
         // healing-specific coverage in tests/shopify-scopes-update-webhook.test.ts
@@ -414,21 +472,12 @@ describe("brand/shopify/status route contract", () => {
         label,
       );
       assert.equal(
-        json.data.shopifyDisconnectedAt,
-        brand.shopifyDisconnectedAt ? brand.shopifyDisconnectedAt.toISOString() : null,
-        label,
-      );
-      assert.equal(
         json.data.shopifyUninstalledAt,
         brand.shopifyUninstalledAt ? brand.shopifyUninstalledAt.toISOString() : null,
         label,
       );
       assert.equal(json.data.shopifyConnectionStatus, brand.shopifyConnectionStatus, label);
-      assert.equal(
-        json.data.hasShopifyAccessToken,
-        Boolean(brand.shopifyAdminAccessTokenEncrypted),
-        label,
-      );
+      assert.equal(json.data.hasShopifyAccessToken, hasToken, label);
       assert.equal(
         json.data.shopifyLastProductSyncAt,
         brand.shopifyLastProductSyncAt ? brand.shopifyLastProductSyncAt.toISOString() : null,
@@ -437,7 +486,11 @@ describe("brand/shopify/status route contract", () => {
       assert.equal(json.data.shopifyCurrencyCode, brand.shopifyCurrencyCode, label);
       assert.equal(json.data.shopifyAuthMode, "LEGACY_OFFLINE", label);
       assert.equal(json.data.shopifyAccessTokenExpiresAt, null, label);
-      assert.equal(json.data.shopifyGrantedScopes, "read_products,write_discounts", label);
+      assert.equal(
+        json.data.shopifyGrantedScopes,
+        summary ? "read_products,write_discounts" : null,
+        label,
+      );
       assert.equal(
         json.data.requiresReconnect,
         brand.shopifyConnectionStatus === "REQUIRES_RECONNECT",
@@ -478,7 +531,7 @@ describe("brand/shopify/status route contract", () => {
         async getContext() {
           return makeContext(makeBrand());
         },
-        async findTokenExtra() {
+        async getConnectionSummary() {
           throw new Error("simulated DB failure");
         },
       }),
@@ -488,23 +541,19 @@ describe("brand/shopify/status route contract", () => {
     assert.deepEqual(erroredJson, { error: "Failed to load Shopify status." });
   });
 
-  test("3. identical output whether the mirror is absent, agreeing, or DISAGREEING with legacy", async () => {
+  test("3. PHASE 14B.4B: the CANONICAL row is authoritative whether it is absent, agreeing, or DISAGREEING with legacy — a stale Brand mirror never overrides it", async () => {
     const brand = makeBrand({ shopifyConnectionStatus: "CONNECTED" });
     const baseDeps = {
       async getContext() {
         return makeContext(brand);
       },
-      async findTokenExtra() {
-        return {
-          shopifyAuthMode: "LEGACY_OFFLINE" as const,
-          shopifyAccessTokenExpiresAt: null,
-          shopifyGrantedScopes: null,
-          shopifyClientId: null,
-        };
+      async getCredential() {
+        return okCredential();
       },
     };
 
-    // (a) No CommerceConnection row at all -> legacy fallback (id: null).
+    // (a) No CommerceConnection row at all -> legacy fallback (id: null) —
+    // the ONLY case that still reads Brand.shopify* for identity/status.
     const noRow = await statusGetImpl(
       makeStatusDeps({
         ...baseDeps,
@@ -514,9 +563,10 @@ describe("brand/shopify/status route contract", () => {
       }),
     );
     const noRowJson = await noRow.json();
+    assert.equal(noRowJson.data.shopifyConnectionStatus, "CONNECTED");
 
-    // (b) A CommerceConnection row exists and its status/timestamps agree
-    // with legacy exactly (the common, healthy case).
+    // (b) A CommerceConnection row exists and agrees with legacy (the
+    // common, healthy case).
     const agreeingRow = await statusGetImpl(
       makeStatusDeps({
         ...baseDeps,
@@ -526,10 +576,14 @@ describe("brand/shopify/status route contract", () => {
       }),
     );
     const agreeingJson = await agreeingRow.json();
+    assert.deepEqual(noRowJson, agreeingJson, "no-row vs agreeing-row must match");
 
-    // (c) A CommerceConnection row exists but is STALE (status disagrees
-    // with legacy, as a best-effort dual-write lagging behind would look) —
-    // the route must still prefer the legacy value, not the stale mirror.
+    // (c) A CommerceConnection row exists but DISAGREES with legacy (legacy
+    // says CONNECTED, canonical says DISCONNECTED) — this is exactly the
+    // "stale Brand mirror" scenario the independent review flagged: the
+    // CANONICAL value must win, never the legacy one, because as of
+    // Phase 14B canonical is written FIRST and Brand can lag or fail
+    // independently — the reverse of the old assumption.
     const disagreeingRow = await statusGetImpl(
       makeStatusDeps({
         ...baseDeps,
@@ -543,38 +597,43 @@ describe("brand/shopify/status route contract", () => {
     );
     const disagreeingJson = await disagreeingRow.json();
 
-    assert.deepEqual(noRowJson, agreeingJson, "no-row vs agreeing-row must match");
-    assert.deepEqual(agreeingJson, disagreeingJson, "agreeing-row vs disagreeing-row must match (legacy wins)");
     assert.equal(
       disagreeingJson.data.shopifyConnectionStatus,
-      "CONNECTED",
-      "a stale/disagreeing mirror must never leak into the response",
+      "DISCONNECTED",
+      "the CANONICAL status must win over a disagreeing legacy Brand value",
+    );
+    assert.notDeepEqual(
+      disagreeingJson,
+      agreeingJson,
+      "a genuinely DISCONNECTED canonical connection must produce a materially different response",
     );
   });
 
   test("3b. shopifyAppEmbedDeepLink is null unless BOTH shop domain and client id are usable", async () => {
     const clientId = "0123456789abcdef0123456789abcdef";
 
+    // PHASE 14C-A: `providerClientId` now comes ONLY from the canonical
+    // credential (`getCredential`) — the legacy `findTokenExtra` fallback
+    // was deleted entirely from status/route.ts along with the rest of the
+    // Brand.shopify* read path.
     async function deepLinkFor(
-      brandOverrides: Partial<BrandFixtureFields>,
-      shopifyClientId: string | null,
+      brandOverrides: Partial<FullBrandFixture>,
+      providerClientId: string | null,
     ): Promise<unknown> {
       const brand = makeBrand(brandOverrides);
+      const summary = brand.shopifyShopDomain ? makeSummary(brand, { isLegacyFallback: false }) : null;
       const response = await statusGetImpl(
         makeStatusDeps({
           async getContext() {
             return makeContext(brand);
           },
-          async findTokenExtra() {
-            return {
-              shopifyAuthMode: "LEGACY_OFFLINE" as const,
-              shopifyAccessTokenExpiresAt: null,
-              shopifyGrantedScopes: null,
-              shopifyClientId,
-            };
-          },
           async getConnectionSummary() {
-            return legacyFallbackSummary(brand);
+            return summary;
+          },
+          async getCredential() {
+            return summary
+              ? okCredential({ providerClientId })
+              : { outcome: "NO_CONNECTION" as const };
           },
         }),
       );
@@ -615,7 +674,6 @@ describe("brand/shopify/status route contract", () => {
 describe("brand/shopify/products route contract", () => {
   test("4. 200 body exact key set including meta.hasNextPage / meta.limit", async () => {
     const brand = makeBrand();
-    const marked: string[] = [];
 
     const response = await productsGetImpl(
       makeProductsDeps({
@@ -623,13 +681,10 @@ describe("brand/shopify/products route contract", () => {
           return makeContext(brand);
         },
         async getConnectionSummary() {
-          return null;
+          return legacyFallbackSummary(brand);
         },
         async fetchProductsDirect() {
           return { ok: true, items: [canonicalProduct], hasNextPage: true, limit: 100, endCursor: null };
-        },
-        async markLegacyProductSync(brandId) {
-          marked.push(brandId);
         },
       }),
     );
@@ -661,7 +716,6 @@ describe("brand/shopify/products route contract", () => {
           assert.deepEqual(input, { shopDomain: brand.shopifyShopDomain, brandId: brand.id, limit: 100 });
           return { ok: true, items: [canonicalProduct], hasNextPage: true, limit: 100, endCursor: null };
         },
-        async markLegacyProductSync() {},
       }),
     );
     const directJson = await directResponse.json();
@@ -691,7 +745,6 @@ describe("brand/shopify/products route contract", () => {
         async fetchProductsDirect() {
           throw new Error("the adapter path must never call fetchProductsDirect");
         },
-        async markLegacyProductSync() {},
       }),
     );
     const adapterJson = await adapterResponse.json();
@@ -753,19 +806,38 @@ describe("brand/shopify/products route contract", () => {
     assert.deepEqual(await adapterFail.json(), { error: "Shopify connection requires reconnection." });
   });
 
-  test("7. not-connected 400 body unchanged for every legacy gate sub-condition", async () => {
-    const cases: Array<[string, Partial<BrandFixtureFields>]> = [
-      ["missing shop domain", { shopifyShopDomain: null }],
-      ["missing access token", { shopifyAdminAccessTokenEncrypted: null }],
-      ["status not CONNECTED", { shopifyConnectionStatus: "DISCONNECTED" }],
+  test("7. not-connected 400 body unchanged for every CANONICALLY-expressible gate sub-condition", async () => {
+    // PHASE 14B.4B: the gate is now `!summary || !isConnectionUsable(summary)`
+    // — no independent `Brand.shopifyAdminAccessTokenEncrypted` check exists
+    // any more (see connection-service.ts's `isConnectionUsable` doc comment
+    // for the write-path invariant this relies on: CONNECTED is written ONLY
+    // together with a credential, for both the canonical and legacy-fallback
+    // paths, so "status === CONNECTED" already implies "credential present").
+    // A "CONNECTED but no credential" row is therefore not a state the
+    // canonical layer can independently express — and if it somehow existed
+    // anyway, the downstream credential resolution
+    // (`getValidAccessToken`/adapter token fetch, covered by
+    // tests/shopify-token-manager.test.ts) still fails closed rather than
+    // leaking data. This test covers the two cases still expressible at the
+    // summary layer: no connection at all, and a connection whose status
+    // isn't CONNECTED.
+    const cases: Array<[string, CommerceConnectionSummary | null]> = [
+      ["no connection at all", null],
+      [
+        "status not CONNECTED",
+        makeSummary(makeBrand(), { isLegacyFallback: false, status: "DISCONNECTED" }),
+      ],
     ];
 
-    for (const [label, overrides] of cases) {
-      const brand = makeBrand(overrides);
+    for (const [label, summary] of cases) {
+      const brand = makeBrand();
       const response = await productsGetImpl(
         makeProductsDeps({
           async getContext() {
             return makeContext(brand);
+          },
+          async getConnectionSummary() {
+            return summary;
           },
         }),
       );
@@ -778,56 +850,20 @@ describe("brand/shopify/products route contract", () => {
     }
   });
 
-  test("8. Brand.shopifyLastProductSyncAt is stamped on success, and never on failure", async () => {
-    const brand = makeBrand();
-    const markedSuccess: string[] = [];
-
-    await productsGetImpl(
-      makeProductsDeps({
-        async getContext() {
-          return makeContext(brand);
-        },
-        async getConnectionSummary() {
-          return legacyFallbackSummary(brand);
-        },
-        async fetchProductsDirect() {
-          return { ok: true, items: [canonicalProduct], hasNextPage: false, limit: 100, endCursor: null };
-        },
-        async markLegacyProductSync(brandId) {
-          markedSuccess.push(brandId);
-        },
-      }),
-    );
-    assert.deepEqual(markedSuccess, [brand.id]);
-
-    const markedFailure: string[] = [];
-    await productsGetImpl(
-      makeProductsDeps({
-        async getContext() {
-          return makeContext(brand);
-        },
-        async getConnectionSummary() {
-          return legacyFallbackSummary(brand);
-        },
-        async fetchProductsDirect() {
-          return { ok: false, status: 502, tokenReason: undefined, error: "boom" };
-        },
-        async markLegacyProductSync(brandId) {
-          markedFailure.push(brandId);
-        },
-      }),
-    );
-    assert.deepEqual(markedFailure, [], "must not stamp lastProductSyncAt on a failed fetch");
-  });
+  // PHASE 14C-A: `markLegacyProductSync` was deleted entirely from
+  // products/route.ts — the route no longer writes anything to `Brand` on
+  // success or failure (canonical `CommerceConnection.lastProductSyncAt` is
+  // already stamped by `ShopifyCommerceAdapter.syncProducts` for the
+  // adapter path; there is nothing left for this route itself to stamp).
+  // The old test 8, which proved that mirror write's success/failure
+  // gating, is removed with the code it covered.
 
   test("9. no product is ever persisted", async () => {
     const brand = makeBrand();
 
-    // The only DB-shaped dependency the route calls on success is
-    // markLegacyProductSync, which — per its default implementation — only
-    // ever calls prisma.brand.update. Nothing else in this DI graph touches
-    // a database at all, so a persistence call is structurally impossible
-    // here; this assertion documents that invariant.
+    // Nothing in this DI graph touches a database at all on a successful
+    // fetch — a persistence call is structurally impossible here; this
+    // assertion documents that invariant.
     await productsGetImpl(
       makeProductsDeps({
         async getContext() {
@@ -839,7 +875,6 @@ describe("brand/shopify/products route contract", () => {
         async fetchProductsDirect() {
           return { ok: true, items: [canonicalProduct], hasNextPage: false, limit: 100, endCursor: null };
         },
-        async markLegacyProductSync() {},
       }),
     );
 
@@ -881,7 +916,6 @@ describe("brand/shopify/products route contract", () => {
           return makeSummary(brand, { isLegacyFallback: false });
         },
         registry,
-        async markLegacyProductSync() {},
       }),
     );
 

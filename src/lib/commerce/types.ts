@@ -60,6 +60,18 @@ export type CommerceConnectionSummary = {
   uninstalledAt: Date | null;
   lastProductSyncAt: Date | null;
   isLegacyFallback: boolean;
+  /**
+   * PHASE 14B.4B — the SINGLE canonical currency representation. For a real
+   * `CommerceConnection` row this is `providerMetadata.currencyCode`
+   * (populated on every install/sync — see `connection-sync.ts`'s
+   * `buildShopifyConnectionSyncInput(FromInstall)`); for a legacy-derived
+   * summary it is `Brand.shopifyCurrencyCode`, since that IS the only value
+   * that ever existed for a pre-cutover brand. There is deliberately no
+   * second currency field anywhere in this codebase — every runtime
+   * consumer must read it from here, not from `Brand.shopifyCurrencyCode`
+   * directly.
+   */
+  currencyCode: string | null;
 };
 
 /**

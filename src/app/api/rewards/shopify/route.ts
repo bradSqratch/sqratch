@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
+import { CommerceProvider } from "@prisma/client";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
 import { getRewardClaimContext } from "@/lib/reward-access";
@@ -10,6 +11,10 @@ import {
 import { getUserSpendablePointBalance } from "@/lib/points";
 import { getShopifyRewardDisplayState } from "@/lib/shopify-reward-display";
 import { computeShopifyRewardCompatibility } from "@/lib/shopify-reward-compatibility";
+import {
+  getActiveCommerceConnectionsForBrands,
+  isConnectionUsable,
+} from "@/lib/commerce/connection-service";
 
 export async function GET(request: NextRequest) {
   try {
@@ -46,22 +51,18 @@ export async function GET(request: NextRequest) {
       userId: session.user.id,
     });
 
+    // PHASE 14B.4C: connectivity is no longer part of the DB filter — a
+    // brand's canonical connection state can only be known by actually
+    // resolving CommerceConnection, not by a Brand.shopify* WHERE clause.
+    // Fetch every active, in-window offer for the unlocked brands, then
+    // filter by canonical connectivity in-memory below.
     const offers = await prisma.brandRewardOffer.findMany({
       where: {
         isActive: true,
         OR: [{ claimStartsAt: null }, { claimStartsAt: { lte: now } }],
         AND: [{ OR: [{ claimEndsAt: null }, { claimEndsAt: { gte: now } }] }],
-        brand: {
-          id: {
-            in: rewardContext.brandIds,
-          },
-          shopifyConnectionStatus: "CONNECTED",
-          shopifyShopDomain: {
-            not: null,
-          },
-          shopifyAdminAccessTokenEncrypted: {
-            not: null,
-          },
+        brandId: {
+          in: rewardContext.brandIds,
         },
       },
       include: {
@@ -70,8 +71,6 @@ export async function GET(request: NextRequest) {
             id: true,
             name: true,
             logoUrl: true,
-            shopifyShopDomain: true,
-            shopifyCurrencyCode: true,
           },
         },
         products: true,
@@ -81,11 +80,29 @@ export async function GET(request: NextRequest) {
       },
     });
 
-    // Filter incompatible offers (currency drift, stale/unknown product
-    // source) before running any per-offer redemption-count queries below —
-    // no Shopify API call is made here, only in-memory comparison against
-    // the Brand fields already loaded above.
+    // CANONICAL, BATCHED — exactly two queries total regardless of how many
+    // distinct brands are represented among `offers` (see
+    // `getActiveCommerceConnectionsForBrands`'s doc comment). This route
+    // never decrypts or even reads a credential: `isConnectionUsable` checks
+    // status + domain presence only, never `CommerceConnectionSecret` — this
+    // route makes no Shopify API call, so credential presence is
+    // deliberately not a display gate (see file header).
+    const connectionsByBrand = await getActiveCommerceConnectionsForBrands(
+      rewardContext.brandIds,
+      CommerceProvider.SHOPIFY,
+    );
+
+    // Filter incompatible offers (not connected, currency drift,
+    // stale/unknown product source) before running any per-offer
+    // redemption-count queries below — no Shopify API call is made here,
+    // only in-memory comparison against the CANONICAL connection resolved
+    // above.
     const compatibleOffers = offers.filter((offer) => {
+      const summary = connectionsByBrand.get(offer.brandId);
+      if (!summary || !isConnectionUsable(summary)) {
+        return false;
+      }
+
       const compatibility = computeShopifyRewardCompatibility({
         offer: {
           discountType: offer.discountType,
@@ -94,12 +111,9 @@ export async function GET(request: NextRequest) {
           appliesTo: offer.appliesTo,
           sourceShopDomain: offer.sourceShopDomain,
         },
-        // The WHERE clause above already restricts to CONNECTED brands with
-        // a domain and access token, so the connection itself is known-good
-        // here — only currency/product-source compatibility remains to check.
         shopifyConnected: true,
-        currentShopDomain: offer.brand.shopifyShopDomain,
-        currentStoreCurrency: offer.brand.shopifyCurrencyCode,
+        currentShopDomain: summary.externalAccountId,
+        currentStoreCurrency: summary.currencyCode,
       });
 
       return compatibility.compatible;
@@ -107,6 +121,9 @@ export async function GET(request: NextRequest) {
 
     const data = await Promise.all(
       compatibleOffers.map(async (offer) => {
+        // Already proven usable by the filter above — resolved once more
+        // here only to read its fields, never re-queried.
+        const summary = connectionsByBrand.get(offer.brandId)!;
         const [totalRedemptions, userRedemptions] = await Promise.all([
           offer.maxTotalRedemptions
             ? prisma.shopifyRewardRedemption.count({
@@ -141,7 +158,11 @@ export async function GET(request: NextRequest) {
         const hasEnoughPoints = userPointsBalance >= offer.pointsCost;
         const computedAvailability = getRewardOfferAvailability({
           offer,
-          shopifyConnected: Boolean(offer.brand.shopifyShopDomain),
+          // Already proven usable by the canonical `isConnectionUsable`
+          // filter above — this offer would not have reached `.map()`
+          // otherwise, so re-deriving from Brand here would just be a
+          // second, redundant (and legacy-authoritative) connectivity check.
+          shopifyConnected: true,
           totalRedemptions,
           userRedemptions,
           now,
@@ -158,9 +179,7 @@ export async function GET(request: NextRequest) {
           title: offer.title,
           description: offer.description,
           brand: offer.brand,
-          shopUrl: offer.brand.shopifyShopDomain
-            ? `https://${offer.brand.shopifyShopDomain}`
-            : null,
+          shopUrl: summary.storefrontUrl,
           pointsCost: offer.pointsCost,
           discountType: offer.discountType,
           discountAmountCents: offer.discountAmountCents,

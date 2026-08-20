@@ -507,15 +507,32 @@ model CommerceConnection {
 }
 
 model CommerceConnectionSecret {
-  id               String             @id @default(cuid())
-  connectionId     String             @unique
+  id               String    @id @default(cuid())
+  connectionId     String    @unique
   encryptedPayload String
-  keyVersion       Int                @default(1)
+  keyVersion       Int       @default(1)
   rotatedAt        DateTime?
   expiresAt        DateTime?
-  createdAt        DateTime           @default(now())
-  updatedAt        DateTime           @updatedAt
-  connection       CommerceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  /// Refresh-lease compare-and-swap state. These are FIRST-CLASS COLUMNS, not
+  /// fields inside `encryptedPayload`, and that is a correctness requirement
+  /// rather than a style choice: `encryptSecret` (src/lib/crypto.ts) is
+  /// AES-256-GCM with a random per-call IV, so the same plaintext yields a
+  /// different ciphertext every time. A compare-and-swap predicate therefore
+  /// cannot be expressed as `WHERE "encryptedPayload" = $expected`, and doing
+  /// it as decrypt -> compare -> re-encrypt would be a read-modify-write race —
+  /// exactly what the lease exists to prevent. Keeping them as plain columns
+  /// lets Postgres arbitrate a single refresh winner in ONE atomic UPDATE,
+  /// the same way the legacy `Brand.shopifyTokenRefresh*` columns did.
+  /// Provider-neutral by design: any provider whose credential needs
+  /// serialized rotation can use the same two columns; a provider that needs
+  /// no rotation simply leaves them null.
+  refreshLockId      String?
+  refreshLockedUntil DateTime?
+
+  connection CommerceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 }
 
 model ConnectedCommerceProduct {

@@ -14,12 +14,11 @@
  *
  * This route is the receiver for that announcement: a passive one-way
  * synchronization of SQRATCH's cached provider-neutral view
- * (`CommerceConnection.grantedScopes`, with a legacy Brand mirror),
- * read by `hasSufficientScopes` / `hasOrderAttributionScope` /
- * `hasThemeVerificationScope`) onto what Shopify reports it has already
- * granted. It grants no permission, approves nothing, and performs no
- * authorization decision. Any future authorization logic belongs in the
- * install/OAuth path, not here.
+ * (`CommerceConnection.grantedScopes`, read by `hasSufficientScopes` /
+ * `hasOrderAttributionScope` / `hasThemeVerificationScope`) onto what
+ * Shopify reports it has already granted. It grants no permission,
+ * approves nothing, and performs no authorization decision. Any future
+ * authorization logic belongs in the install/OAuth path, not here.
  *
  * ONE EXCEPTION: it MAY heal a connection stuck in a false, scope-drift-caused
  * `REQUIRES_RECONNECT` back to `CONNECTED` — never a genuine credential
@@ -46,13 +45,15 @@
  * ===========================================================================
  * IDENTITY: THE SHOP DOMAIN HEADER IS THE ONLY TENANT SELECTOR
  * ===========================================================================
- * The brand row is resolved solely from the verified `X-Shopify-Shop-Domain`
- * header (normalized to trimmed-lowercase by the shared verifier, matching
- * `app/uninstalled`'s exact lookup), against the `@unique`
- * `Brand.shopifyShopDomain` column. NO field of the request body — not
- * `shop_id`, not `id`, not `application_id` — participates in row selection,
- * so a signed payload for shop A can never reach shop B's row. Only the
- * `current` scope list is read out of the body, and only after verification.
+ * The connection row is resolved solely from the verified
+ * `X-Shopify-Shop-Domain` header (normalized to trimmed-lowercase by the
+ * shared verifier, matching `app/uninstalled`'s exact lookup), against the
+ * `@@unique([provider, externalAccountId])` `CommerceConnection` key — no
+ * legacy `Brand` lookup at all (Phase 14C-A). NO field of the request
+ * body — not `shop_id`, not `id`, not `application_id` — participates in
+ * row selection, so a signed payload for shop A can never reach shop B's
+ * row. Only the `current` scope list is read out of the body, and only
+ * after verification.
  *
  * ===========================================================================
  * RESPONSE POLICY

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
+import { CommerceProvider } from "@prisma/client";
 import { getAdminContext } from "@/lib/admin-auth";
 import prisma from "@/lib/prisma";
+import { getActiveCommerceConnectionsForBrands } from "@/lib/commerce/connection-service";
 
 export async function GET() {
   try {
@@ -20,8 +22,6 @@ export async function GET() {
         websiteUrl: true,
         logoUrl: true,
         isActive: true,
-        shopifyShopDomain: true,
-        shopifyInstalledAt: true,
         createdAt: true,
         members: {
           orderBy: {
@@ -55,7 +55,19 @@ export async function GET() {
       },
     });
 
-    return NextResponse.json({ data: brands });
+    // CANONICAL — one batched CommerceConnection query for every brand in
+    // this list, never one query per brand (see connection-service.ts).
+    const connectionsByBrand = await getActiveCommerceConnectionsForBrands(
+      brands.map((brand) => brand.id),
+      CommerceProvider.SHOPIFY,
+    );
+
+    return NextResponse.json({
+      data: brands.map((brand) => ({
+        ...brand,
+        shopifyShopDomain: connectionsByBrand.get(brand.id)?.externalAccountId ?? null,
+      })),
+    });
   } catch (error) {
     console.error("[admin/brands][GET] Error:", error);
     return NextResponse.json(

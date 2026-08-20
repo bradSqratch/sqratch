@@ -96,7 +96,17 @@ test("rewards API uses unlock context and the point-account balance", () => {
   );
 
   assert.match(source, /getRewardClaimContext/);
-  assert.match(source, /id:\s*\{\s*in: rewardContext\.brandIds/);
+  // PHASE 14B.4C: the offer query used to scope brands via a nested relation
+  // filter (`brand: { id: { in: rewardContext.brandIds } }`), which also
+  // joined in `Brand.shopifyShopDomain` for the (now-removed) legacy
+  // connectivity check. The offer query no longer needs that join at all —
+  // it filters on the scalar FK column directly. The invariant this
+  // assertion actually guards — every offer fetched is scoped to
+  // `rewardContext.brandIds`, never all brands — is unchanged; only the
+  // Prisma filter shape that expresses it changed. See also the
+  // behavioral no-cross-brand-leakage coverage in
+  // tests/commerce-canonical-gate-regression.test.ts.
+  assert.match(source, /brandId:\s*\{\s*in:\s*rewardContext\.brandIds/);
   assert.match(source, /getUserSpendablePointBalance/);
   assert.doesNotMatch(source, /userPointsBalance:\s*user\.points/);
 });

@@ -23,14 +23,6 @@ export type BrandAdminContext = {
       websiteUrl: string | null;
       logoUrl: string | null;
       coverImageUrl: string | null;
-      shopifyShopDomain: string | null;
-      shopifyAdminAccessTokenEncrypted: string | null;
-      shopifyInstalledAt: Date | null;
-      shopifyDisconnectedAt: Date | null;
-      shopifyUninstalledAt: Date | null;
-      shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED" | "REQUIRES_RECONNECT";
-      shopifyLastProductSyncAt: Date | null;
-      shopifyCurrencyCode: string | null;
     };
   } | null;
 };

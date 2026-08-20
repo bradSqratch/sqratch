@@ -14,7 +14,6 @@ type BrandListItem = {
   logoUrl: string | null;
   isActive: boolean;
   shopifyShopDomain: string | null;
-  shopifyInstalledAt: string | null;
   createdAt: string;
   members: Array<{
     id: string;

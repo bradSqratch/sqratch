@@ -3,9 +3,10 @@ import {
   getBrandContextFailure,
   getBrandManagementContext,
 } from "@/lib/brand-auth";
-import prisma from "@/lib/prisma";
 import { recordShopifyConnectionLoss } from "@/lib/shopify-connection-transitions";
-import { safeMarkShopifyCommerceConnectionDisconnected } from "@/lib/commerce/connection-sync";
+import { invalidateShopifyCredential } from "@/lib/commerce/providers/shopify-credential-store";
+import { getActiveCommerceConnection } from "@/lib/commerce/connection-service";
+import { CommerceProvider, type Prisma } from "@prisma/client";
 
 export async function POST() {
   try {
@@ -21,63 +22,49 @@ export async function POST() {
 
     const brandId = context.membership.brand.id;
 
-    const brand = await prisma.$transaction(async (tx) => {
-      const before = await tx.brand.findUnique({
-        where: { id: brandId },
-        select: {
-          shopifyShopDomain: true,
-          shopifyCurrencyCode: true,
-          shopifyClientId: true,
-        },
-      });
+    // PHASE 14C-A: CANONICAL-ONLY invalidation — no legacy `Brand` read or
+    // write. The event snapshot is captured from the canonical connection
+    // BEFORE invalidation (while it's still CONNECTED), since
+    // `invalidateShopifyCredential`'s `onInvalidated` hook only carries
+    // {connectionId, brandId}.
+    const preDisconnectSummary = await getActiveCommerceConnection(
+      brandId,
+      CommerceProvider.SHOPIFY,
+    );
 
-      const updated = await tx.brand.update({
-        where: { id: brandId },
-        data: {
-          shopifyShopDomain: null,
-          shopifyAdminAccessTokenEncrypted: null,
-          shopifyRefreshTokenEncrypted: null,
-          shopifyAccessTokenExpiresAt: null,
-          shopifyRefreshTokenExpiresAt: null,
-          shopifyGrantedScopes: null,
-          shopifyClientId: null,
-          shopifyTokenRefreshLockedUntil: null,
-          shopifyTokenRefreshLockId: null,
-          shopifyDisconnectedAt: new Date(),
-          shopifyUninstalledAt: null,
-          shopifyConnectionStatus: "DISCONNECTED",
-        },
-        select: {
-          id: true,
-          shopifyShopDomain: true,
-          shopifyInstalledAt: true,
-          shopifyDisconnectedAt: true,
-          shopifyUninstalledAt: true,
-          shopifyConnectionStatus: true,
-          shopifyLastProductSyncAt: true,
-        },
-      });
-
-      await recordShopifyConnectionLoss(tx, {
-        brandId,
-        eventType: "DISCONNECTED",
-        snapshot: {
-          shopDomain: before?.shopifyShopDomain ?? null,
-          currencyCode: before?.shopifyCurrencyCode ?? null,
-          shopifyClientId: before?.shopifyClientId ?? null,
-        },
-      });
-
-      return updated;
+    const canonicalInvalidation = await invalidateShopifyCredential({
+      brandId,
+      status: "DISCONNECTED" as const,
+      onInvalidated: async (tx) => {
+        await recordShopifyConnectionLoss(tx as Prisma.TransactionClient, {
+          brandId,
+          eventType: "DISCONNECTED",
+          snapshot: {
+            shopDomain: preDisconnectSummary?.externalAccountId ?? null,
+            currencyCode: preDisconnectSummary?.currencyCode ?? null,
+            shopifyClientId: null,
+          },
+        });
+      },
     });
 
-    // Provider-neutral CommerceConnection mirror (Phase 1 dual-write) — best
-    // effort, runs in its own transaction AFTER the one above has already
-    // committed, and can never fail this request (see connection-sync.ts).
-    // Must never throw: the legacy disconnect above already committed, so a throw here would wrongly surface as a 500 via the outer catch.
-    await safeMarkShopifyCommerceConnectionDisconnected(brandId, "DISCONNECTED");
+    if (canonicalInvalidation.outcome === "NO_CONNECTION") {
+      return NextResponse.json(
+        { error: "Shopify is not connected for this brand." },
+        { status: 400 },
+      );
+    }
 
-    return NextResponse.json({ data: brand });
+    return NextResponse.json({
+      data: {
+        id: brandId,
+        shopifyShopDomain: null,
+        shopifyInstalledAt: null,
+        shopifyUninstalledAt: null,
+        shopifyConnectionStatus: "DISCONNECTED" as const,
+        shopifyLastProductSyncAt: null,
+      },
+    });
   } catch (error) {
     console.error("[brand/shopify/disconnect][POST] Error:", error);
     return NextResponse.json(

@@ -77,6 +77,7 @@ function makeSummary(overrides: Partial<CommerceConnectionSummary> = {}): Commer
     uninstalledAt: null,
     lastProductSyncAt: null,
     isLegacyFallback: false,
+    currencyCode: null,
     ...overrides,
   };
 }
@@ -246,7 +247,6 @@ class FakeStore {
   rows = new Map<string, StoredRow>();
   runs = new Map<string, StoredRun>();
   connections = new Map<string, CommerceConnectionSummary | null>();
-  brandCurrency = new Map<string, string | null>();
   adapters = new Map<CommerceProvider, CommerceAdapter>();
   /** rowId -> field names actually written by the most recent applyProductWrite call for that row. */
   lastWriteFields = new Map<string, string[]>();
@@ -269,9 +269,6 @@ function makeDeps(store: FakeStore, overrides: Partial<ProductSyncDeps> = {}): P
         throw new UnsupportedProviderError(summary.provider);
       }
       return adapter;
-    },
-    async getBrandCurrencyCode(brandId) {
-      return store.brandCurrency.has(brandId) ? store.brandCurrency.get(brandId)! : null;
     },
     async findExistingProducts(connectionId): Promise<ExistingConnectedProductRow[]> {
       return store.rowsForConnection(connectionId).map((row) => ({
@@ -360,8 +357,7 @@ function setupBrand(
   adapter: CommerceAdapter,
   currency: string | null = "USD",
 ): void {
-  store.connections.set(brandId, makeSummary({ id: connectionId, brandId }));
-  store.brandCurrency.set(brandId, currency);
+  store.connections.set(brandId, makeSummary({ id: connectionId, brandId, currencyCode: currency }));
   store.adapters.set(CommerceProvider.SHOPIFY, adapter);
 }
 

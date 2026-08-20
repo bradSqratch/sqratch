@@ -34,6 +34,7 @@
  */
 
 import { CommerceProvider, type CommerceConnectionStatus, type Prisma } from "@prisma/client";
+import { extractCurrencyCodeFromProviderMetadata } from "../connection-resolver";
 import type { CommerceAdapter } from "../adapter";
 import { CommerceConnectionNotFoundError, CommerceProviderApiError } from "../errors";
 import type {
@@ -94,6 +95,7 @@ export type ShopifyCommerceConnectionRow = {
   installedAt: Date | null;
   uninstalledAt: Date | null;
   lastProductSyncAt: Date | null;
+  providerMetadata: Prisma.JsonValue | null;
 };
 
 /**
@@ -142,6 +144,7 @@ async function defaultLoadConnection(
       installedAt: true,
       uninstalledAt: true,
       lastProductSyncAt: true,
+      providerMetadata: true,
     },
   });
 }
@@ -212,6 +215,7 @@ function toCommerceConnectionSummary(
     uninstalledAt: row.uninstalledAt,
     lastProductSyncAt: row.lastProductSyncAt,
     isLegacyFallback: false,
+    currencyCode: extractCurrencyCodeFromProviderMetadata(row.providerMetadata),
   };
 }
 

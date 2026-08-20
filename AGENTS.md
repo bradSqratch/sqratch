@@ -5,7 +5,7 @@ Preserve Graphify-generated sections; Graphify maintains them.
 
 ## Working Tree Safety
 
-- Inspect `git status` before substantial edits.
+- Use compact Git inspection such as git status --short before substantial edits.
 - Preserve unrelated and uncommitted work.
 - Never reset, revert, clean, stash, or overwrite unrelated changes.
 - Re-read a target file before editing when concurrent work may exist.
@@ -16,8 +16,12 @@ Preserve Graphify-generated sections; Graphify maintains them.
 Follow the generated `## graphify` rules below for initial navigation.
 Graphify narrows the search space; current source code is authoritative.
 
-Use targeted source search only when locating an exact symbol/string/path,
-Graphify is insufficient or stale, or source verification is required.
+Use targeted source search only when:
+
+- locating an exact symbol, string, or path;
+- Graphify is insufficient or stale; or
+- source verification is required.
+  Avoid repository-wide searches or broad source reads when Graphify already identifies the relevant files.
 
 ## Stack
 

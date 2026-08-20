@@ -1191,6 +1191,152 @@ describe("financial reconciliation orchestration through handleShopifyOrderWebho
     });
   });
 
+  // -------------------------------------------------------------------------
+  // Phase 13 P2-B: classified reconciliation diagnostics
+  //
+  // Before this, every deferred reconciliation logged an indistinguishable
+  // `"reconciliationOutcome":"NOT_ELIGIBLE"` — an operator could not tell a
+  // missing credential from a >=250-transaction fail-closed, which are very
+  // different operational problems. The reason must surface WITHOUT ever
+  // widening the log's no-secret/no-PII contract.
+  // -------------------------------------------------------------------------
+
+  for (const reason of [
+    "NO_CREDENTIAL",
+    "ORDER_NOT_FOUND",
+    "MALFORMED_SNAPSHOT",
+    "TRANSACTION_COUNT_LIMIT_EXCEEDED",
+    "INVALID_ORDER_ID",
+  ] as const) {
+    test(`P2-B. a NOT_ELIGIBLE reconciliation surfaces its classified reason "${reason}" in the sanitized audit log`, async () => {
+      await withShopifyApiSecret(SECRET, async () => {
+        const logged: string[] = [];
+        const originalLog = console.log;
+        console.log = (...args: unknown[]) => {
+          logged.push(args.map(String).join(" "));
+        };
+        try {
+          await handleShopifyOrderWebhook(
+            deliveryFor(
+              "http://localhost/api/shopify/webhooks/orders/updated",
+              ORDER_WITH_REFUND_EVIDENCE_BODY,
+              `reconcile-reason-${reason}`,
+            ),
+            "orders/updated",
+            normalizeShopifyOrderPayload,
+            {
+              async findConnectionByShopDomain() {
+                return { id: "conn-1", brandId: "brand-1" };
+              },
+              ingest: makeIngestSpy(PASS_OUTCOME).fn,
+              ingestionDeps: {},
+              reconcileFinancials: makeReconcileSpy({
+                outcome: "NOT_ELIGIBLE",
+                reason,
+              }).fn,
+            },
+          );
+        } finally {
+          console.log = originalLog;
+        }
+
+        const line = logged.find((l) => l.includes("shopify_webhook"));
+        assert.ok(line, "expected a sanitized audit log line");
+        const parsed = JSON.parse(line!) as {
+          reconciliationOutcome?: string | null;
+          reconciliationReason?: string | null;
+        };
+        assert.equal(parsed.reconciliationOutcome, "NOT_ELIGIBLE");
+        assert.equal(parsed.reconciliationReason, reason);
+      });
+    });
+  }
+
+  test("P2-B. a RECONCILED delivery logs no reason (there is nothing to diagnose), and a reconciliation that never ran logs neither field", async () => {
+    await withShopifyApiSecret(SECRET, async () => {
+      const captured: Array<Record<string, unknown>> = [];
+      const originalLog = console.log;
+      console.log = (...args: unknown[]) => {
+        const line = args.map(String).join(" ");
+        if (line.includes("shopify_webhook")) {
+          captured.push(JSON.parse(line) as Record<string, unknown>);
+        }
+      };
+      try {
+        // (a) Reconciliation ran and succeeded.
+        await handleShopifyOrderWebhook(
+          deliveryFor(
+            "http://localhost/api/shopify/webhooks/orders/updated",
+            ORDER_WITH_REFUND_EVIDENCE_BODY,
+            "reconcile-reason-success",
+          ),
+          "orders/updated",
+          normalizeShopifyOrderPayload,
+          {
+            async findConnectionByShopDomain() {
+              return { id: "conn-1", brandId: "brand-1" };
+            },
+            ingest: makeIngestSpy(PASS_OUTCOME).fn,
+            ingestionDeps: {},
+            reconcileFinancials: makeReconcileSpy(reconciledResult()).fn,
+          },
+        );
+
+        // (b) No refund evidence -> reconciliation never attempted at all.
+        await handleShopifyOrderWebhook(
+          deliveryFor(
+            "http://localhost/api/shopify/webhooks/orders/updated",
+            ORDER_BODY,
+            "reconcile-reason-not-attempted",
+          ),
+          "orders/updated",
+          normalizeShopifyOrderPayload,
+          {
+            async findConnectionByShopDomain() {
+              return { id: "conn-1", brandId: "brand-1" };
+            },
+            ingest: makeIngestSpy(PASS_OUTCOME).fn,
+            ingestionDeps: {},
+            reconcileFinancials: makeReconcileSpy(reconciledResult()).fn,
+          },
+        );
+      } finally {
+        console.log = originalLog;
+      }
+
+      assert.equal(captured.length, 2);
+      assert.equal(captured[0].reconciliationOutcome, "RECONCILED");
+      assert.equal(captured[0].reconciliationReason, null);
+      assert.equal(captured[1].reconciliationOutcome, null);
+      assert.equal(captured[1].reconciliationReason, null);
+    });
+  });
+
+  test("P2-B. the classified reason is a closed constant — a reconciler result carrying provider text/money/token-shaped data could not reach the log through this field", () => {
+    // Source-level lock: the webhook layer may only ever assign the
+    // reconciler's own `reason` (a union of literal constants declared in
+    // shopify-order-financial-reconciliation.ts), never a message, body, or
+    // interpolated value. If someone later widens this to `String(err)` or
+    // a provider payload, this fails.
+    const source = readSource("src/lib/commerce/providers/shopify-order-webhook.ts");
+    const assignIdx = source.indexOf("reconciliationReason =");
+    assert.notEqual(assignIdx, -1, "reconciliationReason must be assigned");
+    const assignment = source.slice(assignIdx, source.indexOf(";", assignIdx));
+
+    assert.match(assignment, /reconciled\.reason/);
+    assert.doesNotMatch(assignment, /message|error|body|payload|JSON\.stringify|String\(/i);
+
+    // And the reconciler's `reason` really is a closed literal union.
+    const reconcilerSource = readSource(
+      "src/lib/commerce/providers/shopify-order-financial-reconciliation.ts",
+    );
+    assert.match(
+      reconcilerSource,
+      /reason:\s*\n?\s*\|?\s*"NO_CREDENTIAL"/,
+      "reason must remain a closed union of literal constants",
+    );
+  });
+
   test("order_transactions/create ALWAYS triggers reconciliation from its own bare, order-id-only payload", async () => {
     await withShopifyApiSecret(SECRET, async () => {
       const spy = makeIngestSpy(PASS_OUTCOME);
@@ -1253,6 +1399,12 @@ describe("the webhook audit log never carries a payload excerpt, customer field,
       "outcome",
       "reason",
       "reconciliationOutcome",
+      // Phase 13 P2-B: the reconciler's CLASSIFIED reason constant only
+      // (NO_CREDENTIAL / INVALID_ORDER_ID / ORDER_NOT_FOUND /
+      // MALFORMED_SNAPSHOT / TRANSACTION_COUNT_LIMIT_EXCEEDED). Never a
+      // provider message, token, payload excerpt, or monetary value — the
+      // assertions above this key-set check enforce that.
+      "reconciliationReason",
       "shopDomain",
       "topic",
       "warnings",

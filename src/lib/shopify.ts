@@ -159,8 +159,26 @@ export async function getShopifyShopCurrency(input: {
   shopDomain: string;
   encryptedToken: string;
 }) {
+  return getShopifyShopCurrencyWithAccessToken({
+    shopDomain: input.shopDomain,
+    accessToken: decryptSecret(input.encryptedToken),
+  });
+}
+
+/**
+ * PHASE 14B.4C: the plaintext-token entry point, for a caller that already
+ * resolved a canonical access token (e.g. via `getValidAccessToken`) and
+ * must never re-encrypt it just to satisfy `getShopifyShopCurrency`'s
+ * encrypted-token signature (that signature is kept only for the install
+ * route, which still has an encrypted pending-install payload at the point
+ * it calls this). Both functions share this same implementation.
+ */
+export async function getShopifyShopCurrencyWithAccessToken(input: {
+  shopDomain: string;
+  accessToken: string;
+}) {
   try {
-    const accessToken = decryptSecret(input.encryptedToken);
+    const accessToken = input.accessToken;
     const response = await fetch(
       `https://${input.shopDomain}/admin/api/${SHOPIFY_API_VERSION}/graphql.json`,
       {

@@ -248,6 +248,7 @@ const CONNECTION_ROW_SELECT = {
   uninstalledAt: true,
   lastProductSyncAt: true,
   createdAt: true,
+  providerMetadata: true,
 } as const;
 
 async function defaultListCandidateBrands(

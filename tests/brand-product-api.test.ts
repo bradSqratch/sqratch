@@ -74,14 +74,6 @@ function makeBrand(overrides: Partial<BrandFixtureFields> = {}): BrandFixtureFie
     websiteUrl: null,
     logoUrl: null,
     coverImageUrl: null,
-    shopifyShopDomain: "test-shop.myshopify.com",
-    shopifyAdminAccessTokenEncrypted: "encrypted-token",
-    shopifyInstalledAt: new Date("2026-01-01T00:00:00Z"),
-    shopifyDisconnectedAt: null,
-    shopifyUninstalledAt: null,
-    shopifyConnectionStatus: "CONNECTED",
-    shopifyLastProductSyncAt: new Date("2026-02-01T00:00:00Z"),
-    shopifyCurrencyCode: "USD",
     ...overrides,
   };
 }

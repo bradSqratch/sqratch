@@ -1,18 +1,24 @@
 /**
  * tests/commerce-connection-compatibility.test.ts
  *
- * Unit tests for the Phase-1 legacy/neutral commerce-connection
- * compatibility layer:
- *   - src/lib/commerce/connection-resolver.ts (read-side resolver + pure
- *     mapping helpers)
- *   - src/lib/commerce/connection-sync.ts (idempotent dual-write, relink,
- *     single-primary enforcement, secret mirror, best-effort wrapper)
- *   - scripts/backfill-commerce-connections.ts (idempotency of the loop
- *     that reuses syncShopifyCommerceConnectionForBrand — the script
- *     itself is a thin CLI wrapper with no additional business logic to
- *     unit test, matching the precedent of
- *     scripts/import-legacy-printed-stickers.ts, which also has no
- *     dedicated test file)
+ * PHASE 14C-A: the legacy READ-side fallback (`mapLegacyBrandToConnectionSummary`,
+ * `LegacyBrandShopifyFields`, `CommerceConnectionResolverDeps.findLegacyBrandFields`,
+ * `safeSyncShopifyCommerceConnection`) was removed from
+ * `connection-resolver.ts` / `connection-sync.ts` — every live Shopify
+ * merchant already has a canonical `CommerceConnection` row
+ * (operator-verified), so those tests were removed with the code they
+ * covered, not left to rot. The remaining WRITE-side dual-write machinery
+ * (`buildShopifyConnectionSyncInput`, `syncShopifyCommerceConnectionForBrand`,
+ * `rebuildShopifyConnectionSecretForBrand`) is still genuinely exercised
+ * here — it now backs only the pre-column-drop reconciliation tool
+ * (`connection-reconciliation.ts`), not any runtime request path, but its
+ * correctness still matters for as long as that tool runs.
+ * `scripts/backfill-commerce-connections.ts` (referenced in the historical
+ * numbering below) has been deleted outright — both purposes it served
+ * (initial backfill, EXPIRING_OFFLINE secret-staleness remedy) are now
+ * structurally obsolete: every install writes canonical directly, and
+ * `performTokenRefresh` writes a rotated token canonically-first with no
+ * remaining Brand-mirror gap for it to repair.
  *
  * No real DB, no real network anywhere in this file. `connection-sync.ts`'s
  * transactional core is exercised against a hand-rolled in-memory fake `tx`
@@ -23,12 +29,14 @@
  * reassignment, and single-primary clearing — these are not hand-waved
  * assertions, the fake actually enforces uniqueness the way Postgres would.
  *
- * Covered cases (numbered to match the review checklist):
- *  1.  Resolver prefers an existing CommerceConnection row over legacy Brand fields.
- *  2.  Resolver falls back to legacy Brand fields when no connection row exists.
+ * Covered cases (numbered to match the review checklist; numbers 2 and 13
+ * now describe their PHASE 14C-A replacement, not the original legacy
+ * behavior — see each test for why):
+ *  1.  Resolver prefers an existing CommerceConnection row.
+ *  2.  No connection row -> null. No legacy fallback (see test comment).
  *  3.  Resolver returns null for a brand with no Shopify connection at all.
  *  4.  Multi-connection tiebreak: isPrimary wins, then most recent installedAt.
- *  5.  Legacy status mapping for all four ShopifyConnectionStatus values.
+ *  5.  Legacy status mapping for all four ShopifyConnectionStatus values (still used by the dual-write builder).
  *  6.  grantedScopes normalization: comma string, Json array, null, non-array Json.
  *  7.  Idempotency: syncing twice produces one connection (upsert, not a second create).
  *  8.  Relink: same shop domain, different brand -> brandId reassigned, no duplicate.
@@ -36,7 +44,7 @@
  *  10. Secret encryption: encryptedPayload round-trips via decryptSecret; keyVersion is set.
  *  11. Secret exclusion: JSON.stringify(summary) never matches /token|secret|encrypted|password/i.
  *  12. Disconnected/uninstalled brand -> secret row deleted, not written empty.
- *  13. safeSyncShopifyCommerceConnection swallows a thrown error, never rethrows.
+ *  13. (removed — see the note above `safeSyncShopifyCommerceConnection`'s old describe block.)
  *  14. Backfill idempotency: looping the sync twice against a shared fake store creates nothing new.
  *  15. GDPR redaction delete is keyed on (provider, externalAccountId), not brandId.
  *  16. Redaction delete still finds and removes the row when it's "orphaned" from the
@@ -66,21 +74,19 @@ import { CommerceProvider, Prisma } from "@prisma/client";
 import { decryptSecret, encryptSecret } from "../src/lib/crypto";
 
 import {
-  mapLegacyBrandToConnectionSummary,
   mapCommerceConnectionToSummary,
+  extractCurrencyCodeFromProviderMetadata,
   mapLegacyShopifyStatusToCommerceStatus,
   normalizeLegacyGrantedScopes,
   normalizeGrantedScopesJson,
   pickPreferredConnectionRow,
   resolveCommerceConnectionForBrand,
   type CommerceConnectionRow,
-  type LegacyBrandShopifyFields,
 } from "../src/lib/commerce/connection-resolver";
 
 import {
   buildShopifyConnectionSyncInput,
   syncShopifyCommerceConnectionForBrand,
-  safeSyncShopifyCommerceConnection,
   deleteShopifyCommerceConnectionByShopDomain,
   safeDeleteShopifyCommerceConnectionByShopDomain,
   normalizeExternalAccountId,
@@ -93,22 +99,6 @@ import {
 // ---------------------------------------------------------------------------
 // Fixture helpers
 // ---------------------------------------------------------------------------
-
-function makeLegacyBrandFields(
-  overrides: Partial<LegacyBrandShopifyFields> = {},
-): LegacyBrandShopifyFields {
-  return {
-    id: "brand-1",
-    name: "Acme",
-    shopifyShopDomain: "acme.myshopify.com",
-    shopifyConnectionStatus: "CONNECTED",
-    shopifyInstalledAt: new Date("2026-01-01T00:00:00Z"),
-    shopifyUninstalledAt: null,
-    shopifyLastProductSyncAt: null,
-    shopifyGrantedScopes: "read_products,write_discounts",
-    ...overrides,
-  };
-}
 
 function makeConnectionRow(
   overrides: Partial<CommerceConnectionRow> = {},
@@ -127,6 +117,7 @@ function makeConnectionRow(
     uninstalledAt: null,
     lastProductSyncAt: null,
     createdAt: new Date("2026-01-01T00:00:00Z"),
+    providerMetadata: { authMode: "LEGACY_OFFLINE", currencyCode: "USD" },
     ...overrides,
   };
 }
@@ -186,6 +177,8 @@ type FakeSecretRow = {
   expiresAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
+  refreshLockId: string | null;
+  refreshLockedUntil: Date | null;
 };
 
 type WhereClause = Record<string, unknown>;
@@ -436,8 +429,8 @@ function makeSyncDeps(
 // 1-3: resolver precedence + fallback + null
 // ---------------------------------------------------------------------------
 
-describe("resolveCommerceConnectionForBrand precedence", () => {
-  test("1. prefers an existing CommerceConnection row over legacy Brand fields", async () => {
+describe("resolveCommerceConnectionForBrand — canonical-only (PHASE 14C-A: no legacy fallback)", () => {
+  test("1. prefers an existing CommerceConnection row", async () => {
     const row = makeConnectionRow({ id: "conn-real", displayName: "real-connection" });
 
     const result = await resolveCommerceConnectionForBrand(
@@ -445,9 +438,6 @@ describe("resolveCommerceConnectionForBrand precedence", () => {
       CommerceProvider.SHOPIFY,
       {
         findConnectionRows: async () => [row],
-        findLegacyBrandFields: async () => {
-          throw new Error("must not be called when a connection row exists");
-        },
       },
     );
 
@@ -457,22 +447,25 @@ describe("resolveCommerceConnectionForBrand precedence", () => {
     assert.equal(result?.displayName, "real-connection");
   });
 
-  test("2. falls back to legacy Brand fields when no connection row exists", async () => {
-    const legacyBrand = makeLegacyBrandFields();
-
+  // PHASE 14C-A: this used to assert a legacy Brand fallback summary
+  // (id: null, isLegacyFallback: true). The operator verified via live SQL
+  // that every currently-installed Shopify merchant already has a canonical
+  // CommerceConnection row, so that fallback was removed entirely —
+  // `resolveCommerceConnectionForBrand`'s deps no longer even have a
+  // `findLegacyBrandFields` slot to inject. The real invariant this test
+  // protects — "no canonical row means no connection" — is unchanged;
+  // only the shape of the answer (previously a legacy-derived summary, now
+  // bare `null`) changed with it.
+  test("2. no connection row -> null, no legacy fallback", async () => {
     const result = await resolveCommerceConnectionForBrand(
       "brand-1",
       CommerceProvider.SHOPIFY,
       {
         findConnectionRows: async () => [],
-        findLegacyBrandFields: async () => legacyBrand,
       },
     );
 
-    assert.ok(result);
-    assert.equal(result?.id, null);
-    assert.equal(result?.isLegacyFallback, true);
-    assert.equal(result?.externalAccountId, "acme.myshopify.com");
+    assert.equal(result, null);
   });
 
   test("3. returns null for a brand with no Shopify connection at all", async () => {
@@ -481,8 +474,6 @@ describe("resolveCommerceConnectionForBrand precedence", () => {
       CommerceProvider.SHOPIFY,
       {
         findConnectionRows: async () => [],
-        findLegacyBrandFields: async () =>
-          makeLegacyBrandFields({ shopifyShopDomain: null }),
       },
     );
 
@@ -495,11 +486,119 @@ describe("resolveCommerceConnectionForBrand precedence", () => {
       CommerceProvider.SHOPIFY,
       {
         findConnectionRows: async () => [],
-        findLegacyBrandFields: async () => null,
       },
     );
 
     assert.equal(result, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 13: one Brand, MULTIPLE providers.
+//
+// This is the Commerce7-readiness contract at the resolver level. Nothing
+// here implements Commerce7 or calls it — it asserts only that the canonical
+// resolution path is genuinely keyed on (brandId, provider) and that the
+// SHOPIFY-only legacy fallback can never bleed into another provider's
+// answer. If a future Commerce7 adapter is added, these are the invariants
+// it must not break.
+// ---------------------------------------------------------------------------
+
+describe("Phase 13: a single Brand may hold Shopify AND Commerce7 connections simultaneously", () => {
+  const shopifyRow = makeConnectionRow({
+    id: "conn-shopify",
+    provider: CommerceProvider.SHOPIFY,
+    displayName: "acme-shopify",
+    externalAccountId: "acme.myshopify.com",
+    storefrontUrl: "https://acme.myshopify.com",
+  });
+  const commerce7Row = makeConnectionRow({
+    id: "conn-c7",
+    provider: CommerceProvider.COMMERCE7,
+    displayName: "acme-winery",
+    externalAccountId: "acme-winery-tenant",
+    storefrontUrl: "https://shop.acmewinery.com",
+    grantedScopes: [],
+  });
+
+  /** Stands in for the real (brandId, provider)-scoped query. */
+  function findRowsScopedByProvider(rows: CommerceConnectionRow[]) {
+    return async (brandId: string, provider: CommerceProvider) =>
+      rows.filter((r) => r.brandId === brandId && r.provider === provider);
+  }
+
+  test("resolving SHOPIFY returns only the Shopify connection, never the Commerce7 row", async () => {
+    const result = await resolveCommerceConnectionForBrand(
+      "brand-1",
+      CommerceProvider.SHOPIFY,
+      {
+        findConnectionRows: findRowsScopedByProvider([shopifyRow, commerce7Row]),
+      },
+    );
+
+    assert.ok(result);
+    assert.equal(result?.id, "conn-shopify");
+    assert.equal(result?.provider, CommerceProvider.SHOPIFY);
+    assert.equal(result?.externalAccountId, "acme.myshopify.com");
+    assert.equal(result?.isLegacyFallback, false);
+  });
+
+  test("resolving COMMERCE7 returns only the Commerce7 connection, with no Shopify identifiers leaking in", async () => {
+    const result = await resolveCommerceConnectionForBrand(
+      "brand-1",
+      CommerceProvider.COMMERCE7,
+      {
+        findConnectionRows: findRowsScopedByProvider([shopifyRow, commerce7Row]),
+      },
+    );
+
+    assert.ok(result);
+    assert.equal(result?.id, "conn-c7");
+    assert.equal(result?.provider, CommerceProvider.COMMERCE7);
+    assert.equal(result?.externalAccountId, "acme-winery-tenant");
+    assert.doesNotMatch(String(result?.externalAccountId), /myshopify/);
+    assert.equal(result?.isLegacyFallback, false);
+  });
+
+  // PHASE 14C-A: no legacy fallback exists for any provider anymore — a
+  // Brand with only a Commerce7 connection resolves SHOPIFY to bare `null`,
+  // never a legacy-derived summary.
+  test("a Brand with ONLY a Commerce7 connection resolves SHOPIFY to null without ever returning the Commerce7 row", async () => {
+    const result = await resolveCommerceConnectionForBrand(
+      "brand-1",
+      CommerceProvider.SHOPIFY,
+      {
+        findConnectionRows: findRowsScopedByProvider([commerce7Row]),
+      },
+    );
+
+    assert.equal(result, null);
+  });
+
+  test("cross-brand isolation holds per provider: brand-2's Commerce7 row is never returned for brand-1", async () => {
+    const otherBrandC7 = makeConnectionRow({
+      id: "conn-c7-other",
+      brandId: "brand-2",
+      provider: CommerceProvider.COMMERCE7,
+      externalAccountId: "other-tenant",
+    });
+
+    const result = await resolveCommerceConnectionForBrand(
+      "brand-1",
+      CommerceProvider.COMMERCE7,
+      {
+        findConnectionRows: findRowsScopedByProvider([otherBrandC7]),
+      },
+    );
+
+    assert.equal(result, null);
+  });
+
+  test("the CommerceProvider enum already carries COMMERCE7, so no schema change is needed to attach one", () => {
+    assert.ok(
+      Object.values(CommerceProvider).includes(CommerceProvider.COMMERCE7),
+      "CommerceConnection.provider must already support COMMERCE7",
+    );
   });
 });
 
@@ -617,26 +716,18 @@ describe("grantedScopes normalization", () => {
 });
 
 // ---------------------------------------------------------------------------
-// mapLegacyBrandToConnectionSummary / mapCommerceConnectionToSummary
+// mapCommerceConnectionToSummary
+//
+// PHASE 14C-A: `mapLegacyBrandToConnectionSummary` was deleted from
+// connection-resolver.ts along with the rest of the legacy-fallback read
+// path (operator-verified: no live merchant needs it). Its direct unit
+// tests are removed with it — the invariants they protected (no shop
+// domain -> null; a legacy-derived summary always carries isPrimary:true /
+// isLegacyFallback:true / id:null) no longer apply to any reachable code
+// path.
 // ---------------------------------------------------------------------------
 
 describe("pure mapping helpers", () => {
-  test("mapLegacyBrandToConnectionSummary returns null when there is no shop domain", () => {
-    assert.equal(
-      mapLegacyBrandToConnectionSummary(makeLegacyBrandFields({ shopifyShopDomain: null })),
-      null,
-    );
-  });
-
-  test("mapLegacyBrandToConnectionSummary derives isPrimary: true and isLegacyFallback: true", () => {
-    const summary = mapLegacyBrandToConnectionSummary(makeLegacyBrandFields());
-    assert.ok(summary);
-    assert.equal(summary?.isPrimary, true);
-    assert.equal(summary?.isLegacyFallback, true);
-    assert.equal(summary?.id, null);
-    assert.equal(summary?.provider, CommerceProvider.SHOPIFY);
-  });
-
   test("mapCommerceConnectionToSummary maps every field and sets isLegacyFallback: false", () => {
     const row = makeConnectionRow();
     const summary = mapCommerceConnectionToSummary(row);
@@ -644,6 +735,34 @@ describe("pure mapping helpers", () => {
     assert.equal(summary.id, row.id);
     assert.equal(summary.brandId, row.brandId);
     assert.deepEqual(summary.grantedScopes, ["read_products"]);
+  });
+
+  // ---------------------------------------------------------------------
+  // M. PHASE 14B.4B — currency comes from the SINGLE canonical
+  // representation: `CommerceConnection.providerMetadata.currencyCode` for a
+  // real row, `Brand.shopifyCurrencyCode` ONLY for the legacy fallback (no
+  // canonical row exists at all). No second/duplicate currency field exists
+  // anywhere in the codebase.
+  // ---------------------------------------------------------------------
+  test("M. mapCommerceConnectionToSummary sources currencyCode from providerMetadata.currencyCode", () => {
+    const row = makeConnectionRow({
+      providerMetadata: { authMode: "LEGACY_OFFLINE", currencyCode: "CAD" },
+    });
+    assert.equal(mapCommerceConnectionToSummary(row).currencyCode, "CAD");
+  });
+
+  test("M. extractCurrencyCodeFromProviderMetadata tolerates malformed providerMetadata shapes without throwing", () => {
+    assert.equal(extractCurrencyCodeFromProviderMetadata(null), null);
+    assert.equal(extractCurrencyCodeFromProviderMetadata(undefined), null);
+    assert.equal(extractCurrencyCodeFromProviderMetadata("not-an-object"), null);
+    assert.equal(extractCurrencyCodeFromProviderMetadata(["array", "not", "object"]), null);
+    assert.equal(extractCurrencyCodeFromProviderMetadata({}), null);
+    assert.equal(extractCurrencyCodeFromProviderMetadata({ currencyCode: 123 }), null);
+    assert.equal(extractCurrencyCodeFromProviderMetadata({ currencyCode: "" }), null);
+    assert.equal(
+      extractCurrencyCodeFromProviderMetadata({ authMode: "LEGACY_OFFLINE", currencyCode: "USD" }),
+      "USD",
+    );
   });
 });
 
@@ -837,6 +956,42 @@ describe("syncShopifyCommerceConnectionForBrand", () => {
 
     assert.equal(updated.secretWritten, false);
     assert.equal(fakeTx.secrets.size, 0, "secret row must be deleted, never written empty");
+  });
+
+  test("P1 FIX (independent review): a fresh credential write clears a HELD refresh lease, so a stale-writer CAS can no longer match", async () => {
+    // Models exactly the race the review flagged: a refresh was acquired
+    // against the connection's PRIOR credential (an in-flight rotation, or a
+    // leftover lease from before a relink) and is still outstanding when a
+    // fresh install/relink writes a brand-new secret payload.
+    const fakeTx = makeFakeConnectionSyncTx();
+    const brand = makeLegacyBrandForSync();
+
+    const first = await syncShopifyCommerceConnectionForBrand(
+      "brand-1",
+      makeSyncDeps(brand, fakeTx),
+    );
+    const secretRow = fakeTx.secrets.get(first.connectionId!)!;
+    // Simulate an outstanding lease acquired before the fresh sync below —
+    // e.g. a refresher that called acquireCredentialRefreshLease moments ago
+    // and hasn't rotated yet.
+    secretRow.refreshLockId = "stale-refresher-lock";
+    secretRow.refreshLockedUntil = new Date(Date.now() + 60_000);
+
+    // A second sync writes a brand-new credential for the SAME connection —
+    // the exact shape of an install/relink landing while that lease is held.
+    const second = await syncShopifyCommerceConnectionForBrand(
+      "brand-1",
+      makeSyncDeps(brand, fakeTx),
+    );
+
+    assert.equal(second.secretWritten, true);
+    const updatedSecret = fakeTx.secrets.get(second.connectionId!)!;
+    assert.equal(
+      updatedSecret.refreshLockId,
+      null,
+      "the lease must be cleared by the fresh write, or the old holder's stale-writer CAS would still match and could overwrite this credential",
+    );
+    assert.equal(updatedSecret.refreshLockedUntil, null);
   });
 });
 
@@ -1118,27 +1273,16 @@ describe("secret payload", () => {
     assert.equal(decrypted.refreshTokenExpiresAt, "2026-12-01T00:00:00.000Z");
   });
 
+  // PHASE 14C-A: the legacy-fallback half of this test (a summary derived
+  // from `findLegacyBrandFields`) was removed along with that fallback
+  // path — there is no longer a second summary shape to prove secret
+  // exclusion for. The canonical-row half is unchanged.
   test("11. JSON.stringify of the resolver's returned summary never contains token/secret/encrypted/password", async () => {
-    const legacyBrand = makeLegacyBrandFields();
-    const summaryFromLegacy = await resolveCommerceConnectionForBrand(
-      "brand-1",
-      CommerceProvider.SHOPIFY,
-      {
-        findConnectionRows: async () => [],
-        findLegacyBrandFields: async () => legacyBrand,
-      },
-    );
-    assert.ok(summaryFromLegacy);
-    assert.doesNotMatch(JSON.stringify(summaryFromLegacy), /token|secret|encrypted|password/i);
-
     const summaryFromRow = await resolveCommerceConnectionForBrand(
       "brand-1",
       CommerceProvider.SHOPIFY,
       {
         findConnectionRows: async () => [makeConnectionRow()],
-        findLegacyBrandFields: async () => {
-          throw new Error("must not be called");
-        },
       },
     );
     assert.ok(summaryFromRow);
@@ -1147,39 +1291,14 @@ describe("secret payload", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 13: safeSyncShopifyCommerceConnection never throws
+// PHASE 14C-A: `safeSyncShopifyCommerceConnection` was deleted from
+// connection-sync.ts — its only callers were runtime reverse-mirror writes
+// (shopify-token-manager.ts, the app/uninstalled webhook), all of which
+// were removed once nothing read `Brand.shopify*` at runtime anymore. Its
+// underlying `syncShopifyCommerceConnectionForBrand` remains covered below
+// (test 14 and the primary-assignment-ordering suite) — it is still used
+// directly by the pre-column-drop reconciliation tool.
 // ---------------------------------------------------------------------------
-
-describe("safeSyncShopifyCommerceConnection", () => {
-  test("13. swallows a thrown error from the underlying sync and does not rethrow", async () => {
-    let threw = false;
-    try {
-      await safeSyncShopifyCommerceConnection("brand-1", {
-        findBrandForSync: async () => {
-          throw new Error("simulated DB failure");
-        },
-      });
-    } catch {
-      threw = true;
-    }
-    assert.equal(threw, false, "safeSyncShopifyCommerceConnection must never throw");
-  });
-
-  test("13b. swallows a failure inside the transaction itself", async () => {
-    let threw = false;
-    try {
-      await safeSyncShopifyCommerceConnection("brand-1", {
-        findBrandForSync: async () => makeLegacyBrandForSync(),
-        runTransaction: async () => {
-          throw new Error("simulated transaction failure");
-        },
-      });
-    } catch {
-      threw = true;
-    }
-    assert.equal(threw, false, "safeSyncShopifyCommerceConnection must never throw");
-  });
-});
 
 // ---------------------------------------------------------------------------
 // 14: backfill idempotency (loop reusing syncShopifyCommerceConnectionForBrand)

@@ -34,6 +34,7 @@ function connectedBrand() {
     id: "brand-internal-id",
     name: "Envinate",
     shopifyConnectionStatus: "CONNECTED" as const,
+    currencyCode: null,
   };
 }
 
@@ -95,27 +96,6 @@ test("embedded status reports unlinked for non-current-app or incomplete connect
       data: { linked: false, brandName: null, connectionStatus: null },
     }, state);
   }
-});
-
-test("embedded status lookup requires the current public-app credential state", async () => {
-  const { buildEmbeddedConnectedBrandWhere } = await import(
-    "../src/lib/shopify-embedded-connection"
-  );
-
-  assert.deepEqual(buildEmbeddedConnectedBrandWhere(
-    "verified.myshopify.com",
-    "embedded-status-test-api-key",
-  ), {
-    shopifyShopDomain: "verified.myshopify.com",
-    shopifyConnectionStatus: "CONNECTED",
-    shopifyClientId: "embedded-status-test-api-key",
-    shopifyAuthMode: "EXPIRING_OFFLINE",
-    shopifyAdminAccessTokenEncrypted: { not: null },
-    shopifyRefreshTokenEncrypted: { not: null },
-    shopifyAccessTokenExpiresAt: { not: null },
-    shopifyRefreshTokenExpiresAt: { not: null },
-    shopifyGrantedScopes: { not: null },
-  });
 });
 
 test("embedded disconnect requires a valid App Bridge token", async () => {
@@ -194,34 +174,95 @@ test("embedded disconnect is idempotent when the store is already disconnected",
   });
 });
 
-test("local disconnect data clears credentials without deleting business records", async () => {
-  const { buildLocalShopifyDisconnectData } = await import(
-    "../src/lib/shopify-embedded-connection"
-  );
-  const data = buildLocalShopifyDisconnectData(new Date("2026-07-17T00:00:00Z"));
+// PHASE 14C-A: `buildLocalShopifyDisconnectData` was deleted along with the
+// legacy `Brand` write in `disconnectEmbeddedConnectedBrand` — canonical
+// invalidation (`invalidateShopifyCredential`) is now the sole disconnect
+// mechanism, covered by the "clears only the local matching connection"
+// test above and the canonical-invalidation coverage in
+// tests/shopify-credential-store.test.ts.
 
-  assert.deepEqual(Object.keys(data).sort(), [
-    "shopifyAccessTokenExpiresAt",
-    "shopifyAdminAccessTokenEncrypted",
-    "shopifyClientId",
-    "shopifyConnectionStatus",
-    "shopifyDisconnectedAt",
-    "shopifyGrantedScopes",
-    "shopifyRefreshTokenEncrypted",
-    "shopifyRefreshTokenExpiresAt",
-    "shopifyShopDomain",
-    "shopifyTokenRefreshLockId",
-    "shopifyTokenRefreshLockedUntil",
-    "shopifyUninstalledAt",
-  ]);
-  assert.equal(data.shopifyConnectionStatus, "DISCONNECTED");
-  assert.equal(data.shopifyShopDomain, null);
-  assert.equal(data.shopifyAdminAccessTokenEncrypted, null);
-  assert.equal(data.shopifyRefreshTokenEncrypted, null);
-  assert.equal("campaigns" in data, false);
-  assert.equal("experiences" in data, false);
-  assert.equal("rewardOffers" in data, false);
-  assert.equal("delete" in data, false);
+// ---------------------------------------------------------------------------
+// F. PHASE 14B.4B — findEmbeddedConnectedBrand itself (not an injected fake)
+// resolves canonical-first: a CommerceConnection row wins whenever one
+// exists, and a stale/disagreeing Brand mirror can never resurrect or
+// override a link the canonical connection has already disowned.
+// ---------------------------------------------------------------------------
+
+test("F. findEmbeddedConnectedBrand resolves through CommerceConnection directly, never touching Brand when canonical matches", async () => {
+  const { default: prisma } = (await import("../src/lib/prisma")) as unknown as {
+    default: Record<string, Record<string, (...args: unknown[]) => unknown>>;
+  };
+  let brandFindUniqueCalled = false;
+  prisma.commerceConnection = {
+    findUnique: async (args: unknown) => {
+      const typed = args as {
+        where: { provider_externalAccountId: { provider: string; externalAccountId: string } };
+      };
+      assert.equal(typed.where.provider_externalAccountId.provider, "SHOPIFY");
+      assert.equal(typed.where.provider_externalAccountId.externalAccountId, "verified.myshopify.com");
+      return {
+        brandId: "brand-canonical",
+        status: "CONNECTED",
+        providerClientId: "embedded-status-test-api-key",
+        providerMetadata: { authMode: "EXPIRING_OFFLINE" },
+      };
+    },
+  };
+  prisma.brand = {
+    findUnique: async () => {
+      return { id: "brand-canonical", name: "Canonical Brand" };
+    },
+    findFirst: async () => {
+      brandFindUniqueCalled = true;
+      throw new Error("must not use the legacy Brand predicate when canonical matches");
+    },
+  };
+
+  const { findEmbeddedConnectedBrand } = await import("../src/lib/shopify-embedded-connection");
+  const result = await findEmbeddedConnectedBrand(
+    "verified.myshopify.com",
+    "embedded-status-test-api-key",
+  );
+
+  assert.deepEqual(result, {
+    id: "brand-canonical",
+    name: "Canonical Brand",
+    shopifyConnectionStatus: "CONNECTED",
+    currencyCode: null,
+  });
+  assert.equal(brandFindUniqueCalled, false);
+});
+
+test("F. a canonical connection that DISAGREES (wrong client id) reports unlinked, never falls back to a stale Brand mirror", async () => {
+  const { default: prisma } = (await import("../src/lib/prisma")) as unknown as {
+    default: Record<string, Record<string, (...args: unknown[]) => unknown>>;
+  };
+  prisma.commerceConnection = {
+    findUnique: async () => ({
+      brandId: "brand-canonical",
+      status: "CONNECTED",
+      providerClientId: "some-other-app-client-id",
+      providerMetadata: { authMode: "EXPIRING_OFFLINE" },
+    }),
+  };
+  let legacyFallbackAttempted = false;
+  prisma.brand = {
+    findFirst: async () => {
+      // The canonical row WAS found — it just disagreed. Legacy must never
+      // be consulted as a rescue in that case (only for NO row at all).
+      legacyFallbackAttempted = true;
+      return { id: "brand-legacy", name: "Stale Legacy Brand", shopifyConnectionStatus: "CONNECTED" };
+    },
+  };
+
+  const { findEmbeddedConnectedBrand } = await import("../src/lib/shopify-embedded-connection");
+  const result = await findEmbeddedConnectedBrand(
+    "verified.myshopify.com",
+    "embedded-status-test-api-key",
+  );
+
+  assert.equal(result, null);
+  assert.equal(legacyFallbackAttempted, false);
 });
 
 test("embedded endpoint responses and sanitized logs exclude credentials", async () => {

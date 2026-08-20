@@ -2,14 +2,19 @@
  * src/lib/commerce/connection-resolver.ts
  *
  * Provider-neutral READ path that lets Phase-2 (and tests) ask "what is
- * brand X's commerce connection for provider Y" without caring whether the
- * answer lives in a real `CommerceConnection` row or is still only present
- * as legacy `Brand.shopify*` columns.
+ * brand X's commerce connection for provider Y".
  *
- * PHASE 1 SCOPE: nothing on the live request path calls this module yet
- * (see the Phase-1 architectural decision that reads stay on
- * `Brand.shopify*` columns unchanged). This is a library entry point for
- * the Phase-2 cutover, exercised today only by unit tests.
+ * PHASE 14C-A: legacy `Brand.shopify*` fallback removed. Every currently
+ * installed Shopify merchant already has a canonical `CommerceConnection` +
+ * `CommerceConnectionSecret` (operator-verified live DB evidence) — there is
+ * no legitimate legacy source of truth left to derive a summary from. A
+ * brand with no `CommerceConnection` row for a provider now simply resolves
+ * to `null`, the same as a brand that never connected at all. This module's
+ * pure mapping helper `mapCommerceConnectionToSummary` is on the live
+ * request path — `connection-service.ts`'s `getActiveCommerceConnection`/
+ * `getPrimaryCommerceConnection` are built directly on top of it, and
+ * several routes (status, products, dashboard, rewards) call through to
+ * those.
  *
  * RESOLUTION ORDER (`resolveCommerceConnectionForBrand`):
  *   1. Prefer an existing `CommerceConnection` row for (brandId, provider).
@@ -20,14 +25,8 @@
  *        b. Else, the row with the most recent `installedAt` wins (rows
  *           with a null `installedAt` sort last).
  *        c. Else, the row with the most recent `createdAt` wins.
- *   2. If no `CommerceConnection` row exists, derive a legacy fallback
- *      summary from `Brand.shopify*` columns (`SHOPIFY` only — there is no
- *      legacy column set for any other provider). The result has `id: null`
- *      and `isLegacyFallback: true`.
- *   3. If the brand doesn't exist, or exists but has no shop domain on
- *      record (never connected, or fully redacted), return `null` — a
- *      brand with no Shopify connection at all keeps resolving to `null`
- *      rather than a bogus empty summary.
+ *   2. If no `CommerceConnection` row exists, resolves to `null` — no
+ *      legacy fallback.
  *
  * SECURITY: nothing exported from this file ever reads or returns
  * `CommerceConnectionSecret`, `Brand.shopifyAdminAccessTokenEncrypted`, or
@@ -36,13 +35,11 @@
  *
  * TESTABILITY: dependency injection follows the same idiom as
  * `ReconciliationDeps` in `src/lib/reward-reconciliation.ts` — the pure
- * mapping helpers (`mapLegacyBrandToConnectionSummary`,
- * `mapCommerceConnectionToSummary`, `mapLegacyShopifyStatusToCommerceStatus`,
- * `pickPreferredConnectionRow`) take plain objects and need no DB. The
- * default DB-backed deps lazily import `@/lib/prisma` (only resolved when a
- * lookup actually runs), matching `getPrisma()` in reward-reconciliation.ts
- * and the "lazy defaults" pattern documented in
- * `./providers/shopify-commerce-adapter.ts`.
+ * mapping helpers (`mapCommerceConnectionToSummary`, `pickPreferredConnectionRow`)
+ * take plain objects and need no DB. The default DB-backed deps lazily
+ * import `@/lib/prisma` (only resolved when a lookup actually runs),
+ * matching `getPrisma()` in reward-reconciliation.ts and the "lazy
+ * defaults" pattern documented in `./providers/shopify-commerce-adapter.ts`.
  */
 
 import {
@@ -150,52 +147,6 @@ export function normalizeGrantedScopesJson(
     .filter((scope) => scope.length > 0);
 }
 
-/** The subset of legacy `Brand` columns needed to derive a fallback summary. */
-export type LegacyBrandShopifyFields = {
-  id: string;
-  name: string | null;
-  shopifyShopDomain: string | null;
-  shopifyConnectionStatus: ShopifyConnectionStatus | string;
-  shopifyInstalledAt: Date | null;
-  shopifyUninstalledAt: Date | null;
-  shopifyLastProductSyncAt: Date | null;
-  shopifyGrantedScopes: string | null;
-};
-
-/**
- * Derives a `CommerceConnectionSummary` from legacy `Brand.shopify*`
- * columns. Returns `null` when the brand has no shop domain on record —
- * there is nothing to represent as a connection (never connected, or fully
- * redacted). `isPrimary` is always `true` for a legacy-derived summary: the
- * legacy schema only ever allows a single Shopify connection per brand
- * (`Brand.shopifyShopDomain` is `@unique`), so there is never a rival
- * connection for it to lose primacy to.
- */
-export function mapLegacyBrandToConnectionSummary(
-  brand: LegacyBrandShopifyFields,
-): CommerceConnectionSummary | null {
-  const shopDomain = brand.shopifyShopDomain?.trim();
-  if (!shopDomain) {
-    return null;
-  }
-
-  return {
-    id: null,
-    brandId: brand.id,
-    provider: CommerceProvider.SHOPIFY,
-    status: mapLegacyShopifyStatusToCommerceStatus(brand.shopifyConnectionStatus),
-    displayName: deriveShopifyDisplayName(shopDomain, brand.name),
-    externalAccountId: shopDomain,
-    storefrontUrl: `https://${shopDomain}`,
-    isPrimary: true,
-    grantedScopes: normalizeLegacyGrantedScopes(brand.shopifyGrantedScopes),
-    installedAt: brand.shopifyInstalledAt,
-    uninstalledAt: brand.shopifyUninstalledAt,
-    lastProductSyncAt: brand.shopifyLastProductSyncAt,
-    isLegacyFallback: true,
-  };
-}
-
 /**
  * The subset of a `CommerceConnection` row this module needs. `createdAt`
  * is required (for the tiebreak) even though it is not part of
@@ -216,7 +167,25 @@ export type CommerceConnectionRow = {
   uninstalledAt: Date | null;
   lastProductSyncAt: Date | null;
   createdAt: Date;
+  /** Provider-opaque metadata. Only `currencyCode` is read out of it here. */
+  providerMetadata: Prisma.JsonValue | null;
 };
+
+/**
+ * Extracts `currencyCode` from `CommerceConnection.providerMetadata`.
+ * Tolerates any shape that isn't a plain object with a string `currencyCode`
+ * (the column is `Json?`, with no compile-time guarantee) by returning
+ * `null` rather than throwing.
+ */
+export function extractCurrencyCodeFromProviderMetadata(
+  raw: Prisma.JsonValue | null | undefined,
+): string | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const value = (raw as Record<string, unknown>).currencyCode;
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
 
 /** Maps a real `CommerceConnection` row to the neutral summary shape. */
 export function mapCommerceConnectionToSummary(
@@ -236,6 +205,7 @@ export function mapCommerceConnectionToSummary(
     uninstalledAt: row.uninstalledAt,
     lastProductSyncAt: row.lastProductSyncAt,
     isLegacyFallback: false,
+    currencyCode: extractCurrencyCodeFromProviderMetadata(row.providerMetadata),
   };
 }
 
@@ -282,11 +252,6 @@ export type CommerceConnectionResolverDeps = {
     brandId: string,
     provider: CommerceProvider,
   ): Promise<CommerceConnectionRow[]>;
-
-  /** Loads the legacy Shopify fields for a brand, or `null` if it doesn't exist. */
-  findLegacyBrandFields(
-    brandId: string,
-  ): Promise<LegacyBrandShopifyFields | null>;
 };
 
 async function getPrisma() {
@@ -315,32 +280,13 @@ async function defaultFindConnectionRows(
       uninstalledAt: true,
       lastProductSyncAt: true,
       createdAt: true,
-    },
-  });
-}
-
-async function defaultFindLegacyBrandFields(
-  brandId: string,
-): Promise<LegacyBrandShopifyFields | null> {
-  const prisma = await getPrisma();
-  return prisma.brand.findUnique({
-    where: { id: brandId },
-    select: {
-      id: true,
-      name: true,
-      shopifyShopDomain: true,
-      shopifyConnectionStatus: true,
-      shopifyInstalledAt: true,
-      shopifyUninstalledAt: true,
-      shopifyLastProductSyncAt: true,
-      shopifyGrantedScopes: true,
+      providerMetadata: true,
     },
   });
 }
 
 const DEFAULT_RESOLVER_DEPS: CommerceConnectionResolverDeps = {
   findConnectionRows: defaultFindConnectionRows,
-  findLegacyBrandFields: defaultFindLegacyBrandFields,
 };
 
 // ---------------------------------------------------------------------------
@@ -350,11 +296,8 @@ const DEFAULT_RESOLVER_DEPS: CommerceConnectionResolverDeps = {
 /**
  * Resolves the commerce connection SQRATCH should treat as authoritative
  * for (brandId, provider) — see the resolution-order doc comment at the top
- * of this file. Returns `null` when the brand has no connection at all for
- * this provider (including: brand not found, or a Shopify brand that never
- * connected / was fully redacted).
- *
- * Not wired into any request path in Phase 1 — see the file header.
+ * of this file. Returns `null` when the brand has no `CommerceConnection`
+ * row at all for this provider — no legacy fallback (Phase 14C-A).
  */
 export async function resolveCommerceConnectionForBrand(
   brandId: string,
@@ -368,20 +311,5 @@ export async function resolveCommerceConnectionForBrand(
 
   const rows = await resolvedDeps.findConnectionRows(brandId, provider);
   const preferred = pickPreferredConnectionRow(rows);
-  if (preferred) {
-    return mapCommerceConnectionToSummary(preferred);
-  }
-
-  // Only SHOPIFY has a legacy Brand.shopify* fallback — no other provider
-  // ever had a pre-CommerceConnection representation in this codebase.
-  if (provider !== CommerceProvider.SHOPIFY) {
-    return null;
-  }
-
-  const legacyBrand = await resolvedDeps.findLegacyBrandFields(brandId);
-  if (!legacyBrand) {
-    return null;
-  }
-
-  return mapLegacyBrandToConnectionSummary(legacyBrand);
+  return preferred ? mapCommerceConnectionToSummary(preferred) : null;
 }

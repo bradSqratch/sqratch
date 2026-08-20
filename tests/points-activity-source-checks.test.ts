@@ -87,11 +87,12 @@ test("the redeem route only records a campaign on the ledger when exactly one un
     source,
     /rewardContext\.campaignIds\.length === 1\s*\?\s*rewardContext\.campaignIds\[0\]\s*:\s*null/,
   );
-  // Passed through to every ledger-affecting call site — debit and both
-  // refund paths — so campaign context is consistent across the whole
-  // redemption lifecycle.
+  // Passed through to every ledger-affecting call site — debit and every
+  // refund path (token-unavailable, canonical shop-domain-mismatch guard,
+  // and discount-creation failure) — so campaign context is consistent
+  // across the whole redemption lifecycle.
   const campaignIdPassCount = (
     source.match(/campaignId:\s*deterministicCampaignId/g) ?? []
   ).length;
-  assert.equal(campaignIdPassCount, 3, "expected debit + 2 refund call sites");
+  assert.equal(campaignIdPassCount, 4, "expected debit + 3 refund call sites");
 });

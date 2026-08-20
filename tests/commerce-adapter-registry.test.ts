@@ -70,6 +70,7 @@ function makeFakeAdapter(
           uninstalledAt: null,
           lastProductSyncAt: null,
           isLegacyFallback: false,
+          currencyCode: null,
         },
       };
     },
