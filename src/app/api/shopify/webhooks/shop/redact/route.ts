@@ -7,12 +7,20 @@ import { invalidateShopifyCredential } from "@/lib/commerce/providers/shopify-cr
 
 // Shopify sends shop/redact 48 hours after a merchant uninstalls, confirming
 // all shop data must be erased. Per docs/shopify-data-inventory.md §5:
-//   - Clear ALL Shopify credentials and token metadata on the Brand record.
-//   - Null shopifyShopDomain to release the unique slot (GDPR shop data removal).
 //   - Anonymize Shopify-specific metadata on ShopifyRewardRedemption rows.
+//   - Deactivate reward offers for every brand historically associated with
+//     this shop domain.
+//   - Clear ALL Shopify credentials and token metadata on any Brand record
+//     whose legacy mirror still points at this domain.
+//   - Null shopifyShopDomain to release the unique slot (GDPR shop data removal).
 //   - PRESERVE all SQRATCH business records (PointTransaction,
 //     ShopifyRewardRedemption core fields, BrandRewardOffer rows).
 //   - Delete any orphaned OAuth state TokenStore rows for this shop.
+//
+// PHASE 14C-B1: identity is resolved from domain-scoped history
+// (ShopifyConnectionEvent + ShopifyRewardRedemption), NEVER from
+// `Brand.shopifyShopDomain` — see the in-function comment below for why a
+// live-mirror lookup silently misses a brand that already relinked away.
 export async function POST(request: NextRequest) {
   const verification = await verifyShopifyWebhookRequest(request);
 
@@ -86,27 +94,73 @@ export async function POST(request: NextRequest) {
     // A STALE event is a genuine, HMAC-verified webhook and must still be
     // acknowledged with 200 — but nothing below may run: the shop domain now
     // belongs to a connection this event has no authority over.
-    let brand: { id: string } | null = null;
+    let historicalBrandIds: string[] = [];
+    let mirrorBrandsCleared = 0;
     if (canonicalInvalidation.outcome !== "STALE_EVENT_IGNORED") {
-      // Find the brand holding this domain first so we can use its id in the
-      // redemption update. updateMany on Brand will null the domain, so we need
-      // the id before we null it.
-      brand = await prisma.brand.findFirst({
-        where: { shopifyShopDomain: shopDomain },
-        select: { id: true },
-      });
+      // -----------------------------------------------------------------
+      // PHASE 14C-B1 — IDENTITY IS RESOLVED FROM HISTORY, NEVER FROM
+      // `Brand.shopifyShopDomain`. That field can no longer be trusted as a
+      // routing key: `app/uninstalled` deliberately preserves it (relink
+      // policy), so by the time a delayed `shop/redact` for shop X arrives, the
+      // brand that actually held X may have already relinked to shop Y — its
+      // `Brand.shopifyShopDomain` now reads Y, not X, and a domain-keyed
+      // `findFirst` on Brand would silently miss it, skipping the privacy
+      // scrub for a real historical connection. Every brand that ever had
+      // reward activity or a recorded connection event against `shopDomain`
+      // is resolved from that domain-scoped history instead — this can never
+      // pull in an unrelated brand (cross-brand leakage) because both sources
+      // are filtered on the exact redacted domain, and it can never miss the
+      // brand that actually owned it (unlike a live-mirror lookup, which
+      // silently goes stale on relink).
+      // -----------------------------------------------------------------
+      const [connectionEventBrands, redemptionBrands] = await Promise.all([
+        prisma.shopifyConnectionEvent.findMany({
+          where: { OR: [{ shopDomain }, { previousShopDomain: shopDomain }] },
+          select: { brandId: true },
+          distinct: ["brandId"],
+        }),
+        prisma.shopifyRewardRedemption.findMany({
+          where: { shopifyShopDomain: shopDomain },
+          select: { brandId: true },
+          distinct: ["brandId"],
+        }),
+      ]);
+      historicalBrandIds = [
+        ...new Set([
+          ...connectionEventBrands.map((row) => row.brandId),
+          ...redemptionBrands.map((row) => row.brandId),
+        ]),
+      ];
+
+      // Of the historically-associated brands above, which ones still have
+      // their legacy `Brand.shopifyShopDomain` mirror pointing at THIS domain
+      // right now. This is the ONLY remaining read of that field, and it is
+      // never used to DISCOVER identity (identity is already resolved above)
+      // — only to scope which brands' now-stale legacy mirror columns need
+      // clearing. A brand that already relinked away has nothing left to
+      // clear here (its mirror legitimately reflects its NEW shop), so it is
+      // correctly excluded rather than having its current connection's data
+      // destroyed.
+      const mirrorBrands =
+        historicalBrandIds.length > 0
+          ? await prisma.brand.findMany({
+              where: { id: { in: historicalBrandIds }, shopifyShopDomain: shopDomain },
+              select: { id: true },
+            })
+          : [];
+      mirrorBrandsCleared = mirrorBrands.length;
 
       const operations: Prisma.PrismaPromise<unknown>[] = [];
 
-      if (brand) {
-        // Clear all Shopify credentials, token metadata, and the shop domain on
-        // the Brand. Nulling shopifyShopDomain releases the @unique slot so the
-        // same shop can re-install in future. Timestamps are retained as an
-        // anonymised audit trail (no personal data). Business records are not
-        // touched.
+      for (const mirrorBrand of mirrorBrands) {
+        // Clear all Shopify credentials, token metadata, and the shop domain
+        // on the Brand. Nulling shopifyShopDomain releases the @unique slot so
+        // the same shop can re-install in future. Timestamps are retained as
+        // an anonymised audit trail (no personal data). Business records are
+        // not touched.
         operations.push(
           prisma.brand.update({
-            where: { id: brand.id },
+            where: { id: mirrorBrand.id },
             data: {
               shopifyShopDomain: null,
               shopifyAdminAccessTokenEncrypted: null,
@@ -117,32 +171,44 @@ export async function POST(request: NextRequest) {
               shopifyConnectionStatus: "UNINSTALLED",
             },
           }),
-          // Anonymize Shopify-specific metadata on redemption rows. Core fields
-          // (userId, brandId, offerId, code, pointsCost, status, timestamps) are
-          // preserved as SQRATCH financial/points ledger entries.
-          // Note: shopifyShopDomain is non-nullable in the schema (String) so it
-          // cannot be nulled here; the domain is not personal data per the
-          // inventory analysis in docs/shopify-data-inventory.md §5.
-          prisma.shopifyRewardRedemption.updateMany({
-            where: { shopifyShopDomain: shopDomain },
-            data: {
-              shopifyDiscountNodeId: null,
-              shopifyDiscountStatus: null,
-              shopifyUserErrors: Prisma.JsonNull,
-            },
-          }),
-          // Redaction is a connection loss for this Brand too — its reward
-          // offers must never stay (or become) claimable against a store that
-          // no longer exists for it.
+        );
+      }
+
+      // Anonymize Shopify-specific metadata on redemption rows — domain-keyed,
+      // unconditional on whether any brand's live mirror still matches (a
+      // relink must never suppress this). Core fields (userId, brandId,
+      // offerId, code, pointsCost, status, timestamps) are preserved as
+      // SQRATCH financial/points ledger entries.
+      // Note: shopifyShopDomain is non-nullable in the schema (String) so it
+      // cannot be nulled here; the domain is not personal data per the
+      // inventory analysis in docs/shopify-data-inventory.md §5.
+      operations.push(
+        prisma.shopifyRewardRedemption.updateMany({
+          where: { shopifyShopDomain: shopDomain },
+          data: {
+            shopifyDiscountNodeId: null,
+            shopifyDiscountStatus: null,
+            shopifyUserErrors: Prisma.JsonNull,
+          },
+        }),
+      );
+
+      // Redaction is a connection loss for every historically-associated
+      // brand — their reward offers must never stay (or become) claimable
+      // against a store that no longer exists. Scoped to `historicalBrandIds`
+      // (resolved above from domain-scoped history only), so this can never
+      // touch a brand unrelated to this shop.
+      if (historicalBrandIds.length > 0) {
+        operations.push(
           prisma.brandRewardOffer.updateMany({
-            where: { brandId: brand.id },
+            where: { brandId: { in: historicalBrandIds } },
             data: { isActive: false },
           }),
         );
       }
 
       // Null sourceShopDomain wherever it references the redacted shop, on
-      // every Brand this domain ever touched — not just the Brand currently
+      // every Brand this domain ever touched — not just a brand currently
       // holding it, since a prior relink can leave the domain referenced as
       // sourceShopDomain on another Brand's rows. Rows are never deleted, only
       // the domain reference is cleared (requires product reselection / a
@@ -167,6 +233,8 @@ export async function POST(request: NextRequest) {
         // separately by field so a RELINKED event whose *current* domain is
         // unrelated to this redaction doesn't lose that unrelated data merely
         // because its previousShopDomain happened to be the redacted shop.
+        // This runs AFTER `connectionEventBrands` was already resolved above,
+        // so nulling these fields here cannot affect that identity resolution.
         prisma.shopifyConnectionEvent.updateMany({
           where: { shopDomain },
           data: { shopDomain: null, currencyCode: null, shopifyClientId: null },
@@ -188,24 +256,14 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      if (operations.length > 0) {
-        await prisma.$transaction(operations);
-      }
+      await prisma.$transaction(operations);
 
       // Provider-neutral CommerceConnection ERASURE. Runs AFTER the canonical
       // invalidation above and after the transaction has committed, and can
-      // never fail this webhook (see connection-sync.ts). Deliberately
-      // NOT gated on `brand`: the CommerceConnection row is keyed on
-      // (provider, externalAccountId) = (SHOPIFY, shopDomain), not on
-      // whichever brand currently holds `Brand.shopifyShopDomain`. Those two
-      // can diverge — e.g. shop X's `app/uninstalled` doesn't null
-      // `Brand.shopifyShopDomain` (relink policy), so if the brand later
-      // relinks to shop Y before X's `shop/redact` arrives, no brand has
-      // `shopifyShopDomain === X` here (`brand` is null) even though the
-      // CommerceConnection row for X must still be erased. Deleting by
-      // shopDomain handles this correctly whether or not `brand` resolved,
-      // and never deletes a sibling connection for a different shop on the
-      // same brand.
+      // never fail this webhook (see connection-sync.ts). Keyed on
+      // (provider, externalAccountId) = (SHOPIFY, shopDomain), not on any
+      // Brand field, so it is correct whether or not a brand's legacy mirror
+      // still pointed at this domain.
       await safeDeleteShopifyCommerceConnectionByShopDomain(shopDomain);
     }
 
@@ -217,8 +275,8 @@ export async function POST(request: NextRequest) {
         event: "shopify_webhook",
         topic: "shop/redact",
         shopDomain,
-        brandFound: !!brand,
-        redactionPerformed: !!brand,
+        historicalBrandsFound: historicalBrandIds.length,
+        mirrorBrandsCleared,
         orphanTokensDeleted:
           canonicalInvalidation.outcome === "STALE_EVENT_IGNORED" ? 0 : orphanServices.length,
         canonicalInvalidation: canonicalInvalidation.outcome,

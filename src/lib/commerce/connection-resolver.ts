@@ -42,47 +42,12 @@
  * defaults" pattern documented in `./providers/shopify-commerce-adapter.ts`.
  */
 
-import {
-  CommerceProvider,
-  type CommerceConnectionStatus,
-  type Prisma,
-  type ShopifyConnectionStatus,
-} from "@prisma/client";
+import { CommerceProvider, type CommerceConnectionStatus, type Prisma } from "@prisma/client";
 import type { CommerceConnectionSummary } from "./types";
 
 // ---------------------------------------------------------------------------
 // Pure helpers
 // ---------------------------------------------------------------------------
-
-/**
- * Maps a legacy `Brand.shopifyConnectionStatus` value to the neutral
- * `CommerceConnectionStatus`. The four legacy statuses map 1:1 onto four of
- * the six neutral statuses; `PENDING` and `ERROR` have no legacy
- * equivalent and are never produced here for a value that matches a known
- * legacy status.
- *
- * Typed to accept `string` (not just the closed `ShopifyConnectionStatus`
- * union) so it can defensively handle a value that doesn't match any known
- * legacy status without throwing and without an `any` cast — falling back
- * to `ERROR` to surface the anomaly rather than silently misreporting it as
- * `DISCONNECTED` or any other real status.
- */
-export function mapLegacyShopifyStatusToCommerceStatus(
-  status: ShopifyConnectionStatus | string,
-): CommerceConnectionStatus {
-  switch (status) {
-    case "DISCONNECTED":
-      return "DISCONNECTED";
-    case "CONNECTED":
-      return "CONNECTED";
-    case "UNINSTALLED":
-      return "UNINSTALLED";
-    case "REQUIRES_RECONNECT":
-      return "REQUIRES_RECONNECT";
-    default:
-      return "ERROR";
-  }
-}
 
 /**
  * Derives a readable display name for a Shopify connection. Chosen over

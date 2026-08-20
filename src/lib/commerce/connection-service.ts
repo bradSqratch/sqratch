@@ -22,9 +22,11 @@
  *   - A `CommerceConnection` row exists -> it is used, unconditionally.
  *   - No row exists -> `null`. `Brand.shopify*` is never read.
  *
- * `detectConnectionDrift` is retained only as an always-`driftDetected: false`
- * diagnostic stub for callers that still reference it — there is nothing
- * left to compare a canonical row against.
+ * PHASE 14C-B1: the diagnostic drift-reporting machinery
+ * (`computeConnectionDrift`/`detectConnectionDrift`/`LegacyBrandShopifyFields`)
+ * that used to live here has been removed along with the pre-column-drop
+ * reconciliation tool it existed solely to serve — there is nothing left
+ * anywhere in this file that reads `Brand.shopify*`.
  *
  * Multiple `CommerceConnection` rows for the same (brandId, provider) are
  * resolved with `pickPreferredConnectionRow`'s existing tiebreak — this
@@ -97,58 +99,9 @@ import {
   pickPreferredConnectionRow,
   type CommerceConnectionRow,
 } from "./connection-resolver";
-import { normalizeExternalAccountId } from "./connection-sync";
 import type { CommerceCapabilities, CommerceConnectionSummary } from "./types";
 
 export type { CommerceConnectionRow } from "./connection-resolver";
-
-/**
- * DIAGNOSTIC-ONLY subset of legacy `Brand` columns — used exclusively by
- * `computeConnectionDrift`/`detectConnectionDrift` (see below) for the
- * pre-column-drop reconciliation tool. Not a fallback data source: nothing
- * in this file ever builds a `CommerceConnectionSummary` from this shape.
- * Delete together with the reconciler once the columns are physically
- * dropped (Phase 14C-B).
- */
-export type LegacyBrandShopifyFields = {
-  id: string;
-  name: string | null;
-  shopifyShopDomain: string | null;
-  shopifyConnectionStatus: string;
-  shopifyInstalledAt: Date | null;
-  shopifyUninstalledAt: Date | null;
-  shopifyLastProductSyncAt: Date | null;
-  shopifyGrantedScopes: string | null;
-  shopifyCurrencyCode: string | null;
-};
-
-// ---------------------------------------------------------------------------
-// Drift signal (reused by a later reconciliation tool)
-// ---------------------------------------------------------------------------
-
-export type CommerceConnectionDriftReason =
-  /** A `CommerceConnection` row exists but its externalAccountId disagrees with the normalized legacy domain. */
-  | "ROW_LEGACY_MISMATCH"
-  /** A `CommerceConnection` row exists but the legacy Brand has no shop domain on record. */
-  | "ROW_WITHOUT_LEGACY_DOMAIN"
-  /** The legacy Brand has a shop domain but no `CommerceConnection` row exists yet (mirror hasn't caught up / not backfilled). */
-  | "LEGACY_DOMAIN_WITHOUT_ROW";
-
-/**
- * Typed drift signal for (brandId, provider). Never carries a credential —
- * only the two externalAccountId (shop domain) strings being compared, which
- * are provider account identifiers, not secrets.
- */
-export type CommerceConnectionDriftResult =
-  | { driftDetected: false; brandId: string; provider: CommerceProvider }
-  | {
-      driftDetected: true;
-      brandId: string;
-      provider: CommerceProvider;
-      reason: CommerceConnectionDriftReason;
-      rowExternalAccountId: string | null;
-      legacyExternalAccountId: string | null;
-    };
 
 // ---------------------------------------------------------------------------
 // Dependency injection (for unit testing without a real DB)
@@ -160,8 +113,6 @@ export type CommerceConnectionServiceDeps = {
     brandId: string,
     provider: CommerceProvider,
   ): Promise<CommerceConnectionRow[]>;
-  /** Loads the legacy Shopify fields for a brand, or `null` if it doesn't exist. */
-  findLegacyBrandFields(brandId: string): Promise<LegacyBrandShopifyFields | null>;
   /** Loads a single `CommerceConnection` row by its own id, or `null` if it does not exist. */
   findConnectionRowById(connectionId: string): Promise<CommerceConnectionRow | null>;
   /** The adapter registry used by `getCommerceCapabilities` / `getAdapterForConnection`. */
@@ -212,29 +163,8 @@ async function defaultFindConnectionRowById(
   });
 }
 
-async function defaultFindLegacyBrandFields(
-  brandId: string,
-): Promise<LegacyBrandShopifyFields | null> {
-  const prisma = await getPrisma();
-  return prisma.brand.findUnique({
-    where: { id: brandId },
-    select: {
-      id: true,
-      name: true,
-      shopifyShopDomain: true,
-      shopifyConnectionStatus: true,
-      shopifyInstalledAt: true,
-      shopifyUninstalledAt: true,
-      shopifyLastProductSyncAt: true,
-      shopifyGrantedScopes: true,
-      shopifyCurrencyCode: true,
-    },
-  });
-}
-
 const DEFAULT_SERVICE_DEPS: CommerceConnectionServiceDeps = {
   findConnectionRows: defaultFindConnectionRows,
-  findLegacyBrandFields: defaultFindLegacyBrandFields,
   findConnectionRowById: defaultFindConnectionRowById,
   registry: defaultCommerceAdapterRegistry,
 };
@@ -271,75 +201,6 @@ async function resolvePreferredConnection(
   const candidateRows = rowFilter ? rows.filter(rowFilter) : rows;
   const preferredRow = pickPreferredConnectionRow(candidateRows);
   return preferredRow ? mapCommerceConnectionToSummary(preferredRow) : null;
-}
-
-/**
- * DIAGNOSTIC ONLY — used exclusively by the pre-column-drop reconciliation
- * tool (`connection-reconciliation.ts` / `scripts/reconcile-commerce-connections.ts`)
- * to report disagreement between a canonical row and the still-schema-present
- * legacy `Brand.shopify*` columns, WITHOUT ever changing which connection
- * `getActiveCommerceConnection`/`getPrimaryCommerceConnection` return (see
- * `resolvePreferredConnection` above — fully decoupled from this function).
- * This is not a fallback: it never substitutes a legacy value for a missing
- * or disagreeing canonical one, it only reports the disagreement for an
- * operator-run tool to act on. Must be deleted together with the reconciler
- * once the Brand columns are physically dropped (Phase 14C-B) — at that
- * point there is nothing left for it to compare against.
- */
-async function computeConnectionDrift(
-  brandId: string,
-  provider: CommerceProvider,
-  deps: CommerceConnectionServiceDeps,
-): Promise<CommerceConnectionDriftResult> {
-  if (provider !== CommerceProvider.SHOPIFY) {
-    return { driftDetected: false, brandId, provider };
-  }
-
-  const rows = await deps.findConnectionRows(brandId, provider).catch(() => []);
-  const preferredRow = pickPreferredConnectionRow(rows);
-  const legacyBrand = await deps.findLegacyBrandFields(brandId).catch(() => null);
-  const legacyDomain = legacyBrand?.shopifyShopDomain
-    ? normalizeExternalAccountId(legacyBrand.shopifyShopDomain)
-    : null;
-
-  if (preferredRow) {
-    const rowExternalAccountId = normalizeExternalAccountId(preferredRow.externalAccountId);
-    if (legacyDomain === null) {
-      return {
-        driftDetected: true,
-        brandId,
-        provider,
-        reason: "ROW_WITHOUT_LEGACY_DOMAIN",
-        rowExternalAccountId,
-        legacyExternalAccountId: null,
-      };
-    }
-    if (rowExternalAccountId !== legacyDomain) {
-      return {
-        driftDetected: true,
-        brandId,
-        provider,
-        reason: "ROW_LEGACY_MISMATCH",
-        rowExternalAccountId,
-        legacyExternalAccountId: legacyDomain,
-      };
-    }
-    return { driftDetected: false, brandId, provider };
-  }
-
-  if (legacyDomain === null) {
-    // Both sides agree: no connection at all. Not drift.
-    return { driftDetected: false, brandId, provider };
-  }
-  // Legacy says connected; the canonical row hasn't been backfilled yet.
-  return {
-    driftDetected: true,
-    brandId,
-    provider,
-    reason: "LEGACY_DOMAIN_WITHOUT_ROW",
-    rowExternalAccountId: null,
-    legacyExternalAccountId: legacyDomain,
-  };
 }
 
 // ---------------------------------------------------------------------------
@@ -572,23 +433,6 @@ export async function getPrimaryCommerceConnection(
     resolveServiceDeps(deps),
     (row) => row.isPrimary,
   );
-}
-
-/**
- * DIAGNOSTIC ONLY (see `computeConnectionDrift`'s doc comment above) —
- * reports whether (brandId, provider)'s `CommerceConnection` mirror agrees
- * with the still-schema-present legacy `Brand.shopify*` columns, for the
- * pre-column-drop reconciliation tool. Never changes which connection
- * `getActiveCommerceConnection`/`getPrimaryCommerceConnection` return.
- * Deliberately does NOT log anything itself — a caller that wants to log a
- * finding should do so itself, e.g. from the reconciliation job.
- */
-export async function detectConnectionDrift(
-  brandId: string,
-  provider: CommerceProvider = CommerceProvider.SHOPIFY,
-  deps: Partial<CommerceConnectionServiceDeps> = {},
-): Promise<CommerceConnectionDriftResult> {
-  return computeConnectionDrift(brandId, provider, resolveServiceDeps(deps));
 }
 
 // ---------------------------------------------------------------------------

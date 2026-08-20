@@ -2,34 +2,34 @@
  * tests/commerce-connection-service.test.ts
  *
  * Unit tests for the provider-neutral commerce connection SERVICE
- * (`src/lib/commerce/connection-service.ts`), which is built on top of the
- * Phase-1 legacy/neutral compatibility layer already covered by
- * `tests/commerce-connection-compatibility.test.ts`
- * (`src/lib/commerce/connection-resolver.ts` / `connection-sync.ts`).
+ * (`src/lib/commerce/connection-service.ts`).
+ *
+ * PHASE 14C-B1: the legacy/diagnostic comparison machinery this file used to
+ * cover (`detectConnectionDrift`, `findLegacyBrandFields`,
+ * `LegacyBrandShopifyFields`) was removed from `connection-service.ts` along
+ * with the pre-column-drop reconciliation tool it existed solely to serve.
+ * `CommerceConnection` is the sole runtime authority with no comparison
+ * value left to test against — the tests below reflect that directly rather
+ * than asserting against a removed drift-reporting API.
  *
  * No real DB, no real network anywhere in this file — every DB-backed
- * dependency is injected as a hand-rolled in-memory fake (same idiom as
- * `commerce-connection-compatibility.test.ts`'s fixtures).
+ * dependency is injected as a hand-rolled in-memory fake.
  *
  * Covered cases (numbered to match the Phase-2 review checklist):
- *  1.  getActiveCommerceConnection prefers the CommerceConnection row when it agrees with legacy truth.
- *  2.  getActiveCommerceConnection falls back to legacy when the row's externalAccountId disagrees
- *      with Brand.shopifyShopDomain, and reports drift via detectConnectionDrift.
- *  3.  getActiveCommerceConnection falls back to legacy when no row exists (id === null, isLegacyFallback === true).
+ *  1.  getActiveCommerceConnection returns the CommerceConnection row as-is (canonical-only, no comparison).
+ *  3.  getActiveCommerceConnection returns null when no row exists.
  *  4.  getActiveCommerceConnection returns null for a brand with no commerce connection at all.
  *  5.  A read through any exported lookup performs ZERO writes — asserted against a fake "prisma"
  *      whose create/update/upsert/delete methods throw if ever called.
  *  6.  Multiple connections for one provider: deterministic selection matching pickPreferredConnectionRow.
- *  7.  getPrimaryCommerceConnection returns the primary; falls back to legacy when none is marked primary.
+ *  7.  getPrimaryCommerceConnection returns the primary; returns null when none is marked primary.
  *  8.  getCommerceCapabilities / getAdapterForConnection: SHOPIFY resolves; COMMERCE7 is controlled
  *      (getCommerceCapabilities returns all-false, never throws; getAdapterForConnection throws
  *      UnsupportedProviderError, never a network call).
  *  9.  isConnectionUsable / connectionRequiresReconnect reproduce today's exact semantics across
  *      CONNECTED / DISCONNECTED / UNINSTALLED / REQUIRES_RECONNECT / no-domain summaries.
  *  10. toSafeConnectionSummary output, JSON.stringify'd, never matches /token|secret|encrypted|password/i.
- *  11. Task-2 cut-over call sites: isLegacyShopifyBrandConnectionUsable / externalAccountIdFromShopDomain /
- *      deriveShopifyStorefrontUrl reproduce the exact old direct-field decisions for
- *      connected / disconnected / uninstalled / requires-reconnect / no-domain brands.
+ *  11. deriveShopifyStorefrontUrl reproduces the exact old direct-field decision for present/absent domains.
  */
 
 process.env.APP_ENCRYPTION_KEY ||= "test-encryption-key-for-commerce-service-tests";
@@ -45,7 +45,6 @@ import {
   recordCommerceConnectionCurrencyCode,
   getCommerceConnectionById,
   getPrimaryCommerceConnection,
-  detectConnectionDrift,
   getCommerceCapabilities,
   getAdapterForConnection,
   isConnectionUsable,
@@ -55,32 +54,14 @@ import {
   type CommerceConnectionServiceDeps,
   type BatchCommerceConnectionServiceDeps,
   type CommerceConnectionRow,
-  type LegacyBrandShopifyFields,
 } from "../src/lib/commerce/connection-service";
 import { UnsupportedProviderError } from "../src/lib/commerce/errors";
 import { ShopifyCommerceAdapter } from "../src/lib/commerce/providers/shopify-commerce-adapter";
 import type { CommerceConnectionSummary } from "../src/lib/commerce/types";
 
 // ---------------------------------------------------------------------------
-// Fixture helpers (mirrors tests/commerce-connection-compatibility.test.ts)
+// Fixture helpers
 // ---------------------------------------------------------------------------
-
-function makeLegacyBrandFields(
-  overrides: Partial<LegacyBrandShopifyFields> = {},
-): LegacyBrandShopifyFields {
-  return {
-    id: "brand-1",
-    name: "Acme",
-    shopifyShopDomain: "acme.myshopify.com",
-    shopifyConnectionStatus: "CONNECTED",
-    shopifyInstalledAt: new Date("2026-01-01T00:00:00Z"),
-    shopifyUninstalledAt: null,
-    shopifyLastProductSyncAt: null,
-    shopifyGrantedScopes: "read_products,write_discounts",
-    shopifyCurrencyCode: "USD",
-    ...overrides,
-  };
-}
 
 function makeConnectionRow(
   overrides: Partial<CommerceConnectionRow> = {},
@@ -106,19 +87,15 @@ function makeConnectionRow(
 
 /**
  * A minimal fake "prisma" whose read methods (findMany/findUnique) serve
- * data from in-memory arrays and whose write-shaped methods
+ * data from an in-memory array and whose write-shaped methods
  * (create/update/upsert/delete*) THROW if ever called. The injected
  * `CommerceConnectionServiceDeps` read functions delegate INTO this fake
- * rather than reading the in-memory arrays directly, so test 5 genuinely
+ * rather than reading the in-memory array directly, so test 5 genuinely
  * proves the call path never reaches a write-shaped prisma method — not
  * merely that the deps type happens to have none to call.
  */
-function makeFakeReadOnlyStore(options: {
-  connectionRows?: CommerceConnectionRow[];
-  brand?: LegacyBrandShopifyFields | null;
-}) {
+function makeFakeReadOnlyStore(options: { connectionRows?: CommerceConnectionRow[] }) {
   const connectionRows = options.connectionRows ?? [];
-  const brand = options.brand ?? null;
   const calls = { reads: 0, creates: 0, updates: 0, upserts: 0, deletes: 0 };
 
   function unexpectedWrite(kind: keyof typeof calls): () => never {
@@ -147,14 +124,6 @@ function makeFakeReadOnlyStore(options: {
       delete: unexpectedWrite("deletes"),
       deleteMany: unexpectedWrite("deletes"),
     },
-    brand: {
-      findUnique: async (args: { where: { id: string } }) => {
-        calls.reads += 1;
-        return brand && brand.id === args.where.id ? brand : null;
-      },
-      update: unexpectedWrite("updates"),
-      updateMany: unexpectedWrite("updates"),
-    },
   };
 
   // Deliberately `Partial<CommerceConnectionServiceDeps>` — omits `registry`
@@ -167,168 +136,58 @@ function makeFakeReadOnlyStore(options: {
       fakePrisma.commerceConnection.findMany({ where: { brandId, provider } }),
     findConnectionRowById: (connectionId) =>
       fakePrisma.commerceConnection.findUnique({ where: { id: connectionId } }),
-    findLegacyBrandFields: (brandId) => fakePrisma.brand.findUnique({ where: { id: brandId } }),
   };
 
   return { deps, calls };
 }
 
 // ---------------------------------------------------------------------------
-// 1-4: getActiveCommerceConnection consistency-checked preference
+// 1, 3, 4: getActiveCommerceConnection — canonical-only, no comparison
 // ---------------------------------------------------------------------------
 
-describe("getActiveCommerceConnection — consistency-checked preference", () => {
-  test("1. prefers the CommerceConnection row when it agrees with legacy truth", async () => {
+describe("getActiveCommerceConnection — canonical-only", () => {
+  test("1. returns the CommerceConnection row as-is", async () => {
     const row = makeConnectionRow({ id: "conn-real", displayName: "real-connection" });
-    const legacy = makeLegacyBrandFields();
 
     const result = await getActiveCommerceConnection("brand-1", CommerceProvider.SHOPIFY, {
       findConnectionRows: async () => [row],
-      findLegacyBrandFields: async () => legacy,
     });
 
     assert.ok(result);
     assert.equal(result?.id, "conn-real");
     assert.equal(result?.isLegacyFallback, false);
     assert.equal(result?.displayName, "real-connection");
-
-    const drift = await detectConnectionDrift("brand-1", CommerceProvider.SHOPIFY, {
-      findConnectionRows: async () => [row],
-      findLegacyBrandFields: async () => legacy,
-    });
-    assert.equal(drift.driftDetected, false);
-  });
-
-  test("2. PHASE 14B.4B: the CANONICAL row wins even when it disagrees with Brand.shopifyShopDomain — legacy never overrides canonical — drift is still reported for a reconciliation tool", async () => {
-    // A stale Brand mirror must never override, or disagree-with-and-win
-    // over, canonical truth (see connection-service.ts's file header for
-    // why this inverted the pre-14B.4B "legacy wins on disagreement"
-    // behavior — CommerceConnection is written BEFORE Brand.shopify* as of
-    // Phase 14B, so it is `Brand` that can lag, not the row).
-    const staleRow = makeConnectionRow({
-      id: "conn-stale",
-      externalAccountId: "old-shop.myshopify.com",
-    });
-    const legacy = makeLegacyBrandFields({ shopifyShopDomain: "new-shop.myshopify.com" });
-
-    const deps = {
-      findConnectionRows: async () => [staleRow],
-      findLegacyBrandFields: async () => legacy,
-    };
-
-    const result = await getActiveCommerceConnection("brand-1", CommerceProvider.SHOPIFY, deps);
-    assert.ok(result);
-    assert.equal(result?.isLegacyFallback, false);
-    assert.equal(result?.id, "conn-stale");
-    assert.equal(result?.externalAccountId, "old-shop.myshopify.com");
-
-    // The disagreement is still surfaced for a reconciliation tool — it just
-    // no longer changes which connection is authoritative.
-    const drift = await detectConnectionDrift("brand-1", CommerceProvider.SHOPIFY, deps);
-    assert.equal(drift.driftDetected, true);
-    if (drift.driftDetected) {
-      assert.equal(drift.reason, "ROW_LEGACY_MISMATCH");
-      assert.equal(drift.rowExternalAccountId, "old-shop.myshopify.com");
-      assert.equal(drift.legacyExternalAccountId, "new-shop.myshopify.com");
-    }
-  });
-
-  test("2b. mismatch is also detected case/whitespace-insensitively (both sides normalized before comparison)", async () => {
-    const row = makeConnectionRow({ externalAccountId: "acme.myshopify.com" });
-    const legacy = makeLegacyBrandFields({ shopifyShopDomain: "  ACME.MyShopify.com  " });
-
-    const result = await getActiveCommerceConnection("brand-1", CommerceProvider.SHOPIFY, {
-      findConnectionRows: async () => [row],
-      findLegacyBrandFields: async () => legacy,
-    });
-
-    // Normalized values agree -> the row is trusted, no drift.
-    assert.equal(result?.isLegacyFallback, false);
-    assert.equal(result?.id, row.id);
   });
 
   // PHASE 14C-A: this used to assert a legacy-derived fallback summary
   // (id: null, isLegacyFallback: true) — that fallback was removed
   // entirely (operator-verified: no live merchant needs it), so
   // `getActiveCommerceConnection` now returns bare `null` here.
-  // `detectConnectionDrift` is UNCHANGED — it remains a diagnostic-only
-  // comparison against the legacy Brand row for the pre-column-drop
-  // reconciliation tool, and still reports LEGACY_DOMAIN_WITHOUT_ROW.
-  test("3. no row exists -> null, no legacy fallback (detectConnectionDrift still reports it for reconciliation)", async () => {
-    const legacy = makeLegacyBrandFields();
-
+  test("3. no row exists -> null", async () => {
     const result = await getActiveCommerceConnection("brand-1", CommerceProvider.SHOPIFY, {
       findConnectionRows: async () => [],
     });
 
     assert.equal(result, null);
-
-    const drift = await detectConnectionDrift("brand-1", CommerceProvider.SHOPIFY, {
-      findConnectionRows: async () => [],
-      findLegacyBrandFields: async () => legacy,
-    });
-    assert.equal(drift.driftDetected, true);
-    if (drift.driftDetected) {
-      assert.equal(drift.reason, "LEGACY_DOMAIN_WITHOUT_ROW");
-    }
   });
 
-  test("3b. PHASE 14B.4B: a row exists but legacy has no domain on record -> the row STILL wins (legacy no longer overrides), drift still reported", async () => {
-    // A Brand row with no domain (e.g. redacted, or relinked away since the
-    // canonical row was written) must not erase a genuinely live canonical
-    // connection — that would be exactly the "stale Brand mirror overrides
-    // canonical" bug this phase closes.
-    const row = makeConnectionRow();
-    const legacy = makeLegacyBrandFields({ shopifyShopDomain: null });
-
-    const result = await getActiveCommerceConnection("brand-1", CommerceProvider.SHOPIFY, {
-      findConnectionRows: async () => [row],
-      findLegacyBrandFields: async () => legacy,
-    });
-    assert.ok(result);
-    assert.equal(result?.id, row.id);
-    assert.equal(result?.isLegacyFallback, false);
-
-    const drift = await detectConnectionDrift("brand-1", CommerceProvider.SHOPIFY, {
-      findConnectionRows: async () => [row],
-      findLegacyBrandFields: async () => legacy,
-    });
-    assert.equal(drift.driftDetected, true);
-    if (drift.driftDetected) {
-      assert.equal(drift.reason, "ROW_WITHOUT_LEGACY_DOMAIN");
-    }
-  });
-
-  test("4. returns null for a brand with no commerce connection at all (both sides absent) — not drift", async () => {
+  test("4. returns null for a brand with no commerce connection at all", async () => {
     const result = await getActiveCommerceConnection("brand-none", CommerceProvider.SHOPIFY, {
       findConnectionRows: async () => [],
-      findLegacyBrandFields: async () => null,
     });
     assert.equal(result, null);
-
-    const drift = await detectConnectionDrift("brand-none", CommerceProvider.SHOPIFY, {
-      findConnectionRows: async () => [],
-      findLegacyBrandFields: async () => null,
-    });
-    assert.equal(drift.driftDetected, false);
   });
 
-  test("4b. COMMERCE7 has no legacy fallback: a row is trusted as-is, no drift concept applies", async () => {
+  test("4b. COMMERCE7: a row is trusted as-is; no row is null", async () => {
     const row = makeConnectionRow({ provider: CommerceProvider.COMMERCE7, id: "conn-c7" });
 
     const result = await getActiveCommerceConnection("brand-1", CommerceProvider.COMMERCE7, {
       findConnectionRows: async () => [row],
-      findLegacyBrandFields: async () => {
-        throw new Error("must not be called for a non-SHOPIFY provider");
-      },
     });
     assert.equal(result?.id, "conn-c7");
 
     const noRowResult = await getActiveCommerceConnection("brand-2", CommerceProvider.COMMERCE7, {
       findConnectionRows: async () => [],
-      findLegacyBrandFields: async () => {
-        throw new Error("must not be called for a non-SHOPIFY provider");
-      },
     });
     assert.equal(noRowResult, null);
   });
@@ -339,18 +198,13 @@ describe("getActiveCommerceConnection — consistency-checked preference", () =>
 // ---------------------------------------------------------------------------
 
 describe("reads never write", () => {
-  test("5. getActiveCommerceConnection / getPrimaryCommerceConnection / getCommerceConnectionById / detectConnectionDrift never call a write-shaped prisma method", async () => {
+  test("5. getActiveCommerceConnection / getPrimaryCommerceConnection / getCommerceConnectionById never call a write-shaped prisma method", async () => {
     const row = makeConnectionRow();
-    const legacy = makeLegacyBrandFields();
-    const { deps, calls } = makeFakeReadOnlyStore({
-      connectionRows: [row],
-      brand: legacy,
-    });
+    const { deps, calls } = makeFakeReadOnlyStore({ connectionRows: [row] });
 
     await getActiveCommerceConnection("brand-1", CommerceProvider.SHOPIFY, deps);
     await getPrimaryCommerceConnection("brand-1", CommerceProvider.SHOPIFY, deps);
     await getCommerceConnectionById("conn-1", deps);
-    await detectConnectionDrift("brand-1", CommerceProvider.SHOPIFY, deps);
 
     assert.ok(calls.reads > 0, "sanity: the fake store was actually exercised");
     assert.equal(calls.creates, 0);
@@ -379,7 +233,6 @@ describe("deterministic multi-connection selection", () => {
 
     const result = await getActiveCommerceConnection("brand-1", CommerceProvider.SHOPIFY, {
       findConnectionRows: async () => [nonPrimaryNewer, primaryOlder],
-      findLegacyBrandFields: async () => makeLegacyBrandFields(),
     });
 
     // isPrimary wins over more-recent installedAt — same tiebreak as
@@ -393,21 +246,18 @@ describe("deterministic multi-connection selection", () => {
 // ---------------------------------------------------------------------------
 
 describe("getPrimaryCommerceConnection", () => {
-  test("7a. returns the row marked isPrimary when it agrees with legacy", async () => {
+  test("7a. returns the row marked isPrimary", async () => {
     const primary = makeConnectionRow({ id: "conn-primary", isPrimary: true });
     const nonPrimary = makeConnectionRow({ id: "conn-other", isPrimary: false });
 
     const result = await getPrimaryCommerceConnection("brand-1", CommerceProvider.SHOPIFY, {
       findConnectionRows: async () => [primary, nonPrimary],
-      findLegacyBrandFields: async () => makeLegacyBrandFields(),
     });
 
     assert.equal(result?.id, "conn-primary");
   });
 
-  // PHASE 14C-A: no legacy fallback — a brand with a row but no primary
-  // mark now simply has no primary connection, full stop.
-  test("7b. returns null when no row is marked primary (no legacy fallback)", async () => {
+  test("7b. returns null when no row is marked primary", async () => {
     const nonPrimary = makeConnectionRow({ id: "conn-other", isPrimary: false });
 
     const result = await getPrimaryCommerceConnection("brand-1", CommerceProvider.SHOPIFY, {
@@ -565,12 +415,7 @@ describe("toSafeConnectionSummary", () => {
 });
 
 // ---------------------------------------------------------------------------
-// PHASE 14C-A: `isLegacyShopifyBrandConnectionUsable` and
-// `externalAccountIdFromShopDomain` were deleted from connection-service.ts
-// — both were confirmed dead in production (zero real call sites; every
-// consumer already migrated to the canonical path in an earlier phase) and
-// existed only to preserve legacy-fallback gate/domain-read parity that no
-// runtime code needs anymore. Their tests are removed with them.
+// 11: deriveShopifyStorefrontUrl — rewards/shopify/redemptions shopUrl parity
 // ---------------------------------------------------------------------------
 
 describe("deriveShopifyStorefrontUrl — rewards/shopify/redemptions shopUrl parity", () => {
@@ -586,14 +431,7 @@ describe("deriveShopifyStorefrontUrl — rewards/shopify/redemptions shopUrl par
 
 // ---------------------------------------------------------------------------
 // getActiveCommerceConnectionsForBrands (batch resolver) — PHASE 14C-A:
-// canonical-only, no legacy Brand fallback (operator-verified: every live
-// Shopify install already has a canonical row). Tests C/D/E/F/K from the
-// original Phase 14B.4C suite specifically proved canonical-wins-over-stale-
-// legacy precedence — with the legacy branch deleted entirely, there is no
-// longer a second value for canonical to "win" against, so those tests are
-// removed rather than kept as dead weight. The still-live invariants (no
-// N+1, cross-brand isolation, COMMERCE7 exclusion, dedup, fail-closed on
-// throw) are preserved below.
+// canonical-only, no legacy Brand fallback.
 // ---------------------------------------------------------------------------
 
 function makeBatchDeps(options: {
@@ -712,7 +550,7 @@ describe("getActiveCommerceConnectionsForBrands — batch canonical resolution",
 });
 
 // ---------------------------------------------------------------------------
-// PHASE 14B.4C — recordCommerceConnectionCurrencyCode (currency self-heal write-back)
+// recordCommerceConnectionCurrencyCode (currency self-heal write-back)
 // ---------------------------------------------------------------------------
 
 describe("recordCommerceConnectionCurrencyCode — canonical currency self-heal", () => {

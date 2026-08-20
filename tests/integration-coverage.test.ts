@@ -205,6 +205,10 @@ before(async () => {
   prismaModule.shopifyConnectionEvent = {
     create: async () => ({ id: "sce-default" }),
     findFirst: async () => null,
+    // PHASE 14C-B1: shop/redact resolves historical brand identity from
+    // domain-scoped connection-event history — default to "no history"
+    // (empty), safe for every test that doesn't model a real redaction.
+    findMany: async () => [],
     updateMany: async () => ({ count: 0 }),
   };
   // PHASE 8: the experienceProductLink / lessonProductLink safe-default mocks
@@ -576,6 +580,11 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     assert.ok(!eventWritten, "no connection-loss event for a state change that never happened");
   });
 
+  // PHASE 14C-B1: identity for the scrub is resolved from domain-scoped
+  // history (ShopifyConnectionEvent + ShopifyRewardRedemption), never from
+  // `Brand.shopifyShopDomain` — see the route's own header comment. The
+  // legacy-mirror clear (`prisma.brand.update`) only fires for brands whose
+  // CURRENT mirror still points at this domain.
   test("AF. shop/redact revokes the canonical credential BEFORE the Brand scrub and before erasing the row", async (t) => {
     const payload = JSON.stringify({ shop_id: 1, shop_domain: "redact-shop.myshopify.com" });
     const hmac = buildWebhookHmac(payload);
@@ -609,7 +618,9 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
       return { count: 1 };
     });
 
-    t.mock.method(prisma.brand, "findFirst", async () => ({ id: "brand-redact" }));
+    t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => [{ brandId: "brand-redact" }]);
+    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => []);
+    t.mock.method(prisma.brand, "findMany", async () => [{ id: "brand-redact" }]);
     t.mock.method(prisma.brand, "update", async () => {
       order.push("brandScrub");
       return { id: "brand-redact" };
@@ -714,10 +725,12 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     let redemptionAnonymized = false;
     let tokensDeleted = false;
 
-    t.mock.method(prisma.brand, "findFirst", async () => {
+    t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => {
       brandFound = true;
-      return { id: "brand-123" };
+      return [{ brandId: "brand-123" }];
     });
+    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => []);
+    t.mock.method(prisma.brand, "findMany", async () => [{ id: "brand-123" }]);
 
     t.mock.method(prisma.brand, "update", async (args: unknown) => {
       brandUpdated = true;
@@ -741,10 +754,11 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     let offerSourceDomainScrubbed = false;
     t.mock.method(prisma.brandRewardOffer, "updateMany", async (args: unknown) => {
       const typedArgs = args as {
-        where: { brandId?: string; sourceShopDomain?: string };
+        where: { brandId?: { in: string[] }; sourceShopDomain?: string };
         data: { isActive?: boolean; sourceShopDomain?: null };
       };
-      if (typedArgs.where.brandId === "brand-123") {
+      if (typedArgs.where.brandId) {
+        assert.deepEqual(typedArgs.where.brandId, { in: ["brand-123"] });
         assert.equal(typedArgs.data.isActive, false);
         offersDeactivated = true;
       } else if (typedArgs.where.sourceShopDomain === "redact-shop.myshopify.com") {
@@ -842,14 +856,26 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
       "abandoned-shop.myshopify.com",
     );
 
-    // No brand holds this domain (e.g. an OAuth flow that was never completed).
-    t.mock.method(prisma.brand, "findFirst", async () => null);
+    // No brand ever historically had this domain (e.g. an OAuth flow that
+    // was never completed) — both history sources come back empty, so the
+    // legacy-mirror lookup (`prisma.brand.findMany`) is never even reached.
+    t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => []);
+    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => []);
+    t.mock.method(prisma.brand, "findMany", async () => {
+      throw new Error("must not be called when no historical brand id was resolved");
+    });
 
     let brandUpdated = false;
     t.mock.method(prisma.brand, "update", async () => {
       brandUpdated = true;
       return {};
     });
+
+    // Domain-keyed operations still run unconditionally even though no
+    // historical brand was found.
+    t.mock.method(prisma.shopifyRewardRedemption, "updateMany", async () => ({ count: 0 }));
+    t.mock.method(prisma.brandRewardOffer, "updateMany", async () => ({ count: 0 }));
+    t.mock.method(prisma.shopifyConnectionEvent, "updateMany", async () => ({ count: 0 }));
 
     t.mock.method(prisma.tokenStore, "findMany", async () => [
       {
@@ -886,6 +912,197 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
       [...deletedServices].sort(),
       ["shopify_oauth_state:abc", "shopify_pending_install:def"],
     );
+  });
+
+  // PHASE 14C-B1 — required regression coverage for the shop/redact P1 fix
+  // (identity resolved from domain-scoped history, never Brand.shopifyShopDomain).
+
+  test("B/D. relink -> delayed old shop/redact still anonymizes historical redemption/offer data for the OLD brand, even though its current Brand mirror points at a NEW shop", async (t) => {
+    const payload = JSON.stringify({ shop_id: 1, shop_domain: "old-shop.myshopify.com" });
+    const hmac = buildWebhookHmac(payload);
+    const req = makeWebhookRequest(
+      "http://localhost/api/shopify/webhooks/shop/redact",
+      payload,
+      hmac,
+      "old-shop.myshopify.com",
+    );
+
+    // The old shop's own CommerceConnection row still exists (UNINSTALLED,
+    // preserved by app/uninstalled's relink policy) -> invalidation succeeds.
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({ id: "conn-old", brandId: "brand-1" }));
+    t.mock.method(prisma.commerceConnection, "findUnique", async () => ({
+      id: "conn-old",
+      brandId: "brand-1",
+      installedAt: null,
+    }));
+    t.mock.method(prisma.commerceConnection, "update", async () => ({}));
+    t.mock.method(prisma.commerceConnectionSecret, "deleteMany", async () => ({ count: 1 }));
+    t.mock.method(prisma.commerceConnection, "deleteMany", async () => ({ count: 1 }));
+    t.mock.method(prisma.tokenStore, "findMany", async () => []);
+
+    // History resolves brand-1 as having owned old-shop.myshopify.com — via
+    // a recorded connection-loss event, exactly what app/uninstalled writes.
+    t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => [{ brandId: "brand-1" }]);
+    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => [{ brandId: "brand-1" }]);
+
+    // brand-1 has SINCE relinked to a different shop — its live mirror no
+    // longer says old-shop.myshopify.com, so the mirror-clear query finds
+    // nothing for it.
+    t.mock.method(prisma.brand, "findMany", async () => []);
+
+    let brandMirrorUpdated = false;
+    t.mock.method(prisma.brand, "update", async () => {
+      brandMirrorUpdated = true;
+      return {};
+    });
+
+    let redemptionAnonymized = false;
+    t.mock.method(prisma.shopifyRewardRedemption, "updateMany", async (args: unknown) => {
+      const typed = args as { where: { shopifyShopDomain: string } };
+      assert.equal(typed.where.shopifyShopDomain, "old-shop.myshopify.com");
+      redemptionAnonymized = true;
+      return { count: 1 };
+    });
+
+    let offersDeactivatedForBrand1 = false;
+    t.mock.method(prisma.brandRewardOffer, "updateMany", async (args: unknown) => {
+      const typed = args as {
+        where: { brandId?: { in: string[] } };
+        data: { isActive?: boolean };
+      };
+      if (typed.where.brandId) {
+        assert.deepEqual(typed.where.brandId, { in: ["brand-1"] });
+        assert.equal(typed.data.isActive, false);
+        offersDeactivatedForBrand1 = true;
+      }
+      return { count: 1 };
+    });
+    t.mock.method(prisma.shopifyConnectionEvent, "updateMany", async () => ({ count: 0 }));
+
+    const res = await shopRedactPOST(req);
+    assert.equal(res.status, 200);
+    assert.ok(redemptionAnonymized, "historical redemption data for the old shop must still be anonymized");
+    assert.ok(offersDeactivatedForBrand1, "the old brand's reward offers must still be deactivated");
+    assert.equal(
+      brandMirrorUpdated,
+      false,
+      "the relinked brand's CURRENT mirror (now pointing at a new shop) must never be touched",
+    );
+  });
+
+  test("C. a delayed shop/redact predating a reinstall does NOT revoke the new connection credential", async (t) => {
+    const payload = JSON.stringify({ shop_id: 1, shop_domain: "reinstalled-shop.myshopify.com" });
+    const hmac = buildWebhookHmac(payload);
+    // Shopify triggered this redact BEFORE the reinstall.
+    const req = makeWebhookRequest(
+      "http://localhost/api/shopify/webhooks/shop/redact",
+      payload,
+      hmac,
+      "reinstalled-shop.myshopify.com",
+      "2026-03-01T11:00:00.000000000Z",
+    );
+
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({ id: "conn-reinstalled", brandId: "brand-1" }));
+    t.mock.method(prisma.commerceConnection, "findUnique", async () => ({
+      id: "conn-reinstalled",
+      brandId: "brand-1",
+      // Reinstalled AFTER Shopify triggered this event.
+      installedAt: new Date("2026-03-01T12:00:00.000Z"),
+    }));
+
+    let canonicalWriteAttempted = false;
+    t.mock.method(prisma.commerceConnection, "update", async () => {
+      canonicalWriteAttempted = true;
+      return {};
+    });
+    t.mock.method(prisma.commerceConnectionSecret, "deleteMany", async () => {
+      canonicalWriteAttempted = true;
+      return { count: 0 };
+    });
+    t.mock.method(prisma.commerceConnection, "deleteMany", async () => {
+      canonicalWriteAttempted = true;
+      return { count: 0 };
+    });
+
+    let historyQueried = false;
+    t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => {
+      historyQueried = true;
+      return [];
+    });
+    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => {
+      historyQueried = true;
+      return [];
+    });
+
+    let brandTouched = false;
+    t.mock.method(prisma.brand, "update", async () => {
+      brandTouched = true;
+      return {};
+    });
+
+    t.mock.method(prisma.tokenStore, "findMany", async () => []);
+
+    const res = await shopRedactPOST(req);
+    assert.equal(res.status, 200);
+    assert.equal(canonicalWriteAttempted, false, "a stale event must never touch the canonical connection");
+    assert.equal(
+      historyQueried,
+      false,
+      "a stale event must short-circuit before even resolving historical identity",
+    );
+    assert.equal(brandTouched, false, "a stale event must never touch any Brand mirror");
+  });
+
+  test("E. no cross-brand cleanup: redacting one shop never touches an unrelated brand's offers or redemptions", async (t) => {
+    const payload = JSON.stringify({ shop_id: 1, shop_domain: "target-shop.myshopify.com" });
+    const hmac = buildWebhookHmac(payload);
+    const req = makeWebhookRequest(
+      "http://localhost/api/shopify/webhooks/shop/redact",
+      payload,
+      hmac,
+      "target-shop.myshopify.com",
+    );
+
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({ id: "conn-target", brandId: "brand-target" }));
+    t.mock.method(prisma.commerceConnection, "findUnique", async () => ({
+      id: "conn-target",
+      brandId: "brand-target",
+      installedAt: null,
+    }));
+    t.mock.method(prisma.commerceConnection, "update", async () => ({}));
+    t.mock.method(prisma.commerceConnectionSecret, "deleteMany", async () => ({ count: 1 }));
+    t.mock.method(prisma.commerceConnection, "deleteMany", async () => ({ count: 1 }));
+    t.mock.method(prisma.tokenStore, "findMany", async () => []);
+
+    t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => [{ brandId: "brand-target" }]);
+    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => [{ brandId: "brand-target" }]);
+    t.mock.method(prisma.brand, "findMany", async () => [{ id: "brand-target" }]);
+    t.mock.method(prisma.brand, "update", async (args: unknown) => {
+      const typed = args as { where: { id: string } };
+      assert.equal(typed.where.id, "brand-target", "only the target brand's mirror may ever be cleared");
+      return {};
+    });
+
+    t.mock.method(prisma.shopifyRewardRedemption, "updateMany", async (args: unknown) => {
+      const typed = args as { where: { shopifyShopDomain: string } };
+      assert.equal(typed.where.shopifyShopDomain, "target-shop.myshopify.com");
+      return { count: 1 };
+    });
+    t.mock.method(prisma.brandRewardOffer, "updateMany", async (args: unknown) => {
+      const typed = args as { where: { brandId?: { in: string[] }; sourceShopDomain?: string } };
+      if (typed.where.brandId) {
+        assert.deepEqual(
+          typed.where.brandId,
+          { in: ["brand-target"] },
+          "offer deactivation must never include an unrelated brand",
+        );
+      }
+      return { count: 1 };
+    });
+    t.mock.method(prisma.shopifyConnectionEvent, "updateMany", async () => ({ count: 0 }));
+
+    const res = await shopRedactPOST(req);
+    assert.equal(res.status, 200);
   });
 
   test("customers/data_request compliance webhook returns 200 with no data found", async () => {

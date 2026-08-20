@@ -7,18 +7,21 @@
  * `connection-resolver.ts` / `connection-sync.ts` — every live Shopify
  * merchant already has a canonical `CommerceConnection` row
  * (operator-verified), so those tests were removed with the code they
- * covered, not left to rot. The remaining WRITE-side dual-write machinery
+ * covered, not left to rot.
+ *
+ * PHASE 14C-B1: the WRITE-side Brand-sourced dual-write machinery
  * (`buildShopifyConnectionSyncInput`, `syncShopifyCommerceConnectionForBrand`,
- * `rebuildShopifyConnectionSecretForBrand`) is still genuinely exercised
- * here — it now backs only the pre-column-drop reconciliation tool
- * (`connection-reconciliation.ts`), not any runtime request path, but its
- * correctness still matters for as long as that tool runs.
- * `scripts/backfill-commerce-connections.ts` (referenced in the historical
- * numbering below) has been deleted outright — both purposes it served
- * (initial backfill, EXPIRING_OFFLINE secret-staleness remedy) are now
- * structurally obsolete: every install writes canonical directly, and
- * `performTokenRefresh` writes a rotated token canonically-first with no
- * remaining Brand-mirror gap for it to repair.
+ * `rebuildShopifyConnectionSecretForBrand`, `LegacyBrandForShopifySync`) has
+ * been removed from `connection-sync.ts` along with the pre-column-drop
+ * reconciliation tool it existed solely to serve
+ * (`connection-reconciliation.ts` / `scripts/reconcile-commerce-connections.ts`,
+ * both deleted). The tests that used to exercise that machinery now exercise
+ * `applyShopifyConnectionSyncFromInstall` instead — the ONLY remaining writer
+ * of a `CommerceConnection`/`CommerceConnectionSecret` pair, built exclusively
+ * from authenticated install facts (`ShopifyInstallFacts`), never from
+ * `Brand.shopify*`. The underlying transactional core these tests actually
+ * exercise (`applyShopifyConnectionSync`, `applyDeleteShopifyConnectionByShopDomain`)
+ * is unchanged — only the caller/input shape moved.
  *
  * No real DB, no real network anywhere in this file. `connection-sync.ts`'s
  * transactional core is exercised against a hand-rolled in-memory fake `tx`
@@ -29,23 +32,23 @@
  * reassignment, and single-primary clearing — these are not hand-waved
  * assertions, the fake actually enforces uniqueness the way Postgres would.
  *
- * Covered cases (numbered to match the review checklist; numbers 2 and 13
- * now describe their PHASE 14C-A replacement, not the original legacy
- * behavior — see each test for why):
+ * Covered cases (numbered to match the review checklist; numbers 2, 13, and
+ * 23/24/26 now describe their PHASE 14C-A/14C-B1 replacement, not the
+ * original legacy behavior — see each test for why):
  *  1.  Resolver prefers an existing CommerceConnection row.
  *  2.  No connection row -> null. No legacy fallback (see test comment).
  *  3.  Resolver returns null for a brand with no Shopify connection at all.
  *  4.  Multi-connection tiebreak: isPrimary wins, then most recent installedAt.
- *  5.  Legacy status mapping for all four ShopifyConnectionStatus values (still used by the dual-write builder).
+ *  5.  (removed — PHASE 14C-B1) `mapLegacyShopifyStatusToCommerceStatus` was deleted; it had zero remaining callers once the Brand-sourced dual-write path it existed for was retired, and was the last runtime dependency on the Prisma `ShopifyConnectionStatus` enum.
  *  6.  grantedScopes normalization: comma string, Json array, null, non-array Json.
- *  7.  Idempotency: syncing twice produces one connection (upsert, not a second create).
+ *  7.  Idempotency: installing twice produces one connection (upsert, not a second create).
  *  8.  Relink: same shop domain, different brand -> brandId reassigned, no duplicate.
  *  9.  Single-primary enforcement: a new primary clears isPrimary on other connections.
  *  10. Secret encryption: encryptedPayload round-trips via decryptSecret; keyVersion is set.
  *  11. Secret exclusion: JSON.stringify(summary) never matches /token|secret|encrypted|password/i.
- *  12. Disconnected/uninstalled brand -> secret row deleted, not written empty.
+ *  12. (removed — an install-facts write always carries a token; the "secret deleted, not written empty" branch is exercised via disconnect/uninstall paths, covered in tests/shopify-credential-store.test.ts.)
  *  13. (removed — see the note above `safeSyncShopifyCommerceConnection`'s old describe block.)
- *  14. Backfill idempotency: looping the sync twice against a shared fake store creates nothing new.
+ *  14. Idempotency across repeated installs: looping the install twice against a shared fake store creates nothing new on the second pass.
  *  15. GDPR redaction delete is keyed on (provider, externalAccountId), not brandId.
  *  16. Redaction delete still finds and removes the row when it's "orphaned" from the
  *      brand's current shopifyShopDomain (the shape of the missed-deletion bug: a stale
@@ -55,13 +58,21 @@
  *  18. Redaction delete is a no-op, not an error, when no row matches the domain.
  *  19. safeDeleteShopifyCommerceConnectionByShopDomain swallows a thrown error, never rethrows.
  *  20. Normalization symmetry: a mixed-case / whitespace-padded shop domain written via
- *      the sync is matched by the redaction delete keyed on a differently-cased /
+ *      the install is matched by the redaction delete keyed on a differently-cased /
  *      differently-padded form of the SAME domain — write and delete agree on the key
  *      because both go through the single exported `normalizeExternalAccountId` helper.
  *  21. Route wiring (source-inspection, same idiom as tests/shopify-scope-drift.test.ts):
  *      the shop/redact route calls `safeDeleteShopifyCommerceConnectionByShopDomain`
- *      unconditionally — NOT nested inside the `if (brand)` block — so the delete still
- *      fires for the relinked-away scenario where the brand lookup finds nothing.
+ *      unconditionally, regardless of whether any historical brand was resolved — see
+ *      the test for the PHASE 14C-B1 route shape this now checks.
+ *  22-26. Primary-assignment ordering/conflict handling — 22 and 25 exercise
+ *      `applyShopifyConnectionSyncFromInstall`'s live ordering directly; 23/24/26
+ *      (the bounded-retry-specific cases) are replaced by a single test proving a
+ *      primary-conflict P2002 now propagates UNCAUGHT to the caller, since the retry
+ *      that used to live in `syncShopifyCommerceConnectionForBrand` is gone — retrying
+ *      is the installations route's own responsibility now (it already maps P2002/P2034
+ *      onto a 409 the client retries).
+ *  27. (removed — rebuildShopifyConnectionSecretForBrand was retired with the reconciliation tool.)
  */
 
 process.env.APP_ENCRYPTION_KEY ||= "test-encryption-key-for-commerce-sync-tests";
@@ -71,12 +82,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 import { CommerceProvider, Prisma } from "@prisma/client";
-import { decryptSecret, encryptSecret } from "../src/lib/crypto";
+import { decryptSecret } from "../src/lib/crypto";
 
 import {
   mapCommerceConnectionToSummary,
   extractCurrencyCodeFromProviderMetadata,
-  mapLegacyShopifyStatusToCommerceStatus,
   normalizeLegacyGrantedScopes,
   normalizeGrantedScopesJson,
   pickPreferredConnectionRow,
@@ -85,14 +95,12 @@ import {
 } from "../src/lib/commerce/connection-resolver";
 
 import {
-  buildShopifyConnectionSyncInput,
-  syncShopifyCommerceConnectionForBrand,
+  applyShopifyConnectionSyncFromInstall,
+  buildShopifyConnectionSyncInputFromInstall,
   deleteShopifyCommerceConnectionByShopDomain,
   safeDeleteShopifyCommerceConnectionByShopDomain,
   normalizeExternalAccountId,
-  rebuildShopifyConnectionSecretForBrand,
-  type ConnectionSyncDeps,
-  type LegacyBrandForShopifySync,
+  type ShopifyInstallFacts,
   type ShopifyConnectionSecretPayload,
 } from "../src/lib/commerce/connection-sync";
 
@@ -122,25 +130,22 @@ function makeConnectionRow(
   };
 }
 
-function makeLegacyBrandForSync(
-  overrides: Partial<LegacyBrandForShopifySync> = {},
-): LegacyBrandForShopifySync {
+function makeInstallFacts(
+  overrides: Partial<ShopifyInstallFacts> = {},
+): ShopifyInstallFacts {
   return {
-    id: "brand-1",
-    name: "Acme",
-    shopifyShopDomain: "acme.myshopify.com",
-    shopifyAdminAccessTokenEncrypted: encryptSecret("shpat_live_token"),
-    shopifyInstalledAt: new Date("2026-01-01T00:00:00Z"),
-    shopifyUninstalledAt: null,
-    shopifyConnectionStatus: "CONNECTED",
-    shopifyLastProductSyncAt: null,
-    shopifyCurrencyCode: "CAD",
-    shopifyAccessTokenExpiresAt: null,
-    shopifyRefreshTokenEncrypted: null,
-    shopifyRefreshTokenExpiresAt: null,
-    shopifyGrantedScopes: "read_products,write_discounts",
-    shopifyClientId: null,
-    shopifyAuthMode: "LEGACY_OFFLINE",
+    shopDomain: "acme.myshopify.com",
+    brandDisplayName: "Acme",
+    providerClientId: null,
+    authMode: "LEGACY_OFFLINE",
+    currencyCode: "CAD",
+    grantedScopes: "read_products,write_discounts",
+    installedAt: new Date("2026-01-01T00:00:00Z"),
+    lastProductSyncAt: null,
+    accessToken: "shpat_live_token",
+    accessTokenExpiresAt: null,
+    refreshToken: null,
+    refreshTokenExpiresAt: null,
     ...overrides,
   };
 }
@@ -415,16 +420,6 @@ function makeFakeConnectionSyncTx(
   };
 }
 
-function makeSyncDeps(
-  brand: LegacyBrandForShopifySync,
-  fakeTx: ReturnType<typeof makeFakeConnectionSyncTx>,
-): Partial<ConnectionSyncDeps> {
-  return {
-    findBrandForSync: async () => brand,
-    runTransaction: (fn) => fn(fakeTx.tx),
-  };
-}
-
 // ---------------------------------------------------------------------------
 // 1-3: resolver precedence + fallback + null
 // ---------------------------------------------------------------------------
@@ -663,21 +658,11 @@ describe("pickPreferredConnectionRow tiebreak", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 5: legacy status mapping
+// 5: (removed — PHASE 14C-B1) `mapLegacyShopifyStatusToCommerceStatus` was
+// the last runtime dependency on the Prisma `ShopifyConnectionStatus` enum;
+// with the Brand-sourced dual-write path it existed for gone, it had zero
+// remaining callers and was deleted from connection-resolver.ts.
 // ---------------------------------------------------------------------------
-
-describe("mapLegacyShopifyStatusToCommerceStatus", () => {
-  test("5. maps all four legacy statuses 1:1, and an unknown value to ERROR", () => {
-    assert.equal(mapLegacyShopifyStatusToCommerceStatus("DISCONNECTED"), "DISCONNECTED");
-    assert.equal(mapLegacyShopifyStatusToCommerceStatus("CONNECTED"), "CONNECTED");
-    assert.equal(mapLegacyShopifyStatusToCommerceStatus("UNINSTALLED"), "UNINSTALLED");
-    assert.equal(
-      mapLegacyShopifyStatusToCommerceStatus("REQUIRES_RECONNECT"),
-      "REQUIRES_RECONNECT",
-    );
-    assert.equal(mapLegacyShopifyStatusToCommerceStatus("SOMETHING_UNEXPECTED"), "ERROR");
-  });
-});
 
 // ---------------------------------------------------------------------------
 // 6: grantedScopes normalization
@@ -770,50 +755,44 @@ describe("pure mapping helpers", () => {
 // buildShopifyConnectionSyncInput
 // ---------------------------------------------------------------------------
 
-describe("buildShopifyConnectionSyncInput", () => {
-  test("returns null when the brand has no shop domain", () => {
+describe("buildShopifyConnectionSyncInputFromInstall", () => {
+  test("returns null when shopDomain is empty", () => {
     assert.equal(
-      buildShopifyConnectionSyncInput(makeLegacyBrandForSync({ shopifyShopDomain: null })),
+      buildShopifyConnectionSyncInputFromInstall(makeInstallFacts({ shopDomain: "" })),
       null,
     );
   });
 
-  test("derives a secretPayload with decrypted credentials when a token is present", () => {
-    const input = buildShopifyConnectionSyncInput(makeLegacyBrandForSync());
+  test("returns null when accessToken is empty — an install always carries a token", () => {
+    assert.equal(
+      buildShopifyConnectionSyncInputFromInstall(makeInstallFacts({ accessToken: "" })),
+      null,
+    );
+  });
+
+  test("derives a secretPayload with the plaintext credential, always CONNECTED, uninstalledAt cleared", () => {
+    const input = buildShopifyConnectionSyncInputFromInstall(makeInstallFacts());
     assert.ok(input);
     assert.ok(input?.secretPayload);
     assert.equal(input?.secretPayload?.accessToken, "shpat_live_token");
     assert.equal(input?.externalAccountId, "acme.myshopify.com");
     assert.equal(input?.storefrontUrl, "https://acme.myshopify.com");
     assert.equal(input?.status, "CONNECTED");
-  });
-
-  test("secretPayload is null when the brand has no access token", () => {
-    const input = buildShopifyConnectionSyncInput(
-      makeLegacyBrandForSync({ shopifyAdminAccessTokenEncrypted: null }),
-    );
-    assert.ok(input);
-    assert.equal(input?.secretPayload, null);
+    assert.equal(input?.uninstalledAt, null);
   });
 });
 
 // ---------------------------------------------------------------------------
-// 7-9, 12: syncShopifyCommerceConnectionForBrand via the fake tx
+// 7-9: applyShopifyConnectionSyncFromInstall via the fake tx
 // ---------------------------------------------------------------------------
 
-describe("syncShopifyCommerceConnectionForBrand", () => {
-  test("7. running the sync twice for the same brand produces one connection (upsert, not a second create)", async () => {
+describe("applyShopifyConnectionSyncFromInstall", () => {
+  test("7. installing twice for the same brand produces one connection (upsert, not a second create)", async () => {
     const fakeTx = makeFakeConnectionSyncTx();
-    const brand = makeLegacyBrandForSync();
+    const facts = makeInstallFacts();
 
-    const first = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeSyncDeps(brand, fakeTx),
-    );
-    const second = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeSyncDeps(brand, fakeTx),
-    );
+    const first = await applyShopifyConnectionSyncFromInstall(fakeTx.tx, "brand-1", facts);
+    const second = await applyShopifyConnectionSyncFromInstall(fakeTx.tx, "brand-1", facts);
 
     assert.equal(first.outcome, "created");
     assert.equal(second.outcome, "updated");
@@ -825,22 +804,14 @@ describe("syncShopifyCommerceConnectionForBrand", () => {
 
   test("8. relink: the same shop domain moving to a different brand reassigns brandId, no duplicate", async () => {
     const fakeTx = makeFakeConnectionSyncTx();
-    const brandA = makeLegacyBrandForSync({ id: "brand-A" });
+    const facts = makeInstallFacts();
 
-    const installedToA = await syncShopifyCommerceConnectionForBrand(
-      "brand-A",
-      makeSyncDeps(brandA, fakeTx),
-    );
+    const installedToA = await applyShopifyConnectionSyncFromInstall(fakeTx.tx, "brand-A", facts);
     assert.equal(installedToA.outcome, "created");
 
-    // Same externalAccountId (shop domain), different brand — mirrors the
-    // install route's relink semantics (brand A's row loses the domain,
-    // brand B's install links it).
-    const brandB = makeLegacyBrandForSync({ id: "brand-B" });
-    const relinkedToB = await syncShopifyCommerceConnectionForBrand(
-      "brand-B",
-      makeSyncDeps(brandB, fakeTx),
-    );
+    // Same shopDomain, different brand — mirrors the install route's relink
+    // semantics (brand A's row loses the domain, brand B's install links it).
+    const relinkedToB = await applyShopifyConnectionSyncFromInstall(fakeTx.tx, "brand-B", facts);
 
     assert.equal(relinkedToB.outcome, "updated");
     assert.equal(fakeTx.connections.size, 1, "no duplicate row for the same shop domain");
@@ -875,15 +846,9 @@ describe("syncShopifyCommerceConnectionForBrand", () => {
       updatedAt: new Date("2025-06-01T00:00:00Z"),
     });
 
-    const brand = makeLegacyBrandForSync({
-      id: "brand-1",
-      shopifyShopDomain: "new-shop.myshopify.com",
-    });
+    const facts = makeInstallFacts({ shopDomain: "new-shop.myshopify.com" });
 
-    const result = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeSyncDeps(brand, fakeTx),
-    );
+    const result = await applyShopifyConnectionSyncFromInstall(fakeTx.tx, "brand-1", facts);
 
     assert.equal(result.outcome, "created");
     assert.equal(
@@ -919,43 +884,12 @@ describe("syncShopifyCommerceConnectionForBrand", () => {
       updatedAt: new Date("2025-01-01T00:00:00Z"),
     });
 
-    const brand = makeLegacyBrandForSync({
-      id: "brand-1",
-      shopifyShopDomain: "second-shop.myshopify.com",
-    });
+    const facts = makeInstallFacts({ shopDomain: "second-shop.myshopify.com" });
 
-    const result = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeSyncDeps(brand, fakeTx),
-    );
+    const result = await applyShopifyConnectionSyncFromInstall(fakeTx.tx, "brand-1", facts);
 
     assert.equal(result.isPrimary, false);
     assert.equal(fakeTx.connections.get("conn-existing")?.isPrimary, true);
-  });
-
-  test("12. a disconnected/uninstalled brand with no token has its secret deleted, not written empty", async () => {
-    const fakeTx = makeFakeConnectionSyncTx();
-    const connectedBrand = makeLegacyBrandForSync();
-
-    const created = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeSyncDeps(connectedBrand, fakeTx),
-    );
-    assert.equal(created.secretWritten, true);
-    assert.equal(fakeTx.secrets.size, 1);
-
-    const uninstalledBrand = makeLegacyBrandForSync({
-      shopifyAdminAccessTokenEncrypted: null,
-      shopifyRefreshTokenEncrypted: null,
-      shopifyConnectionStatus: "UNINSTALLED",
-    });
-    const updated = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeSyncDeps(uninstalledBrand, fakeTx),
-    );
-
-    assert.equal(updated.secretWritten, false);
-    assert.equal(fakeTx.secrets.size, 0, "secret row must be deleted, never written empty");
   });
 
   test("P1 FIX (independent review): a fresh credential write clears a HELD refresh lease, so a stale-writer CAS can no longer match", async () => {
@@ -964,12 +898,9 @@ describe("syncShopifyCommerceConnectionForBrand", () => {
     // leftover lease from before a relink) and is still outstanding when a
     // fresh install/relink writes a brand-new secret payload.
     const fakeTx = makeFakeConnectionSyncTx();
-    const brand = makeLegacyBrandForSync();
+    const facts = makeInstallFacts();
 
-    const first = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeSyncDeps(brand, fakeTx),
-    );
+    const first = await applyShopifyConnectionSyncFromInstall(fakeTx.tx, "brand-1", facts);
     const secretRow = fakeTx.secrets.get(first.connectionId!)!;
     // Simulate an outstanding lease acquired before the fresh sync below —
     // e.g. a refresher that called acquireCredentialRefreshLease moments ago
@@ -977,12 +908,10 @@ describe("syncShopifyCommerceConnectionForBrand", () => {
     secretRow.refreshLockId = "stale-refresher-lock";
     secretRow.refreshLockedUntil = new Date(Date.now() + 60_000);
 
-    // A second sync writes a brand-new credential for the SAME connection —
-    // the exact shape of an install/relink landing while that lease is held.
-    const second = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeSyncDeps(brand, fakeTx),
-    );
+    // A second install writes a brand-new credential for the SAME
+    // connection — the exact shape of an install/relink landing while that
+    // lease is held.
+    const second = await applyShopifyConnectionSyncFromInstall(fakeTx.tx, "brand-1", facts);
 
     assert.equal(second.secretWritten, true);
     const updatedSecret = fakeTx.secrets.get(second.connectionId!)!;
@@ -1011,12 +940,12 @@ describe("syncShopifyCommerceConnectionForBrand", () => {
 // call order.
 // ---------------------------------------------------------------------------
 
-describe("syncShopifyCommerceConnectionForBrand — primary-assignment ordering and conflict handling", () => {
+describe("applyShopifyConnectionSyncFromInstall — primary-assignment ordering and conflict handling", () => {
   test("22. clearing siblings happens BEFORE setting the target row primary (operation ordering)", async () => {
     const fakeTx = makeFakeConnectionSyncTx();
 
     // A stale primary sibling that is no longer CONNECTED — same shape as
-    // test 9's seed — so the new sync both (a) computes isPrimary: true
+    // test 9's seed — so the new install both (a) computes isPrimary: true
     // (no OTHER *CONNECTED* sibling) and (b) has a real isPrimary: true row
     // to clear, so the ordering is actually exercised, not vacuous.
     fakeTx.connections.set("conn-old", {
@@ -1038,108 +967,15 @@ describe("syncShopifyCommerceConnectionForBrand — primary-assignment ordering 
       updatedAt: new Date("2025-06-01T00:00:00Z"),
     });
 
-    const brand = makeLegacyBrandForSync({
-      id: "brand-1",
-      shopifyShopDomain: "new-shop.myshopify.com",
-    });
+    const facts = makeInstallFacts({ shopDomain: "new-shop.myshopify.com" });
 
-    const result = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeSyncDeps(brand, fakeTx),
-    );
+    const result = await applyShopifyConnectionSyncFromInstall(fakeTx.tx, "brand-1", facts);
 
     assert.equal(result.isPrimary, true);
     assert.deepEqual(
       fakeTx.order,
       ["clearPrimary", "upsert"],
       "the sibling-clearing updateMany must run BEFORE the upsert that (re)writes this row's isPrimary value",
-    );
-  });
-
-  // Shared seed for the two tests below: inserts shop-a as the "winner" of
-  // the race — CONNECTED + isPrimary: true — at the exact moment shop-b's
-  // conflict is simulated, modeling shop-a's competing transaction actually
-  // committing in between shop-b's `count()` read and its `upsert()` write.
-  function seedCompetingPrimaryConnection(
-    fakeTx: ReturnType<typeof makeFakeConnectionSyncTx>,
-  ) {
-    fakeTx.connections.set("conn-a", {
-      id: "conn-a",
-      brandId: "brand-1",
-      provider: CommerceProvider.SHOPIFY,
-      status: "CONNECTED",
-      displayName: "shop-a",
-      externalAccountId: "shop-a.myshopify.com",
-      storefrontUrl: "https://shop-a.myshopify.com",
-      providerClientId: null,
-      isPrimary: true,
-      grantedScopes: [],
-      providerMetadata: {},
-      installedAt: new Date("2026-01-01T00:00:00Z"),
-      uninstalledAt: null,
-      lastProductSyncAt: null,
-      createdAt: new Date("2026-01-01T00:00:00Z"),
-      updatedAt: new Date("2026-01-01T00:00:00Z"),
-    });
-  }
-
-  test("23. two competing primary assignments for the same (brandId, provider) resolve to exactly ONE primary", async () => {
-    const fakeTx = makeFakeConnectionSyncTx();
-
-    // shop-b's own `count()` read sees no CONNECTED sibling yet (shop-a has
-    // not been "committed" in the store at that point), so it also computes
-    // isPrimary: true — exactly like two real concurrent transactions under
-    // READ COMMITTED, neither of which can see the other's uncommitted
-    // write. Its upsert is armed to conflict once; the side effect
-    // materializes shop-a's row as the transaction that actually won.
-    fakeTx.armPrimaryConflict(1, () => seedCompetingPrimaryConnection(fakeTx));
-
-    const brandB = makeLegacyBrandForSync({
-      id: "brand-1",
-      shopifyShopDomain: "shop-b.myshopify.com",
-    });
-    const resultB = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeSyncDeps(brandB, fakeTx),
-    );
-
-    // The retry re-reads the brand's connections fresh, sees shop-a is now
-    // CONNECTED, and correctly resolves shop-b as NOT primary.
-    assert.equal(resultB.isPrimary, false);
-
-    const primaryRows = [...fakeTx.connections.values()].filter(
-      (row) => row.isPrimary,
-    );
-    assert.equal(primaryRows.length, 1, "exactly one row must end up primary");
-    assert.equal(primaryRows[0]?.externalAccountId, "shop-a.myshopify.com");
-  });
-
-  test("24. a P2002 conflict is retried and resolved rather than propagating as an unhandled error", async () => {
-    const fakeTx = makeFakeConnectionSyncTx();
-    fakeTx.armPrimaryConflict(1, () => seedCompetingPrimaryConnection(fakeTx));
-
-    const brandB = makeLegacyBrandForSync({
-      id: "brand-1",
-      shopifyShopDomain: "shop-b.myshopify.com",
-    });
-
-    let threw = false;
-    let resultB: Awaited<ReturnType<typeof syncShopifyCommerceConnectionForBrand>> | undefined;
-    try {
-      resultB = await syncShopifyCommerceConnectionForBrand(
-        "brand-1",
-        makeSyncDeps(brandB, fakeTx),
-      );
-    } catch {
-      threw = true;
-    }
-
-    assert.equal(threw, false, "a single, recoverable conflict must not propagate as an error");
-    assert.equal(resultB?.outcome, "created");
-    assert.equal(
-      fakeTx.calls.primaryConflictsRaised,
-      1,
-      "the conflict must actually have been raised (and then absorbed by the retry), not skipped",
     );
   });
 
@@ -1187,15 +1023,9 @@ describe("syncShopifyCommerceConnectionForBrand — primary-assignment ordering 
       updatedAt: new Date("2025-02-01T00:00:00Z"),
     });
 
-    const brand = makeLegacyBrandForSync({
-      id: "brand-1",
-      shopifyShopDomain: "shop-3.myshopify.com",
-    });
+    const facts = makeInstallFacts({ shopDomain: "shop-3.myshopify.com" });
 
-    const result = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeSyncDeps(brand, fakeTx),
-    );
+    const result = await applyShopifyConnectionSyncFromInstall(fakeTx.tx, "brand-1", facts);
 
     assert.equal(result.outcome, "created");
     assert.equal(result.isPrimary, false, "a third CONNECTED shop is not primary either");
@@ -1209,29 +1039,28 @@ describe("syncShopifyCommerceConnectionForBrand — primary-assignment ordering 
     assert.equal(fakeTx.connections.size, 3, "all three non-primary-or-single-primary rows coexist");
   });
 
-  test("26. the bounded retry terminates instead of retrying forever under sustained conflict", async () => {
+  // PHASE 14C-B1: 23/24/26 (the bounded-retry-specific cases) tested
+  // `syncShopifyCommerceConnectionForBrand`'s own retry loop, which no
+  // longer exists — `applyShopifyConnectionSyncFromInstall` never retries
+  // (see its doc comment). A primary-conflict P2002 now propagates straight
+  // to the installations route, which already maps P2002/P2034 onto a 409
+  // the client retries (`tests/integration-coverage.test.ts` covers that
+  // route-level mapping for the shop-ownership-conflict case). This single
+  // test proves the boundary moved correctly: no retry happens in this file
+  // any more.
+  test("23/24/26 (replacement). a primary-conflict P2002 propagates UNCAUGHT — no retry lives here any more", async () => {
     const fakeTx = makeFakeConnectionSyncTx();
-    // Arm far more conflicts than MAX_PRIMARY_CONFLICT_ATTEMPTS (3) so every
-    // attempt fails — if the retry were unbounded this test would hang.
-    fakeTx.armPrimaryConflict(10);
+    fakeTx.armPrimaryConflict(1);
 
-    const brand = makeLegacyBrandForSync({
-      id: "brand-1",
-      shopifyShopDomain: "shop-a.myshopify.com",
-    });
+    const facts = makeInstallFacts({ shopDomain: "shop-b.myshopify.com" });
 
     await assert.rejects(
-      () => syncShopifyCommerceConnectionForBrand("brand-1", makeSyncDeps(brand, fakeTx)),
+      () => applyShopifyConnectionSyncFromInstall(fakeTx.tx, "brand-1", facts),
       (error: unknown) =>
         error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002",
-      "must eventually give up and throw rather than retry forever",
+      "the conflict must propagate to the caller, not be retried internally",
     );
-
-    assert.equal(
-      fakeTx.calls.primaryConflictsRaised,
-      3,
-      "exactly MAX_PRIMARY_CONFLICT_ATTEMPTS (3) attempts must have been made, not unbounded",
-    );
+    assert.equal(fakeTx.calls.primaryConflictsRaised, 1, "exactly one attempt, no retry");
   });
 });
 
@@ -1242,20 +1071,17 @@ describe("syncShopifyCommerceConnectionForBrand — primary-assignment ordering 
 describe("secret payload", () => {
   test("10. encryptedPayload round-trips through decryptSecret to the expected JSON, and keyVersion is set", async () => {
     const fakeTx = makeFakeConnectionSyncTx();
-    const brand = makeLegacyBrandForSync({
-      shopifyRefreshTokenEncrypted: encryptSecret("shpat_refresh_token"),
-      shopifyRefreshTokenExpiresAt: new Date("2026-12-01T00:00:00Z"),
-      shopifyAccessTokenExpiresAt: new Date("2026-08-01T00:00:00Z"),
-      shopifyAuthMode: "EXPIRING_OFFLINE",
+    const facts = makeInstallFacts({
+      refreshToken: "shpat_refresh_token",
+      refreshTokenExpiresAt: new Date("2026-12-01T00:00:00Z"),
+      accessTokenExpiresAt: new Date("2026-08-01T00:00:00Z"),
+      authMode: "EXPIRING_OFFLINE",
     });
 
-    const result = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeSyncDeps(brand, fakeTx),
-    );
+    const result = await applyShopifyConnectionSyncFromInstall(fakeTx.tx, "brand-1", facts);
 
     if (!result.connectionId) {
-      throw new Error("expected syncShopifyCommerceConnectionForBrand to return a connectionId");
+      throw new Error("expected applyShopifyConnectionSyncFromInstall to return a connectionId");
     }
     const secretRow = fakeTx.secrets.get(result.connectionId);
     if (!secretRow) {
@@ -1294,41 +1120,42 @@ describe("secret payload", () => {
 // PHASE 14C-A: `safeSyncShopifyCommerceConnection` was deleted from
 // connection-sync.ts — its only callers were runtime reverse-mirror writes
 // (shopify-token-manager.ts, the app/uninstalled webhook), all of which
-// were removed once nothing read `Brand.shopify*` at runtime anymore. Its
-// underlying `syncShopifyCommerceConnectionForBrand` remains covered below
-// (test 14 and the primary-assignment-ordering suite) — it is still used
-// directly by the pre-column-drop reconciliation tool.
+// were removed once nothing read `Brand.shopify*` at runtime anymore.
+// PHASE 14C-B1: `syncShopifyCommerceConnectionForBrand` itself (the function
+// that write used) has since been deleted too, along with the
+// pre-column-drop reconciliation tool that was its last caller. The
+// underlying transactional core it shared with the install path
+// (`applyShopifyConnectionSync`) remains covered below via
+// `applyShopifyConnectionSyncFromInstall` (test 14 and the
+// primary-assignment-ordering suite).
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
-// 14: backfill idempotency (loop reusing syncShopifyCommerceConnectionForBrand)
+// 14: idempotency across repeated installs (loop reusing applyShopifyConnectionSyncFromInstall)
 // ---------------------------------------------------------------------------
 
-describe("backfill idempotency", () => {
-  test("14. running the sync loop twice against a shared fake store creates nothing new on the second pass", async () => {
+describe("idempotency across repeated installs", () => {
+  test("14. running the install loop twice against a shared fake store creates nothing new on the second pass", async () => {
     const fakeTx = makeFakeConnectionSyncTx();
-    const brands: LegacyBrandForShopifySync[] = [
-      makeLegacyBrandForSync({ id: "brand-1", shopifyShopDomain: "shop-one.myshopify.com" }),
-      makeLegacyBrandForSync({ id: "brand-2", shopifyShopDomain: "shop-two.myshopify.com" }),
+    const brandInstalls: Array<{ brandId: string; facts: ShopifyInstallFacts }> = [
+      { brandId: "brand-1", facts: makeInstallFacts({ shopDomain: "shop-one.myshopify.com" }) },
+      { brandId: "brand-2", facts: makeInstallFacts({ shopDomain: "shop-two.myshopify.com" }) },
     ];
 
-    async function runBackfillPass() {
+    async function runInstallPass() {
       const outcomes: string[] = [];
-      for (const brand of brands) {
-        const result = await syncShopifyCommerceConnectionForBrand(brand.id, {
-          findBrandForSync: async () => brand,
-          runTransaction: (fn) => fn(fakeTx.tx),
-        });
+      for (const { brandId, facts } of brandInstalls) {
+        const result = await applyShopifyConnectionSyncFromInstall(fakeTx.tx, brandId, facts);
         outcomes.push(result.outcome);
       }
       return outcomes;
     }
 
-    const firstPass = await runBackfillPass();
+    const firstPass = await runInstallPass();
     assert.deepEqual(firstPass, ["created", "created"]);
     assert.equal(fakeTx.connections.size, 2);
 
-    const secondPass = await runBackfillPass();
+    const secondPass = await runInstallPass();
     assert.deepEqual(secondPass, ["updated", "updated"]);
     assert.equal(fakeTx.connections.size, 2, "second pass must not create additional rows");
     assert.equal(fakeTx.calls.createConnection, 2, "create must never be called again on the second pass");
@@ -1545,18 +1372,13 @@ describe("normalizeExternalAccountId write/delete symmetry", () => {
     assert.equal(normalizeExternalAccountId("  Acme.MyShopify.com  "), "acme.myshopify.com");
   });
 
-  test("20. a mixed-case / whitespace-padded domain written via the sync is matched by the redaction delete", async () => {
+  test("20. a mixed-case / whitespace-padded domain written via the install is matched by the redaction delete", async () => {
     const fakeTx = makeFakeConnectionSyncTx();
-    const brand = makeLegacyBrandForSync({
-      // Deliberately mixed-case and whitespace-padded, as a manual DB edit
-      // or a future writer that skips `normalizeShopDomain` might produce.
-      shopifyShopDomain: "  Acme.MyShopify.com  ",
-    });
+    // Deliberately mixed-case and whitespace-padded, as a manual DB edit or
+    // a future writer that skips `normalizeShopDomain` might produce.
+    const facts = makeInstallFacts({ shopDomain: "  Acme.MyShopify.com  " });
 
-    const syncResult = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeSyncDeps(brand, fakeTx),
-    );
+    const syncResult = await applyShopifyConnectionSyncFromInstall(fakeTx.tx, "brand-1", facts);
     assert.equal(syncResult.outcome, "created");
 
     // The stored row's key must already be normalized (this is what makes
@@ -1580,18 +1402,19 @@ describe("normalizeExternalAccountId write/delete symmetry", () => {
 
 // ---------------------------------------------------------------------------
 // 21: shop/redact route wiring (source-inspection test — same idiom as
-// tests/shopify-scope-drift.test.ts). The library-level tests above (15-19)
-// exercise deleteShopifyCommerceConnectionByShopDomain directly against a
-// fake tx; they would pass identically even if the route never called it,
-// or called it only inside `if (brand)`. This test reads the actual route
-// source and asserts the call exists and is NOT gated on `brand` being
-// found — the precise wiring that must hold for the relinked-away scenario
-// (no brand currently holds the redacted domain) to still redact the
-// CommerceConnection mirror.
+// tests/shopify-scope-drift.test.ts). PHASE 14C-B1: the route no longer
+// resolves identity via a single `if (brand)` block (see the P1 fix in
+// route.ts's own header comment) — it resolves historical brand ids from
+// domain-scoped history, and separately determines which of those brands'
+// legacy mirrors still need clearing (`mirrorBrands`). This test asserts the
+// invariant that actually matters now: the CommerceConnection erasure call
+// is gated ONLY on the canonical-invalidation outcome (never STALE), never
+// on whether any historical brand or legacy mirror was found — and never
+// keyed on `Brand.shopifyShopDomain` for routing.
 // ---------------------------------------------------------------------------
 
 describe("shop/redact route wiring", () => {
-  test("21. calls safeDeleteShopifyCommerceConnectionByShopDomain(shopDomain) outside the `if (brand)` block", () => {
+  test("21. calls safeDeleteShopifyCommerceConnectionByShopDomain(shopDomain) unconditionally within the non-stale branch, never gated on a brand/mirror match", () => {
     const routeSource = readFileSync(
       "src/app/api/shopify/webhooks/shop/redact/route.ts",
       "utf8",
@@ -1610,258 +1433,70 @@ describe("shop/redact route wiring", () => {
       "must be called with the redacted shop domain",
     );
 
-    const ifBrandOpenIndex = routeSource.indexOf("if (brand) {");
-    assert.ok(ifBrandOpenIndex >= 0, "route must still have an `if (brand) {` block");
+    const outerGateOpenIndex = routeSource.indexOf(
+      'if (canonicalInvalidation.outcome !== "STALE_EVENT_IGNORED") {',
+    );
+    assert.ok(
+      outerGateOpenIndex >= 0,
+      "route must gate the whole scrub on the canonical invalidation NOT being a stale, superseded event",
+    );
 
-    // Find the matching close brace for `if (brand) { ... }` via simple
-    // brace counting, then confirm the call site is NOT between the two.
+    // Find the matching close brace for the outer gate via brace counting.
     let depth = 0;
-    let ifBrandCloseIndex = -1;
-    for (let i = ifBrandOpenIndex; i < routeSource.length; i++) {
+    let outerGateCloseIndex = -1;
+    for (let i = outerGateOpenIndex; i < routeSource.length; i++) {
       const char = routeSource[i];
       if (char === "{") depth += 1;
       if (char === "}") {
         depth -= 1;
         if (depth === 0) {
-          ifBrandCloseIndex = i;
+          outerGateCloseIndex = i;
           break;
         }
       }
     }
-    assert.ok(ifBrandCloseIndex > ifBrandOpenIndex, "must find the closing brace of `if (brand)`");
+    assert.ok(outerGateCloseIndex > outerGateOpenIndex, "must find the closing brace of the outer gate");
 
     const callIndex = routeSource.indexOf("safeDeleteShopifyCommerceConnectionByShopDomain(");
     assert.ok(
-      callIndex < ifBrandOpenIndex || callIndex > ifBrandCloseIndex,
-      "safeDeleteShopifyCommerceConnectionByShopDomain must be called OUTSIDE the `if (brand)` block, " +
-        "so it still runs for the relinked-away scenario where no brand currently holds the redacted domain",
-    );
-  });
-});
-
-// ---------------------------------------------------------------------------
-// 27: rebuildShopifyConnectionSecretForBrand (Phase-2 reconciliation helper)
-//
-// Narrower than syncShopifyCommerceConnectionForBrand: it repairs ONLY
-// CommerceConnectionSecret from the current, authoritative Brand.shopify*
-// fields for a brand's EXISTING CommerceConnection row — it never creates or
-// mutates the CommerceConnection row itself. Reuses the same
-// makeFakeConnectionSyncTx fake tx as the sync tests above, and
-// syncShopifyCommerceConnectionForBrand to seed a real connection row before
-// exercising the narrower helper against it.
-// ---------------------------------------------------------------------------
-
-describe("rebuildShopifyConnectionSecretForBrand", () => {
-  function makeRebuildDeps(
-    brand: LegacyBrandForShopifySync,
-    fakeTx: ReturnType<typeof makeFakeConnectionSyncTx>,
-  ): Partial<ConnectionSyncDeps> {
-    return {
-      findBrandForSync: async () => brand,
-      runTransaction: (fn) => fn(fakeTx.tx),
-    };
-  }
-
-  test("27a. skips with skipped_brand_not_found when the brand does not exist", async () => {
-    const result = await rebuildShopifyConnectionSecretForBrand("missing-brand", {
-      findBrandForSync: async () => null,
-    });
-    assert.equal(result.outcome, "skipped_brand_not_found");
-    assert.equal(result.connectionId, null);
-  });
-
-  test("27b. skips with skipped_no_shop_domain when the brand has no shop domain", async () => {
-    const brand = makeLegacyBrandForSync({ shopifyShopDomain: null });
-    const result = await rebuildShopifyConnectionSecretForBrand("brand-1", {
-      findBrandForSync: async () => brand,
-    });
-    assert.equal(result.outcome, "skipped_no_shop_domain");
-    assert.equal(result.connectionId, null);
-  });
-
-  test("27c. skips with skipped_no_connection when no CommerceConnection row exists yet for the brand's shop domain, and never creates one", async () => {
-    const fakeTx = makeFakeConnectionSyncTx();
-    const brand = makeLegacyBrandForSync();
-
-    const result = await rebuildShopifyConnectionSecretForBrand(
-      "brand-1",
-      makeRebuildDeps(brand, fakeTx),
+      callIndex > outerGateOpenIndex && callIndex < outerGateCloseIndex,
+      "the erasure call must be inside the outer (non-stale) gate",
     );
 
-    assert.equal(result.outcome, "skipped_no_connection");
-    assert.equal(result.connectionId, null);
-    assert.equal(fakeTx.connections.size, 0, "must never create a CommerceConnection row itself");
-    assert.equal(fakeTx.secrets.size, 0);
-  });
-
-  test("27d. creates a secret when the connection exists but has none yet", async () => {
-    const fakeTx = makeFakeConnectionSyncTx();
-    const brand = makeLegacyBrandForSync();
-
-    const synced = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeRebuildDeps(brand, fakeTx),
-    );
-    if (!synced.connectionId) {
-      throw new Error("expected syncShopifyCommerceConnectionForBrand to return a connectionId");
-    }
-    // Model the historical drift this helper repairs: the connection row
-    // exists, but its secret was never written (or was lost).
-    fakeTx.secrets.delete(synced.connectionId);
-
-    const result = await rebuildShopifyConnectionSecretForBrand(
-      "brand-1",
-      makeRebuildDeps(brand, fakeTx),
-    );
-
-    assert.equal(result.outcome, "created");
-    assert.equal(result.connectionId, synced.connectionId);
-    const secretRow = fakeTx.secrets.get(synced.connectionId);
-    if (!secretRow) {
-      throw new Error("expected a secret row to have been created");
-    }
-    assert.equal(secretRow.keyVersion, 1);
-    const decrypted = JSON.parse(
-      decryptSecret(secretRow.encryptedPayload),
-    ) as ShopifyConnectionSecretPayload;
-    assert.equal(decrypted.accessToken, "shpat_live_token");
-  });
-
-  test("27e. rebuilds (overwrites) a stale secret that no longer matches the current legacy Brand fields", async () => {
-    const fakeTx = makeFakeConnectionSyncTx();
-    const brand = makeLegacyBrandForSync();
-
-    const synced = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeRebuildDeps(brand, fakeTx),
-    );
-    if (!synced.connectionId) {
-      throw new Error("expected syncShopifyCommerceConnectionForBrand to return a connectionId");
-    }
-    const connectionId = synced.connectionId;
-    const staleSecretRow = fakeTx.secrets.get(connectionId);
-    if (!staleSecretRow) {
-      throw new Error("expected the initial sync to have written a secret");
-    }
-    const staleEncryptedPayload = staleSecretRow.encryptedPayload;
-
-    // Simulate drift: the DB still holds the OLD encrypted payload, but the
-    // legacy Brand row's token has since rotated — exactly the gap Task 1's
-    // best-effort mirror closes going forward for live traffic; this helper
-    // is the retroactive repair for rows that went stale before that fix.
-    const rotatedBrand = makeLegacyBrandForSync({
-      shopifyAdminAccessTokenEncrypted: encryptSecret("shpat_rotated_token"),
-    });
-
-    const result = await rebuildShopifyConnectionSecretForBrand(
-      "brand-1",
-      makeRebuildDeps(rotatedBrand, fakeTx),
-    );
-
-    assert.equal(result.outcome, "rebuilt");
-    assert.equal(result.connectionId, connectionId);
-    // The typed result itself carries only an outcome tag + id — never a
-    // credential value.
-    assert.doesNotMatch(JSON.stringify(result), /shpat_|shprt_|rotated_token/i);
-    const rebuiltRow = fakeTx.secrets.get(connectionId);
-    if (!rebuiltRow) {
-      throw new Error("expected the secret row to still exist after rebuilding");
-    }
-    assert.notEqual(rebuiltRow.encryptedPayload, staleEncryptedPayload);
-    assert.equal(rebuiltRow.keyVersion, 1);
-    const decrypted = JSON.parse(
-      decryptSecret(rebuiltRow.encryptedPayload),
-    ) as ShopifyConnectionSecretPayload;
-    assert.equal(decrypted.accessToken, "shpat_rotated_token");
-  });
-
-  test("27f. is idempotent: once up to date, a second run against unchanged Brand fields makes no write and reports up_to_date", async () => {
-    const fakeTx = makeFakeConnectionSyncTx();
-    const brand = makeLegacyBrandForSync();
-
-    const synced = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeRebuildDeps(brand, fakeTx),
-    );
-    if (!synced.connectionId) {
-      throw new Error("expected syncShopifyCommerceConnectionForBrand to return a connectionId");
+    // It must NOT additionally be nested inside the per-brand mirror loop —
+    // that loop only decides which legacy Brand rows to clear, and must
+    // never gate the canonical CommerceConnection erasure itself.
+    const mirrorLoopOpenIndex = routeSource.indexOf("for (const mirrorBrand of mirrorBrands)");
+    if (mirrorLoopOpenIndex >= 0) {
+      const loopBraceIndex = routeSource.indexOf("{", mirrorLoopOpenIndex);
+      let loopDepth = 0;
+      let mirrorLoopCloseIndex = -1;
+      for (let i = loopBraceIndex; i < routeSource.length; i++) {
+        const char = routeSource[i];
+        if (char === "{") loopDepth += 1;
+        if (char === "}") {
+          loopDepth -= 1;
+          if (loopDepth === 0) {
+            mirrorLoopCloseIndex = i;
+            break;
+          }
+        }
+      }
+      assert.ok(
+        callIndex < loopBraceIndex || callIndex > mirrorLoopCloseIndex,
+        "the erasure call must not be nested inside the per-brand legacy-mirror loop",
+      );
     }
 
-    // The sync above already wrote a matching payload, so the very first
-    // rebuild call should already find nothing to do.
-    const first = await rebuildShopifyConnectionSecretForBrand(
-      "brand-1",
-      makeRebuildDeps(brand, fakeTx),
+    // Routing must never key off `Brand.shopifyShopDomain` — only the
+    // legacy-mirror-clearing `prisma.brand.findMany` (scoped to
+    // `historicalBrandIds`) may still reference it, and that call must
+    // filter on `id: { in: historicalBrandIds }`, not resolve identity by
+    // domain alone.
+    assert.doesNotMatch(
+      routeSource,
+      /prisma\.brand\.findFirst\(\{\s*where:\s*\{\s*shopifyShopDomain/,
+      "must never resolve identity via a direct Brand.shopifyShopDomain findFirst",
     );
-    assert.equal(first.outcome, "up_to_date");
-    const upsertCallsBefore = fakeTx.calls.upsertSecret;
-
-    const second = await rebuildShopifyConnectionSecretForBrand(
-      "brand-1",
-      makeRebuildDeps(brand, fakeTx),
-    );
-    assert.equal(second.outcome, "up_to_date");
-    assert.equal(second.connectionId, synced.connectionId);
-    assert.equal(
-      fakeTx.calls.upsertSecret,
-      upsertCallsBefore,
-      "an up-to-date rebuild must not write — no needless re-encryption or rotatedAt bump",
-    );
-  });
-
-  test("27g. deletes the secret (rather than writing an empty payload) when the brand currently has no credentials, and stays idempotent", async () => {
-    const fakeTx = makeFakeConnectionSyncTx();
-    const brand = makeLegacyBrandForSync();
-
-    const synced = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeRebuildDeps(brand, fakeTx),
-    );
-    if (!synced.connectionId) {
-      throw new Error("expected syncShopifyCommerceConnectionForBrand to return a connectionId");
-    }
-    assert.equal(fakeTx.secrets.size, 1);
-
-    const uninstalledBrand = makeLegacyBrandForSync({
-      shopifyAdminAccessTokenEncrypted: null,
-      shopifyRefreshTokenEncrypted: null,
-    });
-
-    const result = await rebuildShopifyConnectionSecretForBrand(
-      "brand-1",
-      makeRebuildDeps(uninstalledBrand, fakeTx),
-    );
-
-    assert.equal(result.outcome, "no_credentials");
-    assert.equal(result.connectionId, synced.connectionId);
-    assert.equal(fakeTx.secrets.size, 0, "secret row must be deleted, never written empty");
-
-    const second = await rebuildShopifyConnectionSecretForBrand(
-      "brand-1",
-      makeRebuildDeps(uninstalledBrand, fakeTx),
-    );
-    assert.equal(second.outcome, "no_credentials");
-    assert.equal(fakeTx.secrets.size, 0);
-  });
-
-  test("27h. never touches CommerceConnection's own columns — only CommerceConnectionSecret", async () => {
-    const fakeTx = makeFakeConnectionSyncTx();
-    const brand = makeLegacyBrandForSync();
-
-    const synced = await syncShopifyCommerceConnectionForBrand(
-      "brand-1",
-      makeRebuildDeps(brand, fakeTx),
-    );
-    if (!synced.connectionId) {
-      throw new Error("expected syncShopifyCommerceConnectionForBrand to return a connectionId");
-    }
-    const connectionId = synced.connectionId;
-    const before = { ...fakeTx.connections.get(connectionId) };
-    fakeTx.secrets.delete(connectionId);
-
-    await rebuildShopifyConnectionSecretForBrand("brand-1", makeRebuildDeps(brand, fakeTx));
-
-    const after = fakeTx.connections.get(connectionId);
-    assert.deepEqual(after, before, "the CommerceConnection row itself must be byte-for-byte untouched");
   });
 });
