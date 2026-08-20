@@ -1499,4 +1499,53 @@ describe("shop/redact route wiring", () => {
       "must never resolve identity via a direct Brand.shopifyShopDomain findFirst",
     );
   });
+
+  test("22. brandRewardOffer.updateMany is scoped to sourceShopDomain, never to brandId IN historicalBrandIds (PHASE 14C-B1.1)", () => {
+    const routeSource = readFileSync(
+      "src/app/api/shopify/webhooks/shop/redact/route.ts",
+      "utf8",
+    );
+
+    // The over-broad predicate from Phase 14C-B1 must be gone entirely.
+    assert.doesNotMatch(
+      routeSource,
+      /brandRewardOffer\.updateMany\(\{\s*where:\s*\{\s*brandId/,
+      "must never deactivate offers by brandId IN historicalBrandIds — that touches offers unrelated to the redacted shop",
+    );
+
+    const callMatch = routeSource.match(
+      /brandRewardOffer\.updateMany\(\{\s*where:\s*\{([^}]*)\},\s*data:\s*\{([^}]*)\}/,
+    );
+    assert.ok(callMatch, "shop/redact route must call brandRewardOffer.updateMany");
+    assert.match(
+      callMatch![1],
+      /sourceShopDomain:\s*shopDomain/,
+      "the offer predicate must filter on sourceShopDomain === the redacted domain",
+    );
+    assert.doesNotMatch(
+      callMatch![1],
+      /appliesTo/,
+      "the offer predicate must not special-case appliesTo — sourceShopDomain is populated for every offer type",
+    );
+    assert.match(
+      callMatch![2],
+      /isActive:\s*false/,
+      "matched offers must be deactivated",
+    );
+    assert.match(
+      callMatch![2],
+      /sourceShopDomain:\s*null/,
+      "matched offers must have their now-dangling sourceShopDomain scrubbed",
+    );
+
+    // Exactly one brandRewardOffer.updateMany call in the whole route — the
+    // old two-call shape (broad deactivate + narrow scrub) is now a single
+    // combined call.
+    const allCalls = routeSource.match(/brandRewardOffer\.updateMany\(/g) ?? [];
+    assert.equal(
+      allCalls.length,
+      1,
+      "exactly one brandRewardOffer.updateMany call — deactivation and scrub are combined into a single shop-scoped operation",
+    );
+  });
 });

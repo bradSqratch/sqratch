@@ -8,8 +8,11 @@ import { invalidateShopifyCredential } from "@/lib/commerce/providers/shopify-cr
 // Shopify sends shop/redact 48 hours after a merchant uninstalls, confirming
 // all shop data must be erased. Per docs/shopify-data-inventory.md §5:
 //   - Anonymize Shopify-specific metadata on ShopifyRewardRedemption rows.
-//   - Deactivate reward offers for every brand historically associated with
-//     this shop domain.
+//   - Deactivate and scrub only the reward offers actually tied to this shop
+//     domain (offer.sourceShopDomain === this domain) — NOT every offer
+//     belonging to a brand that merely once had some connection to it. A
+//     brand that has since relinked to, and resaved offers against, a
+//     different live shop keeps those offers untouched.
 //   - Clear ALL Shopify credentials and token metadata on any Brand record
 //     whose legacy mirror still points at this domain.
 //   - Null shopifyShopDomain to release the unique slot (GDPR shop data removal).
@@ -21,6 +24,10 @@ import { invalidateShopifyCredential } from "@/lib/commerce/providers/shopify-cr
 // (ShopifyConnectionEvent + ShopifyRewardRedemption), NEVER from
 // `Brand.shopifyShopDomain` — see the in-function comment below for why a
 // live-mirror lookup silently misses a brand that already relinked away.
+// PHASE 14C-B1.1: that domain-scoped `historicalBrandIds` set is used only
+// to scope the legacy-mirror clear and connection-event identity — reward
+// offer deactivation/scrub is separately scoped to `sourceShopDomain`, see
+// the in-function comment below.
 export async function POST(request: NextRequest) {
   const verification = await verifyShopifyWebhookRequest(request);
 
@@ -193,31 +200,25 @@ export async function POST(request: NextRequest) {
         }),
       );
 
-      // Redaction is a connection loss for every historically-associated
-      // brand — their reward offers must never stay (or become) claimable
-      // against a store that no longer exists. Scoped to `historicalBrandIds`
-      // (resolved above from domain-scoped history only), so this can never
-      // touch a brand unrelated to this shop.
-      if (historicalBrandIds.length > 0) {
-        operations.push(
-          prisma.brandRewardOffer.updateMany({
-            where: { brandId: { in: historicalBrandIds } },
-            data: { isActive: false },
-          }),
-        );
-      }
-
-      // Null sourceShopDomain wherever it references the redacted shop, on
-      // every Brand this domain ever touched — not just a brand currently
-      // holding it, since a prior relink can leave the domain referenced as
-      // sourceShopDomain on another Brand's rows. Rows are never deleted, only
-      // the domain reference is cleared (requires product reselection / a
-      // currency review already anyway, since sourceShopDomain no longer
-      // resolves to anything).
+      // PHASE 14C-B1.1: an offer is shop-specific iff its own
+      // `sourceShopDomain` equals the redacted domain — that field is set to
+      // the connected shop's domain on every create/update while a Shopify
+      // connection is active (src/lib/reward-offers.ts,
+      // src/app/api/brand/rewards/offers/route.ts), for every `appliesTo`
+      // value, not only SPECIFIC_PRODUCTS offers. It only goes stale (still
+      // pointing at an old shop) until the offer is next saved while
+      // connected elsewhere. Scoping to `sourceShopDomain: shopDomain` (never
+      // to `historicalBrandIds` alone) is deliberately narrower: a brand that
+      // once owned this domain but has since relinked to, and resaved offers
+      // against, a different live shop must keep those live offers
+      // untouched — only the offers actually tied to THIS domain are
+      // deactivated and scrubbed. An offer with a null `sourceShopDomain`
+      // (created/last saved while never connected) is never shop-specific to
+      // any domain and is therefore never matched here.
       operations.push(
         prisma.brandRewardOffer.updateMany({
           where: { sourceShopDomain: shopDomain },
-          data: { sourceShopDomain: null },
+          data: { isActive: false, sourceShopDomain: null },
         }),
         // PHASE 8: the ExperienceProductLink / LessonProductLink
         // sourceShopDomain scrubs that used to sit here are gone with those
