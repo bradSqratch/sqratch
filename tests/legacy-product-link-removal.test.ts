@@ -381,10 +381,9 @@ test("all 16 legacy Brand.shopify* compatibility columns are ABSENT from Brand (
   }
 
   // Count check, so a reintroduced column is caught even if this file's name
-  // list were edited. Brand still declares exactly two shopify* fields, and
-  // BOTH are relation lists (back-relations to provider-specific history), not
-  // scalar compatibility columns.
-  const RELATION_FIELDS = new Set(["shopifyRewardRedemptions", "shopifyConnectionEvents"]);
+  // list were edited. The remaining Shopify relation is reward-specific;
+  // lifecycle history is provider-neutral CommerceConnectionEvent.
+  const RELATION_FIELDS = new Set(["shopifyRewardRedemptions"]);
   const declaredShopifyFields = [...body.matchAll(/^\s+(shopify[A-Za-z]+)\s+/gm)].map(
     (match) => match[1],
   );
@@ -397,8 +396,8 @@ test("all 16 legacy Brand.shopify* compatibility columns are ABSENT from Brand (
   );
   assert.deepEqual(
     [...declaredShopifyFields].sort(),
-    ["shopifyConnectionEvents", "shopifyRewardRedemptions"],
-    "the only shopify* fields left on Brand are the two provider-specific history relations",
+    ["shopifyRewardRedemptions"],
+    "the only shopify* field left on Brand is the out-of-scope reward history relation",
   );
 });
 
@@ -423,13 +422,13 @@ test("the legacy ShopifyConnectionStatus / ShopifyAuthMode enums are gone, and p
   assert.match(schema, /^enum\s+CommerceProvider\b/m);
 });
 
-test("canonical commerce authority and provider-specific history models survive Phase 14C-B2", () => {
+test("canonical commerce authority and provider-neutral lifecycle history survive Phase 14C-B2", () => {
   for (const model of [
     // Canonical authority — the whole point of the migration.
     "CommerceConnection",
     "CommerceConnectionSecret",
-    // Provider-specific history, deliberately retained (not duplicate Brand authority).
-    "ShopifyConnectionEvent",
+    // Provider-neutral lifecycle history, deliberately retained.
+    "CommerceConnectionEvent",
     "ShopifyRewardRedemption",
   ]) {
     assert.match(
@@ -527,7 +526,7 @@ test("shop/redact no longer touches the removed legacy Prisma delegates, and kee
   assert.match(route, /verifyShopifyWebhookRequest/);
   assert.match(route, /prisma\.shopifyRewardRedemption\.updateMany/);
   assert.match(route, /prisma\.brandRewardOffer\.updateMany/);
-  assert.match(route, /prisma\.shopifyConnectionEvent\.updateMany/);
+  assert.match(route, /prisma\.commerceConnectionEvent\.updateMany/);
   assert.match(route, /prisma\.tokenStore\.deleteMany/);
   assert.match(route, /prisma\.\$transaction\(operations\)/);
   assert.match(route, /deleteShopifyCommerceConnectionByShopDomain\(shopDomain\)/);

@@ -1,5 +1,9 @@
-import type { Prisma, ShopifyConnectionEventType } from "@prisma/client";
+import { CommerceProvider, type CommerceConnectionEventType, type Prisma } from "@prisma/client";
 import { isSameShopDomain, normalizeShopDomain } from "@/lib/shopify";
+import {
+  recordCommerceConnectionEvent,
+  resolveLastKnownExternalAccountId,
+} from "@/lib/commerce/connection-lifecycle";
 
 type TxClient = Prisma.TransactionClient;
 
@@ -26,7 +30,7 @@ export async function deactivateAllBrandRewardOffers(
 
 /**
  * Deactivates every reward offer for the brand and records a
- * ShopifyConnectionEvent describing a connection loss (manual/embedded
+ * provider-neutral CommerceConnectionEvent describing a Shopify connection loss (manual/embedded
  * disconnect, app uninstall, or a permanent token failure), atomically
  * inside the given transaction.
  *
@@ -42,22 +46,21 @@ export async function recordShopifyConnectionLoss(
   input: {
     brandId: string;
     eventType: Extract<
-      ShopifyConnectionEventType,
+      CommerceConnectionEventType,
       "DISCONNECTED" | "UNINSTALLED" | "REQUIRES_RECONNECT"
     >;
     snapshot: PreTransitionShopifySnapshot;
   },
 ) {
   await deactivateAllBrandRewardOffers(tx, input.brandId);
-  await tx.shopifyConnectionEvent.create({
-    data: {
-      brandId: input.brandId,
-      eventType: input.eventType,
-      shopDomain: input.snapshot.shopDomain,
-      previousShopDomain: null,
+  await recordCommerceConnectionEvent(tx, {
+    brandId: input.brandId,
+    provider: CommerceProvider.SHOPIFY,
+    eventType: input.eventType,
+    snapshot: {
+      externalAccountId: input.snapshot.shopDomain,
       currencyCode: input.snapshot.currencyCode,
-      previousCurrencyCode: null,
-      shopifyClientId: input.snapshot.shopifyClientId,
+      providerClientId: input.snapshot.shopifyClientId,
     },
   });
 }
@@ -70,7 +73,7 @@ export function resolveInstallConnectionEventType(
   previousShopDomain: string | null,
   newShopDomain: string,
 ): Extract<
-  ShopifyConnectionEventType,
+  CommerceConnectionEventType,
   "CONNECTED" | "RECONNECTED" | "RELINKED"
 > {
   if (!previousShopDomain) {
@@ -84,7 +87,7 @@ export function resolveInstallConnectionEventType(
 
 /**
  * Deactivates every reward offer for the brand and records a
- * CONNECTED/RECONNECTED/RELINKED ShopifyConnectionEvent, atomically inside
+ * CONNECTED/RECONNECTED/RELINKED CommerceConnectionEvent, atomically inside
  * the given transaction. Offers are never automatically reactivated here —
  * activation always requires a separate, explicit Brand Admin action.
  */
@@ -93,7 +96,7 @@ export async function recordShopifyConnectionInstall(
   input: {
     brandId: string;
     eventType: Extract<
-      ShopifyConnectionEventType,
+      CommerceConnectionEventType,
       "CONNECTED" | "RECONNECTED" | "RELINKED"
     >;
     shopDomain: string;
@@ -104,15 +107,18 @@ export async function recordShopifyConnectionInstall(
   },
 ) {
   await deactivateAllBrandRewardOffers(tx, input.brandId);
-  await tx.shopifyConnectionEvent.create({
-    data: {
-      brandId: input.brandId,
-      eventType: input.eventType,
-      shopDomain: normalizeShopDomain(input.shopDomain) ?? input.shopDomain,
-      previousShopDomain: input.previousShopDomain,
+  await recordCommerceConnectionEvent(tx, {
+    brandId: input.brandId,
+    provider: CommerceProvider.SHOPIFY,
+    eventType: input.eventType,
+    snapshot: {
+      externalAccountId: normalizeShopDomain(input.shopDomain) ?? input.shopDomain,
       currencyCode: input.currencyCode,
-      previousCurrencyCode: input.previousCurrencyCode,
-      shopifyClientId: input.shopifyClientId,
+      providerClientId: input.shopifyClientId,
+    },
+    previousSnapshot: {
+      externalAccountId: input.previousShopDomain,
+      currencyCode: input.previousCurrencyCode,
     },
   });
 }
@@ -127,11 +133,10 @@ export async function resolveLastKnownShopDomain(
   tx: TxClient,
   brandId: string,
 ): Promise<string | null> {
-  const lastEvent = await tx.shopifyConnectionEvent.findFirst({
-    where: { brandId, shopDomain: { not: null } },
-    orderBy: { createdAt: "desc" },
-    select: { shopDomain: true },
-  });
-
-  return normalizeShopDomain(lastEvent?.shopDomain ?? null);
+  const externalAccountId = await resolveLastKnownExternalAccountId(
+    tx,
+    brandId,
+    CommerceProvider.SHOPIFY,
+  );
+  return normalizeShopDomain(externalAccountId);
 }

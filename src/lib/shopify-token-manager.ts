@@ -366,7 +366,7 @@ async function resolveRuntimeCredential(
         // `CommerceConnection.providerMetadata.currencyCode` — see
         // `loadShopifyCredential`'s `ShopifyCredential.currencyCode`. Used
         // only to populate connection-loss/heal event snapshots
-        // (`ShopifyConnectionEvent`); `null` there is fine (no
+        // (`CommerceConnectionEvent`); `null` there is fine (no
         // `Brand.shopifyCurrencyCode` fallback, Phase 14C-A).
         currencyCode: c.currencyCode,
       },
@@ -965,7 +965,7 @@ export async function applyGrantedScopesUpdate(input: {
 
 /**
  * CAS-guarded transition of a scope-drift-caused `REQUIRES_RECONNECT` back to
- * `CONNECTED`, plus a truthful `RECONNECTED` `ShopifyConnectionEvent` — the
+ * `CONNECTED`, plus a truthful `RECONNECTED` `CommerceConnectionEvent` — the
  * mirror image of `markRequiresReconnectCanonical`.
  *
  * ONLY call this once genuine positive evidence exists that this

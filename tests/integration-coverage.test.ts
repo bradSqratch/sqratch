@@ -27,6 +27,8 @@ interface MockedPrismaClient {
   user: Record<string, (...args: unknown[]) => unknown>;
   campaignUnlock: Record<string, (...args: unknown[]) => unknown>;
   brandRewardOffer: Record<string, (...args: unknown[]) => unknown>;
+  commerceConnectionEvent: Record<string, (...args: unknown[]) => unknown>;
+  /** Legacy test alias only; points at commerceConnectionEvent below. */
   shopifyConnectionEvent: Record<string, (...args: unknown[]) => unknown>;
   commerceConnection: Record<string, (...args: unknown[]) => unknown>;
   commerceConnectionSecret: Record<string, (...args: unknown[]) => unknown>;
@@ -202,7 +204,7 @@ before(async () => {
   // t.mock.method when they need to assert on the specific call.
   (prismaModule.brandRewardOffer as Record<string, unknown>).updateMany =
     async () => ({ count: 0 });
-  prismaModule.shopifyConnectionEvent = {
+  const commerceConnectionEvent = {
     create: async () => ({ id: "sce-default" }),
     findFirst: async () => null,
     // PHASE 14C-B1: shop/redact resolves historical brand identity from
@@ -211,6 +213,10 @@ before(async () => {
     findMany: async () => [],
     updateMany: async () => ({ count: 0 }),
   };
+  prismaModule.commerceConnectionEvent = commerceConnectionEvent;
+  // Keep existing focused mocks attached to the same delegate while this
+  // broad integration harness is incrementally migrated.
+  prismaModule.shopifyConnectionEvent = commerceConnectionEvent;
   // PHASE 8: the experienceProductLink / lessonProductLink safe-default mocks
   // that used to sit here are gone with those Prisma models
   // (20260808130000_remove_legacy_product_link_snapshots). shop/redact no
@@ -881,25 +887,26 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     );
 
     let connectionEventScrubCalls = 0;
-    t.mock.method(prisma.shopifyConnectionEvent, "updateMany", async (args: unknown) => {
+    t.mock.method(prisma.commerceConnectionEvent, "updateMany", async (args: unknown) => {
       connectionEventScrubCalls += 1;
       const typedArgs = args as {
-        where: { shopDomain?: string; previousShopDomain?: string };
+        where: { provider?: string; externalAccountId?: string; previousExternalAccountId?: string };
         data: Record<string, null>;
       };
-      if (typedArgs.where.shopDomain === "redact-shop.myshopify.com") {
+      assert.equal(typedArgs.where.provider, "SHOPIFY");
+      if (typedArgs.where.externalAccountId === "redact-shop.myshopify.com") {
         assert.deepEqual(Object.keys(typedArgs.data).sort(), [
           "currencyCode",
-          "shopDomain",
-          "shopifyClientId",
+          "externalAccountId",
+          "providerClientId",
         ]);
-      } else if (typedArgs.where.previousShopDomain === "redact-shop.myshopify.com") {
+      } else if (typedArgs.where.previousExternalAccountId === "redact-shop.myshopify.com") {
         assert.deepEqual(Object.keys(typedArgs.data).sort(), [
           "previousCurrencyCode",
-          "previousShopDomain",
+          "previousExternalAccountId",
         ]);
       } else {
-        assert.fail("unexpected shopifyConnectionEvent.updateMany where clause");
+        assert.fail("unexpected commerceConnectionEvent.updateMany where clause");
       }
       return { count: 1 };
     });
@@ -1421,14 +1428,15 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
     });
 
     let eventRecorded = false;
-    t.mock.method(prisma.shopifyConnectionEvent, "create", async (args: unknown) => {
+    t.mock.method(prisma.commerceConnectionEvent, "create", async (args: unknown) => {
       eventRecorded = true;
       const typedArgs = args as {
-        data: { brandId: string; eventType: string; shopDomain: string; currencyCode: string };
+        data: { brandId: string; provider: string; eventType: string; externalAccountId: string; currencyCode: string };
       };
       assert.equal(typedArgs.data.brandId, "brand-embedded");
+      assert.equal(typedArgs.data.provider, "SHOPIFY");
       assert.equal(typedArgs.data.eventType, "DISCONNECTED");
-      assert.equal(typedArgs.data.shopDomain, "embedded-shop.myshopify.com");
+      assert.equal(typedArgs.data.externalAccountId, "embedded-shop.myshopify.com");
       assert.equal(typedArgs.data.currencyCode, "CAD");
       return {};
     });
@@ -2273,14 +2281,15 @@ describe("Route Scenario 3: Shopify Token Refresh", () => {
     });
 
     let eventRecordedAfterGuard = false;
-    t.mock.method(prisma.shopifyConnectionEvent, "create", async (args: unknown) => {
+    t.mock.method(prisma.commerceConnectionEvent, "create", async (args: unknown) => {
       assert.ok(markRequiresReconnectCalled);
       const typedArgs = args as {
-        data: { brandId: string; eventType: string; shopDomain: string };
+        data: { brandId: string; provider: string; eventType: string; externalAccountId: string };
       };
       assert.equal(typedArgs.data.brandId, brandId);
+      assert.equal(typedArgs.data.provider, "SHOPIFY");
       assert.equal(typedArgs.data.eventType, "REQUIRES_RECONNECT");
-      assert.equal(typedArgs.data.shopDomain, "test-shop.myshopify.com");
+      assert.equal(typedArgs.data.externalAccountId, "test-shop.myshopify.com");
       eventRecordedAfterGuard = true;
       return {};
     });

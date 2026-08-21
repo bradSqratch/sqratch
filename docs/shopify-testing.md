@@ -119,6 +119,35 @@ Current limitation: the embedded shell loads the minimum App Bridge script/meta 
 - Send invalid webhook HMAC and confirm the request is rejected.
 - Send valid privacy compliance webhooks and confirm they return `200`.
 
+## Phase 15B Lifecycle-History Rollout
+
+`20260821120000_rename_shopify_connection_event_to_commerce_connection_event`
+physically renames the lifecycle-history table and columns. The accepted
+controlled maintenance window has this compatibility matrix:
+
+| Application revision | Database schema | Result |
+| --- | --- | --- |
+| Pre-Phase 15B | Pre-Phase 15B | Works |
+| Phase 15B | Pre-Phase 15B | Lifecycle paths fail |
+| Pre-Phase 15B | Phase 15B | Lifecycle paths fail |
+| Phase 15B | Phase 15B | Works |
+
+During the short window, operators must not intentionally perform Shopify
+install/reconnect/relink, dashboard or embedded disconnect, `app/uninstalled`,
+scope lifecycle transitions, invalid-grant lifecycle recording, or
+`shop/redact`. Shopify webhook failures in this interval are expected to be
+non-2xx and retried.
+
+1. Record the preflight lifecycle-row fingerprint.
+2. Push/deploy the Phase 15B revision first and wait until the Vercel
+   production deployment is **Ready**. If it fails before becoming production,
+   do not run the migration.
+3. Immediately run `npx prisma migrate deploy`.
+4. Immediately run the Phase 15B postflight SQL and compare its lifecycle-row
+   fingerprint with the preflight fingerprint.
+5. If `migrate deploy` errors, stop immediately. Do not retry, run `db push`,
+   reset, or manually rename any additional database objects.
+
 ## Reward Redemption, Status Refresh, and Reconciliation Checklist
 
 See `docs/points-ledger.md` for the full ledger/account model and `docs/codebase-map.md` (Section F.7–F.9) for the exact transaction sequence; this section covers what to exercise manually.
@@ -141,7 +170,7 @@ The four compliance/lifecycle webhooks below (`customers/data_request`, `custome
 - Send each of `customers/data_request`, `customers/redact`, `shop/redact`, and `app/uninstalled` with an invalid HMAC and confirm the request is rejected (non-200) before any processing.
 - Confirm `customers/data_request` and `customers/redact` return `200` and write a sanitized audit log entry (topic + shop domain only, no customer PII) without touching any database row — SQRATCH stores no Shopify-customer-keyed data.
 - Confirm `shop/redact` for a shop with no matching `Brand` returns `200` without error.
-- Confirm `shop/redact` for a shop with a matching `Brand`: nulls the brand's Shopify credentials and `shopifyShopDomain`; anonymizes `ShopifyRewardRedemption` Shopify-specific metadata (discount node id, discount status, user errors) while preserving the redemption's SQRATCH core fields (`userId`, `brandId`, `offerId`, `code`, `pointsCost`, `status`, timestamps); sets the brand's `BrandRewardOffer` rows `isActive: false`; nulls `sourceShopDomain` on any `BrandRewardOffer` row that referenced the redacted domain, across all brands (Phase 8 removed the `ExperienceProductLink`/`LessonProductLink` scrubs with those tables — the canonical product chain cascades from the `CommerceConnection` this handler deletes instead); scrubs the domain/currency/client-id out of `ShopifyConnectionEvent` history while preserving the event type and timestamp; deletes orphaned OAuth-state/pending-install `TokenStore` rows for that shop.
+- Confirm `shop/redact` for a shop with a matching connection: anonymizes `ShopifyRewardRedemption` Shopify-specific metadata (discount node id, discount status, user errors) while preserving the redemption's SQRATCH core fields (`userId`, `brandId`, `offerId`, `code`, `pointsCost`, `status`, timestamps); sets matching `BrandRewardOffer` rows inactive; nulls `sourceShopDomain` on offers tied to the redacted domain; scrubs account/currency/client-id snapshots only from `CommerceConnectionEvent` rows where `provider=SHOPIFY`, preserving event type and timestamp and leaving Commerce7 history untouched; deletes orphaned OAuth-state/pending-install `TokenStore` rows for that shop.
 - Confirm `app/uninstalled` clears credential/token fields and sets `UNINSTALLED`, but intentionally preserves `shopifyShopDomain` (unlike `shop/redact`) so the same shop can reinstall and relink seamlessly.
 - Automated coverage: `tests/integration-coverage.test.ts` (shop/redact temp-token cleanup) and `tests/shopify-connection-transitions.test.ts`.
 

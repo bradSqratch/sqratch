@@ -178,7 +178,7 @@ const commerceConnectionSecretDelegateStub = {
 async function fakeTransaction<T>(fn: (tx: Record<string, unknown>) => Promise<T>): Promise<T> {
   const tx = {
     brandRewardOffer: { updateMany: async () => ({ count: 0 }) },
-    shopifyConnectionEvent: {
+    commerceConnectionEvent: {
       create: async (args: { data: { brandId: string; eventType: string } }) => {
         connectionEventCreateCalls.push({ brandId: args.data.brandId, eventType: args.data.eventType });
         return {};

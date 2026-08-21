@@ -100,7 +100,7 @@ model Brand {
   campaigns                 Campaign[]
   rewardOffers              BrandRewardOffer[]
   shopifyRewardRedemptions  ShopifyRewardRedemption[]
-  shopifyConnectionEvents   ShopifyConnectionEvent[]
+  commerceConnectionEvents  CommerceConnectionEvent[]
   commerceConnections       CommerceConnection[]
   connectedCommerceProducts ConnectedCommerceProduct[]
   commerceProductSyncRuns   CommerceProductSyncRun[]
@@ -440,22 +440,26 @@ model BrandRewardOfferProduct {
   @@index([offerId])
 }
 
-model ShopifyConnectionEvent {
-  id                   String                     @id @default(cuid())
-  brandId              String
-  eventType            ShopifyConnectionEventType
-  shopDomain           String?
-  previousShopDomain   String?
-  currencyCode         String?
-  previousCurrencyCode String?
-  shopifyClientId      String?
-  createdAt            DateTime                   @default(now())
+/// Provider-neutral, append-only lifecycle history. It deliberately snapshots
+/// identity rather than depending on a live CommerceConnection FK, so the
+/// audit record survives a privacy-driven connection deletion.
+model CommerceConnectionEvent {
+  id                        String                      @id @default(cuid())
+  brandId                   String
+  provider                  CommerceProvider
+  eventType                 CommerceConnectionEventType
+  externalAccountId         String?
+  previousExternalAccountId String?
+  currencyCode              String?
+  previousCurrencyCode      String?
+  providerClientId          String?
+  createdAt                 DateTime                    @default(now())
 
   brand Brand @relation(fields: [brandId], references: [id], onDelete: Cascade)
 
   @@index([brandId, createdAt])
-  @@index([shopDomain, createdAt])
-  @@index([previousShopDomain, createdAt])
+  @@index([externalAccountId, createdAt])
+  @@index([previousExternalAccountId, createdAt])
 }
 
 model CommerceConnection {
@@ -1392,7 +1396,7 @@ enum ExperienceVideoSource {
   @@map("CampaignVideoSource")
 }
 
-enum ShopifyConnectionEventType {
+enum CommerceConnectionEventType {
   CONNECTED
   RECONNECTED
   RELINKED

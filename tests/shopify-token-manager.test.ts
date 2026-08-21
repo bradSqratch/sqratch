@@ -1141,7 +1141,7 @@ describe("getValidAccessToken → CANONICAL credential authority + reverse mirro
           return { count: 0 };
         },
       },
-      shopifyConnectionEvent: {
+      commerceConnectionEvent: {
         create: async () => {
           ctx.calls.push("connectionEventCreate");
           return {};

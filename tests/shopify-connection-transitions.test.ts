@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { Prisma } from "@prisma/client";
+import { CommerceProvider, type Prisma } from "@prisma/client";
+import { recordCommerceConnectionEvent } from "../src/lib/commerce/connection-lifecycle";
 
 import {
   deactivateAllBrandRewardOffers,
@@ -26,7 +27,7 @@ function makeFakeTx() {
         return { count: 1 };
       },
     },
-    shopifyConnectionEvent: {
+    commerceConnectionEvent: {
       create: async (...args: unknown[]) => {
         calls.create.push({ args });
         return {};
@@ -100,24 +101,26 @@ test("recordShopifyConnectionLoss deactivates offers and records one event atomi
     {
       data: {
         brandId: string;
+        provider: string;
         eventType: string;
-        shopDomain: string | null;
-        previousShopDomain: string | null;
+        externalAccountId: string | null;
+        previousExternalAccountId: string | null;
         currencyCode: string | null;
         previousCurrencyCode: string | null;
-        shopifyClientId: string | null;
+        providerClientId: string | null;
       };
     },
   ];
 
   assert.equal(eventArgs.data.brandId, "brand-1");
+  assert.equal(eventArgs.data.provider, "SHOPIFY");
   assert.equal(eventArgs.data.eventType, "DISCONNECTED");
-  assert.equal(eventArgs.data.shopDomain, "shop.myshopify.com");
+  assert.equal(eventArgs.data.externalAccountId, "shop.myshopify.com");
   assert.equal(eventArgs.data.currencyCode, "CAD");
-  assert.equal(eventArgs.data.shopifyClientId, "client-1");
+  assert.equal(eventArgs.data.providerClientId, "client-1");
   // A loss event has no "previous, different" domain concept — that only
   // applies to install-time CONNECTED/RECONNECTED/RELINKED transitions.
-  assert.equal(eventArgs.data.previousShopDomain, null);
+  assert.equal(eventArgs.data.previousExternalAccountId, null);
   assert.equal(eventArgs.data.previousCurrencyCode, null);
 });
 
@@ -148,28 +151,30 @@ test("recordShopifyConnectionInstall records CONNECTED/RECONNECTED/RELINKED with
   const [eventArgs] = calls.create[0].args as [
     {
       data: {
+        provider: string;
         eventType: string;
-        shopDomain: string;
-        previousShopDomain: string | null;
+        externalAccountId: string;
+        previousExternalAccountId: string | null;
         currencyCode: string | null;
         previousCurrencyCode: string | null;
       };
     },
   ];
+  assert.equal(eventArgs.data.provider, "SHOPIFY");
   assert.equal(eventArgs.data.eventType, "RELINKED");
-  assert.equal(eventArgs.data.shopDomain, "new-shop.myshopify.com");
-  assert.equal(eventArgs.data.previousShopDomain, "old-shop.myshopify.com");
+  assert.equal(eventArgs.data.externalAccountId, "new-shop.myshopify.com");
+  assert.equal(eventArgs.data.previousExternalAccountId, "old-shop.myshopify.com");
   assert.equal(eventArgs.data.currencyCode, "USD");
   assert.equal(eventArgs.data.previousCurrencyCode, "CAD");
 });
 
 test("resolveLastKnownShopDomain queries connection history and normalizes the result", async () => {
   const tx = {
-    shopifyConnectionEvent: {
+    commerceConnectionEvent: {
       findFirst: async (args: unknown) => {
         const typedArgs = args as { where: { brandId: string } };
         assert.equal(typedArgs.where.brandId, "brand-1");
-        return { shopDomain: "Shop.MyShopify.com" };
+        return { externalAccountId: "Shop.MyShopify.com" };
       },
     },
   } as unknown as Prisma.TransactionClient;
@@ -180,11 +185,47 @@ test("resolveLastKnownShopDomain queries connection history and normalizes the r
 
 test("resolveLastKnownShopDomain returns null when there is no history", async () => {
   const tx = {
-    shopifyConnectionEvent: {
+    commerceConnectionEvent: {
       findFirst: async () => null,
     },
   } as unknown as Prisma.TransactionClient;
 
   const result = await resolveLastKnownShopDomain(tx, "brand-1");
   assert.equal(result, null);
+});
+
+test("generic lifecycle writer records Commerce7 without Shopify-shaped fields", async () => {
+  const events: unknown[] = [];
+  const tx = {
+    commerceConnectionEvent: {
+      create: async (args: unknown) => {
+        events.push(args);
+        return {};
+      },
+    },
+  } as unknown as Prisma.TransactionClient;
+
+  await recordCommerceConnectionEvent(tx, {
+    brandId: "brand-commerce7",
+    provider: CommerceProvider.COMMERCE7,
+    eventType: "CONNECTED",
+    snapshot: {
+      externalAccountId: "winery-tenant",
+      currencyCode: "USD",
+      providerClientId: null,
+    },
+  });
+
+  assert.deepEqual(events, [{
+    data: {
+      brandId: "brand-commerce7",
+      provider: "COMMERCE7",
+      eventType: "CONNECTED",
+      externalAccountId: "winery-tenant",
+      previousExternalAccountId: null,
+      currencyCode: "USD",
+      previousCurrencyCode: null,
+      providerClientId: null,
+    },
+  }]);
 });

@@ -19,7 +19,7 @@ import { invalidateShopifyCredential } from "@/lib/commerce/providers/shopify-cr
 //   - Delete any orphaned OAuth state TokenStore rows for this shop.
 //
 // PHASE 14C-B1: identity is resolved from domain-scoped history
-// (ShopifyConnectionEvent + ShopifyRewardRedemption), never from a live
+// (CommerceConnectionEvent filtered to SHOPIFY + ShopifyRewardRedemption), never from a live
 // Brand mirror — a mirror lookup silently misses a brand that already
 // relinked away.
 // PHASE 14C-B2: `Brand` no longer carries ANY Shopify connection or
@@ -114,8 +114,11 @@ export async function POST(request: NextRequest) {
       // keyed on the redacted domain itself, never on a brand id.
       // -----------------------------------------------------------------
       const [connectionEventBrands, redemptionBrands] = await Promise.all([
-        prisma.shopifyConnectionEvent.findMany({
-          where: { OR: [{ shopDomain }, { previousShopDomain: shopDomain }] },
+        prisma.commerceConnectionEvent.findMany({
+          where: {
+            provider: "SHOPIFY",
+            OR: [{ externalAccountId: shopDomain }, { previousExternalAccountId: shopDomain }],
+          },
           select: { brandId: true },
           distinct: ["brandId"],
         }),
@@ -199,13 +202,13 @@ export async function POST(request: NextRequest) {
         // because its previousShopDomain happened to be the redacted shop.
         // This runs AFTER `connectionEventBrands` was already resolved above,
         // so nulling these fields here cannot affect that identity resolution.
-        prisma.shopifyConnectionEvent.updateMany({
-          where: { shopDomain },
-          data: { shopDomain: null, currencyCode: null, shopifyClientId: null },
+        prisma.commerceConnectionEvent.updateMany({
+          where: { provider: "SHOPIFY", externalAccountId: shopDomain },
+          data: { externalAccountId: null, currencyCode: null, providerClientId: null },
         }),
-        prisma.shopifyConnectionEvent.updateMany({
-          where: { previousShopDomain: shopDomain },
-          data: { previousShopDomain: null, previousCurrencyCode: null },
+        prisma.commerceConnectionEvent.updateMany({
+          where: { provider: "SHOPIFY", previousExternalAccountId: shopDomain },
+          data: { previousExternalAccountId: null, previousCurrencyCode: null },
         }),
       );
 

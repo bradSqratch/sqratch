@@ -112,7 +112,7 @@ test("migration contains no destructive table/column deletion", () => {
 test("migration's foreign key uses standard referential CASCADE, not a destructive bulk operation", () => {
   const migration = readMigration();
 
-  // The spec's ShopifyConnectionEvent model itself declares
+  // The original ShopifyConnectionEvent model (renamed in Phase 15B) declares
   // onDelete: Cascade for brandId -> Brand — a routine FK constraint clause,
   // not a data-mutating statement. It only affects FUTURE deletes of a
   // Brand, never existing rows at migration time (the table is brand new).

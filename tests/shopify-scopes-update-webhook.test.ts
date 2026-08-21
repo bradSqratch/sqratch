@@ -348,7 +348,7 @@ async function fakeTransaction<T>(
     brandRewardOffer: {
       updateMany: async () => ({ count: 0 }),
     },
-    shopifyConnectionEvent: {
+    commerceConnectionEvent: {
       create: async (args: { data: { brandId: string; eventType: string } }) => {
         connectionEventCreateCalls.push({
           brandId: args.data.brandId,
