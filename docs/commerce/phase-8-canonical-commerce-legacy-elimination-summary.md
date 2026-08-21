@@ -270,10 +270,11 @@ field-scrubbed, which is strictly stronger erasure than nulling one column.
 Two pre-existing observations, recorded here rather than acted on (this was a
 destructive-migration change, not a webhook expansion):
 
-- `safeDeleteShopifyCommerceConnectionByShopDomain` is best-effort and
-  non-throwing, and runs *after* the main transaction commits. If it fails it
-  only logs. The cascade is therefore correct but not transactionally
-  guaranteed. Pre-existing since Phase 1.
+- Phase 14 replaced the former best-effort delete with strict
+  `deleteShopifyCommerceConnectionByShopDomain`. It still runs *after* the
+  historical scrub commits, but a deletion failure now returns a sanitized
+  retryable non-2xx response so Shopify redelivers; an already-deleted row is
+  idempotently successful.
 - `CommerceClickAttribution.destinationHost` / `destinationUrl` embed the shop
   domain, and the attribution row survives connection deletion by design
   (`SetNull`, because a click is historical evidence). No redaction step scrubs

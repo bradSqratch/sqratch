@@ -399,6 +399,9 @@ model QuestionAnswer {
 model BrandRewardOffer {
   id                            String                    @id @default(cuid())
   brandId                       String
+  /// Temporary EXPAND compatibility default. Phase 15C2 must write this
+  /// explicitly; the later contract phase removes the Shopify default.
+  provider                      CommerceProvider          @default(SHOPIFY)
   title                         String
   description                   String?
   isActive                      Boolean                   @default(false)
@@ -425,6 +428,9 @@ model BrandRewardOffer {
   @@index([brandId])
   @@index([brandId, isActive, claimStartsAt, claimEndsAt])
   @@index([brandId, sourceShopDomain])
+  /// Phase 15C2 resolves an offer's provider-specific source-account snapshot
+  /// without treating a brand's current connection as historical authority.
+  @@index([brandId, provider, sourceShopDomain])
 }
 
 model BrandRewardOfferProduct {
@@ -1154,6 +1160,9 @@ model ShopifyRewardRedemption {
   userId                        String
   brandId                       String
   offerId                       String
+  /// Temporary EXPAND compatibility default. Phase 15C2 must write this
+  /// explicitly; the later contract phase removes the Shopify default.
+  provider                      CommerceProvider              @default(SHOPIFY)
   idempotencyKey                String                        @unique
   code                          String                        @unique
   status                        ShopifyRewardRedemptionStatus
@@ -1190,6 +1199,9 @@ model ShopifyRewardRedemption {
   @@index([status, needsManualReview, createdAt])
   @@index([offerId, status])
   @@index([offerId, userId, status])
+  /// Phase 15C2 uses this exact historical identity to resolve the matching
+  /// connection; it must never call a current connection for another account.
+  @@index([brandId, provider, shopifyShopDomain])
 }
 
 model UserSession {

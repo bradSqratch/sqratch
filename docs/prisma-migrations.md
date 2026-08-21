@@ -214,6 +214,25 @@ the new foreign key with `pg_trigger`/`pg_constraint`, and confirm
 There is no automatic rollback for the removed redundant column: restoring it
 would require inventing historical attribution data.
 
+## Phase 15C1 reward provider expansion
+
+`20260821130000_add_reward_provider_columns` is an EXPAND-only compatibility
+migration for the future provider-neutral reward cutover. It adds
+`provider CommerceProvider NOT NULL DEFAULT 'SHOPIFY'` to the existing
+`BrandRewardOffer` and `ShopifyRewardRedemption` tables, and adds the two
+provider-aware exact-identity indexes `(brandId, provider, sourceShopDomain)`
+and `(brandId, provider, shopifyShopDomain)`. Existing indexes remain.
+
+The temporary defaults keep the deployed Shopify offer and redemption writers
+compatible because they do not yet supply `provider`. Phase 15C2 must write it
+explicitly, and the later contract phase must remove both defaults so a future
+provider can never silently become Shopify. This migration deliberately does
+not rename any reward table, enum, or provider-shaped field.
+
+It contains no DML and does not reference `PointTransaction` or
+`UserPointAccount`; it cannot alter point balances, ledger history, reward
+links, or account totals.
+
 ## Deployment procedure
 
 Back up first, pause reward issuance briefly, run reviewed preflight SQL, then run `npx prisma migrate deploy` once from a controlled release job. Immediately after, run `npx prisma migrate status` and `npx prisma migrate diff` to confirm the expected state (do not assume success from the deploy command's exit code alone). Validate schema, token refresh, QR unlock deduplication, redemption/refund, and query plans afterward.

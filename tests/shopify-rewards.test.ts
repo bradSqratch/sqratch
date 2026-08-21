@@ -426,6 +426,9 @@ test("21. Existing fixed offers serialize correctly", () => {
   const mockOffer = {
     id: "offer-id",
     brandId: "brand-id",
+    // Mirrors the Phase 15C1 database default for records written by the
+    // unchanged pre-15C2 offer writer.
+    provider: "SHOPIFY" as const,
     title: "Fixed Reward Offer",
     description: "Old offer",
     isActive: true,
