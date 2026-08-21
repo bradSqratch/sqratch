@@ -1,38 +1,37 @@
 /**
  * reward-reconciliation.ts
  *
- * Exactly-once reconciliation for ShopifyRewardRedemption rows stuck in
+ * Exactly-once reconciliation for CommerceRewardRedemption rows stuck in
  * POINTS_DEBITED status. This happens when a crash occurs between the
  * serializable TX commit (debit) and the subsequent ISSUED update (which
- * sets shopifyDiscountNodeId).
+ * sets externalDiscountId).
  *
  * EXACTLY-ONCE guarantee:
- *   The composite unique `@@unique([shopifyRewardRedemptionId, reason])` on
+ *   The composite unique `@@unique([commerceRewardRedemptionId, reason])` on
  *   PointTransaction (name: "uq_point_tx_redemption_reason") prevents two
  *   ledger rows for the same (redemption, reason) pair. On a P2002 violation
  *   during the refund path, a refund row already exists → swallow and set
  *   REFUNDED without incrementing points again.
  *
- *   NOTE on NULL semantics: because shopifyRewardRedemptionId is nullable,
+ *   NOTE on NULL semantics: because commerceRewardRedemptionId is nullable,
  *   Postgres treats NULL as distinct from every other NULL, so existing
- *   QR/BONUS rows (shopifyRewardRedemptionId = NULL) are entirely unaffected
- *   by this index. Only rows where shopifyRewardRedemptionId IS NOT NULL
+ *   QR/BONUS rows (commerceRewardRedemptionId = NULL) are entirely unaffected
+ *   by this index. Only rows where commerceRewardRedemptionId IS NOT NULL
  *   participate in the uniqueness constraint.
  *
  * SECURITY: tokens are never logged.
  */
 
-import { Prisma } from "@prisma/client";
+import { CommerceProvider, Prisma } from "@prisma/client";
 import { refundShopifyRewardPoints } from "@/lib/points";
 import {
   assertTransition,
-  ShopifyRewardRedemptionStatus,
+  CommerceRewardRedemptionStatus,
 } from "@/lib/reward-redemption-state";
-import {
-  getShopifyDiscountUsageStatus,
-  getShopifyDiscountByCode,
-} from "@/lib/shopify-discounts";
 import { getValidAccessToken } from "@/lib/shopify-token-manager";
+import { isConnectionUsable, resolveCommerceConnectionForExternalAccount } from "@/lib/commerce/connection-service";
+import { defaultCommerceAdapterRegistry } from "@/lib/commerce/default-registry";
+import { CommerceProviderApiError } from "@/lib/commerce/errors";
 
 // ---------------------------------------------------------------------------
 // Dependency-injection interfaces (for unit testing without a real DB)
@@ -42,11 +41,12 @@ export type ReconciliationRow = {
   id: string;
   userId: string;
   brandId: string;
+  provider: CommerceProvider;
   code: string;
-  status: ShopifyRewardRedemptionStatus;
+  status: CommerceRewardRedemptionStatus;
   pointsCost: number;
-  shopifyShopDomain: string;
-  shopifyDiscountNodeId: string | null;
+  externalAccountId: string;
+  externalDiscountId: string | null;
   issuedAt: Date | null;
   expiresAt: Date | null;
   reconcileAttempts: number;
@@ -91,14 +91,14 @@ export type ReconciliationDeps = {
 
   /**
    * Completes a row to ISSUED in a single DB operation.
-   * Sets status, shopifyDiscountNodeId (if provided), issuedAt, expiresAt,
-   * shopifyDiscountStatus, and clears reconcileLockedUntil.
+   * Sets status, externalDiscountId (if provided), issuedAt, expiresAt,
+   * externalDiscountStatus, and clears reconcileLockedUntil.
    */
   completeToIssued(
     id: string,
     data: {
-      shopifyDiscountNodeId?: string;
-      shopifyDiscountStatus?: string | null;
+      externalDiscountId?: string;
+      externalDiscountStatus?: string | null;
       issuedAt?: Date;
       expiresAt?: Date | null;
       lastReconcileReason?: string;
@@ -108,21 +108,26 @@ export type ReconciliationDeps = {
   /**
    * Refunds a row in a single atomic transaction:
    *   1. Re-read row for validation (bail if not POINTS_DEBITED).
-   *   2. Create PointTransaction (SHOPIFY_REWARD_REFUND) — throws P2002 if exists.
+   *   2. Create PointTransaction (COMMERCE_REWARD_REFUND) — throws P2002 if exists.
    *   3. If created: increment user points + set status = REFUNDED.
    *   4. If P2002: set status = REFUNDED without incrementing (idempotent).
    * Returns 'refunded' | 'already_refunded' | 'skipped'.
    */
   refundRow(row: ReconciliationRow): Promise<"refunded" | "already_refunded" | "skipped">;
 
-  /** Resolves the Shopify access token for the brand. */
+  /** Resolves an exact provider/account connection before any credential use. */
+  resolveConnection(row: ReconciliationRow): Promise<{ id: string } | null>;
+  /** Resolves the credential only for that exact connection. */
   getToken(
     brandId: string,
+    connectionId: string,
+    provider: CommerceProvider,
   ): Promise<{ ok: true; accessToken: string } | { ok: false; reason: string }>;
 
   /** Looks up the discount by node ID (if known). */
   lookupByNodeId(opts: {
-    shopDomain: string;
+    provider: CommerceProvider;
+    connectionId: string;
     accessToken: string;
     discountNodeId: string;
   }): Promise<
@@ -133,7 +138,8 @@ export type ReconciliationDeps = {
 
   /** Looks up the discount by code string. */
   lookupByCode(opts: {
-    shopDomain: string;
+    provider: CommerceProvider;
+    connectionId: string;
     accessToken: string;
     code: string;
   }): Promise<
@@ -237,7 +243,16 @@ export async function reconcileStuckRedemptionsWithDeps(
     }
 
     // --- Token ---
-    const tokenResult = await deps.getToken(row.brandId);
+    const connection = await deps.resolveConnection(row);
+    if (!connection) {
+      await deps.updateReconcileMetadata(row.id, {
+        lastReconcileReason: "historical provider account is not currently connected",
+        reconcileLockedUntil: null,
+      });
+      summary.retained++;
+      continue;
+    }
+    const tokenResult = await deps.getToken(row.brandId, connection.id, row.provider);
     if (!tokenResult.ok) {
       const reason = "shop disconnected / token unavailable";
       await deps.updateReconcileMetadata(row.id, {
@@ -254,18 +269,19 @@ export async function reconcileStuckRedemptionsWithDeps(
       | { ok: true; exists: false }
       | { ok: false; status: number; error: string };
 
-    if (row.shopifyDiscountNodeId) {
+    if (row.externalDiscountId) {
       // Prefer node ID lookup (stronger / more direct)
       const byNodeId = await deps.lookupByNodeId({
-        shopDomain: row.shopifyShopDomain,
+        provider: row.provider,
+        connectionId: connection.id,
         accessToken: tokenResult.accessToken,
-        discountNodeId: row.shopifyDiscountNodeId,
+        discountNodeId: row.externalDiscountId,
       });
       if (byNodeId.ok && byNodeId.exists) {
         lookupResult = {
           ok: true,
           exists: true,
-          discountNodeId: row.shopifyDiscountNodeId,
+          discountNodeId: row.externalDiscountId,
           status: byNodeId.status,
           endsAt: byNodeId.endsAt,
           asyncUsageCount: byNodeId.asyncUsageCount,
@@ -275,7 +291,8 @@ export async function reconcileStuckRedemptionsWithDeps(
       }
     } else {
       lookupResult = await deps.lookupByCode({
-        shopDomain: row.shopifyShopDomain,
+        provider: row.provider,
+        connectionId: connection.id,
         accessToken: tokenResult.accessToken,
         code: row.code,
       });
@@ -285,10 +302,10 @@ export async function reconcileStuckRedemptionsWithDeps(
     const decision = makeReconciliationDecision(lookupResult, row.reconcileAttempts, maxAttempts);
 
     if (decision.action === "COMPLETE_ISSUED") {
-      assertTransition(ShopifyRewardRedemptionStatus.POINTS_DEBITED, ShopifyRewardRedemptionStatus.ISSUED);
+      assertTransition(CommerceRewardRedemptionStatus.POINTS_DEBITED, CommerceRewardRedemptionStatus.ISSUED);
       await deps.completeToIssued(row.id, {
-        shopifyDiscountNodeId: decision.discountNodeId,
-        shopifyDiscountStatus: decision.status,
+        externalDiscountId: decision.discountNodeId,
+        externalDiscountStatus: decision.status,
         issuedAt: row.issuedAt ?? now,
         expiresAt: decision.endsAt,
         lastReconcileReason: "reconciled: discount found on Shopify",
@@ -298,7 +315,7 @@ export async function reconcileStuckRedemptionsWithDeps(
     }
 
     if (decision.action === "REFUND") {
-      assertTransition(ShopifyRewardRedemptionStatus.POINTS_DEBITED, ShopifyRewardRedemptionStatus.REFUNDED);
+      assertTransition(CommerceRewardRedemptionStatus.POINTS_DEBITED, CommerceRewardRedemptionStatus.REFUNDED);
       const outcome = await deps.refundRow(row);
       if (outcome === "refunded" || outcome === "already_refunded") {
         summary.refunded++;
@@ -338,9 +355,9 @@ function buildProductionDeps(): ReconciliationDeps {
     async selectCandidates({ limit, minAgeMs, now }) {
       const prisma = await getPrisma();
       const ageThreshold = new Date(now.getTime() - minAgeMs);
-      return prisma.shopifyRewardRedemption.findMany({
+      return prisma.commerceRewardRedemption.findMany({
         where: {
-          status: ShopifyRewardRedemptionStatus.POINTS_DEBITED,
+          status: CommerceRewardRedemptionStatus.POINTS_DEBITED,
           needsManualReview: false,
           createdAt: { lt: ageThreshold },
           OR: [
@@ -354,11 +371,12 @@ function buildProductionDeps(): ReconciliationDeps {
           id: true,
           userId: true,
           brandId: true,
+          provider: true,
           code: true,
           status: true,
           pointsCost: true,
-          shopifyShopDomain: true,
-          shopifyDiscountNodeId: true,
+          externalAccountId: true,
+          externalDiscountId: true,
           issuedAt: true,
           expiresAt: true,
           reconcileAttempts: true,
@@ -371,10 +389,10 @@ function buildProductionDeps(): ReconciliationDeps {
 
     async claimRow({ id, lockUntil, now }) {
       const prisma = await getPrisma();
-      return prisma.shopifyRewardRedemption.updateMany({
+      return prisma.commerceRewardRedemption.updateMany({
         where: {
           id,
-          status: ShopifyRewardRedemptionStatus.POINTS_DEBITED,
+          status: CommerceRewardRedemptionStatus.POINTS_DEBITED,
           needsManualReview: false,
           OR: [
             { reconcileLockedUntil: null },
@@ -390,7 +408,7 @@ function buildProductionDeps(): ReconciliationDeps {
 
     async releaseLock(id) {
       const prisma = await getPrisma();
-      await prisma.shopifyRewardRedemption.update({
+      await prisma.commerceRewardRedemption.update({
         where: { id },
         data: { reconcileLockedUntil: null },
       });
@@ -398,7 +416,7 @@ function buildProductionDeps(): ReconciliationDeps {
 
     async updateReconcileMetadata(id, data) {
       const prisma = await getPrisma();
-      await prisma.shopifyRewardRedemption.update({
+      await prisma.commerceRewardRedemption.update({
         where: { id },
         data: {
           lastReconcileReason: data.lastReconcileReason,
@@ -410,12 +428,12 @@ function buildProductionDeps(): ReconciliationDeps {
 
     async completeToIssued(id, data) {
       const prisma = await getPrisma();
-      await prisma.shopifyRewardRedemption.update({
+      await prisma.commerceRewardRedemption.update({
         where: { id },
         data: {
-          status: ShopifyRewardRedemptionStatus.ISSUED,
-          shopifyDiscountNodeId: data.shopifyDiscountNodeId ?? undefined,
-          shopifyDiscountStatus: data.shopifyDiscountStatus,
+          status: CommerceRewardRedemptionStatus.ISSUED,
+          externalDiscountId: data.externalDiscountId ?? undefined,
+          externalDiscountStatus: data.externalDiscountStatus,
           issuedAt: data.issuedAt,
           expiresAt: data.expiresAt,
           lastReconcileReason: data.lastReconcileReason,
@@ -429,17 +447,17 @@ function buildProductionDeps(): ReconciliationDeps {
       try {
         return await prisma.$transaction(async (tx) => {
           // Re-read for validation
-          const current = await tx.shopifyRewardRedemption.findUnique({
+          const current = await tx.commerceRewardRedemption.findUnique({
             where: { id: row.id },
             select: { status: true },
           });
-          if (current?.status !== ShopifyRewardRedemptionStatus.POINTS_DEBITED) {
+          if (current?.status !== CommerceRewardRedemptionStatus.POINTS_DEBITED) {
             return "skipped" as const;
           }
 
           // Central refund helper: restores spendable points, raises lifetime
           // refunded (never lifetime earned), and writes the positive
-          // SHOPIFY_REWARD_REFUND ledger row — all inside this TX. Exactly-once
+          // COMMERCE_REWARD_REFUND ledger row — all inside this TX. Exactly-once
           // is preserved by the ledger's unique constraints:
           //   * A refund row already carrying an idempotencyKey → helper returns
           //     applied:false (no double increment); flip status idempotently here.
@@ -449,7 +467,7 @@ function buildProductionDeps(): ReconciliationDeps {
           const refund = await refundShopifyRewardPoints({
             userId: row.userId,
             points: row.pointsCost,
-            shopifyRewardRedemptionId: row.id,
+            commerceRewardRedemptionId: row.id,
             db: tx,
           });
 
@@ -457,10 +475,10 @@ function buildProductionDeps(): ReconciliationDeps {
             ? "reconciled: discount not found"
             : "reconciled: discount not found (idempotent)";
 
-          await tx.shopifyRewardRedemption.update({
+          await tx.commerceRewardRedemption.update({
             where: { id: row.id },
             data: {
-              status: ShopifyRewardRedemptionStatus.REFUNDED,
+              status: CommerceRewardRedemptionStatus.REFUNDED,
               errorMessage: settledReason,
               lastReconcileReason: settledReason,
               reconcileLockedUntil: null,
@@ -478,13 +496,13 @@ function buildProductionDeps(): ReconciliationDeps {
           err instanceof Prisma.PrismaClientKnownRequestError &&
           err.code === "P2002"
         ) {
-          await prisma.shopifyRewardRedemption.updateMany({
+          await prisma.commerceRewardRedemption.updateMany({
             where: {
               id: row.id,
-              status: ShopifyRewardRedemptionStatus.POINTS_DEBITED,
+              status: CommerceRewardRedemptionStatus.POINTS_DEBITED,
             },
             data: {
-              status: ShopifyRewardRedemptionStatus.REFUNDED,
+              status: CommerceRewardRedemptionStatus.REFUNDED,
               errorMessage: "reconciled: discount not found (idempotent)",
               lastReconcileReason: "reconciled: discount not found (idempotent refund)",
               reconcileLockedUntil: null,
@@ -496,37 +514,84 @@ function buildProductionDeps(): ReconciliationDeps {
       }
     },
 
-    async getToken(brandId) {
-      const result = await getValidAccessToken(brandId);
+    async resolveConnection(row) {
+      const connection = await resolveCommerceConnectionForExternalAccount({
+        brandId: row.brandId,
+        provider: row.provider,
+        externalAccountId: row.externalAccountId,
+      });
+      return connection && connection.id && isConnectionUsable(connection)
+        ? { id: connection.id }
+        : null;
+    },
+
+    async getToken(brandId, connectionId, provider) {
+      if (provider !== CommerceProvider.SHOPIFY) {
+        return { ok: false as const, reason: "provider credential unavailable" };
+      }
+      const result = await getValidAccessToken(brandId, { connectionId });
       if (!result.ok) {
         return { ok: false, reason: result.reason };
       }
       return { ok: true, accessToken: result.accessToken };
     },
 
-    async lookupByNodeId({ shopDomain, accessToken, discountNodeId }) {
-      const result = await getShopifyDiscountUsageStatus({
-        shopDomain,
-        accessToken,
-        discountNodeId,
-      });
-      if (!result.ok) {
-        return { ok: false, status: result.status, error: result.error };
+    async lookupByNodeId({ provider, connectionId, accessToken, discountNodeId }) {
+      try {
+        const adapter = defaultCommerceAdapterRegistry.get(provider);
+        const result = await adapter.getDiscount?.(connectionId, {
+          externalDiscountId: discountNodeId,
+        }, { preResolvedAccessToken: accessToken });
+        if (!result) {
+          return { ok: false as const, status: 501, error: "discount lookup unsupported" };
+        }
+        return result.exists
+          ? {
+              ok: true as const,
+              exists: true as const,
+              discountNodeId: result.externalDiscountId,
+              status: result.externalStatus,
+              endsAt: result.expiresAt,
+              asyncUsageCount: result.usageCount,
+            }
+          : { ok: true as const, exists: false as const };
+      } catch (error) {
+        return {
+          ok: false as const,
+          status: error instanceof CommerceProviderApiError ? error.httpStatus ?? 502 : 502,
+          error: "provider discount lookup failed",
+        };
       }
-      // getShopifyDiscountUsageStatus returns ok:true even when node exists but has no codeDiscount
-      // We interpret a successful fetch with data as "exists"
-      return {
-        ok: true,
-        exists: true,
-        discountNodeId,
-        status: result.status,
-        endsAt: result.endsAt,
-        asyncUsageCount: result.asyncUsageCount,
-      };
     },
 
-    async lookupByCode({ shopDomain, accessToken, code }) {
-      return getShopifyDiscountByCode({ shopDomain, accessToken, code });
+    async lookupByCode({ provider, connectionId, accessToken, code }) {
+      try {
+        const adapter = defaultCommerceAdapterRegistry.get(provider);
+        const result = await adapter.getDiscount?.(
+          connectionId,
+          { code },
+          { preResolvedAccessToken: accessToken },
+        );
+        if (!result) {
+          return { ok: false as const, status: 501, error: "discount lookup unsupported" };
+        }
+        return result.exists
+          ? {
+              ok: true as const,
+              exists: true as const,
+              discountNodeId: result.externalDiscountId,
+              status: result.externalStatus,
+              endsAt: result.expiresAt,
+              asyncUsageCount: result.usageCount,
+            }
+          : { ok: true as const, exists: false as const };
+      } catch (error) {
+        return {
+          ok: false as const,
+          status: error instanceof CommerceProviderApiError ? error.httpStatus ?? 502 : 502,
+          error: "provider discount lookup failed",
+        };
+      }
     },
   };
 }

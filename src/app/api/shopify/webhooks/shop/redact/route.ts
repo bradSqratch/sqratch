@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { Prisma } from "@prisma/client";
+import { CommerceProvider, Prisma } from "@prisma/client";
 import prisma from "@/lib/prisma";
 import { verifyShopifyWebhookRequest } from "@/lib/shopify-webhooks";
 import { deleteShopifyCommerceConnectionByShopDomain } from "@/lib/commerce/connection-sync";
@@ -7,19 +7,19 @@ import { invalidateShopifyCredential } from "@/lib/commerce/providers/shopify-cr
 
 // Shopify sends shop/redact 48 hours after a merchant uninstalls, confirming
 // all shop data must be erased. Per docs/shopify-data-inventory.md §5:
-//   - Anonymize Shopify-specific metadata on ShopifyRewardRedemption rows.
+//   - Anonymize Shopify-specific metadata on CommerceRewardRedemption rows.
 //   - Deactivate and scrub only the reward offers actually tied to this shop
-//     domain (offer.sourceShopDomain === this domain) — NOT every offer
+//     domain (offer.sourceExternalAccountId === this domain) — NOT every offer
 //     belonging to a brand that merely once had some connection to it. A
 //     brand that has since relinked to, and resaved offers against, a
 //     different live shop keeps those offers untouched.
 //   - Revoke the canonical credential and erase the CommerceConnection row.
 //   - PRESERVE all SQRATCH business records (PointTransaction,
-//     ShopifyRewardRedemption core fields, BrandRewardOffer rows).
+//     CommerceRewardRedemption core fields, BrandRewardOffer rows).
 //   - Delete any orphaned OAuth state TokenStore rows for this shop.
 //
 // PHASE 14C-B1: identity is resolved from domain-scoped history
-// (CommerceConnectionEvent filtered to SHOPIFY + ShopifyRewardRedemption), never from a live
+// (CommerceConnectionEvent filtered to SHOPIFY + CommerceRewardRedemption), never from a live
 // Brand mirror — a mirror lookup silently misses a brand that already
 // relinked away.
 // PHASE 14C-B2: `Brand` no longer carries ANY Shopify connection or
@@ -122,8 +122,8 @@ export async function POST(request: NextRequest) {
           select: { brandId: true },
           distinct: ["brandId"],
         }),
-        prisma.shopifyRewardRedemption.findMany({
-          where: { shopifyShopDomain: shopDomain },
+        prisma.commerceRewardRedemption.findMany({
+          where: { provider: "SHOPIFY", externalAccountId: shopDomain },
           select: { brandId: true },
           distinct: ["brandId"],
         }),
@@ -152,42 +152,50 @@ export async function POST(request: NextRequest) {
       // relink must never suppress this). Core fields (userId, brandId,
       // offerId, code, pointsCost, status, timestamps) are preserved as
       // SQRATCH financial/points ledger entries.
-      // Note: shopifyShopDomain is non-nullable in the schema (String) so it
+      // Note: externalAccountId is non-nullable in the schema (String) so it
       // cannot be nulled here; the domain is not personal data per the
       // inventory analysis in docs/shopify-data-inventory.md §5.
       operations.push(
-        prisma.shopifyRewardRedemption.updateMany({
-          where: { shopifyShopDomain: shopDomain },
+        prisma.commerceRewardRedemption.updateMany({
+          where: {
+            provider: CommerceProvider.SHOPIFY,
+            externalAccountId: shopDomain,
+          },
           data: {
-            shopifyDiscountNodeId: null,
-            shopifyDiscountStatus: null,
-            shopifyUserErrors: Prisma.JsonNull,
+            externalDiscountId: null,
+            externalDiscountStatus: null,
+            externalUsageCount: null,
+            providerLastCheckedAt: null,
+            providerErrorDetails: Prisma.JsonNull,
           },
         }),
       );
 
       // PHASE 14C-B1.1: an offer is shop-specific iff its own
-      // `sourceShopDomain` equals the redacted domain — that field is set to
+      // `sourceExternalAccountId` equals the redacted domain — that field is set to
       // the connected shop's domain on every create/update while a Shopify
       // connection is active (src/lib/reward-offers.ts,
       // src/app/api/brand/rewards/offers/route.ts), for every `appliesTo`
       // value, not only SPECIFIC_PRODUCTS offers. It only goes stale (still
       // pointing at an old shop) until the offer is next saved while
-      // connected elsewhere. Scoping to `sourceShopDomain: shopDomain` (never
+      // connected elsewhere. Scoping to `sourceExternalAccountId: shopDomain` (never
       // to `historicalBrandIds` alone) is deliberately narrower: a brand that
       // once owned this domain but has since relinked to, and resaved offers
       // against, a different live shop must keep those live offers
       // untouched — only the offers actually tied to THIS domain are
-      // deactivated and scrubbed. An offer with a null `sourceShopDomain`
+      // deactivated and scrubbed. An offer with a null `sourceExternalAccountId`
       // (created/last saved while never connected) is never shop-specific to
       // any domain and is therefore never matched here.
       operations.push(
         prisma.brandRewardOffer.updateMany({
-          where: { sourceShopDomain: shopDomain },
-          data: { isActive: false, sourceShopDomain: null },
+          where: {
+            provider: "SHOPIFY",
+            sourceExternalAccountId: shopDomain,
+          },
+          data: { isActive: false, sourceExternalAccountId: null },
         }),
         // PHASE 8: the ExperienceProductLink / LessonProductLink
-        // sourceShopDomain scrubs that used to sit here are gone with those
+        // sourceExternalAccountId scrubs that used to sit here are gone with those
         // tables (20260808130000_remove_legacy_product_link_snapshots). No
         // coverage is lost: the canonical product chain
         // (ConnectedCommerceProduct / BrandCommerceProduct /

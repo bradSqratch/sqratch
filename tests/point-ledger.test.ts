@@ -39,7 +39,7 @@ type TxRow = Record<string, unknown> & {
   reason: string;
   idempotencyKey: string | null;
   qrCodeId: string | null;
-  shopifyRewardRedemptionId: string | null;
+  commerceRewardRedemptionId: string | null;
 };
 
 function makeP2002(target: string[]) {
@@ -89,7 +89,7 @@ function makeFakeDb(seed: FakeSeed = {}) {
     type: "EARN",
     idempotencyKey: null,
     qrCodeId: null,
-    shopifyRewardRedemptionId: null,
+    commerceRewardRedemptionId: null,
     ...t,
   }));
   const lessons = seed.lessons ?? {};
@@ -178,14 +178,14 @@ function makeFakeDb(seed: FakeSeed = {}) {
           throw makeP2002(["userId", "qrCodeId"]);
         }
         if (
-          data.shopifyRewardRedemptionId != null &&
+          data.commerceRewardRedemptionId != null &&
           txs.some(
             (t) =>
-              t.shopifyRewardRedemptionId === data.shopifyRewardRedemptionId &&
+              t.commerceRewardRedemptionId === data.commerceRewardRedemptionId &&
               t.reason === data.reason,
           )
         ) {
-          throw makeP2002(["shopifyRewardRedemptionId", "reason"]);
+          throw makeP2002(["commerceRewardRedemptionId", "reason"]);
         }
         const row = {
           id: `tx-${txs.length + 1}`,
@@ -401,7 +401,7 @@ describe("Shopify redemption debit", () => {
     const res = await debitShopifyRewardPoints({
       userId: "u1",
       pointsCost: 40,
-      shopifyRewardRedemptionId: "r1",
+      commerceRewardRedemptionId: "r1",
       db: f.db,
     });
     assert.equal(res.applied, true);
@@ -420,7 +420,7 @@ describe("Shopify redemption debit", () => {
     const res = await debitShopifyRewardPoints({
       userId: "u1",
       pointsCost: 50,
-      shopifyRewardRedemptionId: "r1",
+      commerceRewardRedemptionId: "r1",
       db: f.db,
     });
     assert.equal(res.applied, false);
@@ -437,7 +437,7 @@ describe("Shopify redemption debit", () => {
     const res = await debitShopifyRewardPoints({
       userId: "u1",
       pointsCost: 40,
-      shopifyRewardRedemptionId: "r1",
+      commerceRewardRedemptionId: "r1",
       campaignId: "camp-1",
       db: f.db,
     });
@@ -455,7 +455,7 @@ describe("Shopify redemption debit", () => {
     await debitShopifyRewardPoints({
       userId: "u1",
       pointsCost: 40,
-      shopifyRewardRedemptionId: "r1",
+      commerceRewardRedemptionId: "r1",
       campaignId: null,
       db: f.db,
     });
@@ -481,7 +481,7 @@ describe("Shopify refund", () => {
     const res = await refundShopifyRewardPoints({
       userId: "u1",
       points: 40,
-      shopifyRewardRedemptionId: "r1",
+      commerceRewardRedemptionId: "r1",
       db: f.db,
     });
     assert.equal(res.applied, true);
@@ -499,13 +499,13 @@ describe("Shopify refund", () => {
     const first = await refundShopifyRewardPoints({
       userId: "u1",
       points: 40,
-      shopifyRewardRedemptionId: "r1",
+      commerceRewardRedemptionId: "r1",
       db: f.db,
     });
     const second = await refundShopifyRewardPoints({
       userId: "u1",
       points: 40,
-      shopifyRewardRedemptionId: "r1",
+      commerceRewardRedemptionId: "r1",
       db: f.db,
     });
     assert.equal(first.applied, true);
@@ -522,7 +522,7 @@ describe("Shopify refund", () => {
     const res = await refundShopifyRewardPoints({
       userId: "u1",
       points: 40,
-      shopifyRewardRedemptionId: "r1",
+      commerceRewardRedemptionId: "r1",
       campaignId: "camp-1",
       db: f.db,
     });
@@ -752,16 +752,16 @@ describe("Missing-account lifetime reconstruction — classified by (reason, typ
         {
           userId: "u1",
           points: -40,
-          reason: "SHOPIFY_REWARD_REDEMPTION",
+          reason: "COMMERCE_REWARD_REDEMPTION",
           type: "SPEND",
-          shopifyRewardRedemptionId: "r1",
+          commerceRewardRedemptionId: "r1",
         },
         {
           userId: "u1",
           points: 40,
-          reason: "SHOPIFY_REWARD_REFUND",
+          reason: "COMMERCE_REWARD_REFUND",
           type: "REFUND",
-          shopifyRewardRedemptionId: "r1",
+          commerceRewardRedemptionId: "r1",
         },
       ],
     });

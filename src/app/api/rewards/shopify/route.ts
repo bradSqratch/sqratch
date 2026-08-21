@@ -109,7 +109,7 @@ export async function GET(request: NextRequest) {
           minimumSubtotalCents: offer.minimumSubtotalCents,
           currencyCode: offer.currencyCode,
           appliesTo: offer.appliesTo,
-          sourceShopDomain: offer.sourceShopDomain,
+          sourceExternalAccountId: offer.sourceExternalAccountId,
         },
         shopifyConnected: true,
         currentShopDomain: summary.externalAccountId,
@@ -126,7 +126,7 @@ export async function GET(request: NextRequest) {
         const summary = connectionsByBrand.get(offer.brandId)!;
         const [totalRedemptions, userRedemptions] = await Promise.all([
           offer.maxTotalRedemptions
-            ? prisma.shopifyRewardRedemption.count({
+            ? prisma.commerceRewardRedemption.count({
                 where: {
                   offerId: offer.id,
                   status: {
@@ -136,7 +136,7 @@ export async function GET(request: NextRequest) {
               })
             : Promise.resolve(0),
           offer.maxRedemptionsPerUser
-            ? prisma.shopifyRewardRedemption.count({
+            ? prisma.commerceRewardRedemption.count({
                 where: {
                   offerId: offer.id,
                   userId: session.user.id,

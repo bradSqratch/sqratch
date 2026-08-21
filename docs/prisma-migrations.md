@@ -233,6 +233,15 @@ It contains no DML and does not reference `PointTransaction` or
 `UserPointAccount`; it cannot alter point balances, ledger history, reward
 links, or account totals.
 
+Phase 15C2 deliberately adds no migration. Prisma now exposes the logical
+`CommerceRewardRedemption` and `CommerceRewardRedemptionStatus` names while
+mapping them to the existing `ShopifyRewardRedemption` table and enum. Its
+logical account, discount, diagnostics, offer-product, and ledger-relation
+fields map to their existing Shopify-shaped columns. The Phase 15C1 defaults
+remain only for rollout compatibility; all current writers supply `SHOPIFY`
+explicitly. Phase 15C3 is the only phase permitted to consider physical naming
+cleanup.
+
 ## Deployment procedure
 
 Back up first, pause reward issuance briefly, run reviewed preflight SQL, then run `npx prisma migrate deploy` once from a controlled release job. Immediately after, run `npx prisma migrate status` and `npx prisma migrate diff` to confirm the expected state (do not assume success from the deploy command's exit code alone). Validate schema, token refresh, QR unlock deduplication, redemption/refund, and query plans afterward.

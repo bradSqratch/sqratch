@@ -1,13 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
-import { CommerceProvider, ShopifyRewardRedemptionStatus } from "@prisma/client";
+import { CommerceProvider, CommerceRewardRedemptionStatus } from "@prisma/client";
 import prisma from "@/lib/prisma";
 import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
 
 import { getShopifyDiscountUsageStatus } from "@/lib/shopify-discounts";
 import { getValidAccessToken } from "@/lib/shopify-token-manager";
 import { canRefresh, assertTransition } from "@/lib/reward-redemption-state";
-import { getActiveCommerceConnection, isConnectionUsable } from "@/lib/commerce/connection-service";
-import { normalizeExternalAccountId } from "@/lib/commerce/connection-sync";
+import { isConnectionUsable, resolveCommerceConnectionForExternalAccount } from "@/lib/commerce/connection-service";
 
 export async function POST(
   request: NextRequest,
@@ -29,7 +28,7 @@ export async function refreshStatusImpl(
     }
 
     const { redemptionId } = await context.params;
-    const redemption = await prisma.shopifyRewardRedemption.findFirst({
+    const redemption = await prisma.commerceRewardRedemption.findFirst({
       where: {
         id: redemptionId,
         userId: session.user.id,
@@ -48,8 +47,8 @@ export async function refreshStatusImpl(
       // USED and EXPIRED are already terminal "success" states — return current
       // state as a 200 idempotent no-op so the client can display them.
       if (
-        redemption.status === ShopifyRewardRedemptionStatus.USED ||
-        redemption.status === ShopifyRewardRedemptionStatus.EXPIRED
+        redemption.status === CommerceRewardRedemptionStatus.USED ||
+        redemption.status === CommerceRewardRedemptionStatus.EXPIRED
       ) {
         return NextResponse.json({
           data: {
@@ -59,9 +58,9 @@ export async function refreshStatusImpl(
             issuedAt: redemption.issuedAt,
             expiresAt: redemption.expiresAt,
             usedAt: redemption.usedAt,
-            shopifyDiscountStatus: redemption.shopifyDiscountStatus,
-            shopifyAsyncUsageCount: redemption.shopifyAsyncUsageCount,
-            shopifyLastCheckedAt: redemption.shopifyLastCheckedAt,
+            shopifyDiscountStatus: redemption.externalDiscountStatus,
+            shopifyAsyncUsageCount: redemption.externalUsageCount,
+            shopifyLastCheckedAt: redemption.providerLastCheckedAt,
           },
         });
       }
@@ -76,7 +75,7 @@ export async function refreshStatusImpl(
 
     // PHASE 14C-A: connectivity is resolved canonically — no legacy Brand
     // fallback (every live Shopify install already has a canonical
-    // CommerceConnection, operator-verified). `redemption.shopifyShopDomain`
+    // CommerceConnection, operator-verified). `redemption.externalAccountId`
     // is the REDEMPTION's OWN historical snapshot (captured at redemption
     // time — see the reservation transaction in redeem/route.ts), never
     // Brand's. The STRUCTURAL GUARD below enforces the intended security
@@ -85,17 +84,17 @@ export async function refreshStatusImpl(
     // same canonical connection) is ever used against it — a relink between
     // redemption and refresh must refuse, never silently call the wrong
     // store or pair a token with an unverified domain.
-    const canonicalConnection = await getActiveCommerceConnection(
-      redemption.brandId,
-      CommerceProvider.SHOPIFY,
-    ).catch(() => null);
+    const canonicalConnection = await resolveCommerceConnectionForExternalAccount({
+      brandId: redemption.brandId,
+      provider: redemption.provider,
+      externalAccountId: redemption.externalAccountId,
+    }).catch(() => null);
 
     if (
-      !redemption.shopifyDiscountNodeId ||
+      !redemption.externalDiscountId ||
       !canonicalConnection ||
       !isConnectionUsable(canonicalConnection) ||
-      normalizeExternalAccountId(canonicalConnection.externalAccountId) !==
-        normalizeExternalAccountId(redemption.shopifyShopDomain)
+      canonicalConnection.provider !== CommerceProvider.SHOPIFY
     ) {
       return NextResponse.json(
         { error: "Shopify discount status cannot be refreshed right now." },
@@ -103,7 +102,9 @@ export async function refreshStatusImpl(
       );
     }
 
-    const tokenResult = await getValidAccessToken(redemption.brandId);
+    const tokenResult = await getValidAccessToken(redemption.brandId, {
+      connectionId: canonicalConnection.id!,
+    });
     if (!tokenResult.ok) {
       return NextResponse.json(
         { error: "Shopify discount status cannot be refreshed right now." },
@@ -114,7 +115,7 @@ export async function refreshStatusImpl(
     const status = await getShopifyDiscountUsageStatus({
       shopDomain: canonicalConnection.externalAccountId,
       accessToken: tokenResult.accessToken,
-      discountNodeId: redemption.shopifyDiscountNodeId,
+      discountNodeId: redemption.externalDiscountId,
     });
 
     if (!status.ok) {
@@ -126,24 +127,24 @@ export async function refreshStatusImpl(
 
     const nextStatus =
       status.derivedStatus === "USED"
-        ? ShopifyRewardRedemptionStatus.USED
+        ? CommerceRewardRedemptionStatus.USED
         : status.derivedStatus === "EXPIRED"
-          ? ShopifyRewardRedemptionStatus.EXPIRED
+          ? CommerceRewardRedemptionStatus.EXPIRED
           : redemption.status;
 
     // Validate the transition before writing.  Allows ISSUED→USED, ISSUED→EXPIRED,
     // and ISSUED→ISSUED (unchanged / idempotent).
     assertTransition(redemption.status, nextStatus);
 
-    const updated = await prisma.shopifyRewardRedemption.update({
+    const updated = await prisma.commerceRewardRedemption.update({
       where: {
         id: redemption.id,
       },
       data: {
         status: nextStatus,
-        shopifyDiscountStatus: status.status,
-        shopifyAsyncUsageCount: status.asyncUsageCount,
-        shopifyLastCheckedAt: new Date(),
+        externalDiscountStatus: status.status,
+        externalUsageCount: status.asyncUsageCount,
+        providerLastCheckedAt: new Date(),
         expiresAt: status.endsAt || redemption.expiresAt,
         usedAt:
           status.derivedStatus === "USED" && !redemption.usedAt
@@ -160,9 +161,9 @@ export async function refreshStatusImpl(
         issuedAt: updated.issuedAt,
         expiresAt: updated.expiresAt,
         usedAt: updated.usedAt,
-        shopifyDiscountStatus: updated.shopifyDiscountStatus,
-        shopifyAsyncUsageCount: updated.shopifyAsyncUsageCount,
-        shopifyLastCheckedAt: updated.shopifyLastCheckedAt,
+        shopifyDiscountStatus: updated.externalDiscountStatus,
+        shopifyAsyncUsageCount: updated.externalUsageCount,
+        shopifyLastCheckedAt: updated.providerLastCheckedAt,
       },
     });
   } catch (error) {

@@ -18,6 +18,7 @@
 import "./env-setup"; // sets DATABASE_URL before reward-reconciliation → points → prisma loads
 import assert from "node:assert/strict";
 import test from "node:test";
+import { CommerceProvider } from "@prisma/client";
 
 import {
   makeReconciliationDecision,
@@ -27,7 +28,7 @@ import {
 } from "../src/lib/reward-reconciliation";
 import {
   assertTransition,
-  ShopifyRewardRedemptionStatus,
+  CommerceRewardRedemptionStatus,
 } from "../src/lib/reward-redemption-state";
 
 // ---------------------------------------------------------------------------
@@ -39,11 +40,12 @@ function makeRow(overrides: Partial<ReconciliationRow> = {}): ReconciliationRow 
     id: "row-1",
     userId: "user-1",
     brandId: "brand-1",
+    provider: CommerceProvider.SHOPIFY,
     code: "TESTCODE",
-    status: ShopifyRewardRedemptionStatus.POINTS_DEBITED,
+    status: CommerceRewardRedemptionStatus.POINTS_DEBITED,
     pointsCost: 100,
-    shopifyShopDomain: "test.myshopify.com",
-    shopifyDiscountNodeId: null,
+    externalAccountId: "test.myshopify.com",
+    externalDiscountId: null,
     issuedAt: null,
     expiresAt: null,
     reconcileAttempts: 1,
@@ -68,6 +70,9 @@ function makeDeps(overrides: Partial<ReconciliationDeps> = {}): ReconciliationDe
     async completeToIssued() {},
     async refundRow() {
       return "refunded";
+    },
+    async resolveConnection() {
+      return { id: "connection-x" };
     },
     async getToken() {
       return { ok: true, accessToken: "mock-token" };
@@ -107,7 +112,7 @@ test("(a) makeReconciliationDecision: discount exists → COMPLETE_ISSUED", () =
 
 test("(a) full flow: discount found by code → issued row", async () => {
   const completedIds: string[] = [];
-  const row = makeRow({ shopifyDiscountNodeId: null });
+  const row = makeRow({ externalDiscountId: null });
 
   const deps = makeDeps({
     async selectCandidates() {
@@ -136,7 +141,7 @@ test("(a) full flow: discount found by code → issued row", async () => {
 
 test("(a) full flow: discount found by node ID → issued row", async () => {
   const completedIds: string[] = [];
-  const row = makeRow({ shopifyDiscountNodeId: "gid://shopify/DiscountCodeNode/77" });
+  const row = makeRow({ externalDiscountId: "gid://shopify/DiscountCodeNode/77" });
 
   const deps = makeDeps({
     async selectCandidates() {
@@ -405,8 +410,8 @@ test("(g) assertTransition POINTS_DEBITED → ISSUED does not throw", () => {
   // This is what completeToIssued depends on internally
   assert.doesNotThrow(() => {
     assertTransition(
-      ShopifyRewardRedemptionStatus.POINTS_DEBITED,
-      ShopifyRewardRedemptionStatus.ISSUED,
+      CommerceRewardRedemptionStatus.POINTS_DEBITED,
+      CommerceRewardRedemptionStatus.ISSUED,
     );
   });
 });
@@ -414,8 +419,8 @@ test("(g) assertTransition POINTS_DEBITED → ISSUED does not throw", () => {
 test("(g) assertTransition ISSUED → ISSUED does not throw (idempotent same-state)", () => {
   assert.doesNotThrow(() => {
     assertTransition(
-      ShopifyRewardRedemptionStatus.ISSUED,
-      ShopifyRewardRedemptionStatus.ISSUED,
+      CommerceRewardRedemptionStatus.ISSUED,
+      CommerceRewardRedemptionStatus.ISSUED,
     );
   });
 });
@@ -424,8 +429,8 @@ test("(g) assertTransition REFUNDED → ISSUED throws (terminal)", () => {
   assert.throws(
     () =>
       assertTransition(
-        ShopifyRewardRedemptionStatus.REFUNDED,
-        ShopifyRewardRedemptionStatus.ISSUED,
+        CommerceRewardRedemptionStatus.REFUNDED,
+        CommerceRewardRedemptionStatus.ISSUED,
       ),
     /Invalid redemption state transition/,
   );
@@ -433,7 +438,7 @@ test("(g) assertTransition REFUNDED → ISSUED throws (terminal)", () => {
 
 test("(g) full flow: second completeToIssued call on same row → completeToIssued called once per run", async () => {
   let completeCount = 0;
-  const row = makeRow({ shopifyDiscountNodeId: "gid://shopify/DiscountCodeNode/1" });
+  const row = makeRow({ externalDiscountId: "gid://shopify/DiscountCodeNode/1" });
 
   const deps = makeDeps({
     async selectCandidates() {
@@ -529,6 +534,57 @@ test("empty candidate list → zero summary", async () => {
   });
 });
 
+test("historical X never requests a current Y credential when no exact connection exists", async () => {
+  let tokenCalls = 0;
+  let lookups = 0;
+  const metadata: string[] = [];
+  const summary = await reconcileStuckRedemptionsWithDeps(makeDeps({
+    async selectCandidates() { return [makeRow({ externalAccountId: "x.myshopify.com" })]; },
+    async resolveConnection() { return null; },
+    async getToken() { tokenCalls++; return { ok: true, accessToken: "y-token" }; },
+    async lookupByCode() { lookups++; return { ok: true, exists: false }; },
+    async updateReconcileMetadata(_id, data) { metadata.push(data.lastReconcileReason ?? ""); },
+  }));
+  assert.equal(summary.retained, 1);
+  assert.equal(tokenCalls, 0);
+  assert.equal(lookups, 0);
+  assert.match(metadata[0] ?? "", /historical provider account/);
+});
+
+test("an exact historical X connection supplies its own connection id to credential resolution", async () => {
+  let connectionId: string | null = null;
+  await reconcileStuckRedemptionsWithDeps(makeDeps({
+    async selectCandidates() { return [makeRow({ externalAccountId: "x.myshopify.com" })]; },
+    async resolveConnection() { return { id: "connection-x" }; },
+    async getToken(_brandId, id) { connectionId = id; return { ok: false, reason: "NOT_CONNECTED" }; },
+  }));
+  assert.equal(connectionId, "connection-x");
+});
+
+test("a Commerce7 redemption never enters Shopify token or lookup handling", async () => {
+  const row = makeRow({ provider: CommerceProvider.COMMERCE7 });
+  let lookupCalls = 0;
+  let tokenProvider: CommerceProvider | null = null;
+  const deps = makeDeps({
+    async selectCandidates() {
+      return [row];
+    },
+    async getToken(_brandId, _connectionId, provider) {
+      tokenProvider = provider;
+      return { ok: false, reason: "provider credential unavailable" };
+    },
+    async lookupByCode() {
+      lookupCalls++;
+      return { ok: true, exists: false };
+    },
+  });
+
+  const summary = await reconcileStuckRedemptionsWithDeps(deps);
+  assert.equal(tokenProvider, CommerceProvider.COMMERCE7);
+  assert.equal(lookupCalls, 0);
+  assert.equal(summary.retained, 1);
+});
+
 test("refundRow returns skipped → counted as skipped not refunded", async () => {
   const row = makeRow();
 
@@ -551,9 +607,9 @@ test("refundRow returns skipped → counted as skipped not refunded", async () =
 
 test("multiple rows processed correctly in batch", async () => {
   const rows: ReconciliationRow[] = [
-    makeRow({ id: "row-exists", shopifyDiscountNodeId: null }),
-    makeRow({ id: "row-missing", shopifyDiscountNodeId: null }),
-    makeRow({ id: "row-error", shopifyDiscountNodeId: null }),
+    makeRow({ id: "row-exists", externalDiscountId: null }),
+    makeRow({ id: "row-missing", externalDiscountId: null }),
+    makeRow({ id: "row-error", externalDiscountId: null }),
   ];
 
   const deps = makeDeps({

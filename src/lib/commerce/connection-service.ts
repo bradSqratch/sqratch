@@ -222,6 +222,24 @@ export async function getActiveCommerceConnection(
 }
 
 /**
+ * Resolves one historical provider account to its exact current canonical
+ * connection. This is deliberately not the preferred/primary lookup: reward
+ * reconciliation must never pair an X redemption with a Y credential after a
+ * relink.
+ */
+export async function resolveCommerceConnectionForExternalAccount(
+  input: { brandId: string; provider: CommerceProvider; externalAccountId: string },
+  deps: Partial<CommerceConnectionServiceDeps> = {},
+): Promise<CommerceConnectionSummary | null> {
+  const resolvedDeps = resolveServiceDeps(deps);
+  const wanted = input.externalAccountId.trim().toLowerCase();
+  const rows = await resolvedDeps.findConnectionRows(input.brandId, input.provider).catch(() => []);
+  const exact = rows.filter((row) => row.externalAccountId.trim().toLowerCase() === wanted);
+  const preferred = pickPreferredConnectionRow(exact);
+  return preferred ? mapCommerceConnectionToSummary(preferred) : null;
+}
+
+/**
  * Minimal structural shape a Prisma client (or `$transaction` callback's
  * `tx`) must satisfy to resolve a canonical connection — deliberately NOT
  * `PrismaClient`, so a `Prisma.TransactionClient` participating in an

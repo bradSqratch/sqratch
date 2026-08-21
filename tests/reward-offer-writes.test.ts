@@ -8,7 +8,7 @@ const baseExisting = {
   minimumSubtotalCents: null,
   currencyCode: "USD",
   appliesTo: "ALL_PRODUCTS" as const,
-  sourceShopDomain: null,
+  sourceExternalAccountId: null,
 };
 
 const validBody = {
@@ -114,7 +114,7 @@ test("specific-products offer with a different existing source requires reselect
       minimumSubtotalCents: null,
       currencyCode: "CAD",
       appliesTo: "SPECIFIC_PRODUCTS",
-      sourceShopDomain: "old-shop.myshopify.com",
+      sourceExternalAccountId: "old-shop.myshopify.com",
     },
     body: {
       title: "Specific",
@@ -143,7 +143,7 @@ test("specific-products reselection rejects activating in the same request", asy
       minimumSubtotalCents: null,
       currencyCode: "CAD",
       appliesTo: "SPECIFIC_PRODUCTS",
-      sourceShopDomain: "old-shop.myshopify.com",
+      sourceExternalAccountId: "old-shop.myshopify.com",
     },
     body: {
       title: "Specific",
@@ -173,7 +173,7 @@ test("specific-products reselection succeeds and stamps the current store as sou
       minimumSubtotalCents: null,
       currencyCode: "CAD",
       appliesTo: "SPECIFIC_PRODUCTS",
-      sourceShopDomain: "old-shop.myshopify.com",
+      sourceExternalAccountId: "old-shop.myshopify.com",
     },
     body: {
       title: "Specific",
@@ -192,7 +192,7 @@ test("specific-products reselection succeeds and stamps the current store as sou
 
   assert.equal(result.ok, true);
   if (result.ok) {
-    assert.equal(result.sourceShopDomain, "new-shop.myshopify.com");
+    assert.equal(result.sourceExternalAccountId, "new-shop.myshopify.com");
   }
 });
 
@@ -203,7 +203,7 @@ test("specific-products reselection is rejected when the authoritative Shopify c
       minimumSubtotalCents: null,
       currencyCode: "CAD",
       appliesTo: "SPECIFIC_PRODUCTS",
-      sourceShopDomain: "old-shop.myshopify.com",
+      sourceExternalAccountId: "old-shop.myshopify.com",
     },
     body: {
       title: "Specific",
@@ -236,7 +236,7 @@ test("specific-products offer whose source already matches the current store sav
       minimumSubtotalCents: null,
       currencyCode: "CAD",
       appliesTo: "SPECIFIC_PRODUCTS",
-      sourceShopDomain: "shop.myshopify.com",
+      sourceExternalAccountId: "shop.myshopify.com",
     },
     body: {
       title: "Specific (renamed)",
@@ -256,7 +256,7 @@ test("specific-products offer whose source already matches the current store sav
   assert.equal(result.ok, true);
   if (result.ok) {
     assert.equal(result.data.isActive, true);
-    assert.equal(result.sourceShopDomain, "shop.myshopify.com");
+    assert.equal(result.sourceExternalAccountId, "shop.myshopify.com");
   }
 });
 
@@ -283,14 +283,14 @@ test("activation is rejected end-to-end when Shopify is disconnected", async () 
   }
 });
 
-test("client cannot spoof sourceShopDomain via the request body", async () => {
+test("client cannot spoof sourceExternalAccountId via the request body", async () => {
   const result = await resolveRewardOfferUpdate({
     existing: {
       discountType: "PERCENTAGE",
       minimumSubtotalCents: null,
       currencyCode: "CAD",
       appliesTo: "SPECIFIC_PRODUCTS",
-      sourceShopDomain: "shop.myshopify.com",
+      sourceExternalAccountId: "shop.myshopify.com",
     },
     body: {
       title: "Specific",
@@ -301,9 +301,9 @@ test("client cannot spoof sourceShopDomain via the request body", async () => {
       isActive: false,
       products: [{ shopifyProductGid: "gid://shopify/Product/1" }],
       // Attempted spoof — resolveRewardOfferUpdate has no such field and
-      // must ignore it, always deriving sourceShopDomain from the server's
+      // must ignore it, always deriving sourceExternalAccountId from the server's
       // own connection state.
-      sourceShopDomain: "attacker-shop.myshopify.com",
+      sourceExternalAccountId: "attacker-shop.myshopify.com",
     },
     isConnected: true,
     currentShopDomain: "shop.myshopify.com",
@@ -313,7 +313,7 @@ test("client cannot spoof sourceShopDomain via the request body", async () => {
 
   assert.equal(result.ok, true);
   if (result.ok) {
-    assert.equal(result.sourceShopDomain, "shop.myshopify.com");
+    assert.equal(result.sourceExternalAccountId, "shop.myshopify.com");
   }
 });
 

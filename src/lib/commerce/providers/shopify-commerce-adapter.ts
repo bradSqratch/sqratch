@@ -45,12 +45,15 @@ import type {
   CommerceWebhookEventType,
   CreateDiscountInput,
   CreateDiscountOptions,
+  GetDiscountInput,
+  GetDiscountOptions,
   NormalizedWebhookEvent,
   ProductSyncPageRequest,
   ProductSyncPreparationRequest,
   ProductSyncPageResult,
   ProductSyncResult,
   ProviderDiscount,
+  ProviderDiscountLookup,
   WebhookRequestInput,
 } from "../types";
 
@@ -59,7 +62,11 @@ import {
   fetchNormalizedShopifyProducts,
   type NormalizedShopifyProduct,
 } from "@/lib/shopify-products";
-import { createShopifyRewardDiscountCode } from "@/lib/shopify-discounts";
+import {
+  createShopifyRewardDiscountCode,
+  getShopifyDiscountByCode,
+  getShopifyDiscountUsageStatus,
+} from "@/lib/shopify-discounts";
 import {
   getValidAccessToken,
   type GetValidAccessTokenResult,
@@ -78,6 +85,10 @@ type FetchPublishedProductIdsResult = Awaited<ReturnType<typeof fetchPublishedSh
 
 type CreateDiscountCodeInput = Parameters<typeof createShopifyRewardDiscountCode>[0];
 type CreateDiscountCodeResult = Awaited<ReturnType<typeof createShopifyRewardDiscountCode>>;
+type LookupDiscountByCodeInput = Parameters<typeof getShopifyDiscountByCode>[0];
+type LookupDiscountByCodeResult = Awaited<ReturnType<typeof getShopifyDiscountByCode>>;
+type LookupDiscountByNodeIdInput = Parameters<typeof getShopifyDiscountUsageStatus>[0];
+type LookupDiscountByNodeIdResult = Awaited<ReturnType<typeof getShopifyDiscountUsageStatus>>;
 
 type VerifyWebhookHmacInput = Parameters<typeof verifyShopifyWebhookHmac>[0];
 
@@ -106,7 +117,10 @@ export type ShopifyCommerceAdapterDeps = {
   /** Loads a `CommerceConnection` row by id, or `null` if it does not exist. */
   loadConnection(connectionId: string): Promise<ShopifyCommerceConnectionRow | null>;
   /** Resolves a valid Shopify access token for a brand. Defaults to `getValidAccessToken`. */
-  getAccessToken(brandId: string): Promise<GetValidAccessTokenResult>;
+  getAccessToken(
+    brandId: string,
+    options?: { connectionId?: string },
+  ): Promise<GetValidAccessTokenResult>;
   /** Fetches the live product catalog. Defaults to `fetchNormalizedShopifyProducts`. */
   fetchProducts(input: FetchProductsInput): Promise<FetchProductsResult>;
   /** Fetches the complete provider-confirmed Online Store publication set. */
@@ -115,6 +129,10 @@ export type ShopifyCommerceAdapterDeps = {
   ): Promise<FetchPublishedProductIdsResult>;
   /** Creates a discount code on Shopify. Defaults to `createShopifyRewardDiscountCode`. */
   createDiscountCode(input: CreateDiscountCodeInput): Promise<CreateDiscountCodeResult>;
+  /** Reads an existing discount by its provider node ID. */
+  lookupDiscountByNodeId(input: LookupDiscountByNodeIdInput): Promise<LookupDiscountByNodeIdResult>;
+  /** Reads an existing discount by its human-facing code. */
+  lookupDiscountByCode(input: LookupDiscountByCodeInput): Promise<LookupDiscountByCodeResult>;
   /** Verifies a webhook HMAC. Defaults to `verifyShopifyWebhookHmac`. */
   verifyWebhookHmac(input: VerifyWebhookHmacInput): boolean;
   /** Stamps `CommerceConnection.lastProductSyncAt` after a successful sync. */
@@ -166,6 +184,8 @@ const DEFAULT_DEPS: ShopifyCommerceAdapterDeps = {
   fetchProducts: fetchNormalizedShopifyProducts,
   fetchPublishedProductIds: fetchPublishedShopifyProductIds,
   createDiscountCode: createShopifyRewardDiscountCode,
+  lookupDiscountByNodeId: getShopifyDiscountUsageStatus,
+  lookupDiscountByCode: getShopifyDiscountByCode,
   verifyWebhookHmac: verifyShopifyWebhookHmac,
   markProductSync: defaultMarkProductSync,
 };
@@ -496,7 +516,7 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
     // re-refreshing) a second one.
     const accessToken = options?.preResolvedAccessToken
       ? options.preResolvedAccessToken
-      : this.resolveAccessToken(await this.deps.getAccessToken(row.brandId));
+      : this.resolveAccessToken(await this.deps.getAccessToken(row.brandId, { connectionId }));
 
     // Field mapping matches exactly what
     // `src/app/api/rewards/shopify/redeem/route.ts` passes to
@@ -537,6 +557,79 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
     return {
       externalDiscountId: result.discountNodeId,
       code: result.code,
+      expiresAt: result.endsAt,
+    };
+  }
+
+  async getDiscount(
+    connectionId: string,
+    input: GetDiscountInput,
+    options?: GetDiscountOptions,
+  ): Promise<ProviderDiscountLookup> {
+    const row = await this.deps.loadConnection(connectionId);
+    if (!row) {
+      throw new CommerceConnectionNotFoundError(connectionId);
+    }
+    if (row.provider !== CommerceProvider.SHOPIFY || row.status !== "CONNECTED") {
+      throw new CommerceProviderApiError(
+        CommerceProvider.SHOPIFY,
+        "Shopify connection is not available.",
+      );
+    }
+
+    const accessToken = options?.preResolvedAccessToken
+      ? options.preResolvedAccessToken
+      : this.resolveAccessToken(
+          await this.deps.getAccessToken(row.brandId, { connectionId }),
+        );
+
+    if (input.externalDiscountId) {
+      const result = await this.deps.lookupDiscountByNodeId({
+        shopDomain: row.externalAccountId,
+        accessToken,
+        discountNodeId: input.externalDiscountId,
+      });
+      if (!result.ok) {
+        throw new CommerceProviderApiError(
+          CommerceProvider.SHOPIFY,
+          result.error,
+          undefined,
+          result.status,
+        );
+      }
+      return {
+        exists: true,
+        externalDiscountId: input.externalDiscountId,
+        externalStatus: result.status,
+        usageCount: result.asyncUsageCount,
+        expiresAt: result.endsAt,
+      };
+    }
+
+    if (!input.code) {
+      return { exists: false };
+    }
+    const result = await this.deps.lookupDiscountByCode({
+      shopDomain: row.externalAccountId,
+      accessToken,
+      code: input.code,
+    });
+    if (!result.ok) {
+      throw new CommerceProviderApiError(
+        CommerceProvider.SHOPIFY,
+        result.error,
+        undefined,
+        result.status,
+      );
+    }
+    if (!result.exists) {
+      return { exists: false };
+    }
+    return {
+      exists: true,
+      externalDiscountId: result.discountNodeId,
+      externalStatus: result.status,
+      usageCount: result.asyncUsageCount,
       expiresAt: result.endsAt,
     };
   }

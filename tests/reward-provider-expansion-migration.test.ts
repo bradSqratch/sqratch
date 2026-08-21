@@ -29,33 +29,34 @@ function executableSql(sql: string) {
     .join("\n");
 }
 
-test("Phase 15C1 adds non-null Shopify-default provider fields without renaming reward schema", () => {
+test("Phase 15C1 adds non-null Shopify-default provider fields and Phase 15C2 maps the logical runtime names", () => {
   assert.match(model("BrandRewardOffer"), /^\s+provider\s+CommerceProvider\s+@default\(SHOPIFY\)/m);
-  assert.match(model("ShopifyRewardRedemption"), /^\s+provider\s+CommerceProvider\s+@default\(SHOPIFY\)/m);
+  assert.match(model("CommerceRewardRedemption"), /^\s+provider\s+CommerceProvider\s+@default\(SHOPIFY\)/m);
 
   assert.match(migration, /ALTER TABLE "BrandRewardOffer"\s+ADD COLUMN "provider" "CommerceProvider" NOT NULL DEFAULT 'SHOPIFY';/);
   assert.match(migration, /ALTER TABLE "ShopifyRewardRedemption"\s+ADD COLUMN "provider" "CommerceProvider" NOT NULL DEFAULT 'SHOPIFY';/);
 
-  assert.match(schema, /^model ShopifyRewardRedemption \{/m);
-  assert.match(schema, /^enum ShopifyRewardRedemptionStatus \{/m);
-  assert.match(model("BrandRewardOffer"), /^\s+sourceShopDomain\s+String\?/m);
-  assert.match(model("ShopifyRewardRedemption"), /^\s+shopifyShopDomain\s+String/m);
-  assert.match(model("BrandRewardOfferProduct"), /^\s+shopifyProductGid\s+String/m);
-  assert.match(model("PointTransaction"), /^\s+shopifyRewardRedemptionId\s+String\?/m);
+  assert.match(schema, /^model CommerceRewardRedemption \{/m);
+  assert.match(schema, /^enum CommerceRewardRedemptionStatus \{/m);
+  assert.match(model("CommerceRewardRedemption"), /@@map\("ShopifyRewardRedemption"\)/);
+  assert.match(model("BrandRewardOffer"), /^\s+sourceExternalAccountId\s+String\?\s+@map\("sourceShopDomain"\)/m);
+  assert.match(model("CommerceRewardRedemption"), /^\s+externalAccountId\s+String\s+@map\("shopifyShopDomain"\)/m);
+  assert.match(model("BrandRewardOfferProduct"), /^\s+externalProductId\s+String\s+@map\("shopifyProductGid"\)/m);
+  assert.match(model("PointTransaction"), /^\s+commerceRewardRedemptionId\s+String\?\s+@map\("shopifyRewardRedemptionId"\)/m);
 });
 
 test("Phase 15C1 keeps the ledger structurally untouched and adds only exact-identity indexes", () => {
   const pointTransaction = model("PointTransaction");
   const pointAccount = model("UserPointAccount");
-  assert.match(pointTransaction, /^\s+shopifyRewardRedemptionId\s+String\?/m);
-  assert.match(pointTransaction, /@@unique\(\[shopifyRewardRedemptionId, reason\]/);
+  assert.match(pointTransaction, /^\s+commerceRewardRedemptionId\s+String\?/m);
+  assert.match(pointTransaction, /@@unique\(\[commerceRewardRedemptionId, reason\]/);
   assert.match(pointAccount, /^\s+spendablePoints\s+Int\s+@default\(0\)/m);
   assert.match(pointAccount, /^\s+lifetimeEarnedPoints\s+Int\s+@default\(0\)/m);
 
   assert.match(migration, /CREATE INDEX "BrandRewardOffer_brandId_provider_sourceShopDomain_idx"\s+ON "BrandRewardOffer"\("brandId", "provider", "sourceShopDomain"\);/);
   assert.match(migration, /CREATE INDEX "ShopifyRewardRedemption_brandId_provider_shopifyShopDomain_idx"\s+ON "ShopifyRewardRedemption"\("brandId", "provider", "shopifyShopDomain"\);/);
-  assert.match(model("BrandRewardOffer"), /@@index\(\[brandId, sourceShopDomain\]\)/);
-  assert.match(model("ShopifyRewardRedemption"), /@@index\(\[brandId, provider, shopifyShopDomain\]\)/);
+  assert.match(model("BrandRewardOffer"), /@@index\(\[brandId, sourceExternalAccountId\], map:/);
+  assert.match(model("CommerceRewardRedemption"), /@@index\(\[brandId, provider, externalAccountId\], map:/);
 });
 
 test("Phase 15C1 migration is additive and cannot mutate rewards or the points ledger", () => {
@@ -65,11 +66,11 @@ test("Phase 15C1 migration is additive and cannot mutate rewards or the points l
   assert.doesNotMatch(sql, /CREATE TABLE|ALTER TABLE "PointTransaction"|ALTER TABLE "UserPointAccount"/i);
 });
 
-test("pre-15C2 reward writers remain compatible by omitting provider and receiving the database default", () => {
+test("Phase 15C2 reward writers explicitly preserve the provider identity", () => {
   const offerCreate = offerRoute.match(/prisma\.brandRewardOffer\.create\(\{[\s\S]*?\n\s*\}\);/)?.[0] ?? "";
-  const redemptionCreate = redeemRoute.match(/tx\.shopifyRewardRedemption\.create\(\{[\s\S]*?\n\s*\}\);/)?.[0] ?? "";
-  assert.match(offerCreate, /sourceShopDomain/);
-  assert.doesNotMatch(offerCreate, /\bprovider\s*:/);
-  assert.match(redemptionCreate, /shopifyShopDomain/);
-  assert.doesNotMatch(redemptionCreate, /\bprovider\s*:/);
+  const redemptionCreate = redeemRoute.match(/tx\.commerceRewardRedemption\.create\(\{[\s\S]*?\n\s*\}\);/)?.[0] ?? "";
+  assert.match(offerCreate, /sourceExternalAccountId/);
+  assert.match(offerCreate, /\bprovider\s*:\s*CommerceProvider\.SHOPIFY/);
+  assert.match(redemptionCreate, /externalAccountId/);
+  assert.match(redemptionCreate, /\bprovider\s*:\s*CommerceProvider\.SHOPIFY/);
 });

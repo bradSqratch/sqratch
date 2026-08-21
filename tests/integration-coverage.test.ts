@@ -22,7 +22,7 @@ interface MockedPrismaClient {
   qRCode: Record<string, (...args: unknown[]) => unknown>;
   qRCodeBatch: Record<string, (...args: unknown[]) => unknown>;
   tokenStore: Record<string, (...args: unknown[]) => unknown>;
-  shopifyRewardRedemption: Record<string, (...args: unknown[]) => unknown>;
+  commerceRewardRedemption: Record<string, (...args: unknown[]) => unknown>;
   pointTransaction: Record<string, (...args: unknown[]) => unknown>;
   user: Record<string, (...args: unknown[]) => unknown>;
   campaignUnlock: Record<string, (...args: unknown[]) => unknown>;
@@ -99,7 +99,7 @@ before(async () => {
     "qRCode",
     "qRCodeBatch",
     "tokenStore",
-    "shopifyRewardRedemption",
+    "commerceRewardRedemption",
     "pointTransaction",
     "user",
     "campaignUnlock",
@@ -587,8 +587,8 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
   });
 
   // PHASE 14C-B1: identity for the scrub is resolved from domain-scoped
-  // history (ShopifyConnectionEvent + ShopifyRewardRedemption), never from
-  // `Brand.shopifyShopDomain` — see the route's own header comment. The
+  // history (ShopifyConnectionEvent + CommerceRewardRedemption), never from
+  // `Brand.externalAccountId` — see the route's own header comment. The
   // legacy-mirror clear (`prisma.brand.update`) only fires for brands whose
   // CURRENT mirror still points at this domain.
   test("AF. shop/redact revokes the canonical credential (status + secret) BEFORE erasing the connection row, and touches no Brand at all", async (t) => {
@@ -625,7 +625,7 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     });
 
     t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => [{ brandId: "brand-redact" }]);
-    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => []);
+    t.mock.method(prisma.commerceRewardRedemption, "findMany", async () => []);
     // PHASE 14C-B2: Brand carries no Shopify state any more. Any Brand read or
     // write from this handler is now a regression, so both fail the test rather
     // than recording an ordering step.
@@ -637,7 +637,7 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
       assert.fail("shop/redact must never write Brand after Phase 14C-B2");
       return {};
     });
-    t.mock.method(prisma.shopifyRewardRedemption, "updateMany", async () => ({ count: 0 }));
+    t.mock.method(prisma.commerceRewardRedemption, "updateMany", async () => ({ count: 0 }));
     t.mock.method(prisma.brandRewardOffer, "updateMany", async () => ({ count: 0 }));
     t.mock.method(prisma.shopifyConnectionEvent, "updateMany", async () => ({ count: 0 }));
 
@@ -682,8 +682,8 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
       return { count: 1 };
     });
     t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => []);
-    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => []);
-    t.mock.method(prisma.shopifyRewardRedemption, "updateMany", async () => {
+    t.mock.method(prisma.commerceRewardRedemption, "findMany", async () => []);
+    t.mock.method(prisma.commerceRewardRedemption, "updateMany", async () => {
       scrubCount += 1;
       return { count: 0 };
     });
@@ -824,12 +824,31 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     let historicalIdentityResolved = false;
     let redemptionAnonymized = false;
     let tokensDeleted = false;
+    const sameAccountRedemptions: Array<{
+      provider: string;
+      externalAccountId: string;
+      externalDiscountId: string | null;
+      externalDiscountStatus: string | null;
+    }> = [
+      {
+        provider: "SHOPIFY",
+        externalAccountId: "redact-shop.myshopify.com",
+        externalDiscountId: "shopify-discount",
+        externalDiscountStatus: "ACTIVE",
+      },
+      {
+        provider: "COMMERCE7",
+        externalAccountId: "redact-shop.myshopify.com",
+        externalDiscountId: "commerce7-discount",
+        externalDiscountStatus: "ACTIVE",
+      },
+    ];
 
     t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => {
       historicalIdentityResolved = true;
       return [{ brandId: "brand-123" }];
     });
-    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => []);
+    t.mock.method(prisma.commerceRewardRedemption, "findMany", async () => []);
 
     // PHASE 14C-B2: Brand no longer holds any Shopify column, so the handler
     // must neither read nor write it. Both delegates fail loudly rather than
@@ -843,28 +862,43 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
       return {};
     });
 
-    t.mock.method(prisma.shopifyRewardRedemption, "updateMany", async (args: unknown) => {
+    t.mock.method(prisma.commerceRewardRedemption, "updateMany", async (args: unknown) => {
       redemptionAnonymized = true;
-      const typedArgs = args as { where: { shopifyShopDomain: string }; data: { shopifyDiscountNodeId: string | null; shopifyDiscountStatus: string | null } };
-      assert.equal(typedArgs.where.shopifyShopDomain, "redact-shop.myshopify.com");
-      assert.equal(typedArgs.data.shopifyDiscountNodeId, null);
-      assert.equal(typedArgs.data.shopifyDiscountStatus, null);
-      return { count: 1 };
+      const typedArgs = args as {
+        where: { provider: string; externalAccountId: string };
+        data: { externalDiscountId: string | null; externalDiscountStatus: string | null };
+      };
+      // A Commerce7 redemption may legitimately carry the same opaque
+      // external-account string; this Shopify webhook must leave it intact.
+      assert.equal(typedArgs.where.provider, "SHOPIFY");
+      assert.equal(typedArgs.where.externalAccountId, "redact-shop.myshopify.com");
+      assert.equal(typedArgs.data.externalDiscountId, null);
+      assert.equal(typedArgs.data.externalDiscountStatus, null);
+      const matched = sameAccountRedemptions.filter(
+        (redemption) =>
+          redemption.provider === typedArgs.where.provider &&
+          redemption.externalAccountId === typedArgs.where.externalAccountId,
+      );
+      for (const redemption of matched) {
+        redemption.externalDiscountId = typedArgs.data.externalDiscountId;
+        redemption.externalDiscountStatus = typedArgs.data.externalDiscountStatus;
+      }
+      return { count: matched.length };
     });
 
     let offersDeactivated = false;
     let offerSourceDomainScrubbed = false;
     t.mock.method(prisma.brandRewardOffer, "updateMany", async (args: unknown) => {
       const typedArgs = args as {
-        where: { sourceShopDomain?: string };
-        data: { isActive?: boolean; sourceShopDomain?: null };
+        where: { sourceExternalAccountId?: string };
+        data: { isActive?: boolean; sourceExternalAccountId?: null };
       };
-      // PHASE 14C-B1.1: offers are scoped to `sourceShopDomain`, never to
+      // PHASE 14C-B1.1: offers are scoped to `sourceExternalAccountId`, never to
       // `brandId IN historicalBrandIds` — a single call both deactivates and
       // scrubs, since only offers actually tied to this shop are matched.
-      assert.equal(typedArgs.where.sourceShopDomain, "redact-shop.myshopify.com");
+      assert.equal(typedArgs.where.sourceExternalAccountId, "redact-shop.myshopify.com");
       assert.equal(typedArgs.data.isActive, false);
-      assert.equal(typedArgs.data.sourceShopDomain, null);
+      assert.equal(typedArgs.data.sourceExternalAccountId, null);
       offersDeactivated = true;
       offerSourceDomainScrubbed = true;
       return { count: 1 };
@@ -940,9 +974,23 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     assert.equal(res.status, 200);
     assert.ok(historicalIdentityResolved, "historical identity is still resolved from domain-scoped history");
     assert.ok(redemptionAnonymized);
+    assert.deepEqual(sameAccountRedemptions, [
+      {
+        provider: "SHOPIFY",
+        externalAccountId: "redact-shop.myshopify.com",
+        externalDiscountId: null,
+        externalDiscountStatus: null,
+      },
+      {
+        provider: "COMMERCE7",
+        externalAccountId: "redact-shop.myshopify.com",
+        externalDiscountId: "commerce7-discount",
+        externalDiscountStatus: "ACTIVE",
+      },
+    ]);
     assert.ok(tokensDeleted);
     assert.ok(offersDeactivated, "the redacted Brand's reward offers are deactivated");
-    assert.ok(offerSourceDomainScrubbed, "BrandRewardOffer.sourceShopDomain is scrubbed");
+    assert.ok(offerSourceDomainScrubbed, "BrandRewardOffer.sourceExternalAccountId is scrubbed");
     assert.equal(connectionEventScrubCalls, 2, "both shopDomain and previousShopDomain are scrubbed independently");
     // Only the matching shop's temp token is deleted; the other shop is preserved.
     assert.deepEqual(deletedServices, ["shopify_oauth_state:nonce-1"]);
@@ -962,7 +1010,7 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     // was never completed) — both history sources come back empty, so the
     // legacy-mirror lookup (`prisma.brand.findMany`) is never even reached.
     t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => []);
-    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => []);
+    t.mock.method(prisma.commerceRewardRedemption, "findMany", async () => []);
     t.mock.method(prisma.brand, "findMany", async () => {
       throw new Error("must not be called when no historical brand id was resolved");
     });
@@ -975,7 +1023,7 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
 
     // Domain-keyed operations still run unconditionally even though no
     // historical brand was found.
-    t.mock.method(prisma.shopifyRewardRedemption, "updateMany", async () => ({ count: 0 }));
+    t.mock.method(prisma.commerceRewardRedemption, "updateMany", async () => ({ count: 0 }));
     t.mock.method(prisma.brandRewardOffer, "updateMany", async () => ({ count: 0 }));
     t.mock.method(prisma.shopifyConnectionEvent, "updateMany", async () => ({ count: 0 }));
 
@@ -1017,7 +1065,7 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
   });
 
   // PHASE 14C-B1 — required regression coverage for the shop/redact P1 fix
-  // (identity resolved from domain-scoped history, never Brand.shopifyShopDomain).
+  // (identity resolved from domain-scoped history, never Brand.externalAccountId).
 
   test("B/D. relink -> delayed old shop/redact still anonymizes historical redemption/offer data for the OLD brand, even though its current Brand mirror points at a NEW shop", async (t) => {
     const payload = JSON.stringify({ shop_id: 1, shop_domain: "old-shop.myshopify.com" });
@@ -1045,7 +1093,7 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     // History resolves brand-1 as having owned old-shop.myshopify.com — via
     // a recorded connection-loss event, exactly what app/uninstalled writes.
     t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => [{ brandId: "brand-1" }]);
-    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => [{ brandId: "brand-1" }]);
+    t.mock.method(prisma.commerceRewardRedemption, "findMany", async () => [{ brandId: "brand-1" }]);
 
     // brand-1 has SINCE relinked to a different shop — its live mirror no
     // longer says old-shop.myshopify.com, so the mirror-clear query finds
@@ -1059,26 +1107,26 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     });
 
     let redemptionAnonymized = false;
-    t.mock.method(prisma.shopifyRewardRedemption, "updateMany", async (args: unknown) => {
-      const typed = args as { where: { shopifyShopDomain: string } };
-      assert.equal(typed.where.shopifyShopDomain, "old-shop.myshopify.com");
+    t.mock.method(prisma.commerceRewardRedemption, "updateMany", async (args: unknown) => {
+      const typed = args as { where: { externalAccountId: string } };
+      assert.equal(typed.where.externalAccountId, "old-shop.myshopify.com");
       redemptionAnonymized = true;
       return { count: 1 };
     });
 
-    // PHASE 14C-B1.1: offer cleanup is scoped to `sourceShopDomain`, never to
+    // PHASE 14C-B1.1: offer cleanup is scoped to `sourceExternalAccountId`, never to
     // `brandId IN historicalBrandIds` — brand-1's offer(s) still tied to
-    // old-shop.myshopify.com (sourceShopDomain never resaved elsewhere) must
+    // old-shop.myshopify.com (sourceExternalAccountId never resaved elsewhere) must
     // still be deactivated and scrubbed by this delayed redact.
     let offersDeactivatedForOldShop = false;
     t.mock.method(prisma.brandRewardOffer, "updateMany", async (args: unknown) => {
       const typed = args as {
-        where: { sourceShopDomain?: string };
-        data: { isActive?: boolean; sourceShopDomain?: null };
+        where: { sourceExternalAccountId?: string };
+        data: { isActive?: boolean; sourceExternalAccountId?: null };
       };
-      assert.equal(typed.where.sourceShopDomain, "old-shop.myshopify.com");
+      assert.equal(typed.where.sourceExternalAccountId, "old-shop.myshopify.com");
       assert.equal(typed.data.isActive, false);
-      assert.equal(typed.data.sourceShopDomain, null);
+      assert.equal(typed.data.sourceExternalAccountId, null);
       offersDeactivatedForOldShop = true;
       return { count: 1 };
     });
@@ -1134,7 +1182,7 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
       historyQueried = true;
       return [];
     });
-    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => {
+    t.mock.method(prisma.commerceRewardRedemption, "findMany", async () => {
       historyQueried = true;
       return [];
     });
@@ -1180,7 +1228,7 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     t.mock.method(prisma.tokenStore, "findMany", async () => []);
 
     t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => [{ brandId: "brand-target" }]);
-    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => [{ brandId: "brand-target" }]);
+    t.mock.method(prisma.commerceRewardRedemption, "findMany", async () => [{ brandId: "brand-target" }]);
     t.mock.method(prisma.brand, "findMany", async () => [{ id: "brand-target" }]);
     t.mock.method(prisma.brand, "update", async (args: unknown) => {
       const typed = args as { where: { id: string } };
@@ -1188,15 +1236,15 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
       return {};
     });
 
-    t.mock.method(prisma.shopifyRewardRedemption, "updateMany", async (args: unknown) => {
-      const typed = args as { where: { shopifyShopDomain: string } };
-      assert.equal(typed.where.shopifyShopDomain, "target-shop.myshopify.com");
+    t.mock.method(prisma.commerceRewardRedemption, "updateMany", async (args: unknown) => {
+      const typed = args as { where: { externalAccountId: string } };
+      assert.equal(typed.where.externalAccountId, "target-shop.myshopify.com");
       return { count: 1 };
     });
     t.mock.method(prisma.brandRewardOffer, "updateMany", async (args: unknown) => {
-      const typed = args as { where: { sourceShopDomain?: string } };
+      const typed = args as { where: { sourceExternalAccountId?: string } };
       assert.equal(
-        typed.where.sourceShopDomain,
+        typed.where.sourceExternalAccountId,
         "target-shop.myshopify.com",
         "offer deactivation must be scoped to this shop domain, never to any brand id set",
       );
@@ -1232,23 +1280,23 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     // brand-2 is historically resolved (it once owned old-shop2) even though
     // it has since relinked to new-shop2 and its live mirror now says so.
     t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => [{ brandId: "brand-2" }]);
-    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => []);
+    t.mock.method(prisma.commerceRewardRedemption, "findMany", async () => []);
     t.mock.method(prisma.brand, "findMany", async () => []);
     t.mock.method(prisma.brand, "update", async () => {
       assert.fail("brand-2's current mirror (now pointing at new-shop2) must never be touched");
       return {};
     });
-    t.mock.method(prisma.shopifyRewardRedemption, "updateMany", async () => ({ count: 0 }));
+    t.mock.method(prisma.commerceRewardRedemption, "updateMany", async () => ({ count: 0 }));
 
     // The only offer.updateMany call this redact issues is scoped to
     // old-shop2.myshopify.com. brand-2's offer that was resaved against
-    // new-shop2 (sourceShopDomain === "new-shop2.myshopify.com") therefore
+    // new-shop2 (sourceExternalAccountId === "new-shop2.myshopify.com") therefore
     // never matches this where clause and is never touched by this call.
     let offerUpdateCalls = 0;
     t.mock.method(prisma.brandRewardOffer, "updateMany", async (args: unknown) => {
       offerUpdateCalls += 1;
-      const typed = args as { where: { sourceShopDomain?: string } };
-      assert.equal(typed.where.sourceShopDomain, "old-shop2.myshopify.com");
+      const typed = args as { where: { sourceExternalAccountId?: string } };
+      assert.equal(typed.where.sourceExternalAccountId, "old-shop2.myshopify.com");
       return { count: 0 };
     });
     t.mock.method(prisma.shopifyConnectionEvent, "updateMany", async () => ({ count: 0 }));
@@ -1258,7 +1306,7 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     assert.equal(offerUpdateCalls, 1, "exactly one offer updateMany call, scoped only to the redacted domain");
   });
 
-  test("G. an offer with a null sourceShopDomain is never matched by any shop/redact call", async (t) => {
+  test("G. an offer with a null sourceExternalAccountId is never matched by any shop/redact call", async (t) => {
     const payload = JSON.stringify({ shop_id: 1, shop_domain: "some-shop.myshopify.com" });
     const hmac = buildWebhookHmac(payload);
     const req = makeWebhookRequest(
@@ -1280,21 +1328,21 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     t.mock.method(prisma.tokenStore, "findMany", async () => []);
 
     t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => [{ brandId: "brand-3" }]);
-    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => []);
+    t.mock.method(prisma.commerceRewardRedemption, "findMany", async () => []);
     t.mock.method(prisma.brand, "findMany", async () => []);
     t.mock.method(prisma.brand, "update", async () => ({}));
-    t.mock.method(prisma.shopifyRewardRedemption, "updateMany", async () => ({ count: 0 }));
+    t.mock.method(prisma.commerceRewardRedemption, "updateMany", async () => ({ count: 0 }));
 
-    // brand-3 has an offer created while never connected (sourceShopDomain
+    // brand-3 has an offer created while never connected (sourceExternalAccountId
     // stays null forever until it is next saved while connected). A
-    // Prisma `where: { sourceShopDomain: "some-shop.myshopify.com" }` filter
+    // Prisma `where: { sourceExternalAccountId: "some-shop.myshopify.com" }` filter
     // can never match a null column value, so this offer is untouched
     // by construction — asserted here by checking the where clause itself,
     // never by simulating actual row matching (this test doesn't need a DB).
     t.mock.method(prisma.brandRewardOffer, "updateMany", async (args: unknown) => {
-      const typed = args as { where: { sourceShopDomain?: string | null } };
-      assert.notEqual(typed.where.sourceShopDomain, null, "the filter itself must never be null-inclusive");
-      assert.equal(typed.where.sourceShopDomain, "some-shop.myshopify.com");
+      const typed = args as { where: { sourceExternalAccountId?: string | null } };
+      assert.notEqual(typed.where.sourceExternalAccountId, null, "the filter itself must never be null-inclusive");
+      assert.equal(typed.where.sourceExternalAccountId, "some-shop.myshopify.com");
       return { count: 0 };
     });
     t.mock.method(prisma.shopifyConnectionEvent, "updateMany", async () => ({ count: 0 }));
@@ -1325,26 +1373,26 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     t.mock.method(prisma.tokenStore, "findMany", async () => []);
 
     t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => [{ brandId: "brand-4" }]);
-    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => []);
+    t.mock.method(prisma.commerceRewardRedemption, "findMany", async () => []);
     t.mock.method(prisma.brand, "findMany", async () => []);
     t.mock.method(prisma.brand, "update", async () => ({}));
-    t.mock.method(prisma.shopifyRewardRedemption, "updateMany", async () => ({ count: 0 }));
+    t.mock.method(prisma.commerceRewardRedemption, "updateMany", async () => ({ count: 0 }));
 
     // The route's Prisma predicate never references `appliesTo` — it is a
-    // plain `sourceShopDomain` filter, so it matches a SPECIFIC_PRODUCTS
-    // offer (whose sourceShopDomain is populated identically to an
+    // plain `sourceExternalAccountId` filter, so it matches a SPECIFIC_PRODUCTS
+    // offer (whose sourceExternalAccountId is populated identically to an
     // ALL_PRODUCTS offer per src/lib/reward-offers.ts) exactly the same way.
     let offerUpdateCalls = 0;
     t.mock.method(prisma.brandRewardOffer, "updateMany", async (args: unknown) => {
       offerUpdateCalls += 1;
       const typed = args as {
-        where: { sourceShopDomain?: string; appliesTo?: unknown };
-        data: { isActive?: boolean; sourceShopDomain?: null };
+        where: { sourceExternalAccountId?: string; appliesTo?: unknown };
+        data: { isActive?: boolean; sourceExternalAccountId?: null };
       };
-      assert.equal(typed.where.sourceShopDomain, "products-shop.myshopify.com");
+      assert.equal(typed.where.sourceExternalAccountId, "products-shop.myshopify.com");
       assert.equal(typed.where.appliesTo, undefined, "the predicate must not filter on appliesTo");
       assert.equal(typed.data.isActive, false);
-      assert.equal(typed.data.sourceShopDomain, null);
+      assert.equal(typed.data.sourceExternalAccountId, null);
       return { count: 1 };
     });
     t.mock.method(prisma.shopifyConnectionEvent, "updateMany", async () => ({ count: 0 }));
@@ -2358,7 +2406,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       currencyCode: "USD",
     });
 
-    t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async () => null);
+    t.mock.method(prisma.commerceRewardRedemption, "findUnique", async () => null);
 
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
       id: "offer-123",
@@ -2376,11 +2424,11 @@ describe("Route Scenario 4: Reward Redemption", () => {
       currencyCode: "USD",
       minimumSubtotalCents: null,
       appliesTo: "ALL_PRODUCTS",
-      sourceShopDomain: null,
+      sourceExternalAccountId: null,
       brand: {
         id: "brand-123",
         name: "Brand Test",
-        shopifyShopDomain: "test-shop.myshopify.com",
+        externalAccountId: "test-shop.myshopify.com",
         shopifyAdminAccessTokenEncrypted: encryptSecret("token-123"),
         shopifyConnectionStatus: "CONNECTED",
         shopifyCurrencyCode: "USD",
@@ -2429,7 +2477,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       currencyCode: "CAD",
     });
 
-    t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async () => null);
+    t.mock.method(prisma.commerceRewardRedemption, "findUnique", async () => null);
 
     let pointsDebited = false;
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
@@ -2448,11 +2496,11 @@ describe("Route Scenario 4: Reward Redemption", () => {
       currencyCode: "USD",
       minimumSubtotalCents: null,
       appliesTo: "ALL_PRODUCTS",
-      sourceShopDomain: null,
+      sourceExternalAccountId: null,
       brand: {
         id: "brand-123",
         name: "Brand Test",
-        shopifyShopDomain: "test-shop.myshopify.com",
+        externalAccountId: "test-shop.myshopify.com",
         shopifyAdminAccessTokenEncrypted: encryptSecret("token-123"),
         shopifyConnectionStatus: "CONNECTED",
         // Store currency has drifted to CAD since this USD offer was created.
@@ -2545,7 +2593,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       providerMetadata: null,
     }));
 
-    t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async () => null);
+    t.mock.method(prisma.commerceRewardRedemption, "findUnique", async () => null);
 
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
       id: "offer-percentage-ok",
@@ -2564,11 +2612,11 @@ describe("Route Scenario 4: Reward Redemption", () => {
       currencyCode: "USD",
       minimumSubtotalCents: null,
       appliesTo: "ALL_PRODUCTS",
-      sourceShopDomain: null,
+      sourceExternalAccountId: null,
       brand: {
         id: "brand-123",
         name: "Brand Test",
-        shopifyShopDomain: "test-shop.myshopify.com",
+        externalAccountId: "test-shop.myshopify.com",
         shopifyAdminAccessTokenEncrypted: encryptSecret("token-123"),
         shopifyConnectionStatus: "CONNECTED",
         // Store currency differs from the offer's stored currency, but this
@@ -2584,7 +2632,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       unlocks: [{ id: "unlock-123" }],
     }));
     t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-123" }));
-    t.mock.method(prisma.shopifyRewardRedemption, "create", async () => ({
+    t.mock.method(prisma.commerceRewardRedemption, "create", async () => ({
       id: "redemption-percentage-ok",
       userId: "user-123",
       brandId: "brand-123",
@@ -2598,7 +2646,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       currencyCode: "USD",
     }));
     t.mock.method(prisma.pointTransaction, "create", async () => ({}));
-    t.mock.method(prisma.shopifyRewardRedemption, "update", async (args: unknown) => {
+    t.mock.method(prisma.commerceRewardRedemption, "update", async (args: unknown) => {
       const typedArgs = args as { data: { status?: string } };
       return {
         id: "redemption-percentage-ok",
@@ -2616,7 +2664,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
     });
     t.mock.method(prisma.brand, "findUnique", async () => ({
       id: "brand-123",
-      shopifyShopDomain: "test-shop.myshopify.com",
+      externalAccountId: "test-shop.myshopify.com",
       shopifyAdminAccessTokenEncrypted: encryptSecret("token-123"),
       shopifyConnectionStatus: "CONNECTED",
       shopifyAuthMode: "LEGACY_OFFLINE",
@@ -2652,7 +2700,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
     assert.equal(res.status, 200);
   });
 
-  test("redemption blocks a specific-products reward whose sourceShopDomain no longer matches the connected store", async (t) => {
+  test("redemption blocks a specific-products reward whose sourceExternalAccountId no longer matches the connected store", async (t) => {
     setupMocks({ user: { id: "user-123", role: "USER" } });
     mockCanonicalConnection(t, {
       brandId: "brand-123",
@@ -2660,7 +2708,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       currencyCode: "CAD",
     });
 
-    t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async () => null);
+    t.mock.method(prisma.commerceRewardRedemption, "findUnique", async () => null);
 
     let pointsDebited = false;
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
@@ -2680,16 +2728,16 @@ describe("Route Scenario 4: Reward Redemption", () => {
       minimumSubtotalCents: null,
       appliesTo: "SPECIFIC_PRODUCTS",
       // Belongs to a previous store, not the currently connected one.
-      sourceShopDomain: "old-shop.myshopify.com",
+      sourceExternalAccountId: "old-shop.myshopify.com",
       brand: {
         id: "brand-123",
         name: "Brand Test",
-        shopifyShopDomain: "test-shop.myshopify.com",
+        externalAccountId: "test-shop.myshopify.com",
         shopifyAdminAccessTokenEncrypted: encryptSecret("token-123"),
         shopifyConnectionStatus: "CONNECTED",
         shopifyCurrencyCode: "CAD",
       },
-      products: [{ shopifyProductGid: "gid://shopify/Product/1" }],
+      products: [{ externalProductId: "gid://shopify/Product/1" }],
     }));
 
     t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-123" }));
@@ -2730,7 +2778,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
   test("cross-brand rewards remain blocked even when the campaign is unlocked", async (t) => {
     setupMocks({ user: { id: "user-123", role: "USER" } });
 
-    t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async () => null);
+    t.mock.method(prisma.commerceRewardRedemption, "findUnique", async () => null);
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
       id: "offer-other-brand",
       brandId: "brand-other",
@@ -2746,11 +2794,11 @@ describe("Route Scenario 4: Reward Redemption", () => {
       currencyCode: "USD",
       minimumSubtotalCents: null,
       appliesTo: "ALL_PRODUCTS",
-      sourceShopDomain: null,
+      sourceExternalAccountId: null,
       brand: {
         id: "brand-other",
         name: "Other Brand",
-        shopifyShopDomain: "other.myshopify.com",
+        externalAccountId: "other.myshopify.com",
         shopifyAdminAccessTokenEncrypted: encryptSecret("token-other"),
         shopifyConnectionStatus: "CONNECTED",
         shopifyCurrencyCode: "USD",
@@ -2781,7 +2829,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
   test("double click / concurrent calls returns existing redemption (idempotency)", async (t) => {
     setupMocks({ user: { id: "user-123", role: "USER" } });
 
-    t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async () => ({
+    t.mock.method(prisma.commerceRewardRedemption, "findUnique", async () => ({
       id: "redemption-existing",
       userId: "user-123",
       offerId: "offer-123",
@@ -2854,7 +2902,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       providerMetadata: null,
     }));
 
-    t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async () => null);
+    t.mock.method(prisma.commerceRewardRedemption, "findUnique", async () => null);
 
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
       id: "offer-123",
@@ -2873,11 +2921,11 @@ describe("Route Scenario 4: Reward Redemption", () => {
       currencyCode: "USD",
       minimumSubtotalCents: null,
       appliesTo: "ALL_PRODUCTS",
-      sourceShopDomain: null,
+      sourceExternalAccountId: null,
       brand: {
         id: "brand-123",
         name: "Brand Test",
-        shopifyShopDomain: "test-shop.myshopify.com",
+        externalAccountId: "test-shop.myshopify.com",
         shopifyAdminAccessTokenEncrypted: encryptSecret("token-123"),
         shopifyConnectionStatus: "CONNECTED",
         shopifyCurrencyCode: "USD",
@@ -2895,7 +2943,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       id: "user-123",
     }));
 
-    t.mock.method(prisma.shopifyRewardRedemption, "create", async () => ({
+    t.mock.method(prisma.commerceRewardRedemption, "create", async () => ({
       id: "redemption-new",
       userId: "user-123",
       brandId: "brand-123",
@@ -2912,7 +2960,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
     t.mock.method(prisma.pointTransaction, "create", async () => ({}));
 
     let redemptionUpdatedToIssued = false;
-    t.mock.method(prisma.shopifyRewardRedemption, "update", async (args: unknown) => {
+    t.mock.method(prisma.commerceRewardRedemption, "update", async (args: unknown) => {
       const typedArgs = args as { data: { status?: string } };
       if (typedArgs.data.status === "ISSUED") {
         redemptionUpdatedToIssued = true;
@@ -2934,7 +2982,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
     t.mock.method(prisma.brand, "findUnique", async () => ({
       id: "brand-123",
-      shopifyShopDomain: "test-shop.myshopify.com",
+      externalAccountId: "test-shop.myshopify.com",
       shopifyAdminAccessTokenEncrypted: encryptSecret("token-123"),
       shopifyConnectionStatus: "CONNECTED",
       shopifyAuthMode: "LEGACY_OFFLINE",
@@ -3015,7 +3063,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       providerMetadata: null,
     }));
 
-    t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async (args: unknown) => {
+    t.mock.method(prisma.commerceRewardRedemption, "findUnique", async (args: unknown) => {
       const typedArgs = args as { where?: { id?: string } };
       if (typedArgs?.where?.id) {
         return {
@@ -3051,11 +3099,11 @@ describe("Route Scenario 4: Reward Redemption", () => {
       currencyCode: "USD",
       minimumSubtotalCents: null,
       appliesTo: "ALL_PRODUCTS",
-      sourceShopDomain: null,
+      sourceExternalAccountId: null,
       brand: {
         id: "brand-123",
         name: "Brand Test",
-        shopifyShopDomain: "test-shop.myshopify.com",
+        externalAccountId: "test-shop.myshopify.com",
         shopifyAdminAccessTokenEncrypted: encryptSecret("token-123"),
         shopifyConnectionStatus: "CONNECTED",
         shopifyCurrencyCode: "USD",
@@ -3073,7 +3121,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       id: "user-123",
     }));
 
-    t.mock.method(prisma.shopifyRewardRedemption, "create", async () => ({
+    t.mock.method(prisma.commerceRewardRedemption, "create", async () => ({
       id: "redemption-fail",
       userId: "user-123",
       brandId: "brand-123",
@@ -3104,7 +3152,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       };
     });
 
-    t.mock.method(prisma.shopifyRewardRedemption, "update", async (args: unknown) => {
+    t.mock.method(prisma.commerceRewardRedemption, "update", async (args: unknown) => {
       const typedArgs = args as { data: { status?: string } };
       if (typedArgs.data.status === "REFUNDED") {
         statusRefunded = true;
@@ -3123,7 +3171,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
     t.mock.method(prisma.brand, "findUnique", async () => ({
       id: "brand-123",
-      shopifyShopDomain: "test-shop.myshopify.com",
+      externalAccountId: "test-shop.myshopify.com",
       shopifyAdminAccessTokenEncrypted: encryptSecret("token-123"),
       shopifyConnectionStatus: "CONNECTED",
       shopifyAuthMode: "LEGACY_OFFLINE",
@@ -3155,8 +3203,8 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
   // PHASE 14C-A: the refresh-status route resolves connectivity through
   // canonical `getActiveCommerceConnection` (no Brand fallback), guarded
-  // against the redemption's OWN historical `shopifyShopDomain` snapshot
-  // (not `Brand.shopifyShopDomain`), and the access token through canonical
+  // against the redemption's OWN historical `externalAccountId` snapshot
+  // (not `Brand.externalAccountId`), and the access token through canonical
   // `getValidAccessToken`.
   test("stuck redemption status refresh is derived as USED", async (t) => {
     setupMocks({ user: { id: "user-123", role: "USER" } });
@@ -3186,12 +3234,12 @@ describe("Route Scenario 4: Reward Redemption", () => {
       },
     }));
 
-    t.mock.method(prisma.shopifyRewardRedemption, "findFirst", async () => ({
+    t.mock.method(prisma.commerceRewardRedemption, "findFirst", async () => ({
       id: "redemption-refresh",
       userId: "user-123",
       brandId: "brand-123",
-      shopifyDiscountNodeId: "gid://shopify/DiscountCodeNode/123",
-      shopifyShopDomain: "test-shop.myshopify.com",
+      externalDiscountId: "gid://shopify/DiscountCodeNode/123",
+      externalAccountId: "test-shop.myshopify.com",
       status: "ISSUED",
       code: "TEST-CODE-REFRESH",
     }));
@@ -3214,7 +3262,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
     } as Response);
 
     let statusUpdatedToUsed = false;
-    t.mock.method(prisma.shopifyRewardRedemption, "update", async (args: unknown) => {
+    t.mock.method(prisma.commerceRewardRedemption, "update", async (args: unknown) => {
       const typedArgs = args as { data: { status?: string } };
       if (typedArgs.data.status === "USED") {
         statusUpdatedToUsed = true;

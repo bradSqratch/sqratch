@@ -12,7 +12,7 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const redemptions = await prisma.shopifyRewardRedemption.findMany({
+    const redemptions = await prisma.commerceRewardRedemption.findMany({
       where: {
         userId: session.user.id,
       },
@@ -51,14 +51,16 @@ export async function GET() {
         discountAmountCents: redemption.discountAmountCents,
         discountPercentageBasisPoints: redemption.discountPercentageBasisPoints,
         currencyCode: redemption.currencyCode,
-        shopifyDiscountStatus: redemption.shopifyDiscountStatus,
-        shopifyAsyncUsageCount: redemption.shopifyAsyncUsageCount,
-        shopifyLastCheckedAt: redemption.shopifyLastCheckedAt,
+        // Maintain the established Shopify endpoint contract. The fields are
+        // mapped from provider-neutral persistence names above this boundary.
+        shopifyDiscountStatus: redemption.externalDiscountStatus,
+        shopifyAsyncUsageCount: redemption.externalUsageCount,
+        shopifyLastCheckedAt: redemption.providerLastCheckedAt,
         // The redemption's OWN historical shop-domain snapshot (captured at
         // redemption time) — never the brand's current domain, which could
         // have relinked since. See src/lib/commerce/connection-service.ts's
         // deriveShopifyStorefrontUrl doc comment.
-        shopUrl: deriveShopifyStorefrontUrl(redemption.shopifyShopDomain),
+        shopUrl: deriveShopifyStorefrontUrl(redemption.externalAccountId),
       })),
     });
   } catch (error) {

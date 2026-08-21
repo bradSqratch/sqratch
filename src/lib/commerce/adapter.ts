@@ -19,9 +19,12 @@ import type {
   ProductSyncPageResult,
   CreateDiscountInput,
   CreateDiscountOptions,
+  GetDiscountInput,
+  GetDiscountOptions,
   NormalizedWebhookEvent,
   ProductSyncResult,
   ProviderDiscount,
+  ProviderDiscountLookup,
   WebhookRequestInput,
 } from "./types";
 
@@ -87,6 +90,16 @@ export interface CommerceAdapter {
     input: CreateDiscountInput,
     options?: CreateDiscountOptions,
   ): Promise<ProviderDiscount>;
+
+  /**
+   * Looks up a discount using the exact persisted connection identity. This
+   * is intentionally separate from business reconciliation policy.
+   */
+  getDiscount?(
+    connectionId: string,
+    input: GetDiscountInput,
+    options?: GetDiscountOptions,
+  ): Promise<ProviderDiscountLookup>;
 
   /**
    * Revokes/deactivates a previously created discount. Optional: only

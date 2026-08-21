@@ -322,6 +322,12 @@ function fakeAdapterDeps(overrides: Partial<ShopifyCommerceAdapterDeps> = {}): S
     async createDiscountCode() {
       throw new Error("createDiscountCode should not be called in this test");
     },
+    async lookupDiscountByNodeId() {
+      throw new Error("lookupDiscountByNodeId should not be called in this test");
+    },
+    async lookupDiscountByCode() {
+      throw new Error("lookupDiscountByCode should not be called in this test");
+    },
     verifyWebhookHmac() {
       throw new Error("verifyWebhookHmac should not be called in this test");
     },

@@ -41,7 +41,7 @@ type OfferPayload = {
   maxTotalRedemptions: number | null;
   maxRedemptionsPerUser: number | null;
   products: Array<{
-    shopifyProductGid: string;
+    externalProductId: string;
     title: string | null;
     imageUrl: string | null;
     productUrl: string | null;
@@ -176,16 +176,16 @@ function parseProducts(value: unknown): OfferPayload["products"] {
   return value
     .map((item) => {
       const product = item as Record<string, unknown>;
-      const shopifyProductGid = String(
-        product.shopifyProductGid || product.id || "",
+      const externalProductId = String(
+        product.externalProductId || product.shopifyProductGid || product.id || "",
       ).trim();
 
-      if (!shopifyProductGid) {
+      if (!externalProductId) {
         return null;
       }
 
       return {
-        shopifyProductGid,
+        externalProductId,
         title: product.title ? String(product.title).trim() : null,
         imageUrl: product.imageUrl ? String(product.imageUrl).trim() : null,
         productUrl: product.productUrl ? String(product.productUrl).trim() : null,
@@ -370,10 +370,18 @@ export function serializeRewardOffer(
     codePrefix: offer.codePrefix,
     maxTotalRedemptions: offer.maxTotalRedemptions,
     maxRedemptionsPerUser: offer.maxRedemptionsPerUser,
-    sourceShopDomain: offer.sourceShopDomain,
+    // These are Shopify-route DTO aliases. Persistence and service-layer
+    // callers use the provider-neutral sourceExternalAccountId field.
+    sourceShopDomain: offer.sourceExternalAccountId,
     createdAt: offer.createdAt,
     updatedAt: offer.updatedAt,
-    products: offer.products || [],
+    products: (offer.products || []).map((product) => ({
+      id: product.id,
+      shopifyProductGid: product.externalProductId,
+      title: product.title,
+      imageUrl: product.imageUrl,
+      productUrl: product.productUrl,
+    })),
   };
 }
 
@@ -386,7 +394,7 @@ export function serializeRewardOffer(
 export async function validateProductsBelongToConnectedStore(input: {
   shopDomain: string;
   brandId: string;
-  products: Array<{ shopifyProductGid: string }>;
+  products: Array<{ externalProductId: string }>;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const result = await fetchNormalizedShopifyProducts({
     shopDomain: input.shopDomain,
@@ -403,7 +411,7 @@ export async function validateProductsBelongToConnectedStore(input: {
 
   const validGids = new Set(result.items.map((item) => item.shopifyProductGid));
   const invalid = input.products.filter(
-    (product) => !validGids.has(product.shopifyProductGid),
+    (product) => !validGids.has(product.externalProductId),
   );
 
   if (invalid.length > 0) {
@@ -420,7 +428,7 @@ export type RewardOfferUpdateResolution =
   | {
       ok: true;
       data: OfferPayload;
-      sourceShopDomain: string | null;
+      sourceExternalAccountId: string | null;
     }
   | {
       ok: false;
@@ -449,7 +457,7 @@ export async function resolveRewardOfferUpdate(input: {
     minimumSubtotalCents: number | null;
     currencyCode: string;
     appliesTo: RewardAppliesTo;
-    sourceShopDomain: string | null;
+    sourceExternalAccountId: string | null;
   };
   body: unknown;
   isConnected: boolean;
@@ -498,7 +506,7 @@ export async function resolveRewardOfferUpdate(input: {
   // would otherwise shadow this with a generic INVALID_PAYLOAD error instead
   // of the specific, actionable PRODUCT_RESELECTION_REQUIRED code.
   const existingSourceDomain = normalizeShopDomain(
-    input.existing.sourceShopDomain,
+    input.existing.sourceExternalAccountId,
   );
   const priorSourceMatchesCurrent =
     input.existing.appliesTo === "SPECIFIC_PRODUCTS" &&
@@ -564,10 +572,10 @@ export async function resolveRewardOfferUpdate(input: {
     };
   }
 
-  let sourceShopDomain: string | null;
+  let sourceExternalAccountId: string | null;
 
   if (data.appliesTo === "SPECIFIC_PRODUCTS") {
-    sourceShopDomain = input.isConnected
+    sourceExternalAccountId = input.isConnected
       ? input.currentShopDomain
       : existingSourceDomain;
 
@@ -584,9 +592,9 @@ export async function resolveRewardOfferUpdate(input: {
       }
     }
   } else {
-    sourceShopDomain = input.isConnected
+    sourceExternalAccountId = input.isConnected
       ? input.currentShopDomain
-      : normalizeShopDomain(input.existing.sourceShopDomain);
+      : normalizeShopDomain(input.existing.sourceExternalAccountId);
   }
 
   if (data.isActive) {
@@ -596,7 +604,7 @@ export async function resolveRewardOfferUpdate(input: {
         minimumSubtotalCents: data.minimumSubtotalCents,
         currencyCode: resolvedCurrencyCode ?? data.currencyCode,
         appliesTo: data.appliesTo,
-        sourceShopDomain,
+        sourceExternalAccountId,
       },
       shopifyConnected: input.isConnected,
       currentShopDomain: input.currentShopDomain,
@@ -616,6 +624,5 @@ export async function resolveRewardOfferUpdate(input: {
     }
   }
 
-  return { ok: true, data, sourceShopDomain };
+  return { ok: true, data, sourceExternalAccountId };
 }
-

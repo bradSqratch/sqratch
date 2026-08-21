@@ -102,7 +102,7 @@ interface MockedPrismaClient {
   brandRewardOffer: Record<string, (...args: unknown[]) => unknown>;
   campaign: Record<string, (...args: unknown[]) => unknown>;
   user: Record<string, (...args: unknown[]) => unknown>;
-  shopifyRewardRedemption: Record<string, (...args: unknown[]) => unknown>;
+  commerceRewardRedemption: Record<string, (...args: unknown[]) => unknown>;
   pointTransaction: Record<string, (...args: unknown[]) => unknown>;
   userPointAccount: Record<string, (...args: unknown[]) => unknown>;
   commerceConnection: Record<string, (...args: unknown[]) => unknown>;
@@ -146,7 +146,7 @@ before(async () => {
     );
   };
 
-  for (const model of ["brand", "brandRewardOffer", "campaign", "user", "shopifyRewardRedemption", "commerceConnection"]) {
+  for (const model of ["brand", "brandRewardOffer", "campaign", "user", "commerceRewardRedemption", "commerceConnection"]) {
     prismaModule[model] = {
       findUnique: stub(model, "findUnique"),
       findUniqueOrThrow: stub(model, "findUniqueOrThrow"),
@@ -244,11 +244,11 @@ function defaultOffer(overrides: Record<string, unknown> = {}) {
     currencyCode: "USD",
     minimumSubtotalCents: null,
     appliesTo: "ALL_PRODUCTS",
-    sourceShopDomain: null,
+    sourceExternalAccountId: null,
     brand: {
       id: "brand-1",
       name: "Brand Test",
-      shopifyShopDomain: SHOP_DOMAIN,
+      externalAccountId: SHOP_DOMAIN,
       shopifyAdminAccessTokenEncrypted: encryptSecret("token-abc"),
       shopifyConnectionStatus: "CONNECTED",
       shopifyCurrencyCode: "USD",
@@ -261,7 +261,7 @@ function defaultOffer(overrides: Record<string, unknown> = {}) {
 function connectedBrandRow(overrides: Record<string, unknown> = {}) {
   return {
     id: "brand-1",
-    shopifyShopDomain: SHOP_DOMAIN,
+    externalAccountId: SHOP_DOMAIN,
     shopifyAdminAccessTokenEncrypted: encryptSecret("token-abc"),
     shopifyConnectionStatus: "CONNECTED",
     shopifyAuthMode: "LEGACY_OFFLINE",
@@ -408,7 +408,7 @@ function failedDiscountFetchResponse(message = "Some Shopify error") {
   } as Response;
 }
 
-/** Wires shopifyRewardRedemption.findUnique/create/update for a full redeemImpl run. Returns the captured `update` data payloads in call order. */
+/** Wires commerceRewardRedemption.findUnique/create/update for a full redeemImpl run. Returns the captured `update` data payloads in call order. */
 function wireRedemption(
   t: import("node:test").TestContext,
   row: {
@@ -424,7 +424,7 @@ function wireRedemption(
 ): Array<Record<string, unknown>> {
   const updateCalls: Array<Record<string, unknown>> = [];
 
-  t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async (args: unknown) => {
+  t.mock.method(prisma.commerceRewardRedemption, "findUnique", async (args: unknown) => {
     const typedArgs = args as { where?: { id?: string } };
     if (typedArgs?.where?.id) {
       // Status-check read inside the refund transaction.
@@ -434,7 +434,7 @@ function wireRedemption(
     return null;
   });
 
-  t.mock.method(prisma.shopifyRewardRedemption, "create", async () => ({
+  t.mock.method(prisma.commerceRewardRedemption, "create", async () => ({
     id: row.id,
     userId: "user-1",
     brandId: "brand-1",
@@ -448,7 +448,7 @@ function wireRedemption(
     currencyCode: row.currencyCode,
   }));
 
-  t.mock.method(prisma.shopifyRewardRedemption, "update", async (args: unknown) => {
+  t.mock.method(prisma.commerceRewardRedemption, "update", async (args: unknown) => {
     const typedArgs = args as { data: Record<string, unknown> };
     updateCalls.push(typedArgs.data);
     return {
@@ -540,7 +540,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       discountAmountCents: null,
       discountPercentageBasisPoints: 1000,
       appliesTo: "ALL_PRODUCTS" as const,
-      shopifyProductGids: [] as string[],
+      externalProductIds: [] as string[],
       minimumSubtotalCents: null,
     };
 
@@ -555,7 +555,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       discountAmountCents: discountConfig.discountAmountCents,
       discountPercentageBasisPoints: discountConfig.discountPercentageBasisPoints,
       appliesTo: discountConfig.appliesTo,
-      shopifyProductGids: discountConfig.shopifyProductGids,
+      shopifyProductGids: discountConfig.externalProductIds,
       minimumSubtotalCents: discountConfig.minimumSubtotalCents,
     });
     assert.equal(legacyOutcome.ok, true);
@@ -616,7 +616,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       discountAmountCents: 500,
       discountPercentageBasisPoints: null,
       appliesTo: "ALL_PRODUCTS" as const,
-      shopifyProductGids: [] as string[],
+      externalProductIds: [] as string[],
       minimumSubtotalCents: null,
     };
 
@@ -659,7 +659,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
     assert.equal(variables.usageLimit, 1);
   });
 
-  test("product targeting: SPECIFIC_PRODUCTS + shopifyProductGids forwards as externalProductIds -> productsToAdd", async () => {
+  test("product targeting: SPECIFIC_PRODUCTS + externalProductIds forwards as externalProductIds -> productsToAdd", async () => {
     let capturedBody: Record<string, unknown> | null = null;
     globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
       capturedBody = JSON.parse(String(init?.body));
@@ -675,7 +675,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       discountAmountCents: null,
       discountPercentageBasisPoints: 1000,
       appliesTo: "SPECIFIC_PRODUCTS" as const,
-      shopifyProductGids: ["gid://shopify/Product/1", "gid://shopify/Product/2"],
+      externalProductIds: ["gid://shopify/Product/1", "gid://shopify/Product/2"],
       minimumSubtotalCents: null,
     };
 
@@ -701,7 +701,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
     });
 
     const input = buildCreateDiscountInput(discountConfig, "TEST-PRODUCTS", issuedAt);
-    assert.deepEqual(input.externalProductIds, discountConfig.shopifyProductGids);
+    assert.deepEqual(input.externalProductIds, discountConfig.externalProductIds);
 
     const outcome = await issueDiscountViaAdapter(
       registry,
@@ -715,7 +715,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
     const variables = (capturedBody as unknown as { variables: { basicCodeDiscount: Record<string, unknown> } }).variables.basicCodeDiscount;
     assert.deepEqual(variables.customerGets, {
       value: { percentage: 0.1 },
-      items: { products: { productsToAdd: discountConfig.shopifyProductGids } },
+      items: { products: { productsToAdd: discountConfig.externalProductIds } },
     });
   });
 
@@ -735,7 +735,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       discountAmountCents: 500,
       discountPercentageBasisPoints: null,
       appliesTo: "ALL_PRODUCTS" as const,
-      shopifyProductGids: [] as string[],
+      externalProductIds: [] as string[],
       minimumSubtotalCents: 5000,
     };
 
@@ -805,7 +805,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
           discountAmountCents: null,
           discountPercentageBasisPoints: 1000,
           appliesTo: "ALL_PRODUCTS",
-          shopifyProductGids: [],
+          externalProductIds: [],
           minimumSubtotalCents: null,
         },
         "CODE",
@@ -825,7 +825,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       {
         status: "REFUNDED",
         errorMessage: "Shopify said no.",
-        shopifyUserErrors: [{ message: "Shopify said no.", field: [] }],
+        providerErrorDetails: [{ message: "Shopify said no.", field: [] }],
       },
     );
   });
@@ -854,7 +854,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
           discountAmountCents: null,
           discountPercentageBasisPoints: 1000,
           appliesTo: "ALL_PRODUCTS",
-          shopifyProductGids: [],
+          externalProductIds: [],
           minimumSubtotalCents: null,
         },
         "CODE",
@@ -890,7 +890,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
           discountAmountCents: null,
           discountPercentageBasisPoints: 1000,
           appliesTo: "ALL_PRODUCTS",
-          shopifyProductGids: [],
+          externalProductIds: [],
           minimumSubtotalCents: null,
         },
         "CODE",
@@ -934,7 +934,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
           discountAmountCents: null,
           discountPercentageBasisPoints: 1000,
           appliesTo: "ALL_PRODUCTS",
-          shopifyProductGids: [],
+          externalProductIds: [],
           minimumSubtotalCents: null,
         },
         "CODE",
@@ -979,7 +979,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
           discountAmountCents: null,
           discountPercentageBasisPoints: 1000,
           appliesTo: "ALL_PRODUCTS",
-          shopifyProductGids: [],
+          externalProductIds: [],
           minimumSubtotalCents: null,
         },
         "CODE",
@@ -1015,7 +1015,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
             discountAmountCents: null,
             discountPercentageBasisPoints: 1000,
             appliesTo: "ALL_PRODUCTS",
-            shopifyProductGids: [],
+            externalProductIds: [],
             minimumSubtotalCents: null,
           },
           "CODE",
@@ -1491,14 +1491,14 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     wireCanonicalCredential(t);
 
     let existingRow: Record<string, unknown> | null = null;
-    t.mock.method(prisma.shopifyRewardRedemption, "findUnique", async (args: unknown) => {
+    t.mock.method(prisma.commerceRewardRedemption, "findUnique", async (args: unknown) => {
       const typedArgs = args as { where?: { idempotencyKey?: string; id?: string } };
       if (typedArgs?.where?.id) {
         return { status: "POINTS_DEBITED" };
       }
       return existingRow;
     });
-    t.mock.method(prisma.shopifyRewardRedemption, "create", async () => {
+    t.mock.method(prisma.commerceRewardRedemption, "create", async () => {
       const row = {
         id: "redemption-idem",
         userId: "user-1",
@@ -1515,7 +1515,7 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
       existingRow = row;
       return row;
     });
-    t.mock.method(prisma.shopifyRewardRedemption, "update", async (args: unknown) => {
+    t.mock.method(prisma.commerceRewardRedemption, "update", async (args: unknown) => {
       const typedArgs = args as { data: Record<string, unknown> };
       const updated = {
         id: "redemption-idem",

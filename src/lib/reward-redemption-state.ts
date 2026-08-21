@@ -1,26 +1,26 @@
 /**
- * Formal state machine for ShopifyRewardRedemption.
+ * Formal state machine for CommerceRewardRedemption.
  * Pure module — no DB access. Single source of truth for all status logic.
  */
 
-import { ShopifyRewardRedemptionStatus } from "@prisma/client";
+import { CommerceRewardRedemptionStatus } from "@prisma/client";
 
 // Re-export the enum for convenience.
-export { ShopifyRewardRedemptionStatus };
+export { CommerceRewardRedemptionStatus };
 
 /** All 8 redemption statuses. */
 export const REDEMPTION_STATUSES = [
-  ShopifyRewardRedemptionStatus.PENDING,
-  ShopifyRewardRedemptionStatus.POINTS_DEBITED,
-  ShopifyRewardRedemptionStatus.ISSUED,
-  ShopifyRewardRedemptionStatus.USED,
-  ShopifyRewardRedemptionStatus.EXPIRED,
-  ShopifyRewardRedemptionStatus.FAILED,
-  ShopifyRewardRedemptionStatus.REFUNDED,
-  ShopifyRewardRedemptionStatus.CANCELLED,
+  CommerceRewardRedemptionStatus.PENDING,
+  CommerceRewardRedemptionStatus.POINTS_DEBITED,
+  CommerceRewardRedemptionStatus.ISSUED,
+  CommerceRewardRedemptionStatus.USED,
+  CommerceRewardRedemptionStatus.EXPIRED,
+  CommerceRewardRedemptionStatus.FAILED,
+  CommerceRewardRedemptionStatus.REFUNDED,
+  CommerceRewardRedemptionStatus.CANCELLED,
 ] as const;
 
-type Status = ShopifyRewardRedemptionStatus;
+type Status = CommerceRewardRedemptionStatus;
 
 /**
  * Valid forward transitions.
@@ -28,36 +28,36 @@ type Status = ShopifyRewardRedemptionStatus;
  * they are handled separately in isValidTransition / assertTransition.
  */
 export const ALLOWED_TRANSITIONS: Record<Status, Status[]> = {
-  [ShopifyRewardRedemptionStatus.PENDING]: [
-    ShopifyRewardRedemptionStatus.POINTS_DEBITED,
-    ShopifyRewardRedemptionStatus.FAILED,
-    ShopifyRewardRedemptionStatus.CANCELLED,
+  [CommerceRewardRedemptionStatus.PENDING]: [
+    CommerceRewardRedemptionStatus.POINTS_DEBITED,
+    CommerceRewardRedemptionStatus.FAILED,
+    CommerceRewardRedemptionStatus.CANCELLED,
   ],
-  [ShopifyRewardRedemptionStatus.POINTS_DEBITED]: [
-    ShopifyRewardRedemptionStatus.ISSUED,
-    ShopifyRewardRedemptionStatus.REFUNDED,
-    ShopifyRewardRedemptionStatus.FAILED,
+  [CommerceRewardRedemptionStatus.POINTS_DEBITED]: [
+    CommerceRewardRedemptionStatus.ISSUED,
+    CommerceRewardRedemptionStatus.REFUNDED,
+    CommerceRewardRedemptionStatus.FAILED,
   ],
-  [ShopifyRewardRedemptionStatus.ISSUED]: [
-    ShopifyRewardRedemptionStatus.USED,
-    ShopifyRewardRedemptionStatus.EXPIRED,
+  [CommerceRewardRedemptionStatus.ISSUED]: [
+    CommerceRewardRedemptionStatus.USED,
+    CommerceRewardRedemptionStatus.EXPIRED,
   ],
-  [ShopifyRewardRedemptionStatus.USED]: [],
-  [ShopifyRewardRedemptionStatus.EXPIRED]: [],
-  [ShopifyRewardRedemptionStatus.REFUNDED]: [],
-  [ShopifyRewardRedemptionStatus.FAILED]: [],
-  [ShopifyRewardRedemptionStatus.CANCELLED]: [],
+  [CommerceRewardRedemptionStatus.USED]: [],
+  [CommerceRewardRedemptionStatus.EXPIRED]: [],
+  [CommerceRewardRedemptionStatus.REFUNDED]: [],
+  [CommerceRewardRedemptionStatus.FAILED]: [],
+  [CommerceRewardRedemptionStatus.CANCELLED]: [],
 };
 
 /**
  * Statuses from which no further progression is possible.
  */
 export const TERMINAL_STATUSES: Status[] = [
-  ShopifyRewardRedemptionStatus.USED,
-  ShopifyRewardRedemptionStatus.EXPIRED,
-  ShopifyRewardRedemptionStatus.REFUNDED,
-  ShopifyRewardRedemptionStatus.FAILED,
-  ShopifyRewardRedemptionStatus.CANCELLED,
+  CommerceRewardRedemptionStatus.USED,
+  CommerceRewardRedemptionStatus.EXPIRED,
+  CommerceRewardRedemptionStatus.REFUNDED,
+  CommerceRewardRedemptionStatus.FAILED,
+  CommerceRewardRedemptionStatus.CANCELLED,
 ];
 
 /**
@@ -65,25 +65,25 @@ export const TERMINAL_STATUSES: Status[] = [
  * This is the single source of truth — reward-offers.ts re-exports it.
  */
 export const CLAIM_COUNTED_REDEMPTION_STATUSES: Status[] = [
-  ShopifyRewardRedemptionStatus.PENDING,
-  ShopifyRewardRedemptionStatus.POINTS_DEBITED,
-  ShopifyRewardRedemptionStatus.ISSUED,
-  ShopifyRewardRedemptionStatus.USED,
-  ShopifyRewardRedemptionStatus.EXPIRED,
+  CommerceRewardRedemptionStatus.PENDING,
+  CommerceRewardRedemptionStatus.POINTS_DEBITED,
+  CommerceRewardRedemptionStatus.ISSUED,
+  CommerceRewardRedemptionStatus.USED,
+  CommerceRewardRedemptionStatus.EXPIRED,
 ];
 
 /**
  * Only ISSUED redemptions may be advanced by a Shopify status refresh.
  */
 export const REFRESH_ELIGIBLE_STATUSES: Status[] = [
-  ShopifyRewardRedemptionStatus.ISSUED,
+  CommerceRewardRedemptionStatus.ISSUED,
 ];
 
 /**
  * POINTS_DEBITED redemptions are eligible for reconciliation by a later batch job.
  */
 export const RECONCILIATION_ELIGIBLE_STATUSES: Status[] = [
-  ShopifyRewardRedemptionStatus.POINTS_DEBITED,
+  CommerceRewardRedemptionStatus.POINTS_DEBITED,
 ];
 
 // ---------------------------------------------------------------------------

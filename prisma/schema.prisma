@@ -38,7 +38,7 @@ model User {
   qrRedemptions             QRCode[]                   @relation("QRCodeRedeemedByUser")
   questions                 Question[]
   questionAnswers           QuestionAnswer[]
-  shopifyRewardRedemptions  ShopifyRewardRedemption[]
+  commerceRewardRedemptions CommerceRewardRedemption[]
   sessions                  UserSession[]
   commerceClickAttributions CommerceClickAttribution[]
 }
@@ -99,7 +99,7 @@ model Brand {
   members                   BrandMember[]
   campaigns                 Campaign[]
   rewardOffers              BrandRewardOffer[]
-  shopifyRewardRedemptions  ShopifyRewardRedemption[]
+  commerceRewardRedemptions CommerceRewardRedemption[]
   commerceConnectionEvents  CommerceConnectionEvent[]
   commerceConnections       CommerceConnection[]
   connectedCommerceProducts ConnectedCommerceProduct[]
@@ -397,52 +397,52 @@ model QuestionAnswer {
 // BrandCommerceProduct -> CampaignCommerceProduct -> CampaignLessonProduct.
 
 model BrandRewardOffer {
-  id                            String                    @id @default(cuid())
+  id                            String                     @id @default(cuid())
   brandId                       String
   /// Temporary EXPAND compatibility default. Phase 15C2 must write this
   /// explicitly; the later contract phase removes the Shopify default.
-  provider                      CommerceProvider          @default(SHOPIFY)
+  provider                      CommerceProvider           @default(SHOPIFY)
   title                         String
   description                   String?
-  isActive                      Boolean                   @default(false)
+  isActive                      Boolean                    @default(false)
   pointsCost                    Int
-  discountType                  RewardDiscountType        @default(FIXED_AMOUNT)
+  discountType                  RewardDiscountType         @default(FIXED_AMOUNT)
   discountAmountCents           Int?
   discountPercentageBasisPoints Int?
-  currencyCode                  String                    @default("CAD")
+  currencyCode                  String                     @default("CAD")
   claimStartsAt                 DateTime?
   claimEndsAt                   DateTime?
-  codeValidDays                 Int                       @default(30)
-  appliesTo                     RewardAppliesTo           @default(ALL_PRODUCTS)
+  codeValidDays                 Int                        @default(30)
+  appliesTo                     RewardAppliesTo            @default(ALL_PRODUCTS)
   minimumSubtotalCents          Int?
   codePrefix                    String?
   maxTotalRedemptions           Int?
   maxRedemptionsPerUser         Int?
-  sourceShopDomain              String?
-  createdAt                     DateTime                  @default(now())
-  updatedAt                     DateTime                  @updatedAt
-  brand                         Brand                     @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  sourceExternalAccountId       String?                    @map("sourceShopDomain")
+  createdAt                     DateTime                   @default(now())
+  updatedAt                     DateTime                   @updatedAt
+  brand                         Brand                      @relation(fields: [brandId], references: [id], onDelete: Cascade)
   products                      BrandRewardOfferProduct[]
-  redemptions                   ShopifyRewardRedemption[]
+  redemptions                   CommerceRewardRedemption[]
 
   @@index([brandId])
   @@index([brandId, isActive, claimStartsAt, claimEndsAt])
-  @@index([brandId, sourceShopDomain])
+  @@index([brandId, sourceExternalAccountId], map: "BrandRewardOffer_brandId_sourceShopDomain_idx")
   /// Phase 15C2 resolves an offer's provider-specific source-account snapshot
   /// without treating a brand's current connection as historical authority.
-  @@index([brandId, provider, sourceShopDomain])
+  @@index([brandId, provider, sourceExternalAccountId], map: "BrandRewardOffer_brandId_provider_sourceShopDomain_idx")
 }
 
 model BrandRewardOfferProduct {
   id                String           @id @default(cuid())
   offerId           String
-  shopifyProductGid String
+  externalProductId String           @map("shopifyProductGid")
   title             String?
   imageUrl          String?
   productUrl        String?
   offer             BrandRewardOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
 
-  @@unique([offerId, shopifyProductGid])
+  @@unique([offerId, externalProductId], map: "BrandRewardOfferProduct_offerId_shopifyProductGid_key")
   @@index([offerId])
 }
 
@@ -1155,42 +1155,42 @@ model CommerceOrderEvent {
   @@index([orderId])
 }
 
-model ShopifyRewardRedemption {
-  id                            String                        @id @default(cuid())
+model CommerceRewardRedemption {
+  id                            String                         @id @default(cuid())
   userId                        String
   brandId                       String
   offerId                       String
   /// Temporary EXPAND compatibility default. Phase 15C2 must write this
   /// explicitly; the later contract phase removes the Shopify default.
-  provider                      CommerceProvider              @default(SHOPIFY)
-  idempotencyKey                String                        @unique
-  code                          String                        @unique
-  status                        ShopifyRewardRedemptionStatus
+  provider                      CommerceProvider               @default(SHOPIFY)
+  idempotencyKey                String                         @unique
+  code                          String                         @unique
+  status                        CommerceRewardRedemptionStatus
   pointsCost                    Int
-  discountType                  RewardDiscountType            @default(FIXED_AMOUNT)
+  discountType                  RewardDiscountType             @default(FIXED_AMOUNT)
   discountAmountCents           Int?
   discountPercentageBasisPoints Int?
-  currencyCode                  String                        @default("CAD")
-  shopifyShopDomain             String
-  shopifyDiscountNodeId         String?
-  shopifyDiscountStatus         String?
-  shopifyAsyncUsageCount        Int?
-  shopifyLastCheckedAt          DateTime?
+  currencyCode                  String                         @default("CAD")
+  externalAccountId             String                         @map("shopifyShopDomain")
+  externalDiscountId            String?                        @map("shopifyDiscountNodeId")
+  externalDiscountStatus        String?                        @map("shopifyDiscountStatus")
+  externalUsageCount            Int?                           @map("shopifyAsyncUsageCount")
+  providerLastCheckedAt         DateTime?                      @map("shopifyLastCheckedAt")
   issuedAt                      DateTime?
   expiresAt                     DateTime?
   usedAt                        DateTime?
   errorMessage                  String?
-  shopifyUserErrors             Json?
-  createdAt                     DateTime                      @default(now())
-  updatedAt                     DateTime                      @updatedAt
+  providerErrorDetails          Json?                          @map("shopifyUserErrors")
+  createdAt                     DateTime                       @default(now())
+  updatedAt                     DateTime                       @updatedAt
   reconcileLockedUntil          DateTime?
-  reconcileAttempts             Int                           @default(0)
-  needsManualReview             Boolean                       @default(false)
+  reconcileAttempts             Int                            @default(0)
+  needsManualReview             Boolean                        @default(false)
   lastReconcileReason           String?
-  brand                         Brand                         @relation(fields: [brandId], references: [id], onDelete: Cascade)
-  offer                         BrandRewardOffer              @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  brand                         Brand                          @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  offer                         BrandRewardOffer               @relation(fields: [offerId], references: [id], onDelete: Restrict)
   pointTransactions             PointTransaction[]
-  user                          User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                          User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId, createdAt])
   @@index([brandId, createdAt])
@@ -1201,7 +1201,8 @@ model ShopifyRewardRedemption {
   @@index([offerId, userId, status])
   /// Phase 15C2 uses this exact historical identity to resolve the matching
   /// connection; it must never call a current connection for another account.
-  @@index([brandId, provider, shopifyShopDomain])
+  @@index([brandId, provider, externalAccountId], map: "ShopifyRewardRedemption_brandId_provider_shopifyShopDomain_idx")
+  @@map("ShopifyRewardRedemption")
 }
 
 model UserSession {
@@ -1321,31 +1322,31 @@ model WaitlistEntry {
 }
 
 model PointTransaction {
-  id                        String                   @id @default(cuid())
-  userId                    String
-  points                    Int
-  reason                    PointReason
-  qrCodeId                  String?
-  shopifyRewardRedemptionId String?
-  createdAt                 DateTime                 @default(now())
-  type                      PointTransactionType     @default(EARN)
-  sourceType                PointSourceType?
-  sourceId                  String?
-  idempotencyKey            String?
-  metadata                  Json?
-  balanceAfter              Int?
-  lifetimeEarnedAfter       Int?
-  createdById               String?
-  qrCode                    QRCode?                  @relation(fields: [qrCodeId], references: [id])
-  shopifyRewardRedemption   ShopifyRewardRedemption? @relation(fields: [shopifyRewardRedemptionId], references: [id], onDelete: SetNull)
-  user                      User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id                         String                    @id @default(cuid())
+  userId                     String
+  points                     Int
+  reason                     PointReason
+  qrCodeId                   String?
+  commerceRewardRedemptionId String?                   @map("shopifyRewardRedemptionId")
+  createdAt                  DateTime                  @default(now())
+  type                       PointTransactionType      @default(EARN)
+  sourceType                 PointSourceType?
+  sourceId                   String?
+  idempotencyKey             String?
+  metadata                   Json?
+  balanceAfter               Int?
+  lifetimeEarnedAfter        Int?
+  createdById                String?
+  qrCode                     QRCode?                   @relation(fields: [qrCodeId], references: [id])
+  commerceRewardRedemption   CommerceRewardRedemption? @relation(fields: [commerceRewardRedemptionId], references: [id], onDelete: SetNull, map: "PointTransaction_shopifyRewardRedemptionId_fkey")
+  user                       User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, qrCodeId])
-  @@unique([shopifyRewardRedemptionId, reason], name: "uq_point_tx_redemption_reason")
+  @@unique([commerceRewardRedemptionId, reason], name: "uq_point_tx_redemption_reason", map: "PointTransaction_shopifyRewardRedemptionId_reason_key")
   @@unique([userId, idempotencyKey], name: "uq_point_tx_user_idempotency_key", map: "uq_point_tx_user_idempotency_key")
   @@index([userId])
   @@index([qrCodeId])
-  @@index([shopifyRewardRedemptionId])
+  @@index([commerceRewardRedemptionId], map: "PointTransaction_shopifyRewardRedemptionId_idx")
   @@index([userId, createdAt])
   @@index([sourceType, sourceId])
 }
@@ -1460,7 +1461,7 @@ enum RewardAppliesTo {
   SPECIFIC_PRODUCTS
 }
 
-enum ShopifyRewardRedemptionStatus {
+enum CommerceRewardRedemptionStatus {
   PENDING
   POINTS_DEBITED
   ISSUED
@@ -1469,6 +1470,8 @@ enum ShopifyRewardRedemptionStatus {
   FAILED
   REFUNDED
   CANCELLED
+
+  @@map("ShopifyRewardRedemptionStatus")
 }
 
 enum QuestionStatus {
@@ -1493,8 +1496,8 @@ enum PointReason {
   QR_SCAN
   BONUS
   REFERRAL
-  SHOPIFY_REWARD_REDEMPTION
-  SHOPIFY_REWARD_REFUND
+  COMMERCE_REWARD_REDEMPTION @map("SHOPIFY_REWARD_REDEMPTION")
+  COMMERCE_REWARD_REFUND     @map("SHOPIFY_REWARD_REFUND")
 }
 
 enum PointTransactionType {
@@ -1511,8 +1514,8 @@ enum PointSourceType {
   VIDEO_WATCH
   BONUS
   REFERRAL
-  SHOPIFY_REWARD_REDEMPTION
-  SHOPIFY_REWARD_REFUND
+  COMMERCE_REWARD_REDEMPTION @map("SHOPIFY_REWARD_REDEMPTION")
+  COMMERCE_REWARD_REFUND     @map("SHOPIFY_REWARD_REFUND")
   ADMIN_ADJUSTMENT
 }
 

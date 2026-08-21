@@ -151,8 +151,8 @@ export interface UserPointAccountShape {
  *              so they are included here — this matches the totals
  *              `getUserPointsOverview` computes via its own (sourceType-based)
  *              bucketing for the same underlying rows.
- *   spent    = SPEND-type SHOPIFY_REWARD_REDEMPTION rows (ABS).
- *   refunded = REFUND-type SHOPIFY_REWARD_REFUND rows.
+ *   spent    = SPEND-type COMMERCE_REWARD_REDEMPTION rows (ABS).
+ *   refunded = REFUND-type COMMERCE_REWARD_REFUND rows.
  *   ADJUSTMENT rows are never classified into any lifetime bucket here — an
  *   adjustment's intended lifetime effect (if any) isn't durably stored on
  *   the row in a reconstructable way, so it must never be guessed. It still
@@ -184,11 +184,11 @@ async function deriveAccountFromLedger(
         earned += sum;
       }
     } else if (row.type === "SPEND") {
-      if (row.reason === "SHOPIFY_REWARD_REDEMPTION" && sum < 0) {
+      if (row.reason === "COMMERCE_REWARD_REDEMPTION" && sum < 0) {
         spent += Math.abs(sum);
       }
     } else if (row.type === "REFUND") {
-      if (row.reason === "SHOPIFY_REWARD_REFUND" && sum > 0) {
+      if (row.reason === "COMMERCE_REWARD_REFUND" && sum > 0) {
         refunded += sum;
       }
     }
@@ -289,7 +289,7 @@ export interface ApplyPointLedgerEventInput {
   sourceId?: string | null;
   idempotencyKey?: string | null;
   qrCodeId?: string | null;
-  shopifyRewardRedemptionId?: string | null;
+  commerceRewardRedemptionId?: string | null;
   metadata?: Prisma.InputJsonValue;
   createdById?: string | null;
   /** For positive ADJUSTMENT only: treat as a true earning that raises lifetime earned. */
@@ -394,7 +394,7 @@ async function runLedgerEvent(
         sourceId: input.sourceId ?? null,
         idempotencyKey: input.idempotencyKey ?? null,
         qrCodeId: input.qrCodeId ?? null,
-        shopifyRewardRedemptionId: input.shopifyRewardRedemptionId ?? null,
+        commerceRewardRedemptionId: input.commerceRewardRedemptionId ?? null,
         metadata: input.metadata,
         balanceAfter: newSpendable,
         lifetimeEarnedAfter: newLifetimeEarned,
@@ -514,7 +514,7 @@ export async function awardQrScanPoint(options: {
 export async function debitShopifyRewardPoints(options: {
   userId: string;
   pointsCost: number;
-  shopifyRewardRedemptionId: string;
+  commerceRewardRedemptionId: string;
   /**
    * Only pass a campaignId that was deterministically resolved (e.g. exactly
    * one unlocked campaign matched the claim request) — never a guess. Stored
@@ -529,11 +529,11 @@ export async function debitShopifyRewardPoints(options: {
     userId: options.userId,
     points: options.pointsCost,
     type: "SPEND",
-    reason: "SHOPIFY_REWARD_REDEMPTION",
-    sourceType: "SHOPIFY_REWARD_REDEMPTION",
-    sourceId: options.shopifyRewardRedemptionId,
-    idempotencyKey: `shopify-reward-redemption:${options.shopifyRewardRedemptionId}`,
-    shopifyRewardRedemptionId: options.shopifyRewardRedemptionId,
+    reason: "COMMERCE_REWARD_REDEMPTION",
+    sourceType: "COMMERCE_REWARD_REDEMPTION",
+    sourceId: options.commerceRewardRedemptionId,
+    idempotencyKey: `shopify-reward-redemption:${options.commerceRewardRedemptionId}`,
+    commerceRewardRedemptionId: options.commerceRewardRedemptionId,
     metadata: options.campaignId ? { campaignId: options.campaignId } : undefined,
     db: options.db,
   });
@@ -546,7 +546,7 @@ export async function debitShopifyRewardPoints(options: {
 export async function refundShopifyRewardPoints(options: {
   userId: string;
   points: number;
-  shopifyRewardRedemptionId: string;
+  commerceRewardRedemptionId: string;
   /** Same deterministic-only contract as debitShopifyRewardPoints. */
   campaignId?: string | null;
   db?: PointDbClient;
@@ -555,11 +555,11 @@ export async function refundShopifyRewardPoints(options: {
     userId: options.userId,
     points: options.points,
     type: "REFUND",
-    reason: "SHOPIFY_REWARD_REFUND",
-    sourceType: "SHOPIFY_REWARD_REFUND",
-    sourceId: options.shopifyRewardRedemptionId,
-    idempotencyKey: `shopify-reward-refund:${options.shopifyRewardRedemptionId}`,
-    shopifyRewardRedemptionId: options.shopifyRewardRedemptionId,
+    reason: "COMMERCE_REWARD_REFUND",
+    sourceType: "COMMERCE_REWARD_REFUND",
+    sourceId: options.commerceRewardRedemptionId,
+    idempotencyKey: `shopify-reward-refund:${options.commerceRewardRedemptionId}`,
+    commerceRewardRedemptionId: options.commerceRewardRedemptionId,
     metadata: options.campaignId ? { campaignId: options.campaignId } : undefined,
     db: options.db,
   });
@@ -691,7 +691,7 @@ export type RawPointTransactionRow = {
   type: PointTransactionType;
   sourceType: PointSourceType | null;
   sourceId: string | null;
-  shopifyRewardRedemptionId: string | null;
+  commerceRewardRedemptionId: string | null;
   createdAt: Date;
   metadata: Prisma.JsonValue | null;
   qrCode: {
@@ -776,7 +776,7 @@ export function resolveDeterministicCampaignByExperience(
  *    (a logged-in user's LessonProgress row does not retain the session/QR
  *    that produced it).
  *  - Reward context is resolved by the redemption's own stable
- *    `shopifyRewardRedemptionId` FK (predates `sourceType`), so it also
+ *    `commerceRewardRedemptionId` FK (predates `sourceType`), so it also
  *    covers historical rows. Reward campaign context is resolved only from
  *    `metadata.campaignId`, which is only ever written when the redemption
  *    request resolved to exactly one unlocked campaign — never guessed.
@@ -821,8 +821,8 @@ export function buildPointsActivityView(
 
     // Keyed off the FK (not sourceType) so historical rows predating
     // sourceType still resolve reward context.
-    if (item.shopifyRewardRedemptionId) {
-      reward = context.redemptionById.get(item.shopifyRewardRedemptionId) ?? null;
+    if (item.commerceRewardRedemptionId) {
+      reward = context.redemptionById.get(item.commerceRewardRedemptionId) ?? null;
       const { campaignId } = parsePointTransactionMetadata(item.metadata);
       campaign = campaignId ? context.campaignById.get(campaignId) ?? null : null;
     }
@@ -879,7 +879,7 @@ export async function getUserPointsOverview(userId: string, take = 25) {
           type: true,
           sourceType: true,
           sourceId: true,
-          shopifyRewardRedemptionId: true,
+          commerceRewardRedemptionId: true,
           metadata: true,
           createdAt: true,
           qrCode: {
@@ -925,8 +925,8 @@ export async function getUserPointsOverview(userId: string, take = 25) {
   const redemptionIds = Array.from(
     new Set(
       transactions
-        .filter((t) => t.shopifyRewardRedemptionId)
-        .map((t) => t.shopifyRewardRedemptionId as string),
+        .filter((t) => t.commerceRewardRedemptionId)
+        .map((t) => t.commerceRewardRedemptionId as string),
     ),
   );
   const metadataCampaignIds = Array.from(
@@ -965,7 +965,7 @@ export async function getUserPointsOverview(userId: string, take = 25) {
         })
       : Promise.resolve([]),
     redemptionIds.length
-      ? prisma.shopifyRewardRedemption.findMany({
+      ? prisma.commerceRewardRedemption.findMany({
           where: { id: { in: redemptionIds } },
           select: {
             id: true,
@@ -1089,10 +1089,10 @@ export async function getUserPointsOverview(userId: string, take = 25) {
       case "COURSE_COMPLETION":
         bucket.courseCompletionPoints += Math.max(0, sum);
         break;
-      case "SHOPIFY_REWARD_REDEMPTION":
+      case "COMMERCE_REWARD_REDEMPTION":
         bucket.shopifyRewardSpentPoints += Math.abs(Math.min(0, sum));
         break;
-      case "SHOPIFY_REWARD_REFUND":
+      case "COMMERCE_REWARD_REFUND":
         bucket.shopifyRewardRefundedPoints += Math.max(0, sum);
         break;
     }

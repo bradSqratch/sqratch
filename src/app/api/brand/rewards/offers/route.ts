@@ -50,7 +50,7 @@ export async function GET() {
         createdAt: "desc",
       },
     });
-    const statusCounts = await prisma.shopifyRewardRedemption.groupBy({
+    const statusCounts = await prisma.commerceRewardRedemption.groupBy({
       by: ["offerId", "status"],
       where: {
         brandId: brand.id,
@@ -128,7 +128,7 @@ export async function GET() {
             minimumSubtotalCents: offer.minimumSubtotalCents,
             currencyCode: offer.currencyCode,
             appliesTo: offer.appliesTo,
-            sourceShopDomain: offer.sourceShopDomain,
+            sourceExternalAccountId: offer.sourceExternalAccountId,
           },
           shopifyConnected: isConnected,
           currentShopDomain: connectionSummary?.externalAccountId ?? null,
@@ -217,7 +217,7 @@ export async function POST(request: NextRequest) {
     const data = parsed.data;
     // Never trust a client-provided shop domain — always derive from the
     // brand's own current CANONICAL connection state.
-    const sourceShopDomain = normalizeShopDomain(
+    const sourceExternalAccountId = normalizeShopDomain(
       connectionSummary?.externalAccountId ?? null,
     );
 
@@ -248,7 +248,7 @@ export async function POST(request: NextRequest) {
           minimumSubtotalCents: data.minimumSubtotalCents,
           currencyCode: data.currencyCode,
           appliesTo: data.appliesTo,
-          sourceShopDomain,
+          sourceExternalAccountId,
         },
         shopifyConnected: isConnected,
         currentShopDomain: connectionSummary?.externalAccountId ?? null,
@@ -272,6 +272,7 @@ export async function POST(request: NextRequest) {
     const offer = await prisma.brandRewardOffer.create({
       data: {
         brandId: brand.id,
+        provider: CommerceProvider.SHOPIFY,
         title: data.title,
         description: data.description,
         isActive: data.isActive,
@@ -288,7 +289,7 @@ export async function POST(request: NextRequest) {
         codePrefix: data.codePrefix,
         maxTotalRedemptions: data.maxTotalRedemptions,
         maxRedemptionsPerUser: data.maxRedemptionsPerUser,
-        sourceShopDomain,
+        sourceExternalAccountId,
         products: {
           create: data.products,
         },

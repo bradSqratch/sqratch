@@ -84,7 +84,7 @@ const KEEP_MODELS = [
   "CampaignExperience",
   "BrandRewardOffer",
   "BrandRewardOfferProduct",
-  "ShopifyRewardRedemption",
+  "CommerceRewardRedemption",
   "PointTransaction",
   "UserPointAccount",
   "User",
@@ -111,7 +111,7 @@ const KEEP_MODELS = [
  * inverted accordingly: every name must now be ABSENT from model Brand.
  */
 const BRAND_SHOPIFY_COLUMNS = [
-  "shopifyShopDomain",
+  "externalAccountId",
   "shopifyAdminAccessTokenEncrypted",
   "shopifyInstalledAt",
   "shopifyDisconnectedAt",
@@ -324,7 +324,9 @@ test("the migration header documents irreversibility, the no-rows-deleted guaran
 
   // Every table Phase 8 must not lose rows from is named in the guarantee.
   for (const model of KEEP_MODELS) {
-    assert.ok(migration.includes(model), `header must name ${model}`);
+    const physicalModel =
+      model === "CommerceRewardRedemption" ? "ShopifyRewardRedemption" : model;
+    assert.ok(migration.includes(physicalModel), `header must name ${physicalModel}`);
   }
 });
 
@@ -381,9 +383,9 @@ test("all 16 legacy Brand.shopify* compatibility columns are ABSENT from Brand (
   }
 
   // Count check, so a reintroduced column is caught even if this file's name
-  // list were edited. The remaining Shopify relation is reward-specific;
-  // lifecycle history is provider-neutral CommerceConnectionEvent.
-  const RELATION_FIELDS = new Set(["shopifyRewardRedemptions"]);
+  // list were edited. Reward history is now exposed through a logical
+  // provider-neutral relation; lifecycle history is CommerceConnectionEvent.
+  const RELATION_FIELDS = new Set<string>();
   const declaredShopifyFields = [...body.matchAll(/^\s+(shopify[A-Za-z]+)\s+/gm)].map(
     (match) => match[1],
   );
@@ -396,8 +398,8 @@ test("all 16 legacy Brand.shopify* compatibility columns are ABSENT from Brand (
   );
   assert.deepEqual(
     [...declaredShopifyFields].sort(),
-    ["shopifyRewardRedemptions"],
-    "the only shopify* field left on Brand is the out-of-scope reward history relation",
+    [],
+    "Brand must not retain a Shopify-named reward-history relation",
   );
 });
 
@@ -429,7 +431,7 @@ test("canonical commerce authority and provider-neutral lifecycle history surviv
     "CommerceConnectionSecret",
     // Provider-neutral lifecycle history, deliberately retained.
     "CommerceConnectionEvent",
-    "ShopifyRewardRedemption",
+    "CommerceRewardRedemption",
   ]) {
     assert.match(
       schema,
@@ -440,8 +442,8 @@ test("canonical commerce authority and provider-neutral lifecycle history surviv
 
   // Provider-specific columns on non-Brand models are legitimate domain data
   // and must NOT have been swept up by the Brand contraction.
-  assert.match(schema, /^\s+shopifyProductGid\s+/m);
-  assert.match(schema, /^\s+shopifyRewardRedemptionId\s+/m);
+  assert.match(schema, /^\s+externalProductId\s+/m);
+  assert.match(schema, /^\s+commerceRewardRedemptionId\s+/m);
 });
 
 test("every KEEP-list model still exists in the schema", () => {
@@ -519,12 +521,11 @@ test("shop/redact no longer touches the removed legacy Prisma delegates, and kee
   assert.doesNotMatch(route, /prisma\.brand\.findFirst/);
   assert.doesNotMatch(route, /shopifyAdminAccessTokenEncrypted: null/);
   assert.doesNotMatch(route, /shopifyRefreshTokenEncrypted: null/);
-  assert.doesNotMatch(route, /shopifyShopDomain: null/);
   assert.doesNotMatch(route, /shopifyConnectionStatus: "UNINSTALLED"/);
 
   // Every other documented redaction step is untouched.
   assert.match(route, /verifyShopifyWebhookRequest/);
-  assert.match(route, /prisma\.shopifyRewardRedemption\.updateMany/);
+  assert.match(route, /prisma\.commerceRewardRedemption\.updateMany/);
   assert.match(route, /prisma\.brandRewardOffer\.updateMany/);
   assert.match(route, /prisma\.commerceConnectionEvent\.updateMany/);
   assert.match(route, /prisma\.tokenStore\.deleteMany/);

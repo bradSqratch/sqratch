@@ -329,8 +329,9 @@ function normalizeCanonicalStatus(status: string): string {
  */
 async function resolveRuntimeCredential(
   brandId: string,
+  connectionId?: string,
 ): Promise<ResolveRuntimeCredentialResult> {
-  const canonical = await loadShopifyCredential(brandId);
+  const canonical = await loadShopifyCredential(brandId, undefined, connectionId);
 
   if (canonical.outcome === "CORRUPT_SECRET") {
     // FAIL CLOSED — see the FALLBACK POLICY block above. Never consult Brand.
@@ -444,11 +445,11 @@ async function waitForLeaseHolder(
       : false;
 
     if (!held) {
-      return resolveRuntimeCredential(credential.brandId);
+      return resolveRuntimeCredential(credential.brandId, credential.connectionId ?? undefined);
     }
   }
   // Deadline passed — return whatever is canonical now.
-  return resolveRuntimeCredential(credential.brandId);
+  return resolveRuntimeCredential(credential.brandId, credential.connectionId ?? undefined);
 }
 
 /**
@@ -613,13 +614,13 @@ async function readWinnerToken(
  */
 export async function getValidAccessToken(
   brandId: string,
-  options?: { tokenEndpoint?: TokenEndpointFn; skipScopeCheck?: boolean },
+  options?: { tokenEndpoint?: TokenEndpointFn; skipScopeCheck?: boolean; connectionId?: string },
 ): Promise<GetValidAccessTokenResult> {
   const tokenEndpoint = options?.tokenEndpoint ?? defaultTokenEndpoint;
 
   // PHASE 14B: canonical-first resolution. Everything below operates on the
   // resolved credential, never on `Brand.shopify*` directly.
-  const resolved = await resolveRuntimeCredential(brandId);
+  const resolved = await resolveRuntimeCredential(brandId, options?.connectionId);
   if (resolved.outcome === "NOT_CONNECTED") {
     return { ok: false, reason: "NOT_CONNECTED" };
   }
@@ -698,7 +699,7 @@ export async function getValidAccessToken(
     }
 
     // Token still appears expired after waiting — try to take over the refresh
-    const rechecked = await resolveRuntimeCredential(brandId);
+    const rechecked = await resolveRuntimeCredential(brandId, credential.connectionId ?? undefined);
     if (rechecked.outcome === "NOT_CONNECTED") {
       return { ok: false, reason: "NOT_CONNECTED" };
     }

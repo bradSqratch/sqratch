@@ -49,6 +49,14 @@ Public-app installations store encrypted expiring-token lifecycle fields and CAS
 | `ShopifyRewardRedemption.expiresAt` | none | No | When the discount code expires. |
 | `ShopifyRewardRedemption.usedAt` | none | No | When usage was confirmed. |
 | `ShopifyRewardRedemption.idempotencyKey` | none | No | Client-supplied dedup key. |
+
+Phase 15C2 exposes these through provider-neutral runtime names on
+`CommerceRewardRedemption` (`externalAccountId`, `externalDiscountId`,
+`externalDiscountStatus`, `externalUsageCount`, `providerLastCheckedAt`, and
+`providerErrorDetails`) while retaining the physical columns above. Reconciliation
+resolves a usable canonical connection by the full historical tuple
+`(brandId, provider, externalAccountId)` before obtaining a credential; it never
+uses a current relinked account's credential for historical reward evidence.
 | `PointTransaction.userId` | none | No | SQRATCH user FK. |
 | `PointTransaction.shopifyRewardRedemptionId` | none | No | FK to redemption for ledger linkage. |
 | `PointTransaction.reason` | none | No | Enum includes `SHOPIFY_REWARD_REDEMPTION`, `SHOPIFY_REWARD_REFUND`. |

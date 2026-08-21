@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
-import { ShopifyRewardRedemptionStatus } from "@prisma/client";
+import { CommerceRewardRedemptionStatus } from "@prisma/client";
 import {
   REDEMPTION_STATUSES,
   ALLOWED_TRANSITIONS,
@@ -16,7 +16,7 @@ import {
   assertTransition,
 } from "../src/lib/reward-redemption-state";
 
-const S = ShopifyRewardRedemptionStatus;
+const S = CommerceRewardRedemptionStatus;
 
 // ---------------------------------------------------------------------------
 // REDEMPTION_STATUSES — all 8 values are present

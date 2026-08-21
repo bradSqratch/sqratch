@@ -51,7 +51,7 @@
  *  14. Idempotency across repeated installs: looping the install twice against a shared fake store creates nothing new on the second pass.
  *  15. GDPR redaction delete is keyed on (provider, externalAccountId), not brandId.
  *  16. Redaction delete still finds and removes the row when it's "orphaned" from the
- *      brand's current shopifyShopDomain (the shape of the missed-deletion bug: a stale
+ *      brand's current externalAccountId (the shape of the missed-deletion bug: a stale
  *      domain's connection row survives a relink to a different domain).
  *  17. Redaction delete removes only the redacted domain's row; a brand's other Shopify
  *      connection is untouched (the shape of the over-deletion bug).
@@ -1175,9 +1175,9 @@ describe("idempotency across repeated installs", () => {
 //
 // Regression coverage for the GDPR redaction bug: the delete used to be
 // keyed on brandId (via a brand lookup on the brand's *current*
-// shopifyShopDomain), which both missed deletions (a stale domain's
+// externalAccountId), which both missed deletions (a stale domain's
 // connection row survives when the brand has since relinked to a different
-// domain, so no brand's shopifyShopDomain matches the redacted domain
+// domain, so no brand's externalAccountId matches the redacted domain
 // anymore) and over-deleted (once a brand can hold more than one Shopify
 // connection, a redact for one shop deleted ALL of that brand's rows). The
 // fix keys the delete on (provider, externalAccountId) — the redacted shop
@@ -1243,12 +1243,12 @@ describe("deleteShopifyCommerceConnectionByShopDomain", () => {
     );
   });
 
-  test("16. scenario (a) — missed deletion: the delete still finds and removes a domain's row even though it is orphaned from the brand's current shopifyShopDomain (no brand lookup is involved at all)", async () => {
+  test("16. scenario (a) — missed deletion: the delete still finds and removes a domain's row even though it is orphaned from the brand's current externalAccountId (no brand lookup is involved at all)", async () => {
     // Models the documented failure: Brand A installed shop X, then later
     // relinked to shop Y before X's shop/redact webhook arrived. Brand A's
     // row for shop Y is CONNECTED/primary; its row for shop X is a stale
     // UNINSTALLED leftover that a brandId-keyed, brand-lookup-gated delete
-    // would never reach (no brand's shopifyShopDomain equals X anymore).
+    // would never reach (no brand's externalAccountId equals X anymore).
     const fakeTx = makeFakeConnectionSyncTx();
     fakeTx.connections.set(
       "conn-stale-x",
@@ -1274,7 +1274,7 @@ describe("deleteShopifyCommerceConnectionByShopDomain", () => {
     // No brand lookup / findBrandForSync dependency is provided at all —
     // deleteShopifyCommerceConnectionByShopDomain never needs one, which is
     // exactly why it is reachable in the route even when the route's own
-    // `prisma.brand.findFirst({ where: { shopifyShopDomain: shopDomain } })`
+    // `prisma.brand.findFirst({ where: { externalAccountId: shopDomain } })`
     // lookup returns null.
     const result = await deleteShopifyCommerceConnectionByShopDomain(
       "shop-x.myshopify.com",
@@ -1418,7 +1418,7 @@ describe("normalizeExternalAccountId write/delete symmetry", () => {
 // invariant that actually matters now: the CommerceConnection erasure call
 // is gated ONLY on the canonical-invalidation outcome (never STALE), never
 // on whether any historical brand or legacy mirror was found — and never
-// keyed on `Brand.shopifyShopDomain` for routing.
+// keyed on `Brand.externalAccountId` for routing.
 // ---------------------------------------------------------------------------
 
 describe("shop/redact route wiring", () => {
@@ -1502,19 +1502,19 @@ describe("shop/redact route wiring", () => {
       );
     }
 
-    // Routing must never key off `Brand.shopifyShopDomain` — only the
+    // Routing must never key off `Brand.externalAccountId` — only the
     // legacy-mirror-clearing `prisma.brand.findMany` (scoped to
     // `historicalBrandIds`) may still reference it, and that call must
     // filter on `id: { in: historicalBrandIds }`, not resolve identity by
     // domain alone.
     assert.doesNotMatch(
       routeSource,
-      /prisma\.brand\.findFirst\(\{\s*where:\s*\{\s*shopifyShopDomain/,
-      "must never resolve identity via a direct Brand.shopifyShopDomain findFirst",
+      /prisma\.brand\.findFirst\(\{\s*where:\s*\{\s*externalAccountId/,
+      "must never resolve identity via a direct Brand.externalAccountId findFirst",
     );
   });
 
-  test("22. brandRewardOffer.updateMany is scoped to sourceShopDomain, never to brandId IN historicalBrandIds (PHASE 14C-B1.1)", () => {
+  test("22. brandRewardOffer.updateMany is scoped to sourceExternalAccountId, never to brandId IN historicalBrandIds (PHASE 14C-B1.1)", () => {
     const routeSource = readFileSync(
       "src/app/api/shopify/webhooks/shop/redact/route.ts",
       "utf8",
@@ -1533,13 +1533,13 @@ describe("shop/redact route wiring", () => {
     assert.ok(callMatch, "shop/redact route must call brandRewardOffer.updateMany");
     assert.match(
       callMatch![1],
-      /sourceShopDomain:\s*shopDomain/,
-      "the offer predicate must filter on sourceShopDomain === the redacted domain",
+      /sourceExternalAccountId:\s*shopDomain/,
+      "the offer predicate must filter on sourceExternalAccountId === the redacted domain",
     );
     assert.doesNotMatch(
       callMatch![1],
       /appliesTo/,
-      "the offer predicate must not special-case appliesTo — sourceShopDomain is populated for every offer type",
+      "the offer predicate must not special-case appliesTo — sourceExternalAccountId is populated for every offer type",
     );
     assert.match(
       callMatch![2],
@@ -1548,8 +1548,8 @@ describe("shop/redact route wiring", () => {
     );
     assert.match(
       callMatch![2],
-      /sourceShopDomain:\s*null/,
-      "matched offers must have their now-dangling sourceShopDomain scrubbed",
+      /sourceExternalAccountId:\s*null/,
+      "matched offers must have their now-dangling sourceExternalAccountId scrubbed",
     );
 
     // Exactly one brandRewardOffer.updateMany call in the whole route — the

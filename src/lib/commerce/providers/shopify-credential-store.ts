@@ -257,6 +257,7 @@ const CONNECTION_ORDER_BY = [
 export async function loadShopifyCredential(
   brandId: string,
   deps?: ShopifyCredentialStoreDeps,
+  connectionId?: string,
 ): Promise<LoadShopifyCredentialOutcome> {
   const db = await getDb(deps);
 
@@ -272,7 +273,7 @@ export async function loadShopifyCredential(
   };
 
   const connection = (await db.commerceConnection.findFirst({
-    where: { brandId, provider: CommerceProvider.SHOPIFY },
+    where: { brandId, provider: CommerceProvider.SHOPIFY, ...(connectionId ? { id: connectionId } : {}) },
     orderBy: CONNECTION_ORDER_BY,
     select: {
       id: true,

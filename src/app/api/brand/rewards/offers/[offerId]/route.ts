@@ -31,7 +31,7 @@ async function getOwnedOffer(offerId: string, brandId: string) {
       minimumSubtotalCents: true,
       currencyCode: true,
       appliesTo: true,
-      sourceShopDomain: true,
+      sourceExternalAccountId: true,
     },
   });
 }
@@ -129,7 +129,7 @@ export async function PUT(
       );
     }
 
-    const { data, sourceShopDomain } = resolution;
+    const { data, sourceExternalAccountId } = resolution;
 
     const offer = await prisma.$transaction(async (tx) => {
       await tx.brandRewardOfferProduct.deleteMany({
@@ -159,7 +159,7 @@ export async function PUT(
           codePrefix: data.codePrefix,
           maxTotalRedemptions: data.maxTotalRedemptions,
           maxRedemptionsPerUser: data.maxRedemptionsPerUser,
-          sourceShopDomain,
+          sourceExternalAccountId,
           products: {
             create: data.products,
           },

@@ -3,7 +3,7 @@ import {
   CommerceProvider,
   Prisma,
   type RewardAppliesTo,
-  type ShopifyRewardRedemption,
+  type CommerceRewardRedemption,
 } from "@prisma/client";
 import prisma from "@/lib/prisma";
 import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
@@ -94,7 +94,7 @@ export type DiscountCreationOutcome =
 /**
  * Narrows `CommerceProviderApiError.details` (deliberately `unknown` — see
  * `../errors.ts`, kept provider-neutral) to the JSON-serializable array
- * shape the `shopifyUserErrors` Json column accepts. The only producer of
+ * shape the `providerErrorDetails` Json column accepts. The only producer of
  * this field today (`ShopifyCommerceAdapter.createDiscount`) always passes
  * through `createShopifyRewardDiscountCode`'s own `userErrors` array —
  * itself always plain `{field, message, code}` objects, see
@@ -119,7 +119,7 @@ export function buildCreateDiscountInput(
     discountAmountCents: number | null;
     discountPercentageBasisPoints: number | null;
     appliesTo: RewardAppliesTo;
-    shopifyProductGids: string[];
+    externalProductIds: string[];
     minimumSubtotalCents: number | null;
   },
   code: string,
@@ -134,7 +134,7 @@ export function buildCreateDiscountInput(
     discountAmountCents: discountConfig.discountAmountCents,
     discountPercentageBasisPoints: discountConfig.discountPercentageBasisPoints,
     appliesTo: discountConfig.appliesTo,
-    externalProductIds: discountConfig.shopifyProductGids,
+    externalProductIds: discountConfig.externalProductIds,
     minimumSubtotalCents: discountConfig.minimumSubtotalCents,
   };
 }
@@ -293,12 +293,12 @@ export function buildIssuedRedemptionData(
 ) {
   return {
     status: "ISSUED" as const,
-    shopifyDiscountNodeId: discount.discountNodeId,
-    shopifyDiscountStatus: "ACTIVE" as const,
-    shopifyAsyncUsageCount: 0,
+    externalDiscountId: discount.discountNodeId,
+    externalDiscountStatus: "ACTIVE" as const,
+    externalUsageCount: 0,
     issuedAt: discount.startsAt,
     expiresAt: discount.endsAt,
-    shopifyUserErrors: discount.userErrors,
+    providerErrorDetails: discount.userErrors,
   };
 }
 
@@ -309,7 +309,7 @@ export function buildRefundedDiscountFailureData(
   return {
     status: "REFUNDED" as const,
     errorMessage: discount.error,
-    shopifyUserErrors: discount.userErrors || undefined,
+    providerErrorDetails: discount.userErrors || undefined,
   };
 }
 
@@ -437,7 +437,7 @@ export async function redeemImpl(
       );
     }
 
-    const existing = await prisma.shopifyRewardRedemption.findUnique({
+    const existing = await prisma.commerceRewardRedemption.findUnique({
       where: {
         idempotencyKey,
       },
@@ -542,7 +542,7 @@ export async function redeemImpl(
         minimumSubtotalCents: offer.minimumSubtotalCents,
         currencyCode: offer.currencyCode,
         appliesTo: offer.appliesTo,
-        sourceShopDomain: offer.sourceShopDomain,
+        sourceExternalAccountId: offer.sourceExternalAccountId,
       },
       shopifyConnected: true,
       currentShopDomain: initialSummary.externalAccountId,
@@ -572,7 +572,7 @@ export async function redeemImpl(
 
     const [totalRedemptions, userRedemptions] = await Promise.all([
       offer.maxTotalRedemptions
-        ? prisma.shopifyRewardRedemption.count({
+        ? prisma.commerceRewardRedemption.count({
             where: {
               offerId: offer.id,
               status: {
@@ -582,7 +582,7 @@ export async function redeemImpl(
           })
         : Promise.resolve(0),
       offer.maxRedemptionsPerUser
-        ? prisma.shopifyRewardRedemption.count({
+        ? prisma.commerceRewardRedemption.count({
             where: {
               offerId: offer.id,
               userId: user.id,
@@ -620,11 +620,13 @@ export async function redeemImpl(
 
     const issuedAt = new Date();
     let reservation: {
-      redemption: ShopifyRewardRedemption;
+      redemption: CommerceRewardRedemption;
       discountConfig: {
         brandName: string;
         shopDomain: string;
         brandId: string;
+        connectionId: string;
+        provider: CommerceProvider;
         title: string;
         codeValidDays: number;
         discountType: "FIXED_AMOUNT" | "PERCENTAGE";
@@ -632,7 +634,7 @@ export async function redeemImpl(
         discountPercentageBasisPoints: number | null;
         currencyCode: string;
         appliesTo: RewardAppliesTo;
-        shopifyProductGids: string[];
+        externalProductIds: string[];
         minimumSubtotalCents: number | null;
         pointsCost: number;
       };
@@ -668,7 +670,7 @@ export async function redeemImpl(
               },
               products: {
                 select: {
-                  shopifyProductGid: true,
+                  externalProductId: true,
                 },
               },
             },
@@ -712,7 +714,7 @@ export async function redeemImpl(
               minimumSubtotalCents: currentOffer.minimumSubtotalCents,
               currencyCode: currentOffer.currencyCode,
               appliesTo: currentOffer.appliesTo,
-              sourceShopDomain: currentOffer.sourceShopDomain,
+              sourceExternalAccountId: currentOffer.sourceExternalAccountId,
             },
             shopifyConnected,
             currentShopDomain: currentSummary.externalAccountId,
@@ -728,7 +730,7 @@ export async function redeemImpl(
           const [currentTotalRedemptions, currentUserRedemptions] =
             await Promise.all([
               currentOffer.maxTotalRedemptions
-                ? tx.shopifyRewardRedemption.count({
+                ? tx.commerceRewardRedemption.count({
                     where: {
                       offerId: currentOffer.id,
                       status: {
@@ -738,7 +740,7 @@ export async function redeemImpl(
                   })
                 : Promise.resolve(0),
               currentOffer.maxRedemptionsPerUser
-                ? tx.shopifyRewardRedemption.count({
+                ? tx.commerceRewardRedemption.count({
                     where: {
                       offerId: currentOffer.id,
                       userId: user.id,
@@ -761,11 +763,12 @@ export async function redeemImpl(
             throw new Error(currentAvailability.status);
           }
 
-          const createdRedemption = await tx.shopifyRewardRedemption.create({
+          const createdRedemption = await tx.commerceRewardRedemption.create({
             data: {
               userId: user.id,
               brandId: currentOffer.brandId,
               offerId: currentOffer.id,
+              provider: CommerceProvider.SHOPIFY,
               idempotencyKey,
               code,
               status: "PENDING",
@@ -774,7 +777,7 @@ export async function redeemImpl(
               discountAmountCents: currentOffer.discountAmountCents,
               discountPercentageBasisPoints: currentOffer.discountPercentageBasisPoints,
               currencyCode: currentOffer.currencyCode,
-              shopifyShopDomain: currentSummary.externalAccountId,
+              externalAccountId: currentSummary.externalAccountId,
             },
           });
 
@@ -786,7 +789,7 @@ export async function redeemImpl(
           const debit = await debitShopifyRewardPoints({
             userId: user.id,
             pointsCost: currentOffer.pointsCost,
-            shopifyRewardRedemptionId: createdRedemption.id,
+            commerceRewardRedemptionId: createdRedemption.id,
             campaignId: deterministicCampaignId,
             db: tx,
           });
@@ -800,7 +803,7 @@ export async function redeemImpl(
             throw new Error("OFFER_NOT_AVAILABLE");
           }
 
-          const debitedRedemption = await tx.shopifyRewardRedemption.update({
+          const debitedRedemption = await tx.commerceRewardRedemption.update({
             where: {
               id: createdRedemption.id,
             },
@@ -815,6 +818,8 @@ export async function redeemImpl(
               brandName: currentOffer.brand.name,
               shopDomain: currentSummary.externalAccountId,
               brandId: currentOffer.brandId,
+              connectionId: currentSummary.id!,
+              provider: currentSummary.provider,
               title: currentOffer.title,
               codeValidDays: currentOffer.codeValidDays,
               discountType: currentOffer.discountType,
@@ -822,8 +827,8 @@ export async function redeemImpl(
               discountPercentageBasisPoints: currentOffer.discountPercentageBasisPoints,
               currencyCode: currentOffer.currencyCode,
               appliesTo: currentOffer.appliesTo,
-              shopifyProductGids: currentOffer.products.map(
-                (product) => product.shopifyProductGid,
+              externalProductIds: currentOffer.products.map(
+                (product) => product.externalProductId,
               ),
               minimumSubtotalCents: currentOffer.minimumSubtotalCents,
               pointsCost: currentOffer.pointsCost,
@@ -865,7 +870,7 @@ export async function redeemImpl(
       const error = lastError;
 
       const concurrentExisting =
-        await prisma.shopifyRewardRedemption.findUnique({
+        await prisma.commerceRewardRedemption.findUnique({
           where: {
             idempotencyKey,
           },
@@ -914,15 +919,17 @@ export async function redeemImpl(
 
     const { redemption, discountConfig } = reservation;
 
-    const tokenResult = await getValidAccessToken(discountConfig.brandId);
+    const tokenResult = await getValidAccessToken(discountConfig.brandId, {
+      connectionId: discountConfig.connectionId,
+    });
     if (!tokenResult.ok) {
       const refunded = await prisma.$transaction(async (tx) => {
-        const current = await tx.shopifyRewardRedemption.findUnique({
+        const current = await tx.commerceRewardRedemption.findUnique({
           where: { id: redemption.id },
           select: { status: true },
         });
         if (current?.status !== "POINTS_DEBITED") {
-          return tx.shopifyRewardRedemption.findUniqueOrThrow({
+          return tx.commerceRewardRedemption.findUniqueOrThrow({
             where: { id: redemption.id },
           });
         }
@@ -930,11 +937,11 @@ export async function redeemImpl(
         await refundShopifyRewardPoints({
           userId: user.id,
           points: discountConfig.pointsCost,
-          shopifyRewardRedemptionId: redemption.id,
+          commerceRewardRedemptionId: redemption.id,
           campaignId: deterministicCampaignId,
           db: tx,
         });
-        return tx.shopifyRewardRedemption.update({
+        return tx.commerceRewardRedemption.update({
           where: { id: redemption.id },
           data: {
             status: "REFUNDED",
@@ -975,29 +982,27 @@ export async function redeemImpl(
     // `issueDiscountViaAdapter`/`createShopifyRewardDiscountCode` with a
     // token/domain pair that was never jointly resolved.
     if (
-      commerceSummary &&
-      commerceSummary.id !== null &&
-      normalizeExternalAccountId(commerceSummary.externalAccountId) !==
-        normalizeExternalAccountId(discountConfig.shopDomain)
+      commerceSummary && commerceSummary.id !== null &&
+      normalizeExternalAccountId(commerceSummary.externalAccountId) !== normalizeExternalAccountId(discountConfig.shopDomain)
     ) {
       const refunded = await prisma.$transaction(async (tx) => {
-        const current = await tx.shopifyRewardRedemption.findUnique({
+        const current = await tx.commerceRewardRedemption.findUnique({
           where: { id: redemption.id },
           select: { status: true },
         });
         if (current?.status !== "POINTS_DEBITED") {
-          return tx.shopifyRewardRedemption.findUniqueOrThrow({
+          return tx.commerceRewardRedemption.findUniqueOrThrow({
             where: { id: redemption.id },
           });
         }
         await refundShopifyRewardPoints({
           userId: user.id,
           points: discountConfig.pointsCost,
-          shopifyRewardRedemptionId: redemption.id,
+          commerceRewardRedemptionId: redemption.id,
           campaignId: deterministicCampaignId,
           db: tx,
         });
-        return tx.shopifyRewardRedemption.update({
+        return tx.commerceRewardRedemption.update({
           where: { id: redemption.id },
           data: {
             status: "REFUNDED",
@@ -1034,13 +1039,13 @@ export async function redeemImpl(
             discountAmountCents: discountConfig.discountAmountCents,
             discountPercentageBasisPoints: discountConfig.discountPercentageBasisPoints,
             appliesTo: discountConfig.appliesTo,
-            shopifyProductGids: discountConfig.shopifyProductGids,
+            shopifyProductGids: discountConfig.externalProductIds,
             minimumSubtotalCents: discountConfig.minimumSubtotalCents,
           });
 
     if (!discount.ok) {
       const refunded = await prisma.$transaction(async (tx) => {
-        const current = await tx.shopifyRewardRedemption.findUnique({
+        const current = await tx.commerceRewardRedemption.findUnique({
           where: {
             id: redemption.id,
           },
@@ -1050,7 +1055,7 @@ export async function redeemImpl(
         });
 
         if (current?.status !== "POINTS_DEBITED") {
-          return tx.shopifyRewardRedemption.findUniqueOrThrow({
+          return tx.commerceRewardRedemption.findUniqueOrThrow({
             where: {
               id: redemption.id,
             },
@@ -1061,12 +1066,12 @@ export async function redeemImpl(
         await refundShopifyRewardPoints({
           userId: user.id,
           points: discountConfig.pointsCost,
-          shopifyRewardRedemptionId: redemption.id,
+          commerceRewardRedemptionId: redemption.id,
           campaignId: deterministicCampaignId,
           db: tx,
         });
 
-        return tx.shopifyRewardRedemption.update({
+        return tx.commerceRewardRedemption.update({
           where: {
             id: redemption.id,
           },
@@ -1084,7 +1089,7 @@ export async function redeemImpl(
       );
     }
 
-    const issued = await prisma.shopifyRewardRedemption.update({
+    const issued = await prisma.commerceRewardRedemption.update({
       where: {
         id: redemption.id,
       },

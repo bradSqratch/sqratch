@@ -283,6 +283,27 @@ export type ProviderDiscount = {
   expiresAt: Date | null;
 };
 
+/** Opaque provider identifiers in, normalized discount facts out. */
+export type GetDiscountInput = {
+  externalDiscountId?: string;
+  code?: string;
+};
+
+/** Transport-only option; the token must already be bound to connectionId. */
+export type GetDiscountOptions = {
+  preResolvedAccessToken?: string;
+};
+
+export type ProviderDiscountLookup =
+  | {
+      exists: true;
+      externalDiscountId: string;
+      externalStatus: string | null;
+      usageCount: number;
+      expiresAt: Date | null;
+    }
+  | { exists: false };
+
 /** Framework-neutral webhook request input — deliberately not `NextRequest`. */
 export type WebhookRequestInput = {
   rawBody: string;

@@ -16,7 +16,7 @@ test("connected compatible fixed reward has no incompatibility reasons", () => {
       minimumSubtotalCents: null,
       currencyCode: "CAD",
       appliesTo: "ALL_PRODUCTS",
-      sourceShopDomain: null,
+      sourceExternalAccountId: null,
     },
     ...connectedBase,
   });
@@ -26,7 +26,7 @@ test("connected compatible fixed reward has no incompatibility reasons", () => {
     reasons: [],
     currentShopDomain: "current-shop.myshopify.com",
     currentStoreCurrency: "CAD",
-    sourceShopDomain: null,
+    sourceExternalAccountId: null,
   });
 });
 
@@ -37,7 +37,7 @@ test("fixed reward in USD against a CAD store requires currency review", () => {
       minimumSubtotalCents: null,
       currencyCode: "USD",
       appliesTo: "ALL_PRODUCTS",
-      sourceShopDomain: null,
+      sourceExternalAccountId: null,
     },
     ...connectedBase,
   });
@@ -53,7 +53,7 @@ test("percentage reward with no minimum subtotal ignores a currency mismatch", (
       minimumSubtotalCents: null,
       currencyCode: "USD",
       appliesTo: "ALL_PRODUCTS",
-      sourceShopDomain: null,
+      sourceExternalAccountId: null,
     },
     ...connectedBase,
   });
@@ -69,7 +69,7 @@ test("percentage reward with a minimum subtotal still requires matching currency
       minimumSubtotalCents: 5000,
       currencyCode: "USD",
       appliesTo: "ALL_PRODUCTS",
-      sourceShopDomain: null,
+      sourceExternalAccountId: null,
     },
     ...connectedBase,
   });
@@ -85,7 +85,7 @@ test("missing current store currency requires currency review for currency-depen
       minimumSubtotalCents: null,
       currencyCode: "CAD",
       appliesTo: "ALL_PRODUCTS",
-      sourceShopDomain: null,
+      sourceExternalAccountId: null,
     },
     shopifyConnected: true,
     currentShopDomain: "current-shop.myshopify.com",
@@ -103,14 +103,14 @@ test("specific products offer with matching source store is compatible", () => {
       minimumSubtotalCents: null,
       currencyCode: "USD",
       appliesTo: "SPECIFIC_PRODUCTS",
-      sourceShopDomain: "Current-Shop.MyShopify.com",
+      sourceExternalAccountId: "Current-Shop.MyShopify.com",
     },
     ...connectedBase,
   });
 
   assert.equal(result.compatible, true);
   assert.deepEqual(result.reasons, []);
-  assert.equal(result.sourceShopDomain, "current-shop.myshopify.com");
+  assert.equal(result.sourceExternalAccountId, "current-shop.myshopify.com");
 });
 
 test("specific products offer sourced from another store requires reselection only", () => {
@@ -120,7 +120,7 @@ test("specific products offer sourced from another store requires reselection on
       minimumSubtotalCents: null,
       currencyCode: "USD",
       appliesTo: "SPECIFIC_PRODUCTS",
-      sourceShopDomain: "previous-shop.myshopify.com",
+      sourceExternalAccountId: "previous-shop.myshopify.com",
     },
     ...connectedBase,
   });
@@ -136,7 +136,7 @@ test("specific products offer with missing source store requires reselection and
       minimumSubtotalCents: null,
       currencyCode: "USD",
       appliesTo: "SPECIFIC_PRODUCTS",
-      sourceShopDomain: null,
+      sourceExternalAccountId: null,
     },
     ...connectedBase,
   });
@@ -155,7 +155,7 @@ test("multiple simultaneous incompatibility reasons are all reported together", 
       minimumSubtotalCents: null,
       currencyCode: "USD",
       appliesTo: "SPECIFIC_PRODUCTS",
-      sourceShopDomain: null,
+      sourceExternalAccountId: null,
     },
     shopifyConnected: false,
     currentShopDomain: null,
@@ -181,7 +181,7 @@ test("disconnected Shopify is reported even when the offer would otherwise be co
       minimumSubtotalCents: null,
       currencyCode: "CAD",
       appliesTo: "ALL_PRODUCTS",
-      sourceShopDomain: null,
+      sourceExternalAccountId: null,
     },
     shopifyConnected: false,
     currentShopDomain: null,
@@ -199,7 +199,7 @@ test("currency comparison is case-insensitive and whitespace-tolerant", () => {
       minimumSubtotalCents: null,
       currencyCode: " cad ",
       appliesTo: "ALL_PRODUCTS",
-      sourceShopDomain: null,
+      sourceExternalAccountId: null,
     },
     ...connectedBase,
   });

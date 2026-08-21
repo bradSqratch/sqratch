@@ -150,8 +150,8 @@ test(
         { userId: user.id, points: 1, reason: "QR_SCAN", type: "EARN", idempotencyKey: `qr-scan:${user.id}-b` },
         { userId: user.id, points: 10, reason: "BONUS", type: "EARN", sourceType: "LESSON_COMPLETION", idempotencyKey: `lesson-completion:${user.id}-b` },
         { userId: user.id, points: 50, reason: "BONUS", type: "EARN", sourceType: "COURSE_COMPLETION", idempotencyKey: `course-completion:${user.id}-b` },
-        { userId: user.id, points: -40, reason: "SHOPIFY_REWARD_REDEMPTION", type: "SPEND", idempotencyKey: `shopify-reward-redemption:${user.id}-b` },
-        { userId: user.id, points: 40, reason: "SHOPIFY_REWARD_REFUND", type: "REFUND", idempotencyKey: `shopify-reward-refund:${user.id}-b` },
+        { userId: user.id, points: -40, reason: "COMMERCE_REWARD_REDEMPTION", type: "SPEND", idempotencyKey: `shopify-reward-redemption:${user.id}-b` },
+        { userId: user.id, points: 40, reason: "COMMERCE_REWARD_REFUND", type: "REFUND", idempotencyKey: `shopify-reward-refund:${user.id}-b` },
       ],
     });
 

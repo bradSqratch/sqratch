@@ -31,7 +31,7 @@ function baseRow(overrides: Partial<RawPointTransactionRow> = {}): RawPointTrans
     type: "EARN",
     sourceType: null,
     sourceId: null,
-    shopifyRewardRedemptionId: null,
+    commerceRewardRedemptionId: null,
     createdAt: new Date("2026-01-01T00:00:00Z"),
     metadata: null,
     qrCode: null,
@@ -259,8 +259,8 @@ describe("buildPointsActivityView — reward redemption / refund", () => {
     const [item] = buildPointsActivityView(
       [
         baseRow({
-          sourceType: "SHOPIFY_REWARD_REDEMPTION",
-          shopifyRewardRedemptionId: "redemption-1",
+          sourceType: "COMMERCE_REWARD_REDEMPTION",
+          commerceRewardRedemptionId: "redemption-1",
           points: -100,
           type: "SPEND",
         }),
@@ -275,8 +275,8 @@ describe("buildPointsActivityView — reward redemption / refund", () => {
     const [item] = buildPointsActivityView(
       [
         baseRow({
-          sourceType: "SHOPIFY_REWARD_REDEMPTION",
-          shopifyRewardRedemptionId: "redemption-1",
+          sourceType: "COMMERCE_REWARD_REDEMPTION",
+          commerceRewardRedemptionId: "redemption-1",
           metadata: { campaignId: "camp-1" },
         }),
       ],
@@ -295,8 +295,8 @@ describe("buildPointsActivityView — reward redemption / refund", () => {
       [
         baseRow({
           sourceType: null, // predates sourceType existing
-          reason: "SHOPIFY_REWARD_REDEMPTION",
-          shopifyRewardRedemptionId: "redemption-old",
+          reason: "COMMERCE_REWARD_REDEMPTION",
+          commerceRewardRedemptionId: "redemption-old",
           metadata: null,
         }),
       ],
@@ -311,8 +311,8 @@ describe("buildPointsActivityView — reward redemption / refund", () => {
     const [item] = buildPointsActivityView(
       [
         baseRow({
-          sourceType: "SHOPIFY_REWARD_REFUND",
-          shopifyRewardRedemptionId: "redemption-1",
+          sourceType: "COMMERCE_REWARD_REFUND",
+          commerceRewardRedemptionId: "redemption-1",
           points: 100,
           type: "REFUND",
         }),
@@ -327,8 +327,8 @@ describe("buildPointsActivityView — reward redemption / refund", () => {
     const [item] = buildPointsActivityView(
       [
         baseRow({
-          sourceType: "SHOPIFY_REWARD_REDEMPTION",
-          shopifyRewardRedemptionId: "redemption-1",
+          sourceType: "COMMERCE_REWARD_REDEMPTION",
+          commerceRewardRedemptionId: "redemption-1",
         }),
       ],
       { ...emptyContext, redemptionById: new Map([["redemption-1", reward]]) },
@@ -358,14 +358,14 @@ describe("buildPointsActivityView — ledger fields are passed through unchanged
   test("points, type, reason, createdAt are preserved verbatim", () => {
     const createdAt = new Date("2026-02-02T12:00:00Z");
     const [item] = buildPointsActivityView(
-      [baseRow({ id: "tx-42", points: -25, type: "SPEND", reason: "SHOPIFY_REWARD_REDEMPTION", createdAt })],
+      [baseRow({ id: "tx-42", points: -25, type: "SPEND", reason: "COMMERCE_REWARD_REDEMPTION", createdAt })],
       emptyContext,
     );
 
     assert.equal(item.id, "tx-42");
     assert.equal(item.points, -25);
     assert.equal(item.type, "SPEND");
-    assert.equal(item.reason, "SHOPIFY_REWARD_REDEMPTION");
+    assert.equal(item.reason, "COMMERCE_REWARD_REDEMPTION");
     assert.equal(item.createdAt, createdAt);
   });
 });

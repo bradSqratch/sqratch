@@ -16,7 +16,7 @@ test("getUserPointsOverview batch-loads lesson/course/redemption/campaign contex
   assert.match(source, /prisma\.course\.findMany\(\{\s*where:\s*\{\s*id:\s*\{\s*in:\s*courseIdsFromCompletion/);
   assert.match(
     source,
-    /prisma\.shopifyRewardRedemption\.findMany\(\{\s*where:\s*\{\s*id:\s*\{\s*in:\s*redemptionIds/,
+    /prisma\.commerceRewardRedemption\.findMany\(\{\s*where:\s*\{\s*id:\s*\{\s*in:\s*redemptionIds/,
   );
   assert.match(
     source,
@@ -41,15 +41,15 @@ test("getUserPointsOverview never selects Shopify credentials, discount codes, o
   // The redemption select clause that feeds Points Activity must stay
   // limited to safe, non-sensitive display fields.
   const redemptionSelectMatch = source.match(
-    /prisma\.shopifyRewardRedemption\.findMany\(\{[\s\S]*?select:\s*\{([\s\S]*?)\},\s*\}\)/,
+    /prisma\.commerceRewardRedemption\.findMany\(\{[\s\S]*?select:\s*\{([\s\S]*?)\},\s*\}\)/,
   );
-  assert.ok(redemptionSelectMatch, "expected a shopifyRewardRedemption.findMany select clause");
+  assert.ok(redemptionSelectMatch, "expected a commerceRewardRedemption.findMany select clause");
   const selectBody = redemptionSelectMatch![1];
 
   assert.doesNotMatch(selectBody, /\bcode\s*:\s*true/);
-  assert.doesNotMatch(selectBody, /shopifyDiscountNodeId/);
-  assert.doesNotMatch(selectBody, /shopifyUserErrors/);
-  assert.doesNotMatch(selectBody, /shopifyShopDomain/);
+  assert.doesNotMatch(selectBody, /externalDiscountId/);
+  assert.doesNotMatch(selectBody, /providerErrorDetails/);
+  assert.doesNotMatch(selectBody, /externalAccountId/);
   assert.doesNotMatch(selectBody, /idempotencyKey/);
 
   // Brand selects anywhere in the file must never pull encrypted/OAuth

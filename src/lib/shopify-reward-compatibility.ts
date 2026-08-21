@@ -11,7 +11,7 @@ export type ShopifyRewardCompatibility = {
   reasons: ShopifyRewardCompatibilityReason[];
   currentShopDomain: string | null;
   currentStoreCurrency: string | null;
-  sourceShopDomain: string | null;
+  sourceExternalAccountId: string | null;
 };
 
 export function normalizeCurrency(value: string | null | undefined): string | null {
@@ -54,7 +54,7 @@ export function computeShopifyRewardCompatibility(input: {
     minimumSubtotalCents: number | null;
     currencyCode: string;
     appliesTo: "ALL_PRODUCTS" | "SPECIFIC_PRODUCTS";
-    sourceShopDomain: string | null;
+    sourceExternalAccountId: string | null;
   };
   shopifyConnected: boolean;
   currentShopDomain: string | null;
@@ -64,7 +64,7 @@ export function computeShopifyRewardCompatibility(input: {
 
   const currentShopDomain = normalizeShopDomain(input.currentShopDomain);
   const currentStoreCurrency = normalizeCurrency(input.currentStoreCurrency);
-  const sourceShopDomain = normalizeShopDomain(input.offer.sourceShopDomain);
+  const sourceExternalAccountId = normalizeShopDomain(input.offer.sourceExternalAccountId);
 
   if (!input.shopifyConnected) {
     reasons.push("SHOPIFY_DISCONNECTED");
@@ -81,10 +81,10 @@ export function computeShopifyRewardCompatibility(input: {
   }
 
   if (input.offer.appliesTo === "SPECIFIC_PRODUCTS") {
-    if (!sourceShopDomain) {
+    if (!sourceExternalAccountId) {
       reasons.push("UNKNOWN_SOURCE_STORE");
       reasons.push("PRODUCT_RESELECTION_REQUIRED");
-    } else if (!currentShopDomain || sourceShopDomain !== currentShopDomain) {
+    } else if (!currentShopDomain || sourceExternalAccountId !== currentShopDomain) {
       reasons.push("PRODUCT_RESELECTION_REQUIRED");
     }
   }
@@ -94,6 +94,6 @@ export function computeShopifyRewardCompatibility(input: {
     reasons,
     currentShopDomain,
     currentStoreCurrency,
-    sourceShopDomain,
+    sourceExternalAccountId,
   };
 }

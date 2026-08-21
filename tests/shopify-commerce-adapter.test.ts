@@ -111,6 +111,12 @@ function makeDeps(overrides: Partial<ShopifyCommerceAdapterDeps> = {}): ShopifyC
     async createDiscountCode() {
       throw new Error("createDiscountCode should not be called in this test");
     },
+    async lookupDiscountByNodeId() {
+      throw new Error("lookupDiscountByNodeId should not be called in this test");
+    },
+    async lookupDiscountByCode() {
+      throw new Error("lookupDiscountByCode should not be called in this test");
+    },
     verifyWebhookHmac() {
       throw new Error("verifyWebhookHmac should not be called in this test");
     },
@@ -600,6 +606,50 @@ describe("ShopifyCommerceAdapter", () => {
       );
       assert.equal(createDiscountCodeCalled, false);
     }
+  });
+
+  test("8a. getDiscount binds the token and Shopify lookup to the exact connection", async () => {
+    const row = makeRow({ id: "connection-x", externalAccountId: "x.myshopify.com" });
+    let tokenConnectionId: string | undefined;
+    let lookupInput: unknown;
+    const adapter = new ShopifyCommerceAdapter(makeDeps({
+      async loadConnection(connectionId) {
+        return connectionId === "connection-x" ? row : null;
+      },
+      async getAccessToken(_brandId, options) {
+        tokenConnectionId = options?.connectionId;
+        return { ok: true, accessToken: "token-x" };
+      },
+      async lookupDiscountByNodeId(input) {
+        lookupInput = input;
+        return {
+          ok: true,
+          status: "ACTIVE",
+          asyncUsageCount: 2,
+          usageLimit: 1,
+          endsAt: new Date("2026-03-31T00:00:00.000Z"),
+          derivedStatus: "ISSUED",
+        };
+      },
+    }));
+
+    const result = await adapter.getDiscount("connection-x", {
+      externalDiscountId: "gid://shopify/DiscountCodeNode/x",
+    });
+
+    assert.equal(tokenConnectionId, "connection-x");
+    assert.deepEqual(lookupInput, {
+      shopDomain: "x.myshopify.com",
+      accessToken: "token-x",
+      discountNodeId: "gid://shopify/DiscountCodeNode/x",
+    });
+    assert.deepEqual(result, {
+      exists: true,
+      externalDiscountId: "gid://shopify/DiscountCodeNode/x",
+      externalStatus: "ACTIVE",
+      usageCount: 2,
+      expiresAt: new Date("2026-03-31T00:00:00.000Z"),
+    });
   });
 
   test("9. verifyAndParseWebhook with a valid HMAC returns the right normalized event (app/uninstalled and a GDPR topic)", async () => {

@@ -60,9 +60,9 @@ function describeTransaction(transaction: OverviewTransaction): {
       return { label: "Bonus points", Icon: Gift };
     case "REFERRAL":
       return { label: "Referral reward", Icon: Gift };
-    case "SHOPIFY_REWARD_REDEMPTION":
+    case "COMMERCE_REWARD_REDEMPTION":
       return { label: "Reward redeemed", Icon: ShoppingBag };
-    case "SHOPIFY_REWARD_REFUND":
+    case "COMMERCE_REWARD_REFUND":
       return { label: "Reward refunded", Icon: RotateCcw };
     default:
       return { label: "Points activity", Icon: Coins };
