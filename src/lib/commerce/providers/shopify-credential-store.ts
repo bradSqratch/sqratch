@@ -177,6 +177,53 @@ function readString(value: unknown): string | null {
   return typeof value === "string" && value !== "" ? value : null;
 }
 
+function readStoredSecretPayload(encryptedPayload: string): StoredSecretPayload | null {
+  try {
+    const payload = JSON.parse(decryptSecret(encryptedPayload)) as StoredSecretPayload;
+    return payload !== null && typeof payload === "object" ? payload : null;
+  } catch {
+    // Do not expose decrypt/parse details: callers receive a stable fail-closed
+    // classification instead.
+    return null;
+  }
+}
+
+function readAuthMode(payload: StoredSecretPayload): string {
+  return readString(payload.authMode) ?? "LEGACY_OFFLINE";
+}
+
+/** A credential-store projection that never exposes tokens or expiry values. */
+export type ShopifyCredentialAuthModeOutcome =
+  | { outcome: "OK"; authMode: string }
+  | { outcome: "NO_SECRET" }
+  | { outcome: "CORRUPT_SECRET" };
+
+/**
+ * Reads Shopify authentication semantics from the encrypted canonical
+ * credential for one already-resolved connection. This is intentionally a
+ * sanitized projection for status/embedded flows: providerMetadata must not
+ * become a second mutable auth-mode authority.
+ */
+export async function getShopifyCredentialAuthMode(
+  connectionId: string,
+  deps?: ShopifyCredentialStoreDeps,
+): Promise<ShopifyCredentialAuthModeOutcome> {
+  const db = await getDb(deps);
+  // Provider-bound at the query boundary: a caller can never make this
+  // Shopify-specific projection inspect a Commerce7 credential by supplying
+  // its connection id. The relation select also keeps this to one query.
+  const connection = (await db.commerceConnection.findFirst({
+    where: { id: connectionId, provider: CommerceProvider.SHOPIFY },
+    select: { secret: { select: { encryptedPayload: true } } },
+  })) as { secret: { encryptedPayload: string } | null } | null;
+
+  if (!connection?.secret) return { outcome: "NO_SECRET" };
+  const payload = readStoredSecretPayload(connection.secret.encryptedPayload);
+  return payload
+    ? { outcome: "OK", authMode: readAuthMode(payload) }
+    : { outcome: "CORRUPT_SECRET" };
+}
+
 /**
  * Canonical `grantedScopes` is `Json?` (an array after Phase 1). The legacy
  * token-manager predicates (`hasSufficientScopes` etc.) take a CSV string, so
@@ -253,22 +300,8 @@ export async function loadShopifyCredential(
     };
   }
 
-  let payload: StoredSecretPayload;
-  try {
-    payload = JSON.parse(
-      decryptSecret(connection.secret.encryptedPayload),
-    ) as StoredSecretPayload;
-  } catch {
-    // Deliberately unbound and unlogged: the thrown error can embed ciphertext
-    // fragments. The classification IS the diagnostic.
-    return {
-      outcome: "CORRUPT_SECRET",
-      connectionId: connection.id,
-      brandId: connection.brandId,
-    };
-  }
-
-  if (payload === null || typeof payload !== "object") {
+  const payload = readStoredSecretPayload(connection.secret.encryptedPayload);
+  if (!payload) {
     return {
       outcome: "CORRUPT_SECRET",
       connectionId: connection.id,
@@ -285,7 +318,7 @@ export async function loadShopifyCredential(
       providerClientId: connection.providerClientId,
       status: connection.status,
       grantedScopes: normalizeScopes(connection.grantedScopes),
-      authMode: readString(payload.authMode) ?? "LEGACY_OFFLINE",
+      authMode: readAuthMode(payload),
       accessToken: readString(payload.accessToken),
       accessTokenExpiresAt: readDate(payload.accessTokenExpiresAt),
       refreshToken: readString(payload.refreshToken),

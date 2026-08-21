@@ -1,7 +1,10 @@
 import { CommerceProvider, type Prisma } from "@prisma/client";
 import prisma from "@/lib/prisma";
 import { recordShopifyConnectionLoss } from "@/lib/shopify-connection-transitions";
-import { invalidateShopifyCredential } from "@/lib/commerce/providers/shopify-credential-store";
+import {
+  getShopifyCredentialAuthMode,
+  invalidateShopifyCredential,
+} from "@/lib/commerce/providers/shopify-credential-store";
 import { normalizeExternalAccountId } from "@/lib/commerce/connection-sync";
 import { extractCurrencyCodeFromProviderMetadata } from "@/lib/commerce/connection-resolver";
 
@@ -39,18 +42,24 @@ export async function findEmbeddedConnectedBrand(
         externalAccountId: normalizeExternalAccountId(shopDomain),
       },
     },
-    select: { brandId: true, status: true, providerClientId: true, providerMetadata: true },
+    select: { id: true, brandId: true, status: true, providerClientId: true, providerMetadata: true },
   });
 
   if (!connection) {
     return null;
   }
 
-  const authMode = (connection.providerMetadata as { authMode?: unknown } | null)?.authMode;
+  // Resolve the secret only after non-secret connection facts identify this as
+  // the current embedded app. This avoids an unnecessary credential read for
+  // every wrong-client/disconnected request while preserving fail-closed
+  // credential semantics for otherwise eligible connections.
+  if (connection.status !== "CONNECTED" || connection.providerClientId !== clientId) {
+    return null;
+  }
+
+  const credentialAuth = await getShopifyCredentialAuthMode(connection.id);
   const matches =
-    connection.status === "CONNECTED" &&
-    connection.providerClientId === clientId &&
-    authMode === "EXPIRING_OFFLINE";
+    credentialAuth.outcome === "OK" && credentialAuth.authMode === "EXPIRING_OFFLINE";
 
   if (!matches) {
     return null;

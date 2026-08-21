@@ -115,7 +115,8 @@ export type ShopifyConnectionSyncInput = {
   uninstalledAt: Date | null;
   lastProductSyncAt: Date | null;
   grantedScopes: string[];
-  providerMetadata: { authMode: string; currencyCode: string | null };
+  /** Provider facts that are not credential semantics. */
+  providerMetadata: { currencyCode: string | null };
   /** `null` when there is currently no access token (disconnected/uninstalled/redacted). */
   secretPayload: ShopifyConnectionSecretPayload | null;
 };
@@ -194,10 +195,7 @@ export function buildShopifyConnectionSyncInputFromInstall(
     uninstalledAt: null,
     lastProductSyncAt: facts.lastProductSyncAt,
     grantedScopes: normalizeLegacyGrantedScopes(facts.grantedScopes),
-    providerMetadata: {
-      authMode: facts.authMode,
-      currencyCode: facts.currencyCode,
-    },
+    providerMetadata: { currencyCode: facts.currencyCode },
     secretPayload: {
       accessToken: facts.accessToken,
       accessTokenExpiresAt: facts.accessTokenExpiresAt

@@ -36,6 +36,7 @@ import { CommerceProvider } from "@prisma/client";
 import { encryptSecret } from "../src/lib/crypto";
 import {
   loadShopifyCredential,
+  getShopifyCredentialAuthMode,
   acquireCredentialRefreshLease,
   releaseCredentialRefreshLease,
   persistRotatedShopifyCredential,
@@ -59,6 +60,7 @@ type ConnRow = {
   isPrimary: boolean;
   installedAt: Date | null;
   createdAt: Date;
+  providerMetadata: unknown;
 };
 
 type SecretRow = {
@@ -84,6 +86,7 @@ function makeStore(conns: ConnRow[], secrets: SecretRow[]) {
       async findFirst(args: unknown) {
         const a = args as {
           where: {
+            id?: string;
             brandId?: string;
             externalAccountId?: string;
             provider: CommerceProvider;
@@ -96,6 +99,7 @@ function makeStore(conns: ConnRow[], secrets: SecretRow[]) {
           .filter(
             (c) =>
               c.provider === a.where.provider &&
+              (a.where.id === undefined || c.id === a.where.id) &&
               (a.where.brandId === undefined || c.brandId === a.where.brandId) &&
               (a.where.externalAccountId === undefined ||
                 c.externalAccountId === a.where.externalAccountId),
@@ -116,6 +120,7 @@ function makeStore(conns: ConnRow[], secrets: SecretRow[]) {
           externalAccountId: row.externalAccountId,
           providerClientId: row.providerClientId,
           grantedScopes: row.grantedScopes,
+          providerMetadata: row.providerMetadata,
           secret: secret ? { encryptedPayload: secret.encryptedPayload } : null,
         };
       },
@@ -236,6 +241,7 @@ function shopifyConn(overrides: Partial<ConnRow> = {}): ConnRow {
     isPrimary: true,
     installedAt: new Date("2026-01-01T00:00:00Z"),
     createdAt: new Date("2026-01-01T00:00:00Z"),
+    providerMetadata: { currencyCode: "USD" },
     ...overrides,
   };
 }
@@ -284,6 +290,18 @@ describe("loadShopifyCredential classification", () => {
     // Canonical grantedScopes is a JSON array; the legacy scope predicates
     // take CSV, so it is normalized exactly once, here.
     assert.equal(result.credential.grantedScopes, "read_products,read_orders");
+  });
+
+  test("stale providerMetadata.authMode cannot alter the credential presented to token refresh", async () => {
+    const { client } = makeStore(
+      [shopifyConn({ providerMetadata: { authMode: "LEGACY_OFFLINE", currencyCode: "USD" } })],
+      [secretFor("conn-shopify", LIVE_PAYLOAD)],
+    );
+    const result = await loadShopifyCredential("brand-1", { client });
+
+    assert.equal(result.outcome, "OK");
+    if (result.outcome !== "OK") return;
+    assert.equal(result.credential.authMode, "EXPIRING_OFFLINE");
   });
 
   test("NO_CONNECTION: no canonical row at all — the ONLY state where a caller may consult legacy Brand", async () => {
@@ -355,6 +373,52 @@ describe("loadShopifyCredential classification", () => {
   });
 });
 
+describe("getShopifyCredentialAuthMode", () => {
+  test("returns only the canonical secret auth mode, never provider metadata or tokens", async () => {
+    const { client } = makeStore([shopifyConn()], [secretFor("conn-shopify", LIVE_PAYLOAD)]);
+    const result = await getShopifyCredentialAuthMode("conn-shopify", { client });
+    assert.deepEqual(result, { outcome: "OK", authMode: "EXPIRING_OFFLINE" });
+    assert.doesNotMatch(JSON.stringify(result), /access|refresh|token|secret/i);
+  });
+
+  test("fails closed for a corrupt credential payload", async () => {
+    const { client } = makeStore(
+      [shopifyConn()],
+      [secretFor("conn-shopify", { ...LIVE_PAYLOAD, authMode: "EXPIRING_OFFLINE" }, {
+        encryptedPayload: "corrupt-ciphertext",
+      })],
+    );
+    assert.deepEqual(
+      await getShopifyCredentialAuthMode("conn-shopify", { client }),
+      { outcome: "CORRUPT_SECRET" },
+    );
+  });
+
+  test("fails closed when the Shopify connection has no canonical secret", async () => {
+    const { client } = makeStore([shopifyConn()], []);
+    assert.deepEqual(
+      await getShopifyCredentialAuthMode("conn-shopify", { client }),
+      { outcome: "NO_SECRET" },
+    );
+  });
+
+  test("never projects a syntactically Shopify-like Commerce7 credential", async () => {
+    const commerce7 = shopifyConn({
+      id: "commerce7-connection",
+      provider: CommerceProvider.COMMERCE7,
+      externalAccountId: "acme-winery-tenant",
+    });
+    const { client } = makeStore(
+      [commerce7],
+      [secretFor("commerce7-connection", LIVE_PAYLOAD)],
+    );
+
+    const result = await getShopifyCredentialAuthMode("commerce7-connection", { client });
+    assert.deepEqual(result, { outcome: "NO_SECRET" });
+    assert.equal("authMode" in result, false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // R / S: provider isolation
 // ---------------------------------------------------------------------------
@@ -371,6 +435,7 @@ describe("R/S. provider isolation on a multi-provider Brand", () => {
     isPrimary: true,
     installedAt: new Date("2026-02-01T00:00:00Z"),
     createdAt: new Date("2026-02-01T00:00:00Z"),
+    providerMetadata: { currencyCode: "USD" },
   };
 
   test("R. a Brand whose ONLY connection is Commerce7 yields NO_CONNECTION for the Shopify credential path — Commerce7 can never enter Shopify token logic", async () => {

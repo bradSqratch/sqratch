@@ -356,8 +356,8 @@ export async function getActiveCommerceConnectionsForBrands(
  * `currencyCode: null`. Callers use this to self-heal that gap in place,
  * WITHOUT going through the full install/sync rewrite (which would also
  * require re-supplying credential/scope/status facts this caller doesn't
- * have) and WITHOUT adding a second currency field — merges into the
- * existing `providerMetadata` object so unrelated keys (`authMode`) survive.
+ * have) and WITHOUT adding a second currency field. Credential semantics
+ * such as Shopify auth mode deliberately do not live in this JSON projection.
  * Best-effort: a failure here should never fail the caller's own request,
  * since the freshly-fetched currency value is still usable in-memory for
  * that one response even if persisting it for future reads fails.
@@ -398,7 +398,12 @@ export async function recordCommerceConnectionCurrencyCode(
   const raw = await findProviderMetadata(connectionId);
   const existing =
     raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-  await updateProviderMetadata(connectionId, { ...existing, currencyCode });
+  // Auth mode belongs exclusively to the encrypted provider credential. Strip
+  // the retired projection when a connection receives a currency self-heal so
+  // pre-Phase-15 rows naturally converge without a JSON rewrite migration.
+  const providerFacts = { ...existing };
+  delete providerFacts.authMode;
+  await updateProviderMetadata(connectionId, { ...providerFacts, currencyCode });
 }
 
 /**

@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
 import { after, test } from "node:test";
 
+import { encryptSecret } from "../src/lib/crypto";
 import type { SessionTokenPayload } from "../src/lib/shopify-session-token";
 
 const originalApiKey = process.env.SHOPIFY_API_KEY;
 const originalApiSecret = process.env.SHOPIFY_API_SECRET;
 const originalDatabaseUrl = process.env.DATABASE_URL;
+const originalEncryptionKey = process.env.APP_ENCRYPTION_KEY;
 process.env.SHOPIFY_API_KEY = "embedded-status-test-api-key";
 process.env.SHOPIFY_API_SECRET = "embedded-status-test-api-secret";
 process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
+process.env.APP_ENCRYPTION_KEY = "phase-15-embedded-connection-test-key";
 
 after(() => {
   if (originalApiKey === undefined) delete process.env.SHOPIFY_API_KEY;
@@ -19,6 +22,9 @@ after(() => {
 
   if (originalDatabaseUrl === undefined) delete process.env.DATABASE_URL;
   else process.env.DATABASE_URL = originalDatabaseUrl;
+
+  if (originalEncryptionKey === undefined) delete process.env.APP_ENCRYPTION_KEY;
+  else process.env.APP_ENCRYPTION_KEY = originalEncryptionKey;
 });
 
 function verifiedShop(shop: string) {
@@ -201,12 +207,20 @@ test("F. findEmbeddedConnectedBrand resolves through CommerceConnection directly
       assert.equal(typed.where.provider_externalAccountId.provider, "SHOPIFY");
       assert.equal(typed.where.provider_externalAccountId.externalAccountId, "verified.myshopify.com");
       return {
+        id: "conn-canonical",
         brandId: "brand-canonical",
         status: "CONNECTED",
         providerClientId: "embedded-status-test-api-key",
-        providerMetadata: { authMode: "EXPIRING_OFFLINE" },
+        // Deliberately stale: embedded eligibility must use the encrypted
+        // credential projection below, never this retired metadata key.
+        providerMetadata: { authMode: "LEGACY_OFFLINE" },
       };
     },
+    findFirst: async () => ({
+      secret: {
+        encryptedPayload: encryptSecret(JSON.stringify({ authMode: "EXPIRING_OFFLINE" })),
+      },
+    }),
   };
   prisma.brand = {
     findUnique: async () => {
@@ -233,12 +247,45 @@ test("F. findEmbeddedConnectedBrand resolves through CommerceConnection directly
   assert.equal(brandFindUniqueCalled, false);
 });
 
+test("F. stale providerMetadata authMode cannot make an embedded legacy credential look expiring", async () => {
+  const { default: prisma } = (await import("../src/lib/prisma")) as unknown as {
+    default: Record<string, Record<string, (...args: unknown[]) => unknown>>;
+  };
+  prisma.commerceConnection = {
+    findUnique: async () => ({
+      id: "conn-stale-metadata",
+      brandId: "brand-canonical",
+      status: "CONNECTED",
+      providerClientId: "embedded-status-test-api-key",
+      providerMetadata: { authMode: "EXPIRING_OFFLINE" },
+    }),
+    findFirst: async () => ({
+      secret: {
+        encryptedPayload: encryptSecret(JSON.stringify({ authMode: "LEGACY_OFFLINE" })),
+      },
+    }),
+  };
+  prisma.brand = {
+    findUnique: async () => {
+      assert.fail("a credential-auth-mode mismatch must fail closed before Brand lookup");
+      return null;
+    },
+  };
+
+  const { findEmbeddedConnectedBrand } = await import("../src/lib/shopify-embedded-connection");
+  assert.equal(
+    await findEmbeddedConnectedBrand("verified.myshopify.com", "embedded-status-test-api-key"),
+    null,
+  );
+});
+
 test("F. a canonical connection that DISAGREES (wrong client id) reports unlinked, never falls back to a stale Brand mirror", async () => {
   const { default: prisma } = (await import("../src/lib/prisma")) as unknown as {
     default: Record<string, Record<string, (...args: unknown[]) => unknown>>;
   };
   prisma.commerceConnection = {
     findUnique: async () => ({
+      id: "conn-canonical",
       brandId: "brand-canonical",
       status: "CONNECTED",
       providerClientId: "some-other-app-client-id",

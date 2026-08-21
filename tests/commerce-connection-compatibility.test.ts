@@ -1097,6 +1097,14 @@ describe("secret payload", () => {
     assert.equal(decrypted.authMode, "EXPIRING_OFFLINE");
     assert.equal(decrypted.accessTokenExpiresAt, "2026-08-01T00:00:00.000Z");
     assert.equal(decrypted.refreshTokenExpiresAt, "2026-12-01T00:00:00.000Z");
+    const connection = [...fakeTx.connections.values()].find(
+      (row) => row.id === result.connectionId,
+    );
+    assert.deepEqual(
+      connection?.providerMetadata,
+      { currencyCode: "CAD" },
+      "install writes auth mode only into the encrypted credential payload",
+    );
   });
 
   // PHASE 14C-A: the legacy-fallback half of this test (a summary derived

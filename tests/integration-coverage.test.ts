@@ -1380,10 +1380,11 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
       };
       if (typed.where.provider_externalAccountId) {
         return {
+          id: "conn-embedded",
           brandId: "brand-embedded",
           status: "CONNECTED",
           providerClientId: "client-embedded",
-          providerMetadata: { authMode: "EXPIRING_OFFLINE", currencyCode: "CAD" },
+          providerMetadata: { authMode: "LEGACY_OFFLINE", currencyCode: "CAD" },
         };
       }
       return { id: "conn-embedded", brandId: "brand-embedded", installedAt: null };
@@ -1392,10 +1393,17 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
       id: "brand-embedded",
       name: "Embedded Brand",
     }));
-    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
-      id: "conn-embedded",
-      brandId: "brand-embedded",
-    }));
+    t.mock.method(prisma.commerceConnection, "findFirst", async (args: unknown) => {
+      const typed = args as { where: { id?: string; provider?: string } };
+      if (typed.where.id === "conn-embedded" && typed.where.provider === "SHOPIFY") {
+        return {
+          secret: {
+            encryptedPayload: encryptSecret(JSON.stringify({ authMode: "EXPIRING_OFFLINE" })),
+          },
+        };
+      }
+      return { id: "conn-embedded", brandId: "brand-embedded" };
+    });
     t.mock.method(prisma.commerceConnection, "update", async (args: unknown) => {
       const typed = args as { data: { status: string } };
       assert.equal(typed.data.status, "DISCONNECTED");
@@ -1458,10 +1466,11 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
         );
         order.push("eligibilityCheck:connFindUnique");
         return {
+          id: "conn-embedded",
           brandId: "brand-embedded",
           status: "CONNECTED",
           providerClientId: "client-embedded",
-          providerMetadata: { authMode: "EXPIRING_OFFLINE" },
+          providerMetadata: { authMode: "LEGACY_OFFLINE" },
         };
       }
       // invalidateShopifyCredential's own internal freshness re-read
@@ -1476,10 +1485,18 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
     });
     // invalidateShopifyCredential's OWN internal lookup, keyed by brandId —
     // distinct from the eligibility check above.
-    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
-      id: "conn-embedded",
-      brandId: "brand-embedded",
-    }));
+    t.mock.method(prisma.commerceConnection, "findFirst", async (args: unknown) => {
+      const typed = args as { where: { id?: string; provider?: string } };
+      if (typed.where.id === "conn-embedded" && typed.where.provider === "SHOPIFY") {
+        order.push("eligibilityCheck:credentialProjection");
+        return {
+          secret: {
+            encryptedPayload: encryptSecret(JSON.stringify({ authMode: "EXPIRING_OFFLINE" })),
+          },
+        };
+      }
+      return { id: "conn-embedded", brandId: "brand-embedded" };
+    });
     t.mock.method(prisma.commerceConnection, "update", async (args: unknown) => {
       const typed = args as { data: { status: string } };
       assert.equal(typed.data.status, "DISCONNECTED");
@@ -1507,6 +1524,7 @@ describe("Route Scenario 2: Embedded Shopify Installation", () => {
     // eligibility, canonical status/secret revocation, then the loss event.
     assert.deepEqual(order, [
       "eligibilityCheck:connFindUnique",
+      "eligibilityCheck:credentialProjection",
       "eligibilityCheck:brandFindUnique",
       "canonical:status",
       "canonical:secretDeleted",

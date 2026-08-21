@@ -554,7 +554,7 @@ describe("getActiveCommerceConnectionsForBrands — batch canonical resolution",
 // ---------------------------------------------------------------------------
 
 describe("recordCommerceConnectionCurrencyCode — canonical currency self-heal", () => {
-  test("M. merges the new currencyCode into existing providerMetadata without dropping other keys", async () => {
+  test("M. merges the new currencyCode while removing the retired authMode projection", async () => {
     let written: Record<string, unknown> | null = null;
     await recordCommerceConnectionCurrencyCode("conn-1", "EUR", {
       findProviderMetadata: async () => ({ authMode: "EXPIRING_OFFLINE", currencyCode: null }),
@@ -562,7 +562,7 @@ describe("recordCommerceConnectionCurrencyCode — canonical currency self-heal"
         written = metadata;
       },
     });
-    assert.deepEqual(written, { authMode: "EXPIRING_OFFLINE", currencyCode: "EUR" });
+    assert.deepEqual(written, { currencyCode: "EUR" });
   });
 
   test("N. a null/missing existing providerMetadata still produces a valid write with just the currency", async () => {
