@@ -144,20 +144,25 @@ test("O. brand offer routes resolve a real Shopify network call's token via getV
   }
 });
 
-test("N. applyGrantedScopesUpdate resolves identity via CommerceConnection.externalAccountId before any Brand.shopifyShopDomain lookup", () => {
+test("N. applyGrantedScopesUpdate resolves identity via CommerceConnection.externalAccountId, and no Brand.shopifyShopDomain fallback exists at all (Phase 14C-B2)", () => {
   const source = readSource("src/lib/shopify-token-manager.ts");
   const fnStart = source.indexOf("export async function applyGrantedScopesUpdate");
   assert.ok(fnStart > -1, "applyGrantedScopesUpdate not found");
   const fnBody = source.slice(fnStart, fnStart + 4000);
-  const connectionLookupIndex = fnBody.indexOf("provider_externalAccountId");
-  const brandShopDomainLookupIndex = fnBody.indexOf(
-    "db.brand.findUnique({\n    where: { shopifyShopDomain: shopDomain }",
+
+  assert.ok(
+    fnBody.indexOf("provider_externalAccountId") > -1,
+    "canonical connection lookup not found",
   );
-  assert.ok(connectionLookupIndex > -1, "canonical connection lookup not found");
-  if (brandShopDomainLookupIndex > -1) {
-    assert.ok(
-      connectionLookupIndex < brandShopDomainLookupIndex,
-      "the canonical connection lookup must precede the legacy Brand.shopifyShopDomain fallback",
-    );
-  }
+
+  // PHASE 14C-B2: the ordering check this test used to make (canonical lookup
+  // BEFORE the legacy Brand fallback) is now an absence check — the column was
+  // physically dropped, so any Brand.shopifyShopDomain lookup here would not
+  // even compile. Asserted on the source text so the guard stays meaningful
+  // rather than passing vacuously.
+  assert.doesNotMatch(
+    fnBody,
+    /brand\.find(?:Unique|First)\s*\(\s*\{\s*\n?\s*where:\s*\{\s*shopifyShopDomain/,
+    "no Brand.shopifyShopDomain fallback lookup may exist",
+  );
 });

@@ -513,10 +513,10 @@ export async function redeemImpl(
         ? rewardContext.campaignIds[0]
         : null;
 
-    // PHASE 14B.4B — CANONICAL CONNECTION GATE. `getActiveCommerceConnection`
-    // is genuinely canonical-first (see connection-service.ts): a
-    // `CommerceConnection` row always wins when one exists, and legacy
-    // `Brand.shopify*` is consulted only for a genuine pre-cutover brand.
+    // CANONICAL CONNECTION GATE. `getActiveCommerceConnection` is the sole
+    // authority (see connection-service.ts): the connection resolves from
+    // `CommerceConnection` or not at all. PHASE 14C-B2 dropped the legacy
+    // `Brand.shopify*` columns outright, so there is no fallback source left.
     // This is a read-only PRE-check — the Serializable transaction below
     // re-derives its own connectivity/compatibility snapshot fresh, exactly
     // as before, as defense in depth against a change that races this check.

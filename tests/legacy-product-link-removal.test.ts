@@ -98,7 +98,18 @@ const KEEP_MODELS = [
   "Lesson",
 ] as const;
 
-/** All 16 Brand.shopify* columns. Every one must survive Phase 8. */
+/**
+ * The 16 legacy Brand.shopify* compatibility columns.
+ *
+ * PHASE 8 (historical): every one had to SURVIVE — the Phase 8 migration was
+ * not allowed to drop them, which the "no Brand.shopify* column appears in any
+ * drop statement" test below still enforces against that historical migration.
+ *
+ * PHASE 14C-B2 (current): they have all been physically dropped. `Brand` now
+ * carries zero Shopify connection/credential state — `CommerceConnection` +
+ * `CommerceConnectionSecret` are the sole authority. The test below is
+ * inverted accordingly: every name must now be ABSENT from model Brand.
+ */
 const BRAND_SHOPIFY_COLUMNS = [
   "shopifyShopDomain",
   "shopifyAdminAccessTokenEncrypted",
@@ -351,32 +362,87 @@ test("prisma/schema.prisma no longer declares the legacy models, bridge, or cura
   assert.doesNotMatch(declarations, /^\s+\w+\s+(?:Experience|Lesson)ProductLink/m);
 });
 
-test("all 16 Brand.shopify* compatibility columns survive Phase 8", () => {
+// PHASE 14C-B2: the inverse of the original Phase 8 protection. These columns
+// were deliberately preserved through Phase 8 and every phase up to 14C-B1.1;
+// 14C-B2 physically drops them. This test is the standing guard that they never
+// come back — a reintroduced `Brand.shopify*` scalar would resurrect exactly the
+// duplicate-authority/stale-mirror class of bug the canonical migration removed.
+test("all 16 legacy Brand.shopify* compatibility columns are ABSENT from Brand (Phase 14C-B2)", () => {
   const brandModel = schema.match(/model Brand \{[\s\S]*?\n\}/);
   assert.ok(brandModel, "found model Brand");
   const body = brandModel[0];
 
   for (const column of BRAND_SHOPIFY_COLUMNS) {
-    assert.match(
+    assert.doesNotMatch(
       body,
       new RegExp(`^\\s+${column}\\s+`, "m"),
-      `Brand.${column} must still be declared`,
+      `Brand.${column} must NOT be declared — it was dropped in Phase 14C-B2`,
     );
   }
 
-  // Exactly 16 — a count check catches an accidental removal that a per-name
-  // loop would miss only if the name list itself were edited.
-  // Count check, so an accidental removal is caught even if this file's name
-  // list were edited. Brand also declares two shopify* RELATION list fields
-  // (shopifyRewardRedemptions, shopifyConnectionEvents); those are back-relations,
-  // not compatibility columns, and are excluded by name.
+  // Count check, so a reintroduced column is caught even if this file's name
+  // list were edited. Brand still declares exactly two shopify* fields, and
+  // BOTH are relation lists (back-relations to provider-specific history), not
+  // scalar compatibility columns.
   const RELATION_FIELDS = new Set(["shopifyRewardRedemptions", "shopifyConnectionEvents"]);
-  const declared = [...body.matchAll(/^\s+(shopify[A-Za-z]+)\s+/gm)]
-    .map((match) => match[1])
-    .filter((name) => !RELATION_FIELDS.has(name));
+  const declaredShopifyFields = [...body.matchAll(/^\s+(shopify[A-Za-z]+)\s+/gm)].map(
+    (match) => match[1],
+  );
+  const scalars = declaredShopifyFields.filter((name) => !RELATION_FIELDS.has(name));
 
-  assert.equal(declared.length, 16, "Brand declares exactly 16 shopify* columns");
-  assert.deepEqual([...declared].sort(), [...BRAND_SHOPIFY_COLUMNS].sort());
+  assert.deepEqual(
+    scalars,
+    [],
+    "Brand must declare NO shopify* scalar columns at all",
+  );
+  assert.deepEqual(
+    [...declaredShopifyFields].sort(),
+    ["shopifyConnectionEvents", "shopifyRewardRedemptions"],
+    "the only shopify* fields left on Brand are the two provider-specific history relations",
+  );
+});
+
+test("the legacy ShopifyConnectionStatus / ShopifyAuthMode enums are gone, and provider-neutral commerce enums survive (Phase 14C-B2)", () => {
+  assert.doesNotMatch(
+    schema,
+    /^enum\s+ShopifyConnectionStatus\b/m,
+    "enum ShopifyConnectionStatus must be dropped",
+  );
+  assert.doesNotMatch(
+    schema,
+    /^enum\s+ShopifyAuthMode\b/m,
+    "enum ShopifyAuthMode must be dropped",
+  );
+
+  // No model may reference them any more either.
+  assert.doesNotMatch(schema, /\bShopifyConnectionStatus\b/);
+  assert.doesNotMatch(schema, /\bShopifyAuthMode\b/);
+
+  // The provider-neutral commerce enums must be untouched by this phase.
+  assert.match(schema, /^enum\s+CommerceConnectionStatus\b/m);
+  assert.match(schema, /^enum\s+CommerceProvider\b/m);
+});
+
+test("canonical commerce authority and provider-specific history models survive Phase 14C-B2", () => {
+  for (const model of [
+    // Canonical authority — the whole point of the migration.
+    "CommerceConnection",
+    "CommerceConnectionSecret",
+    // Provider-specific history, deliberately retained (not duplicate Brand authority).
+    "ShopifyConnectionEvent",
+    "ShopifyRewardRedemption",
+  ]) {
+    assert.match(
+      schema,
+      new RegExp(`^model\\s+${model}\\s*\\{`, "m"),
+      `model ${model} must survive Phase 14C-B2`,
+    );
+  }
+
+  // Provider-specific columns on non-Brand models are legitimate domain data
+  // and must NOT have been swept up by the Brand contraction.
+  assert.match(schema, /^\s+shopifyProductGid\s+/m);
+  assert.match(schema, /^\s+shopifyRewardRedemptionId\s+/m);
 });
 
 test("every KEEP-list model still exists in the schema", () => {
@@ -445,13 +511,20 @@ test("shop/redact no longer touches the removed legacy Prisma delegates, and kee
   assert.doesNotMatch(route, /prisma\.experienceProductLink/);
   assert.doesNotMatch(route, /prisma\.lessonProductLink/);
 
+  // PHASE 14C-B2: the Brand compatibility-mirror lookup and clear are gone
+  // along with the columns themselves. shop/redact must now perform NO Brand
+  // write and NO Brand read of any kind — there is nothing left on Brand to
+  // redact, and reintroducing one would recreate the stale-mirror bug class.
+  assert.doesNotMatch(route, /prisma\.brand\.update/);
+  assert.doesNotMatch(route, /prisma\.brand\.findMany/);
+  assert.doesNotMatch(route, /prisma\.brand\.findFirst/);
+  assert.doesNotMatch(route, /shopifyAdminAccessTokenEncrypted: null/);
+  assert.doesNotMatch(route, /shopifyRefreshTokenEncrypted: null/);
+  assert.doesNotMatch(route, /shopifyShopDomain: null/);
+  assert.doesNotMatch(route, /shopifyConnectionStatus: "UNINSTALLED"/);
+
   // Every other documented redaction step is untouched.
   assert.match(route, /verifyShopifyWebhookRequest/);
-  assert.match(route, /prisma\.brand\.update/);
-  assert.match(route, /shopifyAdminAccessTokenEncrypted: null/);
-  assert.match(route, /shopifyRefreshTokenEncrypted: null/);
-  assert.match(route, /shopifyShopDomain: null/);
-  assert.match(route, /shopifyConnectionStatus: "UNINSTALLED"/);
   assert.match(route, /prisma\.shopifyRewardRedemption\.updateMany/);
   assert.match(route, /prisma\.brandRewardOffer\.updateMany/);
   assert.match(route, /prisma\.shopifyConnectionEvent\.updateMany/);

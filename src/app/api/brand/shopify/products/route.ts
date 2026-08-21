@@ -232,16 +232,15 @@ export async function productsGetImpl(
 
     const brand = context.membership.brand;
 
-    // PHASE 14B.4B — CANONICAL GATE. `getActiveCommerceConnection` is
-    // genuinely canonical-first (see connection-service.ts): a
-    // `CommerceConnection` row always wins when one exists, and legacy
-    // `Brand.shopify*` is consulted only for a genuine pre-cutover brand.
+    // CANONICAL GATE. `getActiveCommerceConnection` is the sole authority
+    // (see connection-service.ts): the connection resolves from
+    // `CommerceConnection` or not at all. PHASE 14C-B2 dropped the legacy
+    // `Brand.shopify*` columns outright, so there is no fallback source left.
     // `isConnectionUsable` reproduces the exact three-part gate this route
-    // used to hand-roll against `Brand` columns (domain present + credential
+    // used to hand-roll against those columns (domain present + credential
     // present + status CONNECTED) — see its own doc comment in
     // connection-service.ts for the write-path invariant that makes
-    // `status === "CONNECTED"` alone equivalent to all three, for BOTH a
-    // canonical row and a legacy-fallback summary.
+    // `status === "CONNECTED"` alone equivalent to all three.
     const summary = await deps.getConnectionSummary(brand.id);
     if (!summary || !isConnectionUsable(summary)) {
       return NextResponse.json(

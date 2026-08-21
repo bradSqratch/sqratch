@@ -585,7 +585,7 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
   // `Brand.shopifyShopDomain` — see the route's own header comment. The
   // legacy-mirror clear (`prisma.brand.update`) only fires for brands whose
   // CURRENT mirror still points at this domain.
-  test("AF. shop/redact revokes the canonical credential BEFORE the Brand scrub and before erasing the row", async (t) => {
+  test("AF. shop/redact revokes the canonical credential (status + secret) BEFORE erasing the connection row, and touches no Brand at all", async (t) => {
     const payload = JSON.stringify({ shop_id: 1, shop_domain: "redact-shop.myshopify.com" });
     const hmac = buildWebhookHmac(payload);
     const req = makeWebhookRequest("http://localhost/api/shopify/webhooks/shop/redact", payload, hmac, "redact-shop.myshopify.com");
@@ -620,10 +620,16 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
 
     t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => [{ brandId: "brand-redact" }]);
     t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => []);
-    t.mock.method(prisma.brand, "findMany", async () => [{ id: "brand-redact" }]);
+    // PHASE 14C-B2: Brand carries no Shopify state any more. Any Brand read or
+    // write from this handler is now a regression, so both fail the test rather
+    // than recording an ordering step.
+    t.mock.method(prisma.brand, "findMany", async () => {
+      assert.fail("shop/redact must never read Brand after Phase 14C-B2");
+      return [];
+    });
     t.mock.method(prisma.brand, "update", async () => {
-      order.push("brandScrub");
-      return { id: "brand-redact" };
+      assert.fail("shop/redact must never write Brand after Phase 14C-B2");
+      return {};
     });
     t.mock.method(prisma.shopifyRewardRedemption, "updateMany", async () => ({ count: 0 }));
     t.mock.method(prisma.brandRewardOffer, "updateMany", async () => ({ count: 0 }));
@@ -632,14 +638,12 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     const res = await shopRedactPOST(req);
     assert.equal(res.status, 200);
 
-    // The status transition + secret delete must land BEFORE the Brand scrub.
-    // Erasing the connection row first would leave NO_CONNECTION — the one
-    // canonical state that still permits the legacy Brand fallback — so a
-    // failed scrub could then resurrect the credential.
+    // The status transition + secret delete must still land BEFORE the row is
+    // erased: erasing first would briefly leave NO_CONNECTION, and any failure
+    // after that point would leave the shop with no recorded revocation at all.
     assert.deepEqual(order, [
       "canonical:status",
       "canonical:secretDeleted",
-      "brandScrub",
       "canonical:rowErased",
     ]);
   });
@@ -720,25 +724,26 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     const hmac = buildWebhookHmac(payload);
     const req = makeWebhookRequest("http://localhost/api/shopify/webhooks/shop/redact", payload, hmac, "redact-shop.myshopify.com");
 
-    let brandFound = false;
-    let brandUpdated = false;
+    let historicalIdentityResolved = false;
     let redemptionAnonymized = false;
     let tokensDeleted = false;
 
     t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => {
-      brandFound = true;
+      historicalIdentityResolved = true;
       return [{ brandId: "brand-123" }];
     });
     t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => []);
-    t.mock.method(prisma.brand, "findMany", async () => [{ id: "brand-123" }]);
 
-    t.mock.method(prisma.brand, "update", async (args: unknown) => {
-      brandUpdated = true;
-      const typedArgs = args as { where: { id: string }; data: { shopifyShopDomain: string | null; shopifyConnectionStatus: string } };
-      assert.equal(typedArgs.where.id, "brand-123");
-      assert.equal(typedArgs.data.shopifyShopDomain, null);
-      assert.equal(typedArgs.data.shopifyConnectionStatus, "UNINSTALLED");
-      return { id: "brand-123" };
+    // PHASE 14C-B2: Brand no longer holds any Shopify column, so the handler
+    // must neither read nor write it. Both delegates fail loudly rather than
+    // silently recording a flag.
+    t.mock.method(prisma.brand, "findMany", async () => {
+      assert.fail("shop/redact must never read Brand after Phase 14C-B2");
+      return [];
+    });
+    t.mock.method(prisma.brand, "update", async () => {
+      assert.fail("shop/redact must never write Brand after Phase 14C-B2");
+      return {};
     });
 
     t.mock.method(prisma.shopifyRewardRedemption, "updateMany", async (args: unknown) => {
@@ -835,8 +840,7 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
 
     const res = await shopRedactPOST(req);
     assert.equal(res.status, 200);
-    assert.ok(brandFound);
-    assert.ok(brandUpdated);
+    assert.ok(historicalIdentityResolved, "historical identity is still resolved from domain-scoped history");
     assert.ok(redemptionAnonymized);
     assert.ok(tokensDeleted);
     assert.ok(offersDeactivated, "the redacted Brand's reward offers are deactivated");
