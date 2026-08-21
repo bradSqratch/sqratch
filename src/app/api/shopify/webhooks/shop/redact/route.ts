@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { Prisma } from "@prisma/client";
 import prisma from "@/lib/prisma";
 import { verifyShopifyWebhookRequest } from "@/lib/shopify-webhooks";
-import { safeDeleteShopifyCommerceConnectionByShopDomain } from "@/lib/commerce/connection-sync";
+import { deleteShopifyCommerceConnectionByShopDomain } from "@/lib/commerce/connection-sync";
 import { invalidateShopifyCredential } from "@/lib/commerce/providers/shopify-credential-store";
 
 // Shopify sends shop/redact 48 hours after a merchant uninstalls, confirming
@@ -222,13 +222,25 @@ export async function POST(request: NextRequest) {
 
       await prisma.$transaction(operations);
 
-      // Provider-neutral CommerceConnection ERASURE. Runs AFTER the canonical
-      // invalidation above and after the transaction has committed, and can
-      // never fail this webhook (see connection-sync.ts). Keyed on
-      // (provider, externalAccountId) = (SHOPIFY, shopDomain), not on any
-      // Brand field — Brand carries no Shopify state at all as of Phase
-      // 14C-B2.
-      await safeDeleteShopifyCommerceConnectionByShopDomain(shopDomain);
+      // Provider-neutral CommerceConnection ERASURE. Runs AFTER canonical
+      // invalidation and the historical scrub. This deletion is REQUIRED for
+      // a successful redaction: a transient failure deliberately returns a
+      // retryable non-2xx response so Shopify redelivers the webhook. A
+      // missing row is an idempotent success in the strict deleter. Keyed on
+      // (provider, externalAccountId) = (SHOPIFY, shopDomain), never Brand.
+      try {
+        await deleteShopifyCommerceConnectionByShopDomain(shopDomain);
+      } catch {
+        // Fixed diagnostic only: never expose database details, credentials,
+        // HMAC material, or provider payload data in this retryable response.
+        console.error("[shopify/webhooks/shop/redact]", {
+          outcome: "canonical_connection_erasure_failed_retryable",
+        });
+        return NextResponse.json(
+          { error: "Shop data erasure could not be completed." },
+          { status: 500 },
+        );
+      }
     }
 
     // Sanitized audit log: topic + shop domain (the domain itself is being

@@ -19,9 +19,11 @@
  * below is now the ONLY writer of a `CommerceConnection`/`CommerceConnectionSecret`
  * pair, and it is built exclusively from authenticated install facts.
  *
- * `safeDeleteShopifyCommerceConnectionByShopDomain` remains load-bearing:
- * it backs the `shop/redact` GDPR erasure path, a genuine privacy
- * obligation independent of runtime authority.
+ * `safeDeleteShopifyCommerceConnectionByShopDomain` remains available as a
+ * generic best-effort utility, but has no production caller after
+ * `shop/redact` moved to strict deletion: compliance erasure must propagate
+ * a transient delete failure so Shopify can retry rather than acknowledging
+ * incomplete redaction.
  *
  * IDEMPOTENCY: the write path is keyed on `CommerceConnection`'s
  * `@@unique([provider, externalAccountId])` constraint via

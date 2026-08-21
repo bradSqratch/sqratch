@@ -1414,18 +1414,18 @@ describe("normalizeExternalAccountId write/delete symmetry", () => {
 // ---------------------------------------------------------------------------
 
 describe("shop/redact route wiring", () => {
-  test("21. calls safeDeleteShopifyCommerceConnectionByShopDomain(shopDomain) unconditionally within the non-stale branch, never gated on a brand/mirror match", () => {
+  test("21. calls strict deleteShopifyCommerceConnectionByShopDomain(shopDomain) unconditionally within the non-stale branch, never gated on a brand/mirror match", () => {
     const routeSource = readFileSync(
       "src/app/api/shopify/webhooks/shop/redact/route.ts",
       "utf8",
     );
 
     const callMatch = routeSource.match(
-      /safeDeleteShopifyCommerceConnectionByShopDomain\(([^)]*)\)/,
+      /deleteShopifyCommerceConnectionByShopDomain\(([^)]*)\)/,
     );
     assert.ok(
       callMatch,
-      "shop/redact route must call safeDeleteShopifyCommerceConnectionByShopDomain",
+      "shop/redact route must call the strict connection deleter",
     );
     assert.equal(
       callMatch?.[1].trim(),
@@ -1457,10 +1457,16 @@ describe("shop/redact route wiring", () => {
     }
     assert.ok(outerGateCloseIndex > outerGateOpenIndex, "must find the closing brace of the outer gate");
 
-    const callIndex = routeSource.indexOf("safeDeleteShopifyCommerceConnectionByShopDomain(");
+    const callIndex = routeSource.indexOf("deleteShopifyCommerceConnectionByShopDomain(");
     assert.ok(
       callIndex > outerGateOpenIndex && callIndex < outerGateCloseIndex,
       "the erasure call must be inside the outer (non-stale) gate",
+    );
+
+    assert.doesNotMatch(
+      routeSource,
+      /safeDeleteShopifyCommerceConnectionByShopDomain/,
+      "redaction must never acknowledge a swallowed canonical-delete failure",
     );
 
     // It must NOT additionally be nested inside the per-brand mirror loop —

@@ -648,6 +648,97 @@ describe("Route Scenario 1: Shopify Webhooks", () => {
     ]);
   });
 
+  test("AF.1 shop/redact makes a failed final canonical erase retryable, then safely completes the repeated scrub on retry", async (t) => {
+    const payload = JSON.stringify({ shop_id: 1, shop_domain: "retry-redact-shop.myshopify.com" });
+    const hmac = buildWebhookHmac(payload);
+
+    const order: string[] = [];
+    let scrubCount = 0;
+    let deleteAttempts = 0;
+    let loggedFailure: unknown[] | null = null;
+
+    t.mock.method(prisma.tokenStore, "findMany", async () => []);
+    t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
+      id: "conn-retry-redact",
+      brandId: "brand-retry-redact",
+    }));
+    t.mock.method(prisma.commerceConnection, "findUnique", async () => ({
+      id: "conn-retry-redact",
+      brandId: "brand-retry-redact",
+      installedAt: null,
+    }));
+    t.mock.method(prisma.commerceConnection, "update", async () => {
+      order.push("canonical:status");
+      return {};
+    });
+    t.mock.method(prisma.commerceConnectionSecret, "deleteMany", async () => {
+      order.push("canonical:secretDeleted");
+      return { count: 1 };
+    });
+    t.mock.method(prisma.shopifyConnectionEvent, "findMany", async () => []);
+    t.mock.method(prisma.shopifyRewardRedemption, "findMany", async () => []);
+    t.mock.method(prisma.shopifyRewardRedemption, "updateMany", async () => {
+      scrubCount += 1;
+      return { count: 0 };
+    });
+    t.mock.method(prisma.brandRewardOffer, "updateMany", async () => {
+      scrubCount += 1;
+      return { count: 0 };
+    });
+    t.mock.method(prisma.shopifyConnectionEvent, "updateMany", async () => {
+      scrubCount += 1;
+      return { count: 0 };
+    });
+    t.mock.method(prisma.commerceConnection, "deleteMany", async () => {
+      deleteAttempts += 1;
+      if (deleteAttempts === 1) {
+        throw new Error("transient database detail must not reach Shopify");
+      }
+      order.push("canonical:rowErased");
+      return { count: 0 }; // Already absent is an idempotent success.
+    });
+    t.mock.method(console, "error", (...args: unknown[]) => {
+      loggedFailure = args;
+    });
+
+    const first = await shopRedactPOST(
+      makeWebhookRequest(
+        "http://localhost/api/shopify/webhooks/shop/redact",
+        payload,
+        hmac,
+        "retry-redact-shop.myshopify.com",
+      ),
+    );
+    assert.equal(first.status, 500, "a failed required erase must not be acknowledged");
+    assert.equal(
+      await first.text(),
+      JSON.stringify({ error: "Shop data erasure could not be completed." }),
+    );
+    assert.ok(loggedFailure, "failure is logged with a fixed diagnostic");
+    assert.doesNotMatch(JSON.stringify(loggedFailure), /transient database detail/);
+    assert.deepEqual(order, ["canonical:status", "canonical:secretDeleted"]);
+    assert.equal(scrubCount, 4, "the first delivery completed the idempotent scrub before delete failed");
+
+    const second = await shopRedactPOST(
+      makeWebhookRequest(
+        "http://localhost/api/shopify/webhooks/shop/redact",
+        payload,
+        hmac,
+        "retry-redact-shop.myshopify.com",
+      ),
+    );
+    assert.equal(second.status, 200, "retry succeeds after repeated scrub and noop delete");
+    assert.equal(deleteAttempts, 2);
+    assert.equal(scrubCount, 8, "the privacy scrub is safely repeatable");
+    assert.deepEqual(order, [
+      "canonical:status",
+      "canonical:secretDeleted",
+      "canonical:status",
+      "canonical:secretDeleted",
+      "canonical:rowErased",
+    ]);
+  });
+
   test("duplicate app/uninstalled delivery is idempotent (succeeds without error)", async (t) => {
     const payload = JSON.stringify({ test: "data" });
     const hmac = buildWebhookHmac(payload);

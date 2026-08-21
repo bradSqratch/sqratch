@@ -530,7 +530,8 @@ test("shop/redact no longer touches the removed legacy Prisma delegates, and kee
   assert.match(route, /prisma\.shopifyConnectionEvent\.updateMany/);
   assert.match(route, /prisma\.tokenStore\.deleteMany/);
   assert.match(route, /prisma\.\$transaction\(operations\)/);
-  assert.match(route, /safeDeleteShopifyCommerceConnectionByShopDomain\(shopDomain\)/);
+  assert.match(route, /deleteShopifyCommerceConnectionByShopDomain\(shopDomain\)/);
+  assert.doesNotMatch(route, /safeDeleteShopifyCommerceConnectionByShopDomain/);
   assert.match(route, /new NextResponse\(null, \{ status: 200 \}\)/);
 });
 
