@@ -399,9 +399,9 @@ model QuestionAnswer {
 model BrandRewardOffer {
   id                            String                     @id @default(cuid())
   brandId                       String
-  /// Temporary EXPAND compatibility default. Phase 15C2 must write this
-  /// explicitly; the later contract phase removes the Shopify default.
-  provider                      CommerceProvider           @default(SHOPIFY)
+  /// Required explicitly by every writer; no provider may silently inherit
+  /// Shopify identity from a database default.
+  provider                      CommerceProvider
   title                         String
   description                   String?
   isActive                      Boolean                    @default(false)
@@ -1160,9 +1160,9 @@ model CommerceRewardRedemption {
   userId                        String
   brandId                       String
   offerId                       String
-  /// Temporary EXPAND compatibility default. Phase 15C2 must write this
-  /// explicitly; the later contract phase removes the Shopify default.
-  provider                      CommerceProvider               @default(SHOPIFY)
+  /// Required explicitly by every writer; no provider may silently inherit
+  /// Shopify identity from a database default.
+  provider                      CommerceProvider
   idempotencyKey                String                         @unique
   code                          String                         @unique
   status                        CommerceRewardRedemptionStatus

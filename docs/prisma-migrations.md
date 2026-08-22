@@ -223,11 +223,11 @@ migration for the future provider-neutral reward cutover. It adds
 provider-aware exact-identity indexes `(brandId, provider, sourceShopDomain)`
 and `(brandId, provider, shopifyShopDomain)`. Existing indexes remain.
 
-The temporary defaults keep the deployed Shopify offer and redemption writers
-compatible because they do not yet supply `provider`. Phase 15C2 must write it
-explicitly, and the later contract phase must remove both defaults so a future
-provider can never silently become Shopify. This migration deliberately does
-not rename any reward table, enum, or provider-shaped field.
+The temporary defaults kept the deployed Shopify offer and redemption writers
+compatible during expansion. Phase 15C2 writes `provider` explicitly; Phase
+15C3 contracts the defaults so a future provider can never silently become
+Shopify. This migration deliberately does not rename any reward table, enum,
+or provider-shaped field.
 
 It contains no DML and does not reference `PointTransaction` or
 `UserPointAccount`; it cannot alter point balances, ledger history, reward
@@ -237,10 +237,22 @@ Phase 15C2 deliberately adds no migration. Prisma now exposes the logical
 `CommerceRewardRedemption` and `CommerceRewardRedemptionStatus` names while
 mapping them to the existing `ShopifyRewardRedemption` table and enum. Its
 logical account, discount, diagnostics, offer-product, and ledger-relation
-fields map to their existing Shopify-shaped columns. The Phase 15C1 defaults
-remain only for rollout compatibility; all current writers supply `SHOPIFY`
-explicitly. Phase 15C3 is the only phase permitted to consider physical naming
-cleanup.
+fields map to their existing Shopify-shaped columns. Phase 15C3 removed the
+temporary database defaults; every writer must now explicitly provide its
+`CommerceProvider` (`SHOPIFY` today, `COMMERCE7` when that writer exists).
+Physical Shopify naming remains intentionally mapped rather than renamed:
+renaming it provides no runtime provider-neutrality benefit and would add
+migration risk.
+
+## Phase 15C3 reward provider contract
+
+`20260821140000_remove_reward_provider_defaults` contains only two `ALTER
+COLUMN ... DROP DEFAULT` statements: one for `BrandRewardOffer.provider` and
+one for physical `ShopifyRewardRedemption.provider`. It neither reads nor
+rewrites reward rows, point-ledger rows, or point-account balances; it changes
+only the database behavior for future omitted provider values. The migration is
+forward-compatible with both the 15C2 and 15C3 runtimes because their Shopify
+writers already explicitly set `provider = SHOPIFY`.
 
 ## Deployment procedure
 
