@@ -121,6 +121,7 @@ export type ShopifyOrderWebhookDeps = {
    */
   reconcileFinancials(params: {
     brandId: string;
+    connectionId: string;
     shopDomain: string;
     externalOrderId: string;
   }): Promise<ReconcileShopifyOrderFinancialsResult>;
@@ -330,6 +331,7 @@ async function runShopifyOrderWebhook(
   ) {
     const reconciled = await resolved.reconcileFinancials({
       brandId: connection.brandId,
+      connectionId: connection.id,
       shopDomain,
       externalOrderId: order.externalOrderId,
     });

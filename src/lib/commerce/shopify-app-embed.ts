@@ -26,7 +26,8 @@
  * SECURITY BOUNDARY. Both returned strings are embedded directly into an
  * `<a href>` / `window.open` target, so this module treats every component as
  * untrusted even though callers are expected to pass server-side values from
- * the brand's own row (`Brand.shopifyShopDomain`, `Brand.shopifyClientId`).
+ * the canonical Shopify `CommerceConnection` row (`externalAccountId`,
+ * `providerClientId`).
  * Each component is validated against a strict allowlist pattern BEFORE the
  * URL is assembled, and the assembled URL is then re-parsed and re-checked
  * against those same components. A corrupted row or a future refactor
@@ -44,7 +45,8 @@
  * silently breaks this deep link — Shopify would open the Theme Editor with
  * nothing pre-selected. Rename both together.
  */
-export const SQRATCH_ATTRIBUTION_EMBED_BLOCK_HANDLE = "sqratch-attribution-embed";
+export const SQRATCH_ATTRIBUTION_EMBED_BLOCK_HANDLE =
+  "sqratch-attribution-embed";
 
 /** The Theme Editor path that hosts the app-embed activation panel. */
 const THEME_EDITOR_PATHNAME = "/admin/themes/current/editor";
@@ -63,9 +65,9 @@ const SHOP_DOMAIN_PATTERN = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/;
  * Shape of a Shopify app client id ("API key"). Verified against this repo's
  * real values — `shopify.app.toml` and `shopify.app.custom.toml` both carry a
  * 32-character lowercase-hex `client_id` — so the pattern is exactly that.
- * A brand's connection may have been installed under either app depending on
- * the environment, which is why callers must pass the brand's stored
- * `Brand.shopifyClientId` rather than a global env value.
+ * A connection may have been installed under either app depending on the
+ * environment, which is why callers pass its canonical provider client id
+ * rather than a global env value.
  */
 const API_KEY_PATTERN = /^[0-9a-f]{32}$/;
 
@@ -98,8 +100,7 @@ export type ThemeEditorAppEmbedDeepLinkInput = {
  * or a rendered page.
  */
 export type ThemeEditorAppEmbedDeepLinkResult =
-  | { ok: true; url: string }
-  | { ok: false; error: string };
+  { ok: true; url: string } | { ok: false; error: string };
 
 /**
  * Builds the Shopify admin Theme Editor deep link that opens the merchant's
@@ -118,7 +119,10 @@ export function buildThemeEditorAppEmbedDeepLink(
   // `typeof` guards, not just the patterns: this module is called with values
   // that originate in nullable DB columns, and a non-string must fail closed
   // rather than be coerced into the URL by template interpolation.
-  if (typeof shopDomain !== "string" || shopDomain.length > MAX_SHOP_DOMAIN_LENGTH) {
+  if (
+    typeof shopDomain !== "string" ||
+    shopDomain.length > MAX_SHOP_DOMAIN_LENGTH
+  ) {
     return { ok: false, error: "invalid_shop_domain" };
   }
   if (!SHOP_DOMAIN_PATTERN.test(shopDomain)) {
@@ -127,7 +131,10 @@ export function buildThemeEditorAppEmbedDeepLink(
   if (typeof apiKey !== "string" || !API_KEY_PATTERN.test(apiKey)) {
     return { ok: false, error: "invalid_api_key" };
   }
-  if (typeof blockHandle !== "string" || !BLOCK_HANDLE_PATTERN.test(blockHandle)) {
+  if (
+    typeof blockHandle !== "string" ||
+    !BLOCK_HANDLE_PATTERN.test(blockHandle)
+  ) {
     return { ok: false, error: "invalid_block_handle" };
   }
 
@@ -184,8 +191,7 @@ export type ShopifyAdminAppHomeDeepLinkInput = {
 };
 
 export type ShopifyAdminAppHomeDeepLinkResult =
-  | { ok: true; url: string }
-  | { ok: false; error: string };
+  { ok: true; url: string } | { ok: false; error: string };
 
 /**
  * Builds the Shopify Admin "App Home" deep link that opens SQRATCH inside a
@@ -217,7 +223,10 @@ export function buildShopifyAdminAppHomeDeepLink(
 ): ShopifyAdminAppHomeDeepLinkResult {
   const { shopDomain, apiKey } = input;
 
-  if (typeof shopDomain !== "string" || shopDomain.length > MAX_SHOP_DOMAIN_LENGTH) {
+  if (
+    typeof shopDomain !== "string" ||
+    shopDomain.length > MAX_SHOP_DOMAIN_LENGTH
+  ) {
     return { ok: false, error: "invalid_shop_domain" };
   }
   if (!SHOP_DOMAIN_PATTERN.test(shopDomain)) {

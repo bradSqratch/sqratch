@@ -8,10 +8,6 @@
  * `UnsupportedProviderError` until a real Commerce7 adapter exists. Do not
  * add a Commerce7 stub here.
  *
- * Nothing on the request path constructs or reads from this registry yet
- * (Phase 1 deliberately keeps existing routes untouched) — this module
- * exists purely as the DI wiring point a later phase will import.
- *
  * IMPORTANT: importing this module never opens a DB connection or requires
  * `DATABASE_URL`. `createCommerceAdapterRegistry` only stores the factory
  * function below without invoking it, and `ShopifyCommerceAdapter`'s

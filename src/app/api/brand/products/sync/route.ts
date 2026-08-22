@@ -18,8 +18,7 @@ import { UnsupportedCapabilityError, UnsupportedProviderError } from "@/lib/comm
  * (`src/lib/commerce/product-sync.ts`, which this route never reimplements
  * or bypasses).
  *
- * A `SKIPPED` outcome (no connection, or a legacy-fallback brand with no
- * real `CommerceConnection` row yet) is ALWAYS surfaced as an error — never
+ * A `SKIPPED` outcome (no canonical connection) is ALWAYS surfaced as an error — never
  * mapped onto a 200, which would misreport "nothing to sync" as "sync
  * succeeded".
  *

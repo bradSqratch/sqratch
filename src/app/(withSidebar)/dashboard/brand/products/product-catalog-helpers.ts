@@ -114,7 +114,7 @@ export type SyncOutcomeInput =
       failedCount?: number;
       runId?: string;
     }
-  | { status: "SKIPPED"; code: "NO_CONNECTION" | "LEGACY_FALLBACK" }
+  | { status: "SKIPPED"; code: "NO_CONNECTION" }
   | { status: "SYNC_IN_PROGRESS" }
   | { status: "SYNC_FAILED"; failureSummary: string | null }
   | { status: "UNKNOWN_ERROR"; message?: string | null };
@@ -135,17 +135,10 @@ export function describeSyncOutcome(input: SyncOutcomeInput): SyncOutcomeNotice 
     case "PARTIAL":
       return describePartialSyncOutcome(input);
     case "SKIPPED":
-      if (input.code === "NO_CONNECTION") {
-        return {
-          tone: "error",
-          message:
-            "No commerce connection is configured for this brand. Connect a store before syncing.",
-        };
-      }
       return {
         tone: "error",
         message:
-          "This brand's Shopify connection needs to be reconnected before syncing products.",
+          "No commerce connection is configured for this brand. Connect a store before syncing.",
       };
     case "SYNC_IN_PROGRESS":
       return {

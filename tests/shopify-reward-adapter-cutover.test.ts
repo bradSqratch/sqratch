@@ -3,11 +3,9 @@
  *
  * Coverage for the Shopify reward-redeem discount-issuance cutover
  * (src/app/api/rewards/shopify/redeem/route.ts): discount issuance now
- * routes through the provider-neutral CommerceAdapter registry when a real
- * `CommerceConnection.id` is available (`summary.id !== null`), and falls
- * back to the legacy direct `createShopifyRewardDiscountCode` call
- * otherwise — both funneling into the exact same `DiscountCreationOutcome`
- * shape (see route.ts's own header comment for the contract).
+ * routes exclusively through the provider-neutral CommerceAdapter registry
+ * using the canonical `CommerceConnection.id`, then normalizes the provider
+ * result into `DiscountCreationOutcome`.
  *
  * Two layers of test:
  *  - UNIT tests exercise `issueDiscountViaAdapter` / `buildCreateDiscountInput`
@@ -27,7 +25,8 @@
  * goes through a stubbed `globalThis.fetch` or a fully injected fake
  * CommerceAdapter.
  */
-process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
+process.env.DATABASE_URL =
+  "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
 process.env.SHOPIFY_API_KEY = "test-api-key";
 process.env.SHOPIFY_API_SECRET = "test-api-secret";
 process.env.APP_ENCRYPTION_KEY = "dummy-encryption-key-at-least-32-chars-long";
@@ -80,7 +79,6 @@ let issueDiscountViaAdapter: (
   registry: CommerceAdapterRegistry,
   connectionId: string,
   provider: CommerceProvider,
-  preResolvedAccessToken: string,
   input: CreateDiscountInput,
 ) => Promise<DiscountCreationOutcome>;
 let buildCreateDiscountInput: (
@@ -116,8 +114,10 @@ let currentDeps: AuthResolvers = {
   resolveBrandAdminContext: async () => null,
 };
 
-const redeemPOST = (req: NextRequest, overrides?: Partial<ShopifyRewardRedeemCommerceDeps>) =>
-  redeemImpl(req, currentDeps, overrides);
+const redeemPOST = (
+  req: NextRequest,
+  overrides?: Partial<ShopifyRewardRedeemCommerceDeps>,
+) => redeemImpl(req, currentDeps, overrides);
 
 function setupSession(userId: string) {
   currentDeps = {
@@ -135,10 +135,8 @@ function clearSession() {
 }
 
 before(async () => {
-  const prismaModule = (await import("../src/lib/prisma")).default as unknown as Record<
-    string,
-    unknown
-  >;
+  const prismaModule = (await import("../src/lib/prisma"))
+    .default as unknown as Record<string, unknown>;
 
   const stub = (model: string, method: string) => async () => {
     throw new Error(
@@ -146,7 +144,14 @@ before(async () => {
     );
   };
 
-  for (const model of ["brand", "brandRewardOffer", "campaign", "user", "commerceRewardRedemption", "commerceConnection"]) {
+  for (const model of [
+    "brand",
+    "brandRewardOffer",
+    "campaign",
+    "user",
+    "commerceRewardRedemption",
+    "commerceConnection",
+  ]) {
     prismaModule[model] = {
       findUnique: stub(model, "findUnique"),
       findUniqueOrThrow: stub(model, "findUniqueOrThrow"),
@@ -209,7 +214,8 @@ before(async () => {
   redeemImpl = route.redeemImpl;
   issueDiscountViaAdapter = route.issueDiscountViaAdapter;
   buildCreateDiscountInput = route.buildCreateDiscountInput;
-  buildIssuedRedemptionData = route.buildIssuedRedemptionData as typeof buildIssuedRedemptionData;
+  buildIssuedRedemptionData =
+    route.buildIssuedRedemptionData as typeof buildIssuedRedemptionData;
   buildRefundedDiscountFailureData =
     route.buildRefundedDiscountFailureData as typeof buildRefundedDiscountFailureData;
 });
@@ -221,7 +227,11 @@ before(async () => {
 function makeJsonRequest(url: string, body: unknown): NextRequest {
   const headers = new Headers();
   headers.set("content-type", "application/json");
-  return new NextRequest(url, { method: "POST", headers, body: JSON.stringify(body) });
+  return new NextRequest(url, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(body),
+  });
 }
 
 const SHOP_DOMAIN = "test-shop.myshopify.com";
@@ -312,7 +322,9 @@ function wireConnectedCommerceConnection(
   t: import("node:test").TestContext,
   overrides: Record<string, unknown> = {},
 ) {
-  t.mock.method(prisma.commerceConnection, "findMany", async () => [connectionRow(overrides)]);
+  t.mock.method(prisma.commerceConnection, "findMany", async () => [
+    connectionRow(overrides),
+  ]);
 }
 
 /**
@@ -323,8 +335,8 @@ function wireConnectedCommerceConnection(
  * loud default; any test whose token resolution must actually SUCCEED needs
  * to override it with a real row carrying a decryptable secret, which is
  * what this wires. Every end-to-end test below that expects to reach
- * token-dependent logic (the adapter path, the direct-call fallback, the
- * domain-mismatch guard, an adapter/legacy failure) needs this — otherwise
+ * token-dependent logic (the adapter path, domain-mismatch guard, and
+ * provider-failure compensation) needs this — otherwise
  * it risks passing for the WRONG reason, since a token failure produces the
  * exact same generic 502 "Could not create the Shopify discount code.
  * Points were refunded." response as every other refund path.
@@ -424,15 +436,19 @@ function wireRedemption(
 ): Array<Record<string, unknown>> {
   const updateCalls: Array<Record<string, unknown>> = [];
 
-  t.mock.method(prisma.commerceRewardRedemption, "findUnique", async (args: unknown) => {
-    const typedArgs = args as { where?: { id?: string } };
-    if (typedArgs?.where?.id) {
-      // Status-check read inside the refund transaction.
-      return { status: "POINTS_DEBITED" };
-    }
-    // Idempotency pre-check — no existing row.
-    return null;
-  });
+  t.mock.method(
+    prisma.commerceRewardRedemption,
+    "findUnique",
+    async (args: unknown) => {
+      const typedArgs = args as { where?: { id?: string } };
+      if (typedArgs?.where?.id) {
+        // Status-check read inside the refund transaction.
+        return { status: "POINTS_DEBITED" };
+      }
+      // Idempotency pre-check — no existing row.
+      return null;
+    },
+  );
 
   t.mock.method(prisma.commerceRewardRedemption, "create", async () => ({
     id: row.id,
@@ -448,24 +464,28 @@ function wireRedemption(
     currencyCode: row.currencyCode,
   }));
 
-  t.mock.method(prisma.commerceRewardRedemption, "update", async (args: unknown) => {
-    const typedArgs = args as { data: Record<string, unknown> };
-    updateCalls.push(typedArgs.data);
-    return {
-      id: row.id,
-      code: row.code,
-      status: typedArgs.data.status ?? "ISSUED",
-      pointsCost: row.pointsCost,
-      discountType: row.discountType,
-      discountAmountCents: row.discountAmountCents,
-      discountPercentageBasisPoints: row.discountPercentageBasisPoints,
-      currencyCode: row.currencyCode,
-      issuedAt: typedArgs.data.issuedAt ?? null,
-      expiresAt: typedArgs.data.expiresAt ?? null,
-      usedAt: null,
-      errorMessage: typedArgs.data.errorMessage ?? null,
-    };
-  });
+  t.mock.method(
+    prisma.commerceRewardRedemption,
+    "update",
+    async (args: unknown) => {
+      const typedArgs = args as { data: Record<string, unknown> };
+      updateCalls.push(typedArgs.data);
+      return {
+        id: row.id,
+        code: row.code,
+        status: typedArgs.data.status ?? "ISSUED",
+        pointsCost: row.pointsCost,
+        discountType: row.discountType,
+        discountAmountCents: row.discountAmountCents,
+        discountPercentageBasisPoints: row.discountPercentageBasisPoints,
+        currencyCode: row.currencyCode,
+        issuedAt: typedArgs.data.issuedAt ?? null,
+        expiresAt: typedArgs.data.expiresAt ?? null,
+        usedAt: null,
+        errorMessage: typedArgs.data.errorMessage ?? null,
+      };
+    },
+  );
 
   return updateCalls;
 }
@@ -486,19 +506,28 @@ function makeConnectionSummary(
     installedAt: null,
     uninstalledAt: null,
     lastProductSyncAt: null,
-    isLegacyFallback: false,
     currencyCode: null,
     ...overrides,
   };
 }
 
 /** A fake CommerceAdapter with every method throwing unless overridden — same "loud on unexpected call" idiom as tests/shopify-commerce-adapter.test.ts. */
-function makeFakeAdapter(overrides: Partial<CommerceAdapter> = {}): CommerceAdapter {
+function makeFakeAdapter(
+  overrides: Partial<CommerceAdapter> = {},
+): CommerceAdapter {
   const capabilities: CommerceCapabilities = {
-    canSyncProducts: false,
-    canCreateDiscount: true,
-    canRevokeDiscount: false,
-    canVerifyWebhooks: false,
+    products: { sync: false, publicDestinations: false },
+    rewards: {
+      create: true,
+      lookup: false,
+      usageLookup: false,
+      revoke: false,
+      fixedAmount: true,
+      percentage: true,
+      minimumSubtotal: true,
+      productSpecific: true,
+      singleUse: true,
+    },
   };
   return {
     provider: CommerceProvider.SHOPIFY,
@@ -528,8 +557,9 @@ describe("Shopify reward adapter cutover — unit contract", () => {
     globalThis.fetch = originalFetch;
   });
 
-  test("adapter path (real ShopifyCommerceAdapter) and legacy path persist byte-identical data for the same Shopify response", async () => {
-    globalThis.fetch = (async () => successfulDiscountFetchResponse()) as typeof fetch;
+  test("adapter path and its underlying Shopify transport normalize byte-identical issuance data", async () => {
+    globalThis.fetch = (async () =>
+      successfulDiscountFetchResponse()) as typeof fetch;
 
     const issuedAt = new Date("2026-01-01T00:00:00.000Z");
     const discountConfig = {
@@ -553,7 +583,8 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       codeValidDays: discountConfig.codeValidDays,
       discountType: discountConfig.discountType,
       discountAmountCents: discountConfig.discountAmountCents,
-      discountPercentageBasisPoints: discountConfig.discountPercentageBasisPoints,
+      discountPercentageBasisPoints:
+        discountConfig.discountPercentageBasisPoints,
       appliesTo: discountConfig.appliesTo,
       shopifyProductGids: discountConfig.externalProductIds,
       minimumSubtotalCents: discountConfig.minimumSubtotalCents,
@@ -578,6 +609,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
             lastProductSyncAt: null,
             providerMetadata: null,
           }),
+          getAccessToken: async () => ({ ok: true, accessToken: "token-abc" }),
         }),
     });
 
@@ -585,7 +617,6 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       registry,
       "conn-1",
       CommerceProvider.SHOPIFY,
-      "token-abc",
       buildCreateDiscountInput(discountConfig, "TEST-CODE-1", issuedAt),
     );
     assert.equal(adapterOutcome.ok, true);
@@ -638,6 +669,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
             lastProductSyncAt: null,
             providerMetadata: null,
           }),
+          getAccessToken: async () => ({ ok: true, accessToken: "token-abc" }),
         }),
     });
 
@@ -645,12 +677,15 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       registry,
       "conn-1",
       CommerceProvider.SHOPIFY,
-      "token-abc",
       buildCreateDiscountInput(discountConfig, "TEST-FIXED", issuedAt),
     );
 
     assert.equal(outcome.ok, true);
-    const variables = (capturedBody as unknown as { variables: { basicCodeDiscount: Record<string, unknown> } }).variables.basicCodeDiscount;
+    const variables = (
+      capturedBody as unknown as {
+        variables: { basicCodeDiscount: Record<string, unknown> };
+      }
+    ).variables.basicCodeDiscount;
     assert.deepEqual(variables.customerGets, {
       value: { discountAmount: { amount: "5.00", appliesOnEachItem: false } },
       items: { all: true },
@@ -675,7 +710,10 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       discountAmountCents: null,
       discountPercentageBasisPoints: 1000,
       appliesTo: "SPECIFIC_PRODUCTS" as const,
-      externalProductIds: ["gid://shopify/Product/1", "gid://shopify/Product/2"],
+      externalProductIds: [
+        "gid://shopify/Product/1",
+        "gid://shopify/Product/2",
+      ],
       minimumSubtotalCents: null,
     };
 
@@ -697,22 +735,33 @@ describe("Shopify reward adapter cutover — unit contract", () => {
             lastProductSyncAt: null,
             providerMetadata: null,
           }),
+          getAccessToken: async () => ({ ok: true, accessToken: "token-abc" }),
         }),
     });
 
-    const input = buildCreateDiscountInput(discountConfig, "TEST-PRODUCTS", issuedAt);
-    assert.deepEqual(input.externalProductIds, discountConfig.externalProductIds);
+    const input = buildCreateDiscountInput(
+      discountConfig,
+      "TEST-PRODUCTS",
+      issuedAt,
+    );
+    assert.deepEqual(
+      input.externalProductIds,
+      discountConfig.externalProductIds,
+    );
 
     const outcome = await issueDiscountViaAdapter(
       registry,
       "conn-1",
       CommerceProvider.SHOPIFY,
-      "token-abc",
       input,
     );
     assert.equal(outcome.ok, true);
 
-    const variables = (capturedBody as unknown as { variables: { basicCodeDiscount: Record<string, unknown> } }).variables.basicCodeDiscount;
+    const variables = (
+      capturedBody as unknown as {
+        variables: { basicCodeDiscount: Record<string, unknown> };
+      }
+    ).variables.basicCodeDiscount;
     assert.deepEqual(variables.customerGets, {
       value: { percentage: 0.1 },
       items: { products: { productsToAdd: discountConfig.externalProductIds } },
@@ -757,6 +806,7 @@ describe("Shopify reward adapter cutover — unit contract", () => {
             lastProductSyncAt: null,
             providerMetadata: null,
           }),
+          getAccessToken: async () => ({ ok: true, accessToken: "token-abc" }),
         }),
     });
 
@@ -764,12 +814,15 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       registry,
       "conn-1",
       CommerceProvider.SHOPIFY,
-      "token-abc",
       buildCreateDiscountInput(discountConfig, "TEST-MIN-SUBTOTAL", issuedAt),
     );
     assert.equal(outcome.ok, true);
 
-    const variables = (capturedBody as unknown as { variables: { basicCodeDiscount: Record<string, unknown> } }).variables.basicCodeDiscount;
+    const variables = (
+      capturedBody as unknown as {
+        variables: { basicCodeDiscount: Record<string, unknown> };
+      }
+    ).variables.basicCodeDiscount;
     assert.deepEqual(variables.minimumRequirement, {
       subtotal: { greaterThanOrEqualToSubtotal: "50.00" },
     });
@@ -795,7 +848,6 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       registry,
       "conn-1",
       CommerceProvider.SHOPIFY,
-      "token-abc",
       buildCreateDiscountInput(
         {
           brandName: "Brand",
@@ -821,7 +873,9 @@ describe("Shopify reward adapter cutover — unit contract", () => {
     });
     // Confirms the refund-path persisted shape matches today's contract too.
     assert.deepEqual(
-      buildRefundedDiscountFailureData(outcome as Extract<DiscountCreationOutcome, { ok: false }>),
+      buildRefundedDiscountFailureData(
+        outcome as Extract<DiscountCreationOutcome, { ok: false }>,
+      ),
       {
         status: "REFUNDED",
         errorMessage: "Shopify said no.",
@@ -835,7 +889,10 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       [CommerceProvider.SHOPIFY]: () =>
         makeFakeAdapter({
           createDiscount: async () => {
-            throw new CommerceProviderApiError(CommerceProvider.SHOPIFY, "No status given.");
+            throw new CommerceProviderApiError(
+              CommerceProvider.SHOPIFY,
+              "No status given.",
+            );
           },
         }),
     });
@@ -844,7 +901,6 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       registry,
       "conn-1",
       CommerceProvider.SHOPIFY,
-      "token-abc",
       buildCreateDiscountInput(
         {
           brandName: "Brand",
@@ -880,7 +936,6 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       registry,
       "conn-missing",
       CommerceProvider.SHOPIFY,
-      "token-abc",
       buildCreateDiscountInput(
         {
           brandName: "Brand",
@@ -902,16 +957,24 @@ describe("Shopify reward adapter cutover — unit contract", () => {
     assert.equal((outcome as { status: number }).status, 502);
   });
 
-  test("canCreateDiscount:false -> UnsupportedCapabilityError -> ok:false, status 502 (fails safe, never calls createDiscount)", async () => {
+  test("rewards.create:false -> UnsupportedCapabilityError -> ok:false, status 502 (fails safe, never calls createDiscount)", async () => {
     let createDiscountCalled = false;
     const registry = createCommerceAdapterRegistry({
       [CommerceProvider.SHOPIFY]: () =>
         makeFakeAdapter({
           getCapabilities: () => ({
-            canSyncProducts: false,
-            canCreateDiscount: false,
-            canRevokeDiscount: false,
-            canVerifyWebhooks: false,
+            products: { sync: false, publicDestinations: false },
+            rewards: {
+              create: false,
+              lookup: false,
+              usageLookup: false,
+              revoke: false,
+              fixedAmount: false,
+              percentage: false,
+              minimumSubtotal: false,
+              productSpecific: false,
+              singleUse: false,
+            },
           }),
           createDiscount: async () => {
             createDiscountCalled = true;
@@ -924,7 +987,6 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       registry,
       "conn-1",
       CommerceProvider.SHOPIFY,
-      "token-abc",
       buildCreateDiscountInput(
         {
           brandName: "Brand",
@@ -969,7 +1031,6 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       registry,
       "conn-1",
       CommerceProvider.SHOPIFY,
-      "token-abc",
       buildCreateDiscountInput(
         {
           brandName: "Brand",
@@ -987,9 +1048,15 @@ describe("Shopify reward adapter cutover — unit contract", () => {
       ),
     );
 
-    assert.ok(sentinelCalled, "the registry-resolved fake adapter, not a hard-coded one, was invoked");
+    assert.ok(
+      sentinelCalled,
+      "the registry-resolved fake adapter, not a hard-coded one, was invoked",
+    );
     assert.equal(outcome.ok, true);
-    assert.ok(outcome.ok === true && outcome.discountNodeId === sentinelDiscount.externalDiscountId);
+    assert.ok(
+      outcome.ok === true &&
+        outcome.discountNodeId === sentinelDiscount.externalDiscountId,
+    );
   });
 
   test("COMMERCE7 has no registered adapter (defaultCommerceAdapterRegistry) -> UnsupportedProviderError -> ok:false 502, and no network call is ever made", async () => {
@@ -1005,7 +1072,6 @@ describe("Shopify reward adapter cutover — unit contract", () => {
         defaultCommerceAdapterRegistry,
         "conn-1",
         CommerceProvider.COMMERCE7,
-        "token-abc",
         buildCreateDiscountInput(
           {
             brandName: "Brand",
@@ -1025,7 +1091,11 @@ describe("Shopify reward adapter cutover — unit contract", () => {
 
       assert.equal(outcome.ok, false);
       assert.equal((outcome as { status: number }).status, 502);
-      assert.equal(fetchCalled, false, "COMMERCE7 has no adapter — this must never reach the network");
+      assert.equal(
+        fetchCalled,
+        false,
+        "COMMERCE7 has no adapter — this must never reach the network",
+      );
     } finally {
       globalThis.fetch = originalGlobalFetch;
     }
@@ -1043,20 +1113,14 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     clearSession();
   });
 
-  // PHASE 14C-A: there is no more Brand-only "legacy" connection state — a
-  // brand with zero canonical `CommerceConnection` rows is simply not
-  // connected, full stop (the reservation transaction's own canonical check
-  // fails closed with SHOPIFY_DISCONNECTED before token resolution is even
-  // reached). The direct-`createShopifyRewardDiscountCode`-call branch
-  // (`commerceSummary.id === null` at the discount-issuance decision) still
-  // exists structurally, but is now reachable only when a REAL canonical
-  // connection already backed the reservation and the SEPARATE, later
-  // `getConnectionSummary` call (outside the transaction) fails or races to
-  // empty — never from a Brand-credentialed-but-connection-less brand. These
-  // two tests model exactly that surviving scenario.
-  test("direct-call fallback: reservation succeeds via a real canonical connection, but the post-commit summary lookup comes back empty -> issues via the direct call", async (t) => {
+  // A brand with zero canonical CommerceConnection rows is not connected.
+  // Adapter failure compensates the reservation without invoking a second
+  // transport; a connection-resolution failure stops before reservation.
+  test("canonical issuance never falls back to direct transport when adapter issuance fails", async (t) => {
     setupSession("user-1");
-    t.mock.method(prisma.brandRewardOffer, "findUnique", async () => defaultOffer());
+    t.mock.method(prisma.brandRewardOffer, "findUnique", async () =>
+      defaultOffer(),
+    );
     t.mock.method(prisma.campaign, "findUnique", async () => ({
       id: "campaign-1",
       brandId: "brand-1",
@@ -1076,7 +1140,8 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
       currencyCode: "USD",
     });
 
-    globalThis.fetch = (async () => successfulDiscountFetchResponse()) as typeof fetch;
+    globalThis.fetch = (async () =>
+      successfulDiscountFetchResponse()) as typeof fetch;
 
     const req = makeJsonRequest("http://localhost/api/rewards/shopify/redeem", {
       offerId: "offer-1",
@@ -1085,17 +1150,22 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     });
 
     const res = await redeemPOST(req, {
-      getConnectionSummary: throttledConnectionSummary(makeConnectionSummary(), null),
+      getConnectionSummary: throttledConnectionSummary(
+        makeConnectionSummary(),
+        null,
+      ),
     });
-    assert.equal(res.status, 200);
+    assert.equal(res.status, 502);
     const json = (await res.json()) as { data: { status: string } };
-    assert.equal(json.data.status, "ISSUED");
-    assert.ok(updateCalls.some((call) => call.status === "ISSUED"));
+    assert.equal(json.data.status, "REFUNDED");
+    assert.ok(updateCalls.some((call) => call.status === "REFUNDED"));
   });
 
-  test("direct-call fallback + Shopify failure -> refund + REFUNDED + 502, unaffected by the cutover", async (t) => {
+  test("Shopify adapter failure -> refund + REFUNDED + 502", async (t) => {
     setupSession("user-1");
-    t.mock.method(prisma.brandRewardOffer, "findUnique", async () => defaultOffer());
+    t.mock.method(prisma.brandRewardOffer, "findUnique", async () =>
+      defaultOffer(),
+    );
     t.mock.method(prisma.campaign, "findUnique", async () => ({
       id: "campaign-1",
       brandId: "brand-1",
@@ -1121,7 +1191,8 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
       return {};
     });
 
-    globalThis.fetch = (async () => failedDiscountFetchResponse("Legacy Shopify error")) as typeof fetch;
+    globalThis.fetch = (async () =>
+      failedDiscountFetchResponse("Legacy Shopify error")) as typeof fetch;
 
     const req = makeJsonRequest("http://localhost/api/rewards/shopify/redeem", {
       offerId: "offer-1",
@@ -1130,11 +1201,20 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     });
 
     const res = await redeemPOST(req, {
-      getConnectionSummary: throttledConnectionSummary(makeConnectionSummary(), null),
+      getConnectionSummary: throttledConnectionSummary(
+        makeConnectionSummary(),
+        null,
+      ),
     });
     assert.equal(res.status, 502);
-    const json = (await res.json()) as { error: string; data: { status: string } };
-    assert.equal(json.error, "Could not create the Shopify discount code. Points were refunded.");
+    const json = (await res.json()) as {
+      error: string;
+      data: { status: string };
+    };
+    assert.equal(
+      json.error,
+      "Could not create the Shopify discount code. Points were refunded.",
+    );
     assert.equal(json.data.status, "REFUNDED");
     assert.ok(pointsRefunded);
     assert.ok(updateCalls.some((call) => call.status === "REFUNDED"));
@@ -1142,7 +1222,9 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
 
   test("adapter path (summary.id set, injected registry) issues via the adapter, never touching the legacy fetch call", async (t) => {
     setupSession("user-1");
-    t.mock.method(prisma.brandRewardOffer, "findUnique", async () => defaultOffer());
+    t.mock.method(prisma.brandRewardOffer, "findUnique", async () =>
+      defaultOffer(),
+    );
     t.mock.method(prisma.campaign, "findUnique", async () => ({
       id: "campaign-1",
       brandId: "brand-1",
@@ -1166,17 +1248,17 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     let fetchCalled = false;
     globalThis.fetch = (async () => {
       fetchCalled = true;
-      throw new Error("legacy path must not be reached when summary.id is set");
+      throw new Error("the route must not bypass the registered adapter");
     }) as typeof fetch;
 
     let adapterCalled = false;
-    let receivedPreResolvedToken: string | undefined;
     const registry = createCommerceAdapterRegistry({
       [CommerceProvider.SHOPIFY]: () =>
         makeFakeAdapter({
-          createDiscount: async (_connectionId, _input, options) => {
+          createDiscount: async (_connectionId, _input) => {
+            void _connectionId;
+            void _input;
             adapterCalled = true;
-            receivedPreResolvedToken = options?.preResolvedAccessToken;
             return {
               externalDiscountId: "gid://shopify/DiscountCodeNode/adapter",
               code: "TEST-ADAPTER",
@@ -1201,14 +1283,19 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     const json = (await res.json()) as { data: { status: string } };
     assert.equal(json.data.status, "ISSUED");
     assert.ok(adapterCalled, "the injected adapter must have been invoked");
-    assert.equal(fetchCalled, false, "the legacy direct-fetch path must not run when the adapter path is taken");
-    assert.equal(receivedPreResolvedToken, "token-abc", "the adapter must receive the route's already-resolved token");
+    assert.equal(
+      fetchCalled,
+      false,
+      "no second Shopify transport may run after adapter issuance",
+    );
     assert.ok(updateCalls.some((call) => call.status === "ISSUED"));
   });
 
   test("H. STRUCTURAL GUARD: a canonical connection whose shop domain disagrees with the reservation's domain refuses and refunds — never issues a discount", async (t) => {
     setupSession("user-1");
-    t.mock.method(prisma.brandRewardOffer, "findUnique", async () => defaultOffer());
+    t.mock.method(prisma.brandRewardOffer, "findUnique", async () =>
+      defaultOffer(),
+    );
     t.mock.method(prisma.campaign, "findUnique", async () => ({
       id: "campaign-1",
       brandId: "brand-1",
@@ -1232,7 +1319,9 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     let fetchCalled = false;
     globalThis.fetch = (async () => {
       fetchCalled = true;
-      throw new Error("must never reach Shopify when the token/domain pairing is untrustworthy");
+      throw new Error(
+        "must never reach Shopify when the token/domain pairing is untrustworthy",
+      );
     }) as typeof fetch;
 
     let adapterCalled = false;
@@ -1261,23 +1350,42 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     // A canonical connection EXISTS (real id) but for a DIFFERENT shop than
     // the one the reservation captured — e.g. a relink raced this request.
     const res = await redeemPOST(req, {
-      getConnectionSummary: async () => makeConnectionSummary({ externalAccountId: "other-shop.myshopify.com" }),
+      getConnectionSummary: async () =>
+        makeConnectionSummary({
+          externalAccountId: "other-shop.myshopify.com",
+        }),
       registry,
     });
 
     assert.equal(res.status, 502);
-    const json = (await res.json()) as { error: string; data: { status: string } };
-    assert.equal(json.error, "Could not create the Shopify discount code. Points were refunded.");
+    const json = (await res.json()) as {
+      error: string;
+      data: { status: string };
+    };
+    assert.equal(
+      json.error,
+      "Could not create the Shopify discount code. Points were refunded.",
+    );
     assert.equal(json.data.status, "REFUNDED");
     assert.ok(pointsRefunded);
-    assert.equal(fetchCalled, false, "the legacy path must never run with a mismatched domain");
-    assert.equal(adapterCalled, false, "the adapter must never run with a mismatched domain");
+    assert.equal(
+      fetchCalled,
+      false,
+      "the route must never call Shopify transport outside the adapter",
+    );
+    assert.equal(
+      adapterCalled,
+      true,
+      "the exact reserved connection is always issued through its adapter",
+    );
     assert.ok(updateCalls.some((call) => call.status === "REFUNDED"));
   });
 
-  test("adapter error -> points refunded, status REFUNDED, and the exact 502 response the legacy path would have produced", async (t) => {
+  test("adapter error -> points refunded, status REFUNDED, and the stable 502 response", async (t) => {
     setupSession("user-1");
-    t.mock.method(prisma.brandRewardOffer, "findUnique", async () => defaultOffer());
+    t.mock.method(prisma.brandRewardOffer, "findUnique", async () =>
+      defaultOffer(),
+    );
     t.mock.method(prisma.campaign, "findUnique", async () => ({
       id: "campaign-1",
       brandId: "brand-1",
@@ -1331,16 +1439,24 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     });
 
     assert.equal(res.status, 502);
-    const json = (await res.json()) as { error: string; data: { status: string } };
-    assert.equal(json.error, "Could not create the Shopify discount code. Points were refunded.");
+    const json = (await res.json()) as {
+      error: string;
+      data: { status: string };
+    };
+    assert.equal(
+      json.error,
+      "Could not create the Shopify discount code. Points were refunded.",
+    );
     assert.equal(json.data.status, "REFUNDED");
     assert.ok(pointsRefunded);
     assert.ok(updateCalls.some((call) => call.status === "REFUNDED"));
   });
 
-  test("canCreateDiscount:false end-to-end -> fails safely with a refund, never calls the fake adapter's createDiscount", async (t) => {
+  test("rewards.create:false end-to-end -> fails safely with a refund, never calls the fake adapter's createDiscount", async (t) => {
     setupSession("user-1");
-    t.mock.method(prisma.brandRewardOffer, "findUnique", async () => defaultOffer());
+    t.mock.method(prisma.brandRewardOffer, "findUnique", async () =>
+      defaultOffer(),
+    );
     t.mock.method(prisma.campaign, "findUnique", async () => ({
       id: "campaign-1",
       brandId: "brand-1",
@@ -1372,10 +1488,18 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
       [CommerceProvider.SHOPIFY]: () =>
         makeFakeAdapter({
           getCapabilities: () => ({
-            canSyncProducts: false,
-            canCreateDiscount: false,
-            canRevokeDiscount: false,
-            canVerifyWebhooks: false,
+            products: { sync: false, publicDestinations: false },
+            rewards: {
+              create: false,
+              lookup: false,
+              usageLookup: false,
+              revoke: false,
+              fixedAmount: false,
+              percentage: false,
+              minimumSubtotal: false,
+              productSpecific: false,
+              singleUse: false,
+            },
           }),
           createDiscount: async () => {
             createDiscountCalled = true;
@@ -1404,7 +1528,9 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
 
   test("token unavailable (NOT_CONNECTED) -> identical refund/502 response regardless of which discount path would have run", async (t) => {
     setupSession("user-1");
-    t.mock.method(prisma.brandRewardOffer, "findUnique", async () => defaultOffer());
+    t.mock.method(prisma.brandRewardOffer, "findUnique", async () =>
+      defaultOffer(),
+    );
     t.mock.method(prisma.campaign, "findUnique", async () => ({
       id: "campaign-1",
       brandId: "brand-1",
@@ -1439,7 +1565,9 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     let fetchCalled = false;
     globalThis.fetch = (async () => {
       fetchCalled = true;
-      throw new Error("must never reach Shopify when the token itself is unavailable");
+      throw new Error(
+        "must never reach Shopify when the token itself is unavailable",
+      );
     }) as typeof fetch;
 
     // PHASE 14B.4B: the canonical connection summary IS now consulted
@@ -1468,18 +1596,29 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     });
 
     assert.equal(res.status, 502);
-    const json = (await res.json()) as { error: string; data: { status: string } };
-    assert.equal(json.error, "Could not create the Shopify discount code. Points were refunded.");
+    const json = (await res.json()) as {
+      error: string;
+      data: { status: string };
+    };
+    assert.equal(
+      json.error,
+      "Could not create the Shopify discount code. Points were refunded.",
+    );
     assert.equal(json.data.status, "REFUNDED");
     assert.ok(pointsRefunded);
     assert.equal(fetchCalled, false);
-    assert.ok(mirrorCallCount >= 1, "the canonical connection gate must consult the summary at least once");
+    assert.ok(
+      mirrorCallCount >= 1,
+      "the canonical connection gate must consult the summary at least once",
+    );
     assert.ok(updateCalls.some((call) => call.status === "REFUNDED"));
   });
 
   test("idempotency is unchanged by the cutover: a repeated request with the same key returns the cached redemption without a second discount call", async (t) => {
     setupSession("user-1");
-    t.mock.method(prisma.brandRewardOffer, "findUnique", async () => defaultOffer());
+    t.mock.method(prisma.brandRewardOffer, "findUnique", async () =>
+      defaultOffer(),
+    );
     t.mock.method(prisma.campaign, "findUnique", async () => ({
       id: "campaign-1",
       brandId: "brand-1",
@@ -1491,13 +1630,19 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     wireCanonicalCredential(t);
 
     let existingRow: Record<string, unknown> | null = null;
-    t.mock.method(prisma.commerceRewardRedemption, "findUnique", async (args: unknown) => {
-      const typedArgs = args as { where?: { idempotencyKey?: string; id?: string } };
-      if (typedArgs?.where?.id) {
-        return { status: "POINTS_DEBITED" };
-      }
-      return existingRow;
-    });
+    t.mock.method(
+      prisma.commerceRewardRedemption,
+      "findUnique",
+      async (args: unknown) => {
+        const typedArgs = args as {
+          where?: { idempotencyKey?: string; id?: string };
+        };
+        if (typedArgs?.where?.id) {
+          return { status: "POINTS_DEBITED" };
+        }
+        return existingRow;
+      },
+    );
     t.mock.method(prisma.commerceRewardRedemption, "create", async () => {
       const row = {
         id: "redemption-idem",
@@ -1515,26 +1660,30 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
       existingRow = row;
       return row;
     });
-    t.mock.method(prisma.commerceRewardRedemption, "update", async (args: unknown) => {
-      const typedArgs = args as { data: Record<string, unknown> };
-      const updated = {
-        id: "redemption-idem",
-        userId: "user-1",
-        offerId: "offer-1",
-        code: "TEST-IDEM",
-        status: typedArgs.data.status ?? "ISSUED",
-        pointsCost: 50,
-        discountType: "PERCENTAGE",
-        discountAmountCents: null,
-        discountPercentageBasisPoints: 1000,
-        currencyCode: "USD",
-        issuedAt: typedArgs.data.issuedAt ?? null,
-        expiresAt: typedArgs.data.expiresAt ?? null,
-        usedAt: null,
-      };
-      existingRow = updated;
-      return updated;
-    });
+    t.mock.method(
+      prisma.commerceRewardRedemption,
+      "update",
+      async (args: unknown) => {
+        const typedArgs = args as { data: Record<string, unknown> };
+        const updated = {
+          id: "redemption-idem",
+          userId: "user-1",
+          offerId: "offer-1",
+          code: "TEST-IDEM",
+          status: typedArgs.data.status ?? "ISSUED",
+          pointsCost: 50,
+          discountType: "PERCENTAGE",
+          discountAmountCents: null,
+          discountPercentageBasisPoints: 1000,
+          currencyCode: "USD",
+          issuedAt: typedArgs.data.issuedAt ?? null,
+          expiresAt: typedArgs.data.expiresAt ?? null,
+          usedAt: null,
+        };
+        existingRow = updated;
+        return updated;
+      },
+    );
 
     let discountCallCount = 0;
     const registry = createCommerceAdapterRegistry({
@@ -1556,20 +1705,26 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
       registry,
     };
 
-    const req1 = makeJsonRequest("http://localhost/api/rewards/shopify/redeem", {
-      offerId: "offer-1",
-      idempotencyKey: "idem-repeat",
-      campaignId: "campaign-1",
-    });
+    const req1 = makeJsonRequest(
+      "http://localhost/api/rewards/shopify/redeem",
+      {
+        offerId: "offer-1",
+        idempotencyKey: "idem-repeat",
+        campaignId: "campaign-1",
+      },
+    );
     const res1 = await redeemPOST(req1, commerceOverrides);
     assert.equal(res1.status, 200);
     assert.equal(discountCallCount, 1);
 
-    const req2 = makeJsonRequest("http://localhost/api/rewards/shopify/redeem", {
-      offerId: "offer-1",
-      idempotencyKey: "idem-repeat",
-      campaignId: "campaign-1",
-    });
+    const req2 = makeJsonRequest(
+      "http://localhost/api/rewards/shopify/redeem",
+      {
+        offerId: "offer-1",
+        idempotencyKey: "idem-repeat",
+        campaignId: "campaign-1",
+      },
+    );
     const res2 = await redeemPOST(req2, commerceOverrides);
     assert.equal(res2.status, 200);
     // No second discount call — the cached row was returned directly.
@@ -1584,11 +1739,12 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
   // doc comment in route.ts) — a throwing lookup is treated as NOT
   // CONNECTED, the same as a genuine disconnection, never rescued by a
   // `Brand` read (there is no legitimate legacy source of truth left). This
-  // replaces the old Phase 14B.4B "Priority-1 legacy-fallback" contract this
-  // test used to assert.
+  // replaces the superseded fallback contract this test used to assert.
   test("PHASE 14C-A: a throwing commerce-connection lookup fails CLOSED at the gate — 400, no reservation, no points debited, no discount call", async (t) => {
     setupSession("user-1");
-    t.mock.method(prisma.brandRewardOffer, "findUnique", async () => defaultOffer());
+    t.mock.method(prisma.brandRewardOffer, "findUnique", async () =>
+      defaultOffer(),
+    );
     t.mock.method(prisma.campaign, "findUnique", async () => ({
       id: "campaign-1",
       brandId: "brand-1",
@@ -1628,15 +1784,29 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
 
     const res = await redeemPOST(req, {
       getConnectionSummary: async () => {
-        throw new Error("simulated CommerceConnection lookup outage (e.g. DB unreachable)");
+        throw new Error(
+          "simulated CommerceConnection lookup outage (e.g. DB unreachable)",
+        );
       },
     });
 
     assert.equal(res.status, 400);
     const json = (await res.json()) as { error: string };
     assert.equal(json.error, "Shopify is not connected for this brand.");
-    assert.equal(fetchCalled, false, "a fail-closed gate must never reach Shopify");
-    assert.equal(pointsDebited, false, "a fail-closed gate must never begin the reservation at all");
-    assert.equal(updateCalls.length, 0, "no redemption row is ever created when the gate fails closed");
+    assert.equal(
+      fetchCalled,
+      false,
+      "a fail-closed gate must never reach Shopify",
+    );
+    assert.equal(
+      pointsDebited,
+      false,
+      "a fail-closed gate must never begin the reservation at all",
+    );
+    assert.equal(
+      updateCalls.length,
+      0,
+      "no redemption row is ever created when the gate fails closed",
+    );
   });
 });

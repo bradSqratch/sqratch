@@ -35,7 +35,9 @@ import {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeRow(overrides: Partial<ReconciliationRow> = {}): ReconciliationRow {
+function makeRow(
+  overrides: Partial<ReconciliationRow> = {},
+): ReconciliationRow {
   return {
     id: "row-1",
     userId: "user-1",
@@ -57,7 +59,9 @@ function makeRow(overrides: Partial<ReconciliationRow> = {}): ReconciliationRow 
 }
 
 /** Creates a minimal fake deps object. Caller overrides individual methods as needed. */
-function makeDeps(overrides: Partial<ReconciliationDeps> = {}): ReconciliationDeps {
+function makeDeps(
+  overrides: Partial<ReconciliationDeps> = {},
+): ReconciliationDeps {
   return {
     async selectCandidates() {
       return [];
@@ -73,9 +77,6 @@ function makeDeps(overrides: Partial<ReconciliationDeps> = {}): ReconciliationDe
     },
     async resolveConnection() {
       return { id: "connection-x" };
-    },
-    async getToken() {
-      return { ok: true, accessToken: "mock-token" };
     },
     async lookupByNodeId() {
       return { ok: true, exists: false };
@@ -141,7 +142,9 @@ test("(a) full flow: discount found by code → issued row", async () => {
 
 test("(a) full flow: discount found by node ID → issued row", async () => {
   const completedIds: string[] = [];
-  const row = makeRow({ externalDiscountId: "gid://shopify/DiscountCodeNode/77" });
+  const row = makeRow({
+    externalDiscountId: "gid://shopify/DiscountCodeNode/77",
+  });
 
   const deps = makeDeps({
     async selectCandidates() {
@@ -254,7 +257,14 @@ test("(d) CAS: claimRow returns count=0 → row skipped", async () => {
     },
     async lookupByCode() {
       lookupCalled = true;
-      return { ok: true, exists: true, discountNodeId: "x", status: null, endsAt: null, asyncUsageCount: 0 };
+      return {
+        ok: true,
+        exists: true,
+        discountNodeId: "x",
+        status: null,
+        endsAt: null,
+        asyncUsageCount: 0,
+      };
     },
   });
 
@@ -311,7 +321,10 @@ test("(e) makeReconciliationDecision: attempts >= maxAttempts → markManualRevi
     5, // maxAttempts
   );
   assert.equal(result.action, "RETAIN");
-  assert.equal((result as { markManualReview?: boolean }).markManualReview, true);
+  assert.equal(
+    (result as { markManualReview?: boolean }).markManualReview,
+    true,
+  );
 });
 
 test("(e) full flow: after maxAttempts failures → manualReview incremented", async () => {
@@ -332,7 +345,9 @@ test("(e) full flow: after maxAttempts failures → manualReview incremented", a
     },
   });
 
-  const summary = await reconcileStuckRedemptionsWithDeps(deps, { maxAttempts: 5 });
+  const summary = await reconcileStuckRedemptionsWithDeps(deps, {
+    maxAttempts: 5,
+  });
   assert.equal(markedManual, true);
   assert.equal(summary.manualReview, 1);
   assert.equal(summary.retained, 1);
@@ -438,7 +453,9 @@ test("(g) assertTransition REFUNDED → ISSUED throws (terminal)", () => {
 
 test("(g) full flow: second completeToIssued call on same row → completeToIssued called once per run", async () => {
   let completeCount = 0;
-  const row = makeRow({ externalDiscountId: "gid://shopify/DiscountCodeNode/1" });
+  const row = makeRow({
+    externalDiscountId: "gid://shopify/DiscountCodeNode/1",
+  });
 
   const deps = makeDeps({
     async selectCandidates() {
@@ -475,8 +492,12 @@ test("(h) token unavailable → RETAIN, reason contains 'token unavailable'", as
     async selectCandidates() {
       return [row];
     },
-    async getToken() {
-      return { ok: false, reason: "NEEDS_RECONNECT" };
+    async lookupByCode() {
+      return {
+        ok: false,
+        status: 502,
+        error: "provider credential unavailable",
+      };
     },
     async updateReconcileMetadata(_id, data) {
       capturedReason = data.lastReconcileReason ?? "";
@@ -486,8 +507,8 @@ test("(h) token unavailable → RETAIN, reason contains 'token unavailable'", as
   const summary = await reconcileStuckRedemptionsWithDeps(deps);
   assert.equal(summary.retained, 1);
   assert.ok(
-    capturedReason.includes("token unavailable") || capturedReason.includes("disconnected"),
-    `Expected 'token unavailable' or 'disconnected' in reason, got: ${capturedReason}`,
+    capturedReason.includes("provider credential unavailable"),
+    `Expected a provider credential failure reason, got: ${capturedReason}`,
   );
 });
 
@@ -499,17 +520,18 @@ test("(h) shop not connected → RETAIN, lookupByCode not called", async () => {
     async selectCandidates() {
       return [row];
     },
-    async getToken() {
-      return { ok: false, reason: "NOT_CONNECTED" };
-    },
     async lookupByCode() {
       lookupCalled = true;
-      return { ok: true, exists: false };
+      return {
+        ok: false,
+        status: 502,
+        error: "provider connection unavailable",
+      };
     },
   });
 
   const summary = await reconcileStuckRedemptionsWithDeps(deps);
-  assert.equal(lookupCalled, false);
+  assert.equal(lookupCalled, true);
   assert.equal(summary.retained, 1);
 });
 
@@ -535,53 +557,64 @@ test("empty candidate list → zero summary", async () => {
 });
 
 test("historical X never requests a current Y credential when no exact connection exists", async () => {
-  let tokenCalls = 0;
   let lookups = 0;
   const metadata: string[] = [];
-  const summary = await reconcileStuckRedemptionsWithDeps(makeDeps({
-    async selectCandidates() { return [makeRow({ externalAccountId: "x.myshopify.com" })]; },
-    async resolveConnection() { return null; },
-    async getToken() { tokenCalls++; return { ok: true, accessToken: "y-token" }; },
-    async lookupByCode() { lookups++; return { ok: true, exists: false }; },
-    async updateReconcileMetadata(_id, data) { metadata.push(data.lastReconcileReason ?? ""); },
-  }));
+  const summary = await reconcileStuckRedemptionsWithDeps(
+    makeDeps({
+      async selectCandidates() {
+        return [makeRow({ externalAccountId: "x.myshopify.com" })];
+      },
+      async resolveConnection() {
+        return null;
+      },
+      async lookupByCode() {
+        lookups++;
+        return { ok: true, exists: false };
+      },
+      async updateReconcileMetadata(_id, data) {
+        metadata.push(data.lastReconcileReason ?? "");
+      },
+    }),
+  );
   assert.equal(summary.retained, 1);
-  assert.equal(tokenCalls, 0);
   assert.equal(lookups, 0);
   assert.match(metadata[0] ?? "", /historical provider account/);
 });
 
-test("an exact historical X connection supplies its own connection id to credential resolution", async () => {
+test("an exact historical X connection supplies its own connection id to provider lookup", async () => {
   let connectionId: string | null = null;
-  await reconcileStuckRedemptionsWithDeps(makeDeps({
-    async selectCandidates() { return [makeRow({ externalAccountId: "x.myshopify.com" })]; },
-    async resolveConnection() { return { id: "connection-x" }; },
-    async getToken(_brandId, id) { connectionId = id; return { ok: false, reason: "NOT_CONNECTED" }; },
-  }));
+  await reconcileStuckRedemptionsWithDeps(
+    makeDeps({
+      async selectCandidates() {
+        return [makeRow({ externalAccountId: "x.myshopify.com" })];
+      },
+      async resolveConnection() {
+        return { id: "connection-x" };
+      },
+      async lookupByCode({ connectionId: id }) {
+        connectionId = id;
+        return { ok: false, status: 502, error: "provider unavailable" };
+      },
+    }),
+  );
   assert.equal(connectionId, "connection-x");
 });
 
-test("a Commerce7 redemption never enters Shopify token or lookup handling", async () => {
+test("a Commerce7 redemption is retained when its provider lookup is unsupported", async () => {
   const row = makeRow({ provider: CommerceProvider.COMMERCE7 });
   let lookupCalls = 0;
-  let tokenProvider: CommerceProvider | null = null;
   const deps = makeDeps({
     async selectCandidates() {
       return [row];
     },
-    async getToken(_brandId, _connectionId, provider) {
-      tokenProvider = provider;
-      return { ok: false, reason: "provider credential unavailable" };
-    },
     async lookupByCode() {
       lookupCalls++;
-      return { ok: true, exists: false };
+      return { ok: false, status: 501, error: "provider unsupported" };
     },
   });
 
   const summary = await reconcileStuckRedemptionsWithDeps(deps);
-  assert.equal(tokenProvider, CommerceProvider.COMMERCE7);
-  assert.equal(lookupCalls, 0);
+  assert.equal(lookupCalls, 1);
   assert.equal(summary.retained, 1);
 });
 

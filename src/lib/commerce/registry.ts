@@ -2,17 +2,12 @@
  * src/lib/commerce/registry.ts
  *
  * A small dependency-injected registry that maps a `CommerceProvider` to a
- * lazily-constructed, memoized `CommerceAdapter`. Built for testability
- * before any concrete adapter exists: callers supply a
+ * lazily-constructed, memoized `CommerceAdapter`. Callers supply a
  * `Partial<Record<CommerceProvider, CommerceAdapterFactory>>`, so tests can
  * register fake adapters without touching real provider SDKs or the network.
  *
- * NOTE: This file intentionally does NOT import the Shopify adapter (or any
- * other concrete provider). A later agent adds
- * `src/lib/commerce/default-registry.ts`, which wires
- * `SHOPIFY -> ShopifyCommerceAdapter` using `createCommerceAdapterRegistry`
- * from this file. Keeping that wiring out of `registry.ts` is what lets this
- * module — and its tests — exist independently of the Shopify adapter.
+ * This file intentionally does not import concrete providers. Production
+ * wiring lives in `default-registry.ts`; tests may register isolated fakes.
  */
 
 import type { CommerceProvider } from "@prisma/client";

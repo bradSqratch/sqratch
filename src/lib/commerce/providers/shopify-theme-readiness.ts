@@ -11,6 +11,7 @@ import type {
 
 type ThemeReadinessInput = {
   brandId: string;
+  connectionId: string;
   shopDomain: string;
   /**
    * The install-time Shopify app client id. No longer used to MATCH the
@@ -104,12 +105,16 @@ export async function getShopifyThemeTrackingReadiness(
 
   const getToken = deps.getAccessToken ?? getValidAccessToken;
   const fetchImpl = deps.fetchImpl ?? fetch;
-  // Scope authority was checked against the provider-neutral summary above;
-  // the token lifecycle helper must not re-authorize this request from the
-  // legacy Brand scope mirror.
+  // Scope authority was checked against the canonical provider-neutral
+  // connection summary above; skip the token helper's baseline-scope gate
+  // because theme readiness specifically reports the read_themes capability.
   let token: Awaited<ReturnType<typeof getValidAccessToken>>;
   try {
-    token = await getToken(input.brandId, { skipScopeCheck: true });
+    token = await getToken(input.brandId, {
+      connectionId: input.connectionId,
+      expectedExternalAccountId: input.shopDomain,
+      skipScopeCheck: true,
+    });
   } catch {
     return result("UNKNOWN");
   }

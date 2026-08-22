@@ -13,7 +13,7 @@ process.env.APP_ENCRYPTION_KEY = "dummy-encryption-key-at-least-32-chars-long";
  *
  * No real DB and no real network anywhere in this file — every DB-backed or
  * network-backed dependency (`getContext`, `getConnectionSummary`,
- * `getCredential`, `registry`, `fetchProductsDirect`) is injected via the
+ * `getCredential`, and `registry`) is injected via the
  * routes' own `Partial<...Deps>` parameter, the same idiom already used by
  * `tests/commerce-connection-service.test.ts` and
  * `tests/shopify-commerce-adapter.test.ts`. Both route impls
@@ -26,18 +26,12 @@ process.env.APP_ENCRYPTION_KEY = "dummy-encryption-key-at-least-32-chars-long";
  *  1.  Status route: exact key set + values of the 200 body for connected /
  *      disconnected / uninstalled / requires-reconnect / never-connected.
  *  2.  Status route: context-failure (403 / 409) and 500 branches unchanged.
- *  3.  Status route: identical output whether or not a CommerceConnection
- *      row exists (mirror present-and-agreeing vs legacy fallback vs a
- *      mirror that DISAGREES with legacy — proving the "prefer legacy on any
- *      mismatch" safety net actually fires).
+ *  3.  Status route: canonical connection status is authoritative.
  *  4.  Products route: 200 body exact key set including meta.hasNextPage /
  *      meta.limit.
- *  5.  Products route: adapter path and legacy-fallback path produce
- *      BYTE-IDENTICAL responses (deep-equal the two JSON payloads).
- *  6.  Products route: fetch failure maps to the same {error} body and
- *      status as today, for both the direct path and the adapter path.
- *  7.  Products route: not-connected 400 body unchanged (all three legacy
- *      gate sub-conditions).
+ *  5.  Products route: adapter path preserves the established response.
+ *  6.  Products route: fetch failures preserve the established error shape.
+ *  7.  Products route: not-connected 400 body remains unchanged.
  *  8.  Products route: Brand.shopifyLastProductSyncAt is still stamped (and
  *      only on success).
  *  9.  Products route: no product is ever persisted (asserted both via a
@@ -175,17 +169,9 @@ function makeSummary(
     installedAt: brand.shopifyInstalledAt,
     uninstalledAt: brand.shopifyUninstalledAt,
     lastProductSyncAt: brand.shopifyLastProductSyncAt,
-    isLegacyFallback: false,
     currencyCode: brand.shopifyCurrencyCode,
     ...overrides,
   };
-}
-
-function legacyFallbackSummary(brand: FullBrandFixture): CommerceConnectionSummary | null {
-  if (!brand.shopifyShopDomain) {
-    return null;
-  }
-  return makeSummary(brand, { id: null, isLegacyFallback: true });
 }
 
 /** Every method throws unless overridden — an unexpected call fails loudly. */
@@ -242,9 +228,6 @@ function makeProductsDeps(overrides: Partial<BrandShopifyProductsDeps> = {}): Br
       throw new Error("getConnectionSummary should not be called in this test");
     },
     registry: createCommerceAdapterRegistry({}),
-    async fetchProductsDirect() {
-      throw new Error("fetchProductsDirect should not be called in this test");
-    },
     ...overrides,
   };
 }
@@ -420,16 +403,9 @@ describe("brand/shopify/status route contract", () => {
 
     for (const { label, brand: brandOverrides } of cases) {
       const brand = makeBrand(brandOverrides);
-      // PHASE 14B.4B: the summary is now the CANONICAL source for identity,
-      // status, and grantedScopes — `findTokenExtra` no longer carries any of
-      // this. `legacyFallbackSummary` models a genuine pre-cutover brand
-      // (no CommerceConnection row), which is the correct fixture shape for
-      // a response contract test that must stay byte-identical to today's
-      // behavior for a brand that predates the cutover.
+      // The summary is the canonical source for identity, status, and scopes.
       const summary = brand.shopifyShopDomain
         ? makeSummary(brand, {
-            id: null,
-            isLegacyFallback: true,
             grantedScopes: ["read_products", "write_discounts"],
           })
         : null;
@@ -547,7 +523,7 @@ describe("brand/shopify/status route contract", () => {
     assert.deepEqual(erroredJson, { error: "Failed to load Shopify status." });
   });
 
-  test("3. PHASE 14B.4B: the CANONICAL row is authoritative whether it is absent, agreeing, or DISAGREEING with legacy — a stale Brand mirror never overrides it", async () => {
+  test("3. canonical connection status is authoritative", async () => {
     const brand = makeBrand({ shopifyConnectionStatus: "CONNECTED" });
     const baseDeps = {
       async getContext() {
@@ -558,44 +534,22 @@ describe("brand/shopify/status route contract", () => {
       },
     };
 
-    // (a) No CommerceConnection row at all -> legacy fallback (id: null) —
-    // the ONLY case that still reads Brand.shopify* for identity/status.
-    const noRow = await statusGetImpl(
-      makeStatusDeps({
-        ...baseDeps,
-        async getConnectionSummary() {
-          return legacyFallbackSummary(brand);
-        },
-      }),
-    );
-    const noRowJson = await noRow.json();
-    assert.equal(noRowJson.data.shopifyConnectionStatus, "CONNECTED");
-
-    // (b) A CommerceConnection row exists and agrees with legacy (the
-    // common, healthy case).
     const agreeingRow = await statusGetImpl(
       makeStatusDeps({
         ...baseDeps,
         async getConnectionSummary() {
-          return makeSummary(brand, { isLegacyFallback: false });
+          return makeSummary(brand);
         },
       }),
     );
     const agreeingJson = await agreeingRow.json();
-    assert.deepEqual(noRowJson, agreeingJson, "no-row vs agreeing-row must match");
+    assert.equal(agreeingJson.data.shopifyConnectionStatus, "CONNECTED");
 
-    // (c) A CommerceConnection row exists but DISAGREES with legacy (legacy
-    // says CONNECTED, canonical says DISCONNECTED) — this is exactly the
-    // "stale Brand mirror" scenario the independent review flagged: the
-    // CANONICAL value must win, never the legacy one, because as of
-    // Phase 14B canonical is written FIRST and Brand can lag or fail
-    // independently — the reverse of the old assumption.
     const disagreeingRow = await statusGetImpl(
       makeStatusDeps({
         ...baseDeps,
         async getConnectionSummary() {
           return makeSummary(brand, {
-            isLegacyFallback: false,
             status: "DISCONNECTED",
           });
         },
@@ -606,7 +560,7 @@ describe("brand/shopify/status route contract", () => {
     assert.equal(
       disagreeingJson.data.shopifyConnectionStatus,
       "DISCONNECTED",
-      "the CANONICAL status must win over a disagreeing legacy Brand value",
+      "the canonical status must be returned",
     );
     assert.notDeepEqual(
       disagreeingJson,
@@ -627,7 +581,7 @@ describe("brand/shopify/status route contract", () => {
       providerClientId: string | null,
     ): Promise<unknown> {
       const brand = makeBrand(brandOverrides);
-      const summary = brand.shopifyShopDomain ? makeSummary(brand, { isLegacyFallback: false }) : null;
+      const summary = brand.shopifyShopDomain ? makeSummary(brand ) : null;
       const response = await statusGetImpl(
         makeStatusDeps({
           async getContext() {
@@ -680,6 +634,14 @@ describe("brand/shopify/status route contract", () => {
 describe("brand/shopify/products route contract", () => {
   test("4. 200 body exact key set including meta.hasNextPage / meta.limit", async () => {
     const brand = makeBrand();
+    const { registry } = makeAdapterRegistry({
+      async loadConnection() {
+        return fakeConnectionRow();
+      },
+      async fetchProducts() {
+        return { ok: true, items: [canonicalProduct], hasNextPage: true, limit: 100, endCursor: null };
+      },
+    });
 
     const response = await productsGetImpl(
       makeProductsDeps({
@@ -687,11 +649,9 @@ describe("brand/shopify/products route contract", () => {
           return makeContext(brand);
         },
         async getConnectionSummary() {
-          return legacyFallbackSummary(brand);
+          return makeSummary(brand);
         },
-        async fetchProductsDirect() {
-          return { ok: true, items: [canonicalProduct], hasNextPage: true, limit: 100, endCursor: null };
-        },
+        registry,
       }),
     );
 
@@ -706,36 +666,19 @@ describe("brand/shopify/products route contract", () => {
     assert.deepEqual(json.data[0], expectedProductResponseItem);
   });
 
-  test("5. adapter path and legacy-fallback path produce BYTE-IDENTICAL responses", async () => {
+  test("5. canonical adapter path preserves the established response", async () => {
     const brand = makeBrand();
-
-    // (a) Legacy fallback path: no real CommerceConnection.id.
-    const directResponse = await productsGetImpl(
-      makeProductsDeps({
-        async getContext() {
-          return makeContext(brand);
-        },
-        async getConnectionSummary() {
-          return legacyFallbackSummary(brand);
-        },
-        async fetchProductsDirect(input) {
-          assert.deepEqual(input, { shopDomain: brand.shopifyShopDomain, brandId: brand.id, limit: 100 });
-          return { ok: true, items: [canonicalProduct], hasNextPage: true, limit: 100, endCursor: null };
-        },
-      }),
-    );
-    const directJson = await directResponse.json();
-
-    // (b) Adapter path: a real CommerceConnection.id, resolved through the
-    // registry to a REAL ShopifyCommerceAdapter (with the DB/network deps
-    // injected) — not a hand-rolled route-level mock.
     const { registry } = makeAdapterRegistry({
       async loadConnection(connectionId) {
         assert.equal(connectionId, "conn-1");
         return fakeConnectionRow({ externalAccountId: brand.shopifyShopDomain! });
       },
       async fetchProducts(input) {
-        assert.deepEqual(input, { shopDomain: brand.shopifyShopDomain, brandId: brand.id });
+        assert.deepEqual(input, {
+          shopDomain: brand.shopifyShopDomain,
+          brandId: brand.id,
+          connectionId: "conn-1",
+        });
         return { ok: true, items: [canonicalProduct], hasNextPage: true, limit: 100, endCursor: null };
       },
     });
@@ -745,41 +688,19 @@ describe("brand/shopify/products route contract", () => {
           return makeContext(brand);
         },
         async getConnectionSummary() {
-          return makeSummary(brand, { isLegacyFallback: false });
+          return makeSummary(brand);
         },
         registry,
-        async fetchProductsDirect() {
-          throw new Error("the adapter path must never call fetchProductsDirect");
-        },
       }),
     );
     const adapterJson = await adapterResponse.json();
 
-    assert.equal(directResponse.status, 200);
     assert.equal(adapterResponse.status, 200);
-    assert.deepEqual(directJson, adapterJson, "direct and adapter paths must be byte-identical");
-    assert.deepEqual(directJson.data[0], expectedProductResponseItem);
+    assert.deepEqual(adapterJson.data[0], expectedProductResponseItem);
   });
 
-  test("6. fetch failure maps to the same {error} body and status as today, for both paths", async () => {
+  test("6. adapter fetch failure preserves the established {error} response", async () => {
     const brand = makeBrand();
-
-    // Direct path failure.
-    const directFail = await productsGetImpl(
-      makeProductsDeps({
-        async getContext() {
-          return makeContext(brand);
-        },
-        async getConnectionSummary() {
-          return legacyFallbackSummary(brand);
-        },
-        async fetchProductsDirect() {
-          return { ok: false, status: 502, tokenReason: undefined, error: "Shopify returned an error." };
-        },
-      }),
-    );
-    assert.equal(directFail.status, 502);
-    assert.deepEqual(await directFail.json(), { error: "Shopify returned an error." });
 
     // Adapter path failure — the adapter throws CommerceProviderApiError
     // carrying the SAME upstream status via httpStatus; the route must map
@@ -803,7 +724,7 @@ describe("brand/shopify/products route contract", () => {
           return makeContext(brand);
         },
         async getConnectionSummary() {
-          return makeSummary(brand, { isLegacyFallback: false });
+          return makeSummary(brand );
         },
         registry,
       }),
@@ -816,9 +737,9 @@ describe("brand/shopify/products route contract", () => {
     // PHASE 14B.4B: the gate is now `!summary || !isConnectionUsable(summary)`
     // — no independent `Brand.shopifyAdminAccessTokenEncrypted` check exists
     // any more (see connection-service.ts's `isConnectionUsable` doc comment
-    // for the write-path invariant this relies on: CONNECTED is written ONLY
-    // together with a credential, for both the canonical and legacy-fallback
-    // paths, so "status === CONNECTED" already implies "credential present").
+    // for the write-path invariant this relies on: CONNECTED is written only
+    // together with the canonical credential, so "status === CONNECTED"
+    // already implies "credential present").
     // A "CONNECTED but no credential" row is therefore not a state the
     // canonical layer can independently express — and if it somehow existed
     // anyway, the downstream credential resolution
@@ -831,7 +752,7 @@ describe("brand/shopify/products route contract", () => {
       ["no connection at all", null],
       [
         "status not CONNECTED",
-        makeSummary(makeBrand(), { isLegacyFallback: false, status: "DISCONNECTED" }),
+        makeSummary(makeBrand(), { status: "DISCONNECTED" }),
       ],
     ];
 
@@ -866,6 +787,14 @@ describe("brand/shopify/products route contract", () => {
 
   test("9. no product is ever persisted", async () => {
     const brand = makeBrand();
+    const { registry } = makeAdapterRegistry({
+      async loadConnection() {
+        return fakeConnectionRow();
+      },
+      async fetchProducts() {
+        return { ok: true, items: [canonicalProduct], hasNextPage: false, limit: 100, endCursor: null };
+      },
+    });
 
     // Nothing in this DI graph touches a database at all on a successful
     // fetch — a persistence call is structurally impossible here; this
@@ -876,11 +805,9 @@ describe("brand/shopify/products route contract", () => {
           return makeContext(brand);
         },
         async getConnectionSummary() {
-          return legacyFallbackSummary(brand);
+          return makeSummary(brand);
         },
-        async fetchProductsDirect() {
-          return { ok: true, items: [canonicalProduct], hasNextPage: false, limit: 100, endCursor: null };
-        },
+        registry,
       }),
     );
 
@@ -919,7 +846,7 @@ describe("brand/shopify/products route contract", () => {
           return makeContext(brand);
         },
         async getConnectionSummary() {
-          return makeSummary(brand, { isLegacyFallback: false });
+          return makeSummary(brand );
         },
         registry,
       }),
@@ -936,7 +863,6 @@ describe("brand/shopify/products route contract", () => {
     // adapter today.
     const registry: CommerceAdapterRegistry = createCommerceAdapterRegistry({});
 
-    let directFetchCalled = false;
     const response = await productsGetImpl(
       makeProductsDeps({
         async getContext() {
@@ -944,19 +870,13 @@ describe("brand/shopify/products route contract", () => {
         },
         async getConnectionSummary() {
           return makeSummary(brand, {
-            isLegacyFallback: false,
             provider: CommerceProvider.COMMERCE7,
           });
         },
         registry,
-        async fetchProductsDirect() {
-          directFetchCalled = true;
-          throw new Error("must never be called for an unsupported provider");
-        },
       }),
     );
 
-    assert.equal(directFetchCalled, false, "no Shopify-specific direct fetch (and so no network call) for COMMERCE7");
     assert.equal(response.status, 500);
     assert.deepEqual(await response.json(), { error: "Failed to load Shopify products." });
 

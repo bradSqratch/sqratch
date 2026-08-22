@@ -166,7 +166,10 @@ export async function POST(request: NextRequest) {
     //    credential failure (token already cleared) is never eligible here,
     //    and this never runs for a connection that was already healthy.
     if (result.applied && result.wasScopeDriftReconnect) {
-      healedConnection = await healScopeDriftReconnect(result.brandId).catch(() => false);
+      healedConnection = await healScopeDriftReconnect(
+        result.brandId,
+        result.connectionId,
+      ).catch(() => false);
     }
   } catch {
     // Never log the error object — it can carry a connection string.

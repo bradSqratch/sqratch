@@ -29,8 +29,8 @@
  *      legacy fallback.
  *
  * SECURITY: nothing exported from this file ever reads or returns
- * `CommerceConnectionSecret`, `Brand.shopifyAdminAccessTokenEncrypted`, or
- * any other credential column. `CommerceConnectionSummary` has no
+ * `CommerceConnectionSecret` or any credential column.
+ * `CommerceConnectionSummary` has no
  * credential field by construction (see `./types.ts`).
  *
  * TESTABILITY: dependency injection follows the same idiom as
@@ -54,9 +54,7 @@ import type { CommerceConnectionSummary } from "./types";
  * always using the raw shop domain because "acme" reads better than
  * "acme.myshopify.com" in UI contexts — the `.myshopify.com` suffix is
  * stripped when present, leaving custom domains untouched. Falls back to
- * the brand name when no domain is known (defensive — callers of
- * `mapLegacyBrandToConnectionSummary` never hit this branch since a summary
- * is only built once a domain is confirmed present), and finally to a
+ * the brand name when no domain is known (defensive), and finally to a
  * static placeholder so this never returns an empty string.
  */
 export function deriveShopifyDisplayName(
@@ -76,11 +74,10 @@ export function deriveShopifyDisplayName(
 }
 
 /**
- * Normalizes the legacy `Brand.shopifyGrantedScopes` shape (a
- * comma-separated string, or `null`) into `string[]`, trimming each entry
- * and dropping empties.
+ * Normalizes a comma-separated scope string into `string[]`, trimming each
+ * entry and dropping empties before canonical persistence.
  */
-export function normalizeLegacyGrantedScopes(
+export function normalizeGrantedScopes(
   raw: string | null | undefined,
 ): string[] {
   if (!raw) {
@@ -169,7 +166,6 @@ export function mapCommerceConnectionToSummary(
     installedAt: row.installedAt,
     uninstalledAt: row.uninstalledAt,
     lastProductSyncAt: row.lastProductSyncAt,
-    isLegacyFallback: false,
     currencyCode: extractCurrencyCodeFromProviderMetadata(row.providerMetadata),
   };
 }

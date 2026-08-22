@@ -20,8 +20,8 @@ test("Shopify scopes stay aligned across server and both CLI configs", () => {
 // Shopify-managed installation, what an ALREADY-INSTALLED merchant actually
 // holds can change server-side (Shopify grants a newly declared scope without
 // a re-OAuth). `app/scopes_update` is the only signal that reports that change,
-// so both configs must subscribe to it or SQRATCH's cached
-// `Brand.shopifyGrantedScopes` silently drifts from the real grant. Both
+// so both configs must subscribe to it or canonical
+// `CommerceConnection.grantedScopes` silently drifts from the real grant. Both
 // configs must also keep managed installation on — `use_legacy_install_flow`
 // absent, or present and false — since the legacy flow is what would make the
 // topic meaningless.

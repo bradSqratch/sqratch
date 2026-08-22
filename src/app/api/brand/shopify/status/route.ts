@@ -31,9 +31,13 @@ export type BrandShopifyStatusDeps = {
   /** Resolves the brand's provider-neutral Shopify connection summary. */
   getConnectionSummary(brandId: string): Promise<CommerceConnectionSummary | null>;
   /** Classifies the canonical Shopify credential (presence, authMode, expiry, scopes). Defaults to `loadShopifyCredential`. */
-  getCredential(brandId: string): ReturnType<typeof loadShopifyCredential>;
+  getCredential(
+    brandId: string,
+    connectionId?: string,
+  ): ReturnType<typeof loadShopifyCredential>;
   getThemeReadiness?(input: {
     brandId: string;
+    connectionId: string;
     shopDomain: string;
     apiKey: string;
     grantedScopes: string[];
@@ -48,13 +52,17 @@ export type BrandShopifyStatusDeps = {
    */
   reconcileScopes?(
     brandId: string,
+    connectionId: string,
   ): Promise<{ healedConnection: boolean; grantedScopes: string[] } | null>;
 };
 
 async function defaultReconcileScopes(
   brandId: string,
+  connectionId: string,
 ): Promise<{ healedConnection: boolean; grantedScopes: string[] } | null> {
-  const result = await reconcileShopifyConnectionScopes(brandId);
+  const result = await reconcileShopifyConnectionScopes(brandId, {
+    connectionId,
+  });
   return result.outcome === "RECONCILED"
     ? { healedConnection: result.healedConnection, grantedScopes: result.grantedScopes }
     : null;
@@ -64,7 +72,8 @@ const DEFAULT_DEPS: BrandShopifyStatusDeps = {
   getContext: getBrandManagementContext,
   getConnectionSummary: (brandId) =>
     getActiveCommerceConnection(brandId, CommerceProvider.SHOPIFY),
-  getCredential: (brandId) => loadShopifyCredential(brandId),
+  getCredential: (brandId, connectionId) =>
+    loadShopifyCredential(brandId, undefined, connectionId),
   getThemeReadiness: (input) => getShopifyThemeTrackingReadiness(input),
   reconcileScopes: defaultReconcileScopes,
 };
@@ -89,12 +98,8 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
 
     const brand = context.membership.brand;
 
-    // CANONICAL FIRST. `getActiveCommerceConnection` is genuinely
-    // canonical-first as of Phase 14B.4B: a `CommerceConnection` row always
-    // wins when one exists, with no legacy-agreement check — a stale
-    // `Brand.shopify*` mirror can no longer override or disagree-with-and-win
-    // over it. Legacy is consulted only for a genuine pre-cutover brand (no
-    // canonical row at all), inside `getActiveCommerceConnection` itself.
+    // Canonical connection identity, status, account, scopes, and storefront
+    // facts come exclusively from CommerceConnection.
     const summary = await deps.getConnectionSummary(brand.id);
     let connectionStatus: string = summary?.status ?? "DISCONNECTED";
     let requiresReconnect = connectionStatus === "REQUIRES_RECONNECT";
@@ -111,8 +116,11 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
     // throws: a failed reconciliation attempt (genuine credential failure, or
     // a transient error) leaves every field exactly as it already was, so
     // this route's response is never worse than before the attempt.
-    if (requiresReconnect && deps.reconcileScopes) {
-      const reconciled = await deps.reconcileScopes(brand.id).catch(() => null);
+    if (requiresReconnect && summary && deps.reconcileScopes) {
+      const reconciled = await deps.reconcileScopes(
+        brand.id,
+        summary.id,
+      ).catch(() => null);
       if (reconciled?.healedConnection) {
         connectionStatus = "CONNECTED";
         requiresReconnect = false;
@@ -129,7 +137,7 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
     // heal never rewrites the credential itself — see
     // `healShopifyCredentialConnected` — only status, so freshness here is
     // about the status/summary having just changed, not the credential).
-    const credential = await deps.getCredential(brand.id);
+    const credential = await deps.getCredential(brand.id, summary?.id);
     const hasShopifyAccessToken =
       credential.outcome === "OK" && credential.credential.accessToken !== null;
     const shopifyAuthMode = credential.outcome === "OK" ? credential.credential.authMode : "LEGACY_OFFLINE";
@@ -185,9 +193,10 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
     const orderAttributionReady = canonicalGrantedScopes.includes("read_orders");
     const themeVerificationScopeReady = canonicalGrantedScopes.includes("read_themes");
     const themeTracking =
-      shopifyShopDomain && providerClientId && deps.getThemeReadiness
+      summary && shopifyShopDomain && providerClientId && deps.getThemeReadiness
         ? await deps.getThemeReadiness({
             brandId: brand.id,
+            connectionId: summary.id,
             shopDomain: shopifyShopDomain,
             apiKey: providerClientId,
             grantedScopes: canonicalGrantedScopes,

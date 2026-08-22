@@ -103,7 +103,8 @@ export async function refreshStatusImpl(
     }
 
     const tokenResult = await getValidAccessToken(redemption.brandId, {
-      connectionId: canonicalConnection.id!,
+      connectionId: canonicalConnection.id,
+      expectedExternalAccountId: canonicalConnection.externalAccountId,
     });
     if (!tokenResult.ok) {
       return NextResponse.json(

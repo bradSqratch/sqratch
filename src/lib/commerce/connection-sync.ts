@@ -30,14 +30,12 @@
  * `prisma.commerceConnection.upsert(...)`. Re-running a sync for the same
  * shop domain always updates the same row — it can never create a
  * duplicate. This is also how RELINK is handled: when a shop domain that
- * used to belong to brand A is relinked to brand B (mirroring
- * `src/app/api/shopify/installations/[installId]/route.ts`'s relink
- * semantics, which reassign `Brand.shopifyShopDomain` from A to B), the
+ * used to belong to brand A is relinked to brand B, the
  * upsert's `update` branch reassigns `brandId` on the SAME row rather than
  * creating a second one or failing — there is no unique index on
  * `[brandId, provider]`, only on `[provider, externalAccountId]`, so a
  * shop domain can only ever be "owned" by one `CommerceConnection` row at a
- * time, exactly like `Brand.shopifyShopDomain @unique` today.
+ * time.
  *
  * SINGLE-PRIMARY ENFORCEMENT: a connection becomes primary iff the brand
  * has no OTHER `CONNECTED` connection for that provider (excluding this
@@ -64,8 +62,8 @@
  * maps both onto a 409 the client retries).
  *
  * CREDENTIAL AUTHORITY: `CommerceConnectionSecret.encryptedPayload` is the
- * SOLE runtime credential source (Phase 14) — `getValidAccessToken(brandId)`
- * (`src/lib/shopify-token-manager.ts`) reads exactly this row, via
+ * SOLE runtime credential source (Phase 14) — account-specific callers use
+ * `getValidAccessToken(brandId, { connectionId })`, which reads exactly this row via
  * `loadShopifyCredential`, and nothing else. The payload holds the DECRYPTED
  * credential values (re-encrypted as one blob via `encryptSecret`) plus
  * expiries and auth mode — see `ShopifyConnectionSecretPayload` below.
@@ -76,7 +74,7 @@
 
 import { CommerceProvider, Prisma, type CommerceConnectionStatus } from "@prisma/client";
 import { encryptSecret } from "@/lib/crypto";
-import { deriveShopifyDisplayName, normalizeLegacyGrantedScopes } from "./connection-resolver";
+import { deriveShopifyDisplayName, normalizeGrantedScopes } from "./connection-resolver";
 
 type TxClient = Prisma.TransactionClient;
 
@@ -194,7 +192,7 @@ export function buildShopifyConnectionSyncInputFromInstall(
     installedAt: facts.installedAt,
     uninstalledAt: null,
     lastProductSyncAt: facts.lastProductSyncAt,
-    grantedScopes: normalizeLegacyGrantedScopes(facts.grantedScopes),
+    grantedScopes: normalizeGrantedScopes(facts.grantedScopes),
     providerMetadata: { currencyCode: facts.currencyCode },
     secretPayload: {
       accessToken: facts.accessToken,
@@ -354,7 +352,7 @@ async function applyShopifyConnectionSync(
       },
     });
   } else {
-    // No token on the Brand row (disconnected / uninstalled / redacted) —
+    // No credential was supplied (disconnected / uninstalled / redacted) —
     // delete rather than write an empty/placeholder payload. `deleteMany`
     // (not `delete`) so this is a no-op, never a throw, when no secret
     // exists yet.
@@ -375,10 +373,8 @@ async function applyShopifyConnectionSync(
  * Deletes the single `CommerceConnection` row keyed on
  * `(provider, externalAccountId)` for the shop domain being redacted —
  * NOT every connection belonging to whichever brand currently owns a
- * `shopifyShopDomain`. This is deliberate: the brand that owned `shopDomain`
- * at install time may no longer be the brand whose `Brand.shopifyShopDomain`
- * currently equals it (a later relink can move that legacy column to a
- * different shop entirely), and a brand may legitimately hold more than one
+ * connection. This is deliberate: a later relink may assign the shop to a
+ * different brand, and a brand may legitimately hold more than one
  * Shopify `CommerceConnection` once multi-store ships. Keying the delete on
  * the domain itself (rather than resolving a brand and deleting all of that
  * brand's rows) is correct in both cases: it always removes exactly the row
@@ -473,12 +469,12 @@ export async function applyShopifyConnectionSyncFromInstall(
  * Deletes the `CommerceConnection` row for the Shopify shop domain being
  * redacted — used by the `shop/redact` GDPR path. Keyed on
  * `(provider, externalAccountId)`, i.e. the redacted domain itself, NOT on
- * whichever brand currently happens to hold `Brand.shopifyShopDomain ===
- * shopDomain` — see `applyDeleteShopifyConnectionByShopDomain`'s doc comment
+ * whichever brand currently happens to own the shop — see
+ * `applyDeleteShopifyConnectionByShopDomain`'s doc comment
  * for why. `shopDomain` is normalized via `normalizeExternalAccountId` (trim
  * + lowercase) — the SAME helper `buildShopifyConnectionSyncInput` uses for
  * the write side — to match how `verifyShopifyWebhookRequest` normalizes the
- * incoming domain and how the dual-write's `externalAccountId` key is
+ * incoming domain and how the canonical write's `externalAccountId` key is
  * derived. Secrets cascade-delete automatically. A no-op (never a throw)
  * when no row exists.
  */

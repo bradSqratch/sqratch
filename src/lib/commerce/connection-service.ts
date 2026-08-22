@@ -13,9 +13,9 @@
  * ---------------------------------------------------------------------------
  * CANONICAL IS THE ONLY AUTHORITY (`getActiveCommerceConnection`)
  * ---------------------------------------------------------------------------
- * PHASE 14C-A: `CommerceConnection` is the SOLE runtime credential/connection
- * authority. Every currently installed Shopify merchant already has a
- * canonical `CommerceConnection` + `CommerceConnectionSecret`
+ * PHASE 14C-A: `CommerceConnection` is the SOLE runtime connection
+ * identity/status/account authority. Every currently installed Shopify merchant has
+ * a canonical connection, while each provider owns its own credential policy.
  * (operator-verified live DB evidence — see the Phase 14C-A brief) — there
  * is no legitimate legacy source of truth left to fall back to:
  *
@@ -36,10 +36,15 @@
  * WHY `isConnectionUsable` DOESN'T CHECK A TOKEN FIELD
  * ---------------------------------------------------------------------------
  * `CommerceConnectionSummary` never carries a credential field by
- * construction (see `./types.ts`), so a token-presence leg cannot be
- * expressed directly against a summary. Instead this relies on an
- * invariant every write path upholds (verified by inspection, not merely
- * assumed):
+ * construction (see `./types.ts`). Connection usability is therefore a
+ * status/account predicate only; the provider adapter enforces its own
+ * credential policy before transport. Shopify requires a connection-bound
+ * `CommerceConnectionSecret`; a future Commerce7 adapter will use an
+ * app-global backend credential together with the exact tenant connection
+ * identity, without requiring a connection secret merely because status is
+ * `CONNECTED`.
+ *
+ * For Shopify, the following write-path invariant remains relevant:
  *   - `CommerceConnection.status` is set to `CONNECTED` ONLY in the same
  *     transaction that also writes a `CommerceConnectionSecret` row
  *     (`applyShopifyConnectionSyncFromInstall` in `./connection-sync.ts`),
@@ -53,10 +58,8 @@
  *     `app/uninstalled` / `shop/redact` / embedded disconnect) and
  *     `markShopifyCredentialRequiresReconnect` (`invalid_grant`) — both in
  *     `./providers/shopify-credential-store.ts`.
- * So for any summary this service can produce, `status === "CONNECTED"` is
- * equivalent to "domain present + canonical credential present + status
- * CONNECTED" — not an approximation, a direct consequence of those write
- * paths.
+ * Shopify's adapter verifies its credential at use time; this generic service
+ * intentionally does not infer that rule for other providers.
  *
  * ---------------------------------------------------------------------------
  * `getCommerceCapabilities` NEVER THROWS (a deliberate, consistent choice)
@@ -426,10 +429,8 @@ export async function recordCommerceConnectionCurrencyCode(
 
 /**
  * Looks up a connection by its own `CommerceConnection.id`. Unlike
- * `getActiveCommerceConnection`, there is no legacy fallback here — a
- * legacy-derived summary always has `id: null`, so it can never be the
- * target of an id lookup in the first place. Returns `null` if no row with
- * this id exists.
+ * `getActiveCommerceConnection`, this resolves only the requested persisted
+ * row. Returns `null` if no row with this id exists.
  */
 export async function getCommerceConnectionById(
   connectionId: string,
@@ -477,10 +478,18 @@ export function getCommerceCapabilities(
 
   if (!adapter) {
     return {
-      canSyncProducts: false,
-      canCreateDiscount: false,
-      canRevokeDiscount: false,
-      canVerifyWebhooks: false,
+      products: { sync: false, publicDestinations: false },
+      rewards: {
+        create: false,
+        lookup: false,
+        usageLookup: false,
+        revoke: false,
+        fixedAmount: false,
+        percentage: false,
+        minimumSubtotal: false,
+        productSpecific: false,
+        singleUse: false,
+      },
     };
   }
 
@@ -510,13 +519,8 @@ export function getAdapterForConnection(
 // ---------------------------------------------------------------------------
 
 /**
- * True when `summary` represents a connection today's routes would treat as
- * "connected" — reproduces the exact three-part gate used today (e.g.
- * `src/app/api/brand/shopify/products/route.ts`,
- * `src/lib/lesson-product-links.ts`'s `CandidateBrand` check), see the file
- * header for the invariant that lets `status === "CONNECTED"` stand in for
- * the token-presence leg. `externalAccountId` is checked too as a
- * documented no-op — see the file header.
+ * Provider-neutral usability checks only connection state and account
+ * identity. Each provider implementation owns any credential requirement.
  */
 export function isConnectionUsable(summary: CommerceConnectionSummary): boolean {
   return summary.status === "CONNECTED" && summary.externalAccountId.trim().length > 0;

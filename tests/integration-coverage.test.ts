@@ -7,8 +7,13 @@ import { test, describe, before, afterEach } from "node:test";
 import { strict as assert } from "node:assert";
 import { NextRequest } from "next/server";
 import * as crypto from "crypto";
+import { CommerceProvider } from "@prisma/client";
 import { encryptSecret } from "../src/lib/crypto";
 import { getValidAccessToken } from "../src/lib/shopify-token-manager";
+import { createCommerceAdapterRegistry } from "../src/lib/commerce/registry";
+import type { CommerceAdapter } from "../src/lib/commerce/adapter";
+import type { CommerceConnectionSummary } from "../src/lib/commerce/types";
+import type { ShopifyRewardRedeemCommerceDeps } from "../src/app/api/rewards/shopify/redeem/route";
 import type {
   AuthResolvers,
   CustomSession,
@@ -48,7 +53,11 @@ let customersRedactPOST: (req: NextRequest) => Promise<Response>;
 let oauthCallbackImpl: (req: NextRequest, deps: AuthResolvers) => Promise<Response>;
 let installationsGetImpl: (req: NextRequest, context: { params: Promise<{ installId: string }> }, deps: AuthResolvers) => Promise<Response>;
 let installationsPostImpl: (req: NextRequest, context: { params: Promise<{ installId: string }> }, deps: AuthResolvers) => Promise<Response>;
-let redeemImpl: (req: NextRequest, deps: AuthResolvers) => Promise<Response>;
+let redeemImpl: (
+  req: NextRequest,
+  deps: AuthResolvers,
+  commerceDepsOverrides?: Partial<ShopifyRewardRedeemCommerceDeps>,
+) => Promise<Response>;
 let refreshStatusImpl: (req: NextRequest, context: { params: Promise<{ redemptionId: string }> }, deps: AuthResolvers) => Promise<Response>;
 let scanImpl: (req: NextRequest, deps: AuthResolvers) => Promise<Response>;
 let mergeImpl: (req: NextRequest, deps: AuthResolvers) => Promise<Response>;
@@ -65,6 +74,7 @@ let currentDeps: AuthResolvers = {
   resolveSession: async () => null,
   resolveBrandAdminContext: async () => null,
 };
+let currentRedeemCommerceDeps: Partial<ShopifyRewardRedeemCommerceDeps> = {};
 
 // Thin wrappers that keep the existing call sites unchanged while threading the
 // per-test injected dependencies into the route implementations.
@@ -77,7 +87,8 @@ const installationsPOST = (
   req: NextRequest,
   context: { params: Promise<{ installId: string }> },
 ) => installationsPostImpl(req, context, currentDeps);
-const redeemPOST = (req: NextRequest) => redeemImpl(req, currentDeps);
+const redeemPOST = (req: NextRequest) =>
+  redeemImpl(req, currentDeps, currentRedeemCommerceDeps);
 const refreshStatusPOST = (
   req: NextRequest,
   context: { params: Promise<{ redemptionId: string }> },
@@ -226,23 +237,14 @@ before(async () => {
     findMany: async () => [],
   };
   prismaModule.course = { findUnique: async () => null };
-  // Safe default for the provider-neutral commerce-connection mirror lookup
-  // (src/lib/commerce/connection-service.ts's getActiveCommerceConnection)
-  // that the reward redeem route now consults before falling back to the
-  // legacy direct Shopify call. No test here exercises a real
-  // CommerceConnection row, so an empty mirror is correct for every
-  // existing test — `getActiveCommerceConnection` treats "no row" + a
-  // legacy shop domain present as legacy-wins (commerceSummary.id === null),
-  // i.e. exactly the pre-cutover legacy path. Individual tests may still
-  // override this with `t.mock.method` if they need to assert on the
-  // adapter path specifically.
+  // Safe default for canonical commerce-connection lookups. Tests exercising
+  // connected commerce override this delegate explicitly; all others fail
+  // closed with no connection rather than falling back to Brand state.
   prismaModule.commerceConnection = {
     findMany: async () => [],
     findUnique: async () => null,
     // PHASE 14B.2: `loadShopifyCredential` joins `secret` via `findFirst`.
-    // Null keeps this harness on the classified NO_CONNECTION compatibility
-    // branch, which is exactly the "pre-cutover legacy path" this stub already
-    // documents itself as modelling.
+    // Null keeps this harness on the canonical NO_CONNECTION branch.
     findFirst: async () => null,
     update: async () => ({}),
     // PHASE 14B.3: the install route now writes the canonical connection
@@ -251,34 +253,33 @@ before(async () => {
     // connection rows fails loudly here; the install tests override them
     // with `t.mock.method` and assert on the ordering.
     count: async () => {
-      throw new Error("canonical connection must not be counted on the legacy path");
+      throw new Error("unexpected canonical connection count");
     },
     updateMany: async () => {
-      throw new Error("canonical connection must not be updated on the legacy path");
+      throw new Error("unexpected canonical connection update");
     },
     upsert: async () => {
-      throw new Error("canonical connection must not be written on the legacy path");
+      throw new Error("unexpected canonical connection write");
     },
-    // shop/redact's GDPR erasure. Default no-op so the legacy-path redact
-    // tests (which assert on the Brand scrub) are unaffected.
+    // shop/redact's GDPR erasure. Default no-op for tests that do not model a
+    // canonical connection.
     deleteMany: async () => ({ count: 0 }),
   };
-  // No canonical secret exists on the legacy path, so the canonical
-  // lease/rotation calls must be unreachable. Throwing (rather than returning
-  // a benign value) makes a regression that started using the canonical lease
-  // for a legacy-compat brand fail loudly instead of passing silently.
+  // No canonical secret exists in this default harness state, so
+  // lease/rotation calls must be unreachable. Throwing makes an unexpected
+  // credential access fail loudly instead of passing silently.
   prismaModule.commerceConnectionSecret = {
     findUnique: async () => {
-      throw new Error("canonical secret must not be read on the legacy path");
+      throw new Error("unexpected canonical secret read");
     },
     updateMany: async () => {
-      throw new Error("canonical lease must not be used on the legacy path");
+      throw new Error("unexpected canonical lease use");
     },
     deleteMany: async () => {
-      throw new Error("canonical secret must not be cleared on the legacy path");
+      throw new Error("unexpected canonical secret clear");
     },
     upsert: async () => {
-      throw new Error("canonical secret must not be written on the legacy path");
+      throw new Error("unexpected canonical secret write");
     },
   };
 
@@ -386,6 +387,7 @@ function clearMocks() {
     resolveSession: async () => null,
     resolveBrandAdminContext: async () => null,
   };
+  currentRedeemCommerceDeps = {};
 }
 
 describe("Route Scenario 1: Shopify Webhooks", () => {
@@ -2398,6 +2400,40 @@ describe("Route Scenario 4: Reward Redemption", () => {
     ]);
   }
 
+  function useRedeemCommerceAdapter(
+    connection: CommerceConnectionSummary,
+    createDiscount: NonNullable<CommerceAdapter["createDiscount"]>,
+  ) {
+    const adapter: CommerceAdapter = {
+      provider: CommerceProvider.SHOPIFY,
+      getCapabilities: () => ({
+        products: { sync: true, publicDestinations: true },
+        rewards: {
+          create: true,
+          lookup: true,
+          usageLookup: true,
+          revoke: false,
+          fixedAmount: true,
+          percentage: true,
+          minimumSubtotal: true,
+          productSpecific: true,
+          singleUse: true,
+        },
+      }),
+      getConnection: async () => ({ ok: true, connection }),
+      syncProducts: async () => {
+        throw new Error("syncProducts is not used by reward redemption");
+      },
+      createDiscount,
+    };
+    currentRedeemCommerceDeps = {
+      getConnectionSummary: async () => connection,
+      registry: createCommerceAdapterRegistry({
+        [CommerceProvider.SHOPIFY]: () => adapter,
+      }),
+    };
+  }
+
   test("point checks: returns 409 when user has insufficient points", async (t) => {
     setupMocks({ user: { id: "user-123", role: "USER" } });
     mockCanonicalConnection(t, {
@@ -2476,7 +2512,6 @@ describe("Route Scenario 4: Reward Redemption", () => {
       shopDomain: "test-shop.myshopify.com",
       currencyCode: "CAD",
     });
-
     t.mock.method(prisma.commerceRewardRedemption, "findUnique", async () => null);
 
     let pointsDebited = false;
@@ -2552,6 +2587,32 @@ describe("Route Scenario 4: Reward Redemption", () => {
       shopDomain: "test-shop.myshopify.com",
       currencyCode: "CAD",
     });
+    let adapterCreateCalls = 0;
+    useRedeemCommerceAdapter(
+      {
+        id: "conn-brand-123",
+        brandId: "brand-123",
+        provider: CommerceProvider.SHOPIFY,
+        status: "CONNECTED",
+        displayName: "test-shop.myshopify.com",
+        externalAccountId: "test-shop.myshopify.com",
+        storefrontUrl: "https://test-shop.myshopify.com",
+        isPrimary: true,
+        grantedScopes: [],
+        installedAt: new Date("2026-01-01T00:00:00Z"),
+        uninstalledAt: null,
+        lastProductSyncAt: null,
+        currencyCode: "CAD",
+      },
+      async () => {
+        adapterCreateCalls += 1;
+        return {
+          externalDiscountId: "gid://shopify/DiscountCodeNode/1",
+          code: "TEST-CODE-OK",
+          expiresAt: null,
+        };
+      },
+    );
     t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
       id: "conn-brand-123",
       brandId: "brand-123",
@@ -2698,6 +2759,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
     const res = await redeemPOST(req);
     assert.equal(res.status, 200);
+    assert.equal(adapterCreateCalls, 1);
   });
 
   test("redemption blocks a specific-products reward whose sourceExternalAccountId no longer matches the connected store", async (t) => {
@@ -2865,6 +2927,32 @@ describe("Route Scenario 4: Reward Redemption", () => {
       shopDomain: "test-shop.myshopify.com",
       currencyCode: "USD",
     });
+    let adapterCreateCalls = 0;
+    useRedeemCommerceAdapter(
+      {
+        id: "conn-brand-123",
+        brandId: "brand-123",
+        provider: CommerceProvider.SHOPIFY,
+        status: "CONNECTED",
+        displayName: "test-shop.myshopify.com",
+        externalAccountId: "test-shop.myshopify.com",
+        storefrontUrl: "https://test-shop.myshopify.com",
+        isPrimary: true,
+        grantedScopes: [],
+        installedAt: new Date("2026-01-01T00:00:00Z"),
+        uninstalledAt: null,
+        lastProductSyncAt: null,
+        currencyCode: "USD",
+      },
+      async () => {
+        adapterCreateCalls += 1;
+        return {
+          externalDiscountId: "gid://shopify/DiscountCodeNode/999",
+          code: "TEST-CODE-NEW",
+          expiresAt: null,
+        };
+      },
+    );
     t.mock.method(prisma.commerceConnection, "findFirst", async () => ({
       id: "conn-brand-123",
       brandId: "brand-123",
@@ -3017,6 +3105,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
     const json = await res.json();
     assert.equal(json.data.code, "TEST-CODE-NEW");
     assert.ok(redemptionUpdatedToIssued);
+    assert.equal(adapterCreateCalls, 1);
   });
 
   test("Shopify failure causes points refund and records REFUNDED status", async (t) => {

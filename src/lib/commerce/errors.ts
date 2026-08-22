@@ -56,7 +56,7 @@ export class UnsupportedProviderError extends CommerceError {
 /**
  * Thrown when an adapter is asked to perform a capability it does not
  * implement (e.g. calling `revokeDiscount` on a provider whose
- * `getCapabilities()` reports `canRevokeDiscount: false`).
+ * `getCapabilities()` reports `rewards.revoke: false`).
  */
 export class UnsupportedCapabilityError extends CommerceError {
   readonly provider: CommerceProvider;

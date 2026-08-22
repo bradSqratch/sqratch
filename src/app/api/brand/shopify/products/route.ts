@@ -5,15 +5,20 @@ import {
   getBrandManagementContext,
   type BrandAdminContext,
 } from "@/lib/brand-auth";
-import { fetchNormalizedShopifyProducts } from "@/lib/shopify-products";
-import { getActiveCommerceConnection, isConnectionUsable } from "@/lib/commerce/connection-service";
+import {
+  getActiveCommerceConnection,
+  isConnectionUsable,
+} from "@/lib/commerce/connection-service";
 import { defaultCommerceAdapterRegistry } from "@/lib/commerce/default-registry";
 import {
   CommerceConnectionNotFoundError,
   CommerceProviderApiError,
 } from "@/lib/commerce/errors";
 import type { CommerceAdapterRegistry } from "@/lib/commerce/registry";
-import type { CommerceConnectionSummary, CommerceProduct } from "@/lib/commerce/types";
+import type {
+  CommerceConnectionSummary,
+  CommerceProduct,
+} from "@/lib/commerce/types";
 
 /**
  * The exact response product shape this route has always returned —
@@ -39,18 +44,23 @@ type ShopifyProductResponseItem = {
 };
 
 type ProductsFetchOutcome =
-  | { ok: true; items: ShopifyProductResponseItem[]; hasNextPage: boolean; limit: number }
+  | {
+      ok: true;
+      items: ShopifyProductResponseItem[];
+      hasNextPage: boolean;
+      limit: number;
+    }
   | { ok: false; error: string; status: number };
 
 export type BrandShopifyProductsDeps = {
   /** Resolves the acting brand-admin context. Defaults to `getBrandManagementContext`. */
   getContext(): Promise<BrandAdminContext | null>;
   /** Resolves the brand's provider-neutral Shopify connection summary. */
-  getConnectionSummary(brandId: string): Promise<CommerceConnectionSummary | null>;
+  getConnectionSummary(
+    brandId: string,
+  ): Promise<CommerceConnectionSummary | null>;
   /** Adapter registry used for provider selection — never hard-coded. */
   registry: CommerceAdapterRegistry;
-  /** The legacy direct-fetch path, used whenever there is no real `CommerceConnection.id` to hand the adapter. */
-  fetchProductsDirect: typeof fetchNormalizedShopifyProducts;
 };
 
 const DEFAULT_DEPS: BrandShopifyProductsDeps = {
@@ -58,7 +68,6 @@ const DEFAULT_DEPS: BrandShopifyProductsDeps = {
   getConnectionSummary: (brandId) =>
     getActiveCommerceConnection(brandId, CommerceProvider.SHOPIFY),
   registry: defaultCommerceAdapterRegistry,
-  fetchProductsDirect: fetchNormalizedShopifyProducts,
 };
 
 function mapCommerceProducts(
@@ -78,71 +87,27 @@ function mapCommerceProducts(
 }
 
 /**
- * The legacy direct-fetch path — byte-for-byte the same call and mapping
- * this route used before the Phase-2 cutover. Used whenever the resolved
- * connection summary has no real `CommerceConnection.id` to hand the adapter
- * (`summary === null` or `summary.id === null`, i.e. a legacy fallback).
- */
-async function runDirectFetch(
-  deps: BrandShopifyProductsDeps,
-  shopDomain: string,
-  brandId: string,
-): Promise<ProductsFetchOutcome> {
-  const products = await deps.fetchProductsDirect({
-    shopDomain,
-    brandId,
-    limit: 100,
-  });
-
-  if (!products.ok) {
-    return { ok: false, error: products.error, status: products.status };
-  }
-
-  return {
-    ok: true,
-    items: products.items.map((product) => ({
-      id: product.id,
-      shopifyProductGid: product.shopifyProductGid,
-      title: product.title,
-      handle: product.handle,
-      productUrl: product.productUrl,
-      imageUrl: product.imageUrl,
-      images: product.images,
-      priceRange: product.priceRange,
-      variantIds: product.variantIds,
-    })),
-    hasNextPage: products.hasNextPage,
-    limit: products.limit,
-  };
-}
-
-/**
  * The adapter path — provider selection goes through the registry
  * (`deps.registry.get`), never a hard-coded `new ShopifyCommerceAdapter()`.
- * Only reachable when the resolved summary carries a real
- * `CommerceConnection.id` (`summary.id !== null`).
+ * The resolved summary always carries a real `CommerceConnection.id`.
  *
- * Capability-checked: `adapter.getCapabilities().canSyncProducts` is
+ * Capability-checked: `adapter.getCapabilities().products.sync` is
  * consulted before calling `syncProducts` rather than assuming support, so a
  * provider that is registered but does not support product sync fails with
  * a typed error instead of an unchecked method call. `deps.registry.get`
  * itself throws `UnsupportedProviderError` for a provider with no adapter at
- * all (e.g. COMMERCE7 today) — deliberately NOT caught here, so it never
- * gets mapped onto the Shopify-specific direct-fetch fallback (that would
- * silently call the Shopify Admin API for a non-Shopify connection). It
- * propagates to the route's outer catch and surfaces as the generic 500,
- * exactly like any other unexpected error — see the route's error-mapping
- * comment.
+ * all (e.g. COMMERCE7 today) — deliberately NOT caught here. It propagates
+ * to the route's outer catch and surfaces as the generic 500.
  */
 async function runAdapterSync(
   deps: BrandShopifyProductsDeps,
-  summary: CommerceConnectionSummary & { id: string },
+  summary: CommerceConnectionSummary,
 ): Promise<ProductsFetchOutcome> {
   try {
     const adapter = deps.registry.get(summary.provider);
     const capabilities = adapter.getCapabilities();
 
-    if (!capabilities.canSyncProducts) {
+    if (!capabilities.products.sync) {
       throw new CommerceProviderApiError(
         summary.provider,
         `Provider "${summary.provider}" does not support product sync.`,
@@ -168,7 +133,11 @@ async function runAdapterSync(
       // 500 only for an error with no upstream status to carry (e.g. the
       // "provider does not support product sync" error synthesized above,
       // which has no direct-path equivalent).
-      return { ok: false, error: error.message, status: error.httpStatus ?? 500 };
+      return {
+        ok: false,
+        error: error.message,
+        status: error.httpStatus ?? 500,
+      };
     }
     if (error instanceof CommerceConnectionNotFoundError) {
       // No equivalent in the direct-fetch path — this can only happen if
@@ -187,29 +156,6 @@ async function runAdapterSync(
   }
 }
 
-/**
- * PHASE 14B.4B: takes the ALREADY-RESOLVED canonical `summary` (the route's
- * own connectivity gate below resolves it first) rather than re-fetching —
- * one canonical read per request, and the gate's decision can never drift
- * from what this function acts on.
- */
-async function resolveProducts(
-  deps: BrandShopifyProductsDeps,
-  brandId: string,
-  summary: CommerceConnectionSummary,
-): Promise<ProductsFetchOutcome> {
-  // `syncProducts` needs a REAL `CommerceConnection.id`. When the resolved
-  // summary is a legacy fallback (`id === null` — no canonical row yet, a
-  // genuine pre-cutover brand), there is no id to hand the adapter, so this
-  // falls back to the direct `fetchNormalizedShopifyProducts` path — the
-  // exact path this route used before the cutover.
-  if (summary.id !== null) {
-    return runAdapterSync(deps, { ...summary, id: summary.id });
-  }
-
-  return runDirectFetch(deps, summary.externalAccountId, brandId);
-}
-
 export async function GET() {
   return productsGetImpl();
 }
@@ -225,7 +171,10 @@ export async function productsGetImpl(
     if (!context?.membership?.brand) {
       const failure = getBrandContextFailure(context);
       return NextResponse.json(
-        { error: failure.error, ...(failure.code ? { code: failure.code } : {}) },
+        {
+          error: failure.error,
+          ...(failure.code ? { code: failure.code } : {}),
+        },
         { status: failure.status },
       );
     }
@@ -249,10 +198,13 @@ export async function productsGetImpl(
       );
     }
 
-    const outcome = await resolveProducts(deps, brand.id, summary);
+    const outcome = await runAdapterSync(deps, summary);
 
     if (!outcome.ok) {
-      return NextResponse.json({ error: outcome.error }, { status: outcome.status });
+      return NextResponse.json(
+        { error: outcome.error },
+        { status: outcome.status },
+      );
     }
 
     return NextResponse.json({

@@ -87,12 +87,15 @@ test("the redeem route only records a campaign on the ledger when exactly one un
     source,
     /rewardContext\.campaignIds\.length === 1\s*\?\s*rewardContext\.campaignIds\[0\]\s*:\s*null/,
   );
-  // Passed through to every ledger-affecting call site — debit and every
-  // refund path (token-unavailable, canonical shop-domain-mismatch guard,
-  // and discount-creation failure) — so campaign context is consistent
-  // across the whole redemption lifecycle.
-  const campaignIdPassCount = (
-    source.match(/campaignId:\s*deterministicCampaignId/g) ?? []
-  ).length;
-  assert.equal(campaignIdPassCount, 4, "expected debit + 3 refund call sites");
+  // The centralized reservation/refund state machine derives one value and
+  // passes it to both ledger mutations. Individual compensation branches may
+  // be consolidated without weakening campaign provenance.
+  assert.match(
+    source,
+    /debitShopifyRewardPoints\(\{[\s\S]*?campaignId:\s*deterministicCampaignId/,
+  );
+  assert.match(
+    source,
+    /refundShopifyRewardPoints\(\{[\s\S]*?campaignId:\s*deterministicCampaignId/,
+  );
 });

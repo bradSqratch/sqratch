@@ -13,8 +13,6 @@ import {
   refundShopifyRewardPoints,
 } from "@/lib/points";
 import { getRewardClaimContext } from "@/lib/reward-access";
-import { createShopifyRewardDiscountCode } from "@/lib/shopify-discounts";
-import { getValidAccessToken } from "@/lib/shopify-token-manager";
 import {
   CLAIM_COUNTED_REDEMPTION_STATUSES,
   generateRewardCode,
@@ -30,7 +28,6 @@ import {
   isConnectionUsable,
   resolveCommerceConnectionSummaryWithClient,
 } from "@/lib/commerce/connection-service";
-import { normalizeExternalAccountId } from "@/lib/commerce/connection-sync";
 import { defaultCommerceAdapterRegistry } from "@/lib/commerce/default-registry";
 import {
   CommerceConnectionNotFoundError,
@@ -39,14 +36,15 @@ import {
   UnsupportedProviderError,
 } from "@/lib/commerce/errors";
 import type { CommerceAdapterRegistry } from "@/lib/commerce/registry";
-import type { CommerceConnectionSummary, CreateDiscountInput } from "@/lib/commerce/types";
+import type {
+  CommerceConnectionSummary,
+  CreateDiscountInput,
+} from "@/lib/commerce/types";
 
 // ---------------------------------------------------------------------------
-// Commerce cutover: discount issuance routes through the provider-neutral
-// CommerceAdapter when a real CommerceConnection.id is available, and falls
-// back to the legacy direct `createShopifyRewardDiscountCode` call otherwise
-// (`summary.id === null`). See `issueDiscountViaAdapter` below for the
-// error-mapping contract that keeps both paths byte-identical.
+// Commerce issuance is provider-neutral after the reservation has captured
+// the exact canonical connection id. The adapter owns provider credential
+// resolution and transport.
 // ---------------------------------------------------------------------------
 
 /**
@@ -57,7 +55,9 @@ import type { CommerceConnectionSummary, CreateDiscountInput } from "@/lib/comme
  * both fields to exercise the adapter path without a DB or network.
  */
 export type ShopifyRewardRedeemCommerceDeps = {
-  getConnectionSummary(brandId: string): Promise<CommerceConnectionSummary | null>;
+  getConnectionSummary(
+    brandId: string,
+  ): Promise<CommerceConnectionSummary | null>;
   /** Adapter registry used for provider selection — never hard-coded. */
   registry: CommerceAdapterRegistry;
 };
@@ -69,12 +69,8 @@ const DEFAULT_COMMERCE_DEPS: ShopifyRewardRedeemCommerceDeps = {
 };
 
 /**
- * The exact shape `createShopifyRewardDiscountCode` returns (see
- * `src/lib/shopify-discounts.ts`), widened just enough that BOTH the legacy
- * direct-call result and the adapter-derived result can be assigned to it
- * without re-shaping the legacy call site at all. Everything downstream
- * (persisted-field mapping, response status) reads only this shape, so it
- * cannot see which path produced it.
+ * Provider-neutral issuance outcome used by the persistence/refund state
+ * machine. Provider-specific transport results are normalized by the adapter.
  */
 export type DiscountCreationOutcome =
   | {
@@ -101,14 +97,16 @@ export type DiscountCreationOutcome =
  * `shopify-discounts.ts` — so a shape check beyond `Array.isArray` is
  * unnecessary. A type guard, not a cast: nothing here uses `as`.
  */
-function isJsonUserErrorArray(value: unknown): value is Prisma.InputJsonValue[] {
+function isJsonUserErrorArray(
+  value: unknown,
+): value is Prisma.InputJsonValue[] {
   return Array.isArray(value);
 }
 
 /**
- * Builds the neutral `CreateDiscountInput` from the same `discountConfig` /
- * `code` / `issuedAt` values the legacy direct call uses — kept as its own
- * function so both the route and tests construct it identically.
+ * Builds the neutral `CreateDiscountInput` consumed by the provider adapter.
+ * Kept separate so the route and tests construct the issuance request
+ * identically.
  */
 export function buildCreateDiscountInput(
   discountConfig: {
@@ -141,21 +139,12 @@ export function buildCreateDiscountInput(
 
 /**
  * Issues the discount via the provider-neutral adapter, then maps the
- * result (or a thrown typed error) back onto EXACTLY the
- * `DiscountCreationOutcome` shape `createShopifyRewardDiscountCode` itself
- * would have produced for the same real Shopify outcome — see the
- * per-branch comments below for the field-by-field justification.
- *
- * `preResolvedAccessToken` MUST already be resolved by the caller (via
- * `getValidAccessToken`, exactly as the legacy path does) — this function
- * never resolves its own token, so a request never triggers two independent
- * token resolutions (see `CreateDiscountOptions` in `../types.ts`).
+ * result (or a typed provider failure) into the state machine outcome.
  */
 export async function issueDiscountViaAdapter(
   registry: CommerceAdapterRegistry,
   connectionId: string,
   provider: CommerceProvider,
-  preResolvedAccessToken: string,
   input: CreateDiscountInput,
 ): Promise<DiscountCreationOutcome> {
   try {
@@ -164,13 +153,14 @@ export async function issueDiscountViaAdapter(
     const adapter = registry.get(provider);
     const capabilities = adapter.getCapabilities();
 
-    if (!capabilities.canCreateDiscount || !adapter.createDiscount) {
+    if (
+      !capabilities.rewards.create ||
+      !adapter.createDiscount
+    ) {
       throw new UnsupportedCapabilityError(provider, "createDiscount");
     }
 
-    const result = await adapter.createDiscount(connectionId, input, {
-      preResolvedAccessToken,
-    });
+    const result = await adapter.createDiscount(connectionId, input);
 
     return {
       ok: true,
@@ -179,17 +169,14 @@ export async function issueDiscountViaAdapter(
       // it was given (verified in `src/lib/shopify-discounts.ts`:
       // `node.codeDiscount?.startsAt ? new Date(...) : startsAt` — the
       // fallback is the same `startsAt` we sent, and the echoed value
-      // round-trips to the identical instant). `input.issuedAt` is that
-      // same value, so this is the same moment the legacy path persists via
-      // `discount.startsAt` — `ProviderDiscount` deliberately carries no
-      // separate field for it (see `../types.ts`) because nothing needs one
-      // beyond what the caller already knows.
+      // round-trips to the identical instant). `input.issuedAt` is that same
+      // value, so `ProviderDiscount` deliberately carries no duplicate field
+      // for it (see `../types.ts`).
       startsAt: input.issuedAt,
       endsAt: result.expiresAt,
       // `createShopifyRewardDiscountCode` only returns `ok:true` when its
-      // own `userErrors` array is empty (see shopify-discounts.ts) —
-      // deterministically `[]` on every success, matching the legacy path
-      // byte-for-byte.
+      // own `userErrors` array is empty (see shopify-discounts.ts), so the
+      // neutral success outcome is deterministically `[]`.
       userErrors: [],
     };
   } catch (error) {
@@ -197,20 +184,21 @@ export async function issueDiscountViaAdapter(
       // `httpStatus` / `details` are threaded through by
       // ShopifyCommerceAdapter.createDiscount from
       // createShopifyRewardDiscountCode's own `status` / `userErrors` — the
-      // exact values the direct-call path would have produced for the same
-      // failure.
+      // exact values the Shopify transport produced for the failure.
       return {
         ok: false,
         status: error.httpStatus || 502,
         error: error.message,
-        userErrors: isJsonUserErrorArray(error.details) ? error.details : undefined,
+        userErrors: isJsonUserErrorArray(error.details)
+          ? error.details
+          : undefined,
       };
     }
     if (
       error instanceof CommerceConnectionNotFoundError ||
       error instanceof UnsupportedCapabilityError ||
-      // UnsupportedProviderError has no legacy-path equivalent (this route's
-      // upstream connectivity gate only ever reaches here for Shopify), but
+      // The upstream connectivity gate only reaches here for Shopify today,
+      // but
       // this is a MONEY PATH with points already debited — catching it here
       // too (rather than letting it fall through to the route's generic
       // outer 500) guarantees the refund still runs. Purely defensive: it
@@ -219,42 +207,11 @@ export async function issueDiscountViaAdapter(
     ) {
       return { ok: false, status: 502, error: error.message };
     }
-    throw error;
-  }
-}
-
-/**
- * Fail-safe wrapper around `commerceDeps.getConnectionSummary` — matches the
- * `safe*` wrapper idiom in `src/lib/commerce/connection-sync.ts` (catch and
- * sanitized-log every failure, NEVER throw into the caller). ANY error
- * resolving it falls back to `null`, which the caller already treats as "no
- * usable CommerceConnection.id — use the legacy direct
- * `createShopifyRewardDiscountCode` path" (see `summary.id === null` below)
- * with `discountConfig.shopDomain`/`tokenResult.accessToken`, both of which
- * are ALREADY canonically resolved by the time this is consulted (the
- * former inside the reservation transaction, the latter via
- * `getValidAccessToken`) — so a failure here degrades to a different but
- * still fully canonical code path, never to a legacy `Brand` read. Called
- * OUTSIDE the Serializable reservation transaction (same as the unwrapped
- * call was) so a slow or failing lookup can never lengthen or interfere
- * with it.
- */
-async function safeGetCommerceConnectionSummary(
-  getConnectionSummary: ShopifyRewardRedeemCommerceDeps["getConnectionSummary"],
-  brandId: string,
-): Promise<CommerceConnectionSummary | null> {
-  try {
-    return await getConnectionSummary(brandId);
-  } catch {
-    // Sanitized: brandId + a fixed outcome tag only, never the caught error
-    // object's message (defense in depth — nothing here is expected to
-    // carry a credential, but this matches the caution the connection-sync
-    // `safe*` wrappers already apply to mirror-table failures).
-    console.error("[rewards/shopify/redeem][commerce-mirror]", {
-      outcome: "connection_summary_lookup_failed",
-      brandId,
-    });
-    return null;
+    return {
+      ok: false,
+      status: 502,
+      error: "Provider discount issuance failed.",
+    };
   }
 }
 
@@ -267,10 +224,7 @@ async function safeGetCommerceConnectionSummary(
  * the same as a genuine disconnection, rather than rescued by a `Brand`
  * read: on a money-adjacent gate, "unknown" must never be upgraded to
  * "assume connected, proceed" once `Brand` is no longer an independent
- * source of truth (that would be the fail-OPEN direction). This replaces
- * the Phase 14B.4B "Priority-1" legacy-fallback behavior — see
- * tests/shopify-reward-adapter-cutover.test.ts's updated "mirror outage"
- * test for the new contract.
+ * source of truth (that would be the fail-OPEN direction).
  */
 async function resolveGateConnectionSummary(
   getConnectionSummary: ShopifyRewardRedeemCommerceDeps["getConnectionSummary"],
@@ -363,11 +317,13 @@ const redemptionErrorResponses: Record<
     status: 409,
   },
   CURRENCY_MISMATCH: {
-    error: "Reward currency does not match the Shopify store currency. Please contact the brand.",
+    error:
+      "Reward currency does not match the Shopify store currency. Please contact the brand.",
     status: 409,
   },
   PRODUCT_SOURCE_MISMATCH: {
-    error: "This reward's products are not available for the connected Shopify store.",
+    error:
+      "This reward's products are not available for the connected Shopify store.",
     status: 409,
   },
 };
@@ -554,7 +510,10 @@ export async function redeemImpl(
         redemptionErrorResponses[
           mapIncompatibilityToErrorCode(initialCompatibility.reasons)
         ];
-      return NextResponse.json({ error: mapped.error }, { status: mapped.status });
+      return NextResponse.json(
+        { error: mapped.error },
+        { status: mapped.status },
+      );
     }
 
     const user = await prisma.user.findUnique({
@@ -601,10 +560,7 @@ export async function redeemImpl(
     });
 
     if (!availability.claimable) {
-      return NextResponse.json(
-        { error: availability.label },
-        { status: 409 },
-      );
+      return NextResponse.json({ error: availability.label }, { status: 409 });
     }
 
     const userPointsBalance = await getUserSpendablePointBalance({
@@ -623,7 +579,6 @@ export async function redeemImpl(
       redemption: CommerceRewardRedemption;
       discountConfig: {
         brandName: string;
-        shopDomain: string;
         brandId: string;
         connectionId: string;
         provider: CommerceProvider;
@@ -657,186 +612,191 @@ export async function redeemImpl(
       const code = generateRewardCode(offer.codePrefix);
 
       try {
-        reservation = await prisma.$transaction(async (tx) => {
-          const currentOffer = await tx.brandRewardOffer.findUnique({
-            where: {
-              id: offer.id,
-            },
-            include: {
-              brand: {
-                select: {
-                  name: true,
+        reservation = await prisma.$transaction(
+          async (tx) => {
+            const currentOffer = await tx.brandRewardOffer.findUnique({
+              where: {
+                id: offer.id,
+              },
+              include: {
+                brand: {
+                  select: {
+                    name: true,
+                  },
+                },
+                products: {
+                  select: {
+                    externalProductId: true,
+                  },
                 },
               },
-              products: {
-                select: {
-                  externalProductId: true,
-                },
-              },
-            },
-          });
+            });
 
-          if (!currentOffer || currentOffer.brandId !== offer.brandId) {
-            throw new Error("OFFER_NOT_AVAILABLE");
-          }
-
-          // PHASE 14C-A: resolved INSIDE the Serializable transaction, via
-          // the transaction's own `tx` client, so this participates in the
-          // transaction's isolation/locking instead of reading a
-          // pre-transaction snapshot that could have gone stale by commit
-          // time — this IS the transaction-time recheck the pre-transaction
-          // gate above deliberately does not substitute for. No legacy
-          // Brand fallback: every live Shopify install already has a
-          // canonical row (operator-verified), so no row means not
-          // connected, full stop.
-          const currentSummary = await resolveCommerceConnectionSummaryWithClient(
-            tx,
-            currentOffer.brandId,
-            CommerceProvider.SHOPIFY,
-          );
-          const shopifyConnected =
-            currentSummary !== null && isConnectionUsable(currentSummary);
-
-          if (!shopifyConnected || !currentSummary) {
-            throw new Error("SHOPIFY_DISCONNECTED");
-          }
-
-          // Re-checked here with data freshly loaded inside the Serializable
-          // transaction — defense in depth against a currency/product-source
-          // change that raced the pre-transaction check above. Currency
-          // validation only applies to currency-dependent offers (FIXED_AMOUNT,
-          // or a set minimumSubtotalCents); a percentage reward with no
-          // minimum subtotal is never blocked merely for a stored currency
-          // difference.
-          const currentCompatibility = computeShopifyRewardCompatibility({
-            offer: {
-              discountType: currentOffer.discountType,
-              minimumSubtotalCents: currentOffer.minimumSubtotalCents,
-              currencyCode: currentOffer.currencyCode,
-              appliesTo: currentOffer.appliesTo,
-              sourceExternalAccountId: currentOffer.sourceExternalAccountId,
-            },
-            shopifyConnected,
-            currentShopDomain: currentSummary.externalAccountId,
-            currentStoreCurrency: currentSummary.currencyCode,
-          });
-
-          if (!currentCompatibility.compatible) {
-            throw new Error(
-              mapIncompatibilityToErrorCode(currentCompatibility.reasons),
-            );
-          }
-
-          const [currentTotalRedemptions, currentUserRedemptions] =
-            await Promise.all([
-              currentOffer.maxTotalRedemptions
-                ? tx.commerceRewardRedemption.count({
-                    where: {
-                      offerId: currentOffer.id,
-                      status: {
-                        in: [...CLAIM_COUNTED_REDEMPTION_STATUSES],
-                      },
-                    },
-                  })
-                : Promise.resolve(0),
-              currentOffer.maxRedemptionsPerUser
-                ? tx.commerceRewardRedemption.count({
-                    where: {
-                      offerId: currentOffer.id,
-                      userId: user.id,
-                      status: {
-                        in: [...CLAIM_COUNTED_REDEMPTION_STATUSES],
-                      },
-                    },
-                  })
-                : Promise.resolve(0),
-            ]);
-          const currentAvailability = getRewardOfferAvailability({
-            offer: currentOffer,
-            shopifyConnected,
-            totalRedemptions: currentTotalRedemptions,
-            userRedemptions: currentUserRedemptions,
-            now: issuedAt,
-          });
-
-          if (!currentAvailability.claimable) {
-            throw new Error(currentAvailability.status);
-          }
-
-          const createdRedemption = await tx.commerceRewardRedemption.create({
-            data: {
-              userId: user.id,
-              brandId: currentOffer.brandId,
-              offerId: currentOffer.id,
-              provider: CommerceProvider.SHOPIFY,
-              idempotencyKey,
-              code,
-              status: "PENDING",
-              pointsCost: currentOffer.pointsCost,
-              discountType: currentOffer.discountType,
-              discountAmountCents: currentOffer.discountAmountCents,
-              discountPercentageBasisPoints: currentOffer.discountPercentageBasisPoints,
-              currencyCode: currentOffer.currencyCode,
-              externalAccountId: currentSummary.externalAccountId,
-            },
-          });
-
-          // Central ledger debit: decrements spendable points (conditional, so
-          // the balance can never go negative), records lifetime spent, and
-          // writes the negative PointTransaction — all inside this Serializable
-          // transaction. Lifetime earned is NOT reduced. Idempotency is
-          // enforced by the ledger's unique constraints.
-          const debit = await debitShopifyRewardPoints({
-            userId: user.id,
-            pointsCost: currentOffer.pointsCost,
-            commerceRewardRedemptionId: createdRedemption.id,
-            campaignId: deterministicCampaignId,
-            db: tx,
-          });
-
-          if (!debit.applied) {
-            if (debit.reason === "INSUFFICIENT_POINTS") {
-              throw new Error("INSUFFICIENT_POINTS");
+            if (!currentOffer || currentOffer.brandId !== offer.brandId) {
+              throw new Error("OFFER_NOT_AVAILABLE");
             }
-            // DUPLICATE / INVALID here would be a genuine anomaly for a freshly
-            // created redemption id — roll the reservation back.
-            throw new Error("OFFER_NOT_AVAILABLE");
-          }
 
-          const debitedRedemption = await tx.commerceRewardRedemption.update({
-            where: {
-              id: createdRedemption.id,
-            },
-            data: {
-              status: "POINTS_DEBITED",
-            },
-          });
+            // PHASE 14C-A: resolved INSIDE the Serializable transaction, via
+            // the transaction's own `tx` client, so this participates in the
+            // transaction's isolation/locking instead of reading a
+            // pre-transaction snapshot that could have gone stale by commit
+            // time — this IS the transaction-time recheck the pre-transaction
+            // gate above deliberately does not substitute for. No legacy
+            // Brand fallback: every live Shopify install already has a
+            // canonical row (operator-verified), so no row means not
+            // connected, full stop.
+            const currentSummary =
+              await resolveCommerceConnectionSummaryWithClient(
+                tx,
+                currentOffer.brandId,
+                CommerceProvider.SHOPIFY,
+              );
+            const shopifyConnected =
+              currentSummary !== null && isConnectionUsable(currentSummary);
 
-          return {
-            redemption: debitedRedemption,
-            discountConfig: {
-              brandName: currentOffer.brand.name,
-              shopDomain: currentSummary.externalAccountId,
-              brandId: currentOffer.brandId,
-              connectionId: currentSummary.id!,
-              provider: currentSummary.provider,
-              title: currentOffer.title,
-              codeValidDays: currentOffer.codeValidDays,
-              discountType: currentOffer.discountType,
-              discountAmountCents: currentOffer.discountAmountCents,
-              discountPercentageBasisPoints: currentOffer.discountPercentageBasisPoints,
-              currencyCode: currentOffer.currencyCode,
-              appliesTo: currentOffer.appliesTo,
-              externalProductIds: currentOffer.products.map(
-                (product) => product.externalProductId,
-              ),
-              minimumSubtotalCents: currentOffer.minimumSubtotalCents,
+            if (!shopifyConnected || !currentSummary) {
+              throw new Error("SHOPIFY_DISCONNECTED");
+            }
+
+            // Re-checked here with data freshly loaded inside the Serializable
+            // transaction — defense in depth against a currency/product-source
+            // change that raced the pre-transaction check above. Currency
+            // validation only applies to currency-dependent offers (FIXED_AMOUNT,
+            // or a set minimumSubtotalCents); a percentage reward with no
+            // minimum subtotal is never blocked merely for a stored currency
+            // difference.
+            const currentCompatibility = computeShopifyRewardCompatibility({
+              offer: {
+                discountType: currentOffer.discountType,
+                minimumSubtotalCents: currentOffer.minimumSubtotalCents,
+                currencyCode: currentOffer.currencyCode,
+                appliesTo: currentOffer.appliesTo,
+                sourceExternalAccountId: currentOffer.sourceExternalAccountId,
+              },
+              shopifyConnected,
+              currentShopDomain: currentSummary.externalAccountId,
+              currentStoreCurrency: currentSummary.currencyCode,
+            });
+
+            if (!currentCompatibility.compatible) {
+              throw new Error(
+                mapIncompatibilityToErrorCode(currentCompatibility.reasons),
+              );
+            }
+
+            const [currentTotalRedemptions, currentUserRedemptions] =
+              await Promise.all([
+                currentOffer.maxTotalRedemptions
+                  ? tx.commerceRewardRedemption.count({
+                      where: {
+                        offerId: currentOffer.id,
+                        status: {
+                          in: [...CLAIM_COUNTED_REDEMPTION_STATUSES],
+                        },
+                      },
+                    })
+                  : Promise.resolve(0),
+                currentOffer.maxRedemptionsPerUser
+                  ? tx.commerceRewardRedemption.count({
+                      where: {
+                        offerId: currentOffer.id,
+                        userId: user.id,
+                        status: {
+                          in: [...CLAIM_COUNTED_REDEMPTION_STATUSES],
+                        },
+                      },
+                    })
+                  : Promise.resolve(0),
+              ]);
+            const currentAvailability = getRewardOfferAvailability({
+              offer: currentOffer,
+              shopifyConnected,
+              totalRedemptions: currentTotalRedemptions,
+              userRedemptions: currentUserRedemptions,
+              now: issuedAt,
+            });
+
+            if (!currentAvailability.claimable) {
+              throw new Error(currentAvailability.status);
+            }
+
+            const createdRedemption = await tx.commerceRewardRedemption.create({
+              data: {
+                userId: user.id,
+                brandId: currentOffer.brandId,
+                offerId: currentOffer.id,
+                provider: CommerceProvider.SHOPIFY,
+                idempotencyKey,
+                code,
+                status: "PENDING",
+                pointsCost: currentOffer.pointsCost,
+                discountType: currentOffer.discountType,
+                discountAmountCents: currentOffer.discountAmountCents,
+                discountPercentageBasisPoints:
+                  currentOffer.discountPercentageBasisPoints,
+                currencyCode: currentOffer.currencyCode,
+                externalAccountId: currentSummary.externalAccountId,
+              },
+            });
+
+            // Central ledger debit: decrements spendable points (conditional, so
+            // the balance can never go negative), records lifetime spent, and
+            // writes the negative PointTransaction — all inside this Serializable
+            // transaction. Lifetime earned is NOT reduced. Idempotency is
+            // enforced by the ledger's unique constraints.
+            const debit = await debitShopifyRewardPoints({
+              userId: user.id,
               pointsCost: currentOffer.pointsCost,
-            },
-          };
-        }, {
-          isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
-        });
+              commerceRewardRedemptionId: createdRedemption.id,
+              campaignId: deterministicCampaignId,
+              db: tx,
+            });
+
+            if (!debit.applied) {
+              if (debit.reason === "INSUFFICIENT_POINTS") {
+                throw new Error("INSUFFICIENT_POINTS");
+              }
+              // DUPLICATE / INVALID here would be a genuine anomaly for a freshly
+              // created redemption id — roll the reservation back.
+              throw new Error("OFFER_NOT_AVAILABLE");
+            }
+
+            const debitedRedemption = await tx.commerceRewardRedemption.update({
+              where: {
+                id: createdRedemption.id,
+              },
+              data: {
+                status: "POINTS_DEBITED",
+              },
+            });
+
+            return {
+              redemption: debitedRedemption,
+              discountConfig: {
+                brandName: currentOffer.brand.name,
+                brandId: currentOffer.brandId,
+                connectionId: currentSummary.id!,
+                provider: currentSummary.provider,
+                title: currentOffer.title,
+                codeValidDays: currentOffer.codeValidDays,
+                discountType: currentOffer.discountType,
+                discountAmountCents: currentOffer.discountAmountCents,
+                discountPercentageBasisPoints:
+                  currentOffer.discountPercentageBasisPoints,
+                currencyCode: currentOffer.currencyCode,
+                appliesTo: currentOffer.appliesTo,
+                externalProductIds: currentOffer.products.map(
+                  (product) => product.externalProductId,
+                ),
+                minimumSubtotalCents: currentOffer.minimumSubtotalCents,
+                pointsCost: currentOffer.pointsCost,
+              },
+            };
+          },
+          {
+            isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
+          },
+        );
 
         // Transaction succeeded — exit the retry loop.
         break;
@@ -880,7 +840,10 @@ export async function redeemImpl(
         // Apply the same user+offer match check as the upfront existing-key
         // branch to guard against returning a row for the wrong offer.
         const concurrentMatch = idempotencyMatch(
-          { userId: concurrentExisting.userId, offerId: concurrentExisting.offerId },
+          {
+            userId: concurrentExisting.userId,
+            offerId: concurrentExisting.offerId,
+          },
           { userId: user.id, offerId },
         );
         if (concurrentMatch === "MATCH") {
@@ -919,129 +882,12 @@ export async function redeemImpl(
 
     const { redemption, discountConfig } = reservation;
 
-    const tokenResult = await getValidAccessToken(discountConfig.brandId, {
-      connectionId: discountConfig.connectionId,
-    });
-    if (!tokenResult.ok) {
-      const refunded = await prisma.$transaction(async (tx) => {
-        const current = await tx.commerceRewardRedemption.findUnique({
-          where: { id: redemption.id },
-          select: { status: true },
-        });
-        if (current?.status !== "POINTS_DEBITED") {
-          return tx.commerceRewardRedemption.findUniqueOrThrow({
-            where: { id: redemption.id },
-          });
-        }
-        // Restore spendable points + lifetime refunded (never lifetime earned).
-        await refundShopifyRewardPoints({
-          userId: user.id,
-          points: discountConfig.pointsCost,
-          commerceRewardRedemptionId: redemption.id,
-          campaignId: deterministicCampaignId,
-          db: tx,
-        });
-        return tx.commerceRewardRedemption.update({
-          where: { id: redemption.id },
-          data: {
-            status: "REFUNDED",
-            errorMessage: "Shopify token unavailable: " + tokenResult.reason,
-          },
-        });
-      });
-      return NextResponse.json(
-        {
-          error: "Could not create the Shopify discount code. Points were refunded.",
-          data: serializeRedemption(refunded),
-        },
-        { status: 502 },
-      );
-    }
-
-    // Cutover point: route discount issuance through the provider-neutral
-    // CommerceAdapter whenever a real CommerceConnection.id is available;
-    // otherwise fall back to the exact legacy direct call. Both branches
-    // funnel into the SAME `DiscountCreationOutcome` shape, so every line
-    // below this point (persisted-field mapping, refund, response) is
-    // identical regardless of which path produced `discount`.
-    const commerceSummary = await safeGetCommerceConnectionSummary(
-      commerceDeps.getConnectionSummary,
-      discountConfig.brandId,
+    const discount = await issueDiscountViaAdapter(
+      commerceDeps.registry,
+      discountConfig.connectionId,
+      discountConfig.provider,
+      buildCreateDiscountInput(discountConfig, redemption.code, issuedAt),
     );
-
-    // PHASE 14B.4B — STRUCTURAL GUARD: a canonical token must never be paired
-    // with a shop domain that didn't resolve it. `tokenResult.accessToken`
-    // was resolved by `getValidAccessToken`, which as of Phase 14B is
-    // canonical-first; `discountConfig.shopDomain` was captured earlier in
-    // this request's reservation. Both should always agree — but if a
-    // canonical connection exists whose shop domain DISAGREES with the
-    // reservation's domain (e.g. a relink raced this request), the adapter
-    // path below would issue a discount against `commerceSummary.id`'s shop
-    // using a token that may not even belong to it. Refuse and refund rather
-    // than risk that pairing, making it structurally impossible to reach
-    // `issueDiscountViaAdapter`/`createShopifyRewardDiscountCode` with a
-    // token/domain pair that was never jointly resolved.
-    if (
-      commerceSummary && commerceSummary.id !== null &&
-      normalizeExternalAccountId(commerceSummary.externalAccountId) !== normalizeExternalAccountId(discountConfig.shopDomain)
-    ) {
-      const refunded = await prisma.$transaction(async (tx) => {
-        const current = await tx.commerceRewardRedemption.findUnique({
-          where: { id: redemption.id },
-          select: { status: true },
-        });
-        if (current?.status !== "POINTS_DEBITED") {
-          return tx.commerceRewardRedemption.findUniqueOrThrow({
-            where: { id: redemption.id },
-          });
-        }
-        await refundShopifyRewardPoints({
-          userId: user.id,
-          points: discountConfig.pointsCost,
-          commerceRewardRedemptionId: redemption.id,
-          campaignId: deterministicCampaignId,
-          db: tx,
-        });
-        return tx.commerceRewardRedemption.update({
-          where: { id: redemption.id },
-          data: {
-            status: "REFUNDED",
-            errorMessage: "Shopify connection changed during redemption.",
-          },
-        });
-      });
-      return NextResponse.json(
-        {
-          error: "Could not create the Shopify discount code. Points were refunded.",
-          data: serializeRedemption(refunded),
-        },
-        { status: 502 },
-      );
-    }
-
-    const discount: DiscountCreationOutcome =
-      commerceSummary && commerceSummary.id !== null
-        ? await issueDiscountViaAdapter(
-            commerceDeps.registry,
-            commerceSummary.id,
-            commerceSummary.provider,
-            tokenResult.accessToken,
-            buildCreateDiscountInput(discountConfig, redemption.code, issuedAt),
-          )
-        : await createShopifyRewardDiscountCode({
-            shopDomain: discountConfig.shopDomain,
-            accessToken: tokenResult.accessToken,
-            title: `${discountConfig.brandName} - ${discountConfig.title}`,
-            code: redemption.code,
-            issuedAt,
-            codeValidDays: discountConfig.codeValidDays,
-            discountType: discountConfig.discountType,
-            discountAmountCents: discountConfig.discountAmountCents,
-            discountPercentageBasisPoints: discountConfig.discountPercentageBasisPoints,
-            appliesTo: discountConfig.appliesTo,
-            shopifyProductGids: discountConfig.externalProductIds,
-            minimumSubtotalCents: discountConfig.minimumSubtotalCents,
-          });
 
     if (!discount.ok) {
       const refunded = await prisma.$transaction(async (tx) => {

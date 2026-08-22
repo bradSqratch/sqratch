@@ -315,7 +315,7 @@ export function BrandProductsClient() {
         }
       } else if (response.status === 400) {
         const code = json?.code;
-        if (code === "NO_CONNECTION" || code === "LEGACY_FALLBACK") {
+        if (code === "NO_CONNECTION") {
           setSyncNotice(describeSyncOutcome({ status: "SKIPPED", code }));
         } else {
           setSyncNotice(

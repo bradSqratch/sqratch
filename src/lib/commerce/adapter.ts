@@ -18,14 +18,10 @@ import type {
   ProductSyncPreparationRequest,
   ProductSyncPageResult,
   CreateDiscountInput,
-  CreateDiscountOptions,
   GetDiscountInput,
-  GetDiscountOptions,
-  NormalizedWebhookEvent,
   ProductSyncResult,
   ProviderDiscount,
   ProviderDiscountLookup,
-  WebhookRequestInput,
 } from "./types";
 
 export interface CommerceAdapter {
@@ -79,16 +75,12 @@ export interface CommerceAdapter {
   /**
    * Creates a discount code on the provider for the given
    * `CommerceConnection.id`. Optional: only implemented by adapters whose
-   * `getCapabilities().canCreateDiscount` is `true`. `options` is an
-   * escape hatch for caller-transport plumbing (see
-   * `CreateDiscountOptions` in `./types.ts`) — it never carries business
-   * data and every implementation must behave identically to omitting it
-   * when no option is set.
+   * `getCapabilities().rewards.create` is `true`. Credential resolution is
+   * adapter-owned; provider tokens never cross this generic boundary.
    */
   createDiscount?(
     connectionId: string,
     input: CreateDiscountInput,
-    options?: CreateDiscountOptions,
   ): Promise<ProviderDiscount>;
 
   /**
@@ -98,20 +90,15 @@ export interface CommerceAdapter {
   getDiscount?(
     connectionId: string,
     input: GetDiscountInput,
-    options?: GetDiscountOptions,
   ): Promise<ProviderDiscountLookup>;
 
   /**
    * Revokes/deactivates a previously created discount. Optional: only
-   * implemented by adapters whose `getCapabilities().canRevokeDiscount` is
+   * implemented by adapters whose `getCapabilities().rewards.revoke` is
    * `true`. No provider currently supported implements this.
    */
-  revokeDiscount?(connectionId: string, externalDiscountId: string): Promise<void>;
-
-  /**
-   * Verifies an inbound webhook request's authenticity and parses it into a
-   * `NormalizedWebhookEvent`. Optional: only implemented by adapters whose
-   * `getCapabilities().canVerifyWebhooks` is `true`.
-   */
-  verifyAndParseWebhook?(connectionId: string, input: WebhookRequestInput): Promise<NormalizedWebhookEvent>;
+  revokeDiscount?(
+    connectionId: string,
+    externalDiscountId: string,
+  ): Promise<void>;
 }

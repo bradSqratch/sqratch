@@ -21,7 +21,7 @@
  *     UnsupportedProviderError.
  *  5. Requesting COMMERCE7 never invokes the SHOPIFY factory (no
  *     cross-provider side effects / no network for the unregistered path).
- *  6. Capability contract: an adapter reporting canRevokeDiscount: false
+ *  6. Capability contract: an adapter reporting rewards.revoke: false
  *     has no revokeDiscount method, so callers can feature-detect via
  *     getCapabilities() before calling optional methods.
  *  7. tryGet() returns null instead of throwing for an unsupported provider.
@@ -69,7 +69,6 @@ function makeFakeAdapter(
           installedAt: null,
           uninstalledAt: null,
           lastProductSyncAt: null,
-          isLegacyFallback: false,
           currencyCode: null,
         },
       };
@@ -85,8 +84,25 @@ function makeFakeAdapter(
         limit: 100,
       };
     },
-    // canRevokeDiscount is false for this fake — revokeDiscount is
+    // rewards.revoke is false for this fake — revokeDiscount is
     // deliberately omitted (see test 6).
+  };
+}
+
+function shopifyCapabilities(): CommerceCapabilities {
+  return {
+    products: { sync: true, publicDestinations: true },
+    rewards: {
+      create: true,
+      lookup: true,
+      usageLookup: true,
+      revoke: false,
+      fixedAmount: true,
+      percentage: true,
+      minimumSubtotal: true,
+      productSpecific: true,
+      singleUse: true,
+    },
   };
 }
 
@@ -96,12 +112,7 @@ function makeFakeAdapter(
 
 describe("CommerceAdapterRegistry", () => {
   test("1. SHOPIFY resolves to the registered fake adapter", () => {
-    const fakeShopify = makeFakeAdapter(CommerceProvider.SHOPIFY, {
-      canSyncProducts: true,
-      canCreateDiscount: true,
-      canRevokeDiscount: false,
-      canVerifyWebhooks: true,
-    });
+    const fakeShopify = makeFakeAdapter(CommerceProvider.SHOPIFY, shopifyCapabilities());
 
     const registry = createCommerceAdapterRegistry({
       SHOPIFY: () => fakeShopify,
@@ -117,12 +128,7 @@ describe("CommerceAdapterRegistry", () => {
     const registry = createCommerceAdapterRegistry({
       SHOPIFY: () => {
         factoryCallCount++;
-        return makeFakeAdapter(CommerceProvider.SHOPIFY, {
-          canSyncProducts: true,
-          canCreateDiscount: true,
-          canRevokeDiscount: false,
-          canVerifyWebhooks: true,
-        });
+        return makeFakeAdapter(CommerceProvider.SHOPIFY, shopifyCapabilities());
       },
     });
 
@@ -137,12 +143,7 @@ describe("CommerceAdapterRegistry", () => {
 
   test("3. COMMERCE7 throws UnsupportedProviderError (which is a CommerceError) naming the provider", () => {
     const registry = createCommerceAdapterRegistry({
-      SHOPIFY: () => makeFakeAdapter(CommerceProvider.SHOPIFY, {
-        canSyncProducts: true,
-        canCreateDiscount: true,
-        canRevokeDiscount: false,
-        canVerifyWebhooks: true,
-      }),
+      SHOPIFY: () => makeFakeAdapter(CommerceProvider.SHOPIFY, shopifyCapabilities()),
     });
 
     assert.throws(
@@ -159,12 +160,7 @@ describe("CommerceAdapterRegistry", () => {
 
   test("4. registry never returns undefined/null for any CommerceProvider value", () => {
     const registry = createCommerceAdapterRegistry({
-      SHOPIFY: () => makeFakeAdapter(CommerceProvider.SHOPIFY, {
-        canSyncProducts: true,
-        canCreateDiscount: true,
-        canRevokeDiscount: false,
-        canVerifyWebhooks: true,
-      }),
+      SHOPIFY: () => makeFakeAdapter(CommerceProvider.SHOPIFY, shopifyCapabilities()),
     });
 
     for (const provider of Object.values(CommerceProvider)) {
@@ -185,12 +181,7 @@ describe("CommerceAdapterRegistry", () => {
     const registry = createCommerceAdapterRegistry({
       SHOPIFY: () => {
         shopifyFactoryCallCount++;
-        return makeFakeAdapter(CommerceProvider.SHOPIFY, {
-          canSyncProducts: true,
-          canCreateDiscount: true,
-          canRevokeDiscount: false,
-          canVerifyWebhooks: true,
-        });
+        return makeFakeAdapter(CommerceProvider.SHOPIFY, shopifyCapabilities());
       },
     });
 
@@ -198,19 +189,14 @@ describe("CommerceAdapterRegistry", () => {
     assert.equal(shopifyFactoryCallCount, 0, "SHOPIFY factory must not run when resolving COMMERCE7");
   });
 
-  test("6. capability contract: canRevokeDiscount: false means no revokeDiscount method", () => {
-    const fakeShopify = makeFakeAdapter(CommerceProvider.SHOPIFY, {
-      canSyncProducts: true,
-      canCreateDiscount: true,
-      canRevokeDiscount: false,
-      canVerifyWebhooks: true,
-    });
+  test("6. capability contract: rewards.revoke: false means no revokeDiscount method", () => {
+    const fakeShopify = makeFakeAdapter(CommerceProvider.SHOPIFY, shopifyCapabilities());
     const registry = createCommerceAdapterRegistry({ SHOPIFY: () => fakeShopify });
 
     const adapter = registry.get(CommerceProvider.SHOPIFY);
     const capabilities = adapter.getCapabilities();
 
-    assert.equal(capabilities.canRevokeDiscount, false);
+    assert.equal(capabilities.rewards.revoke, false);
     assert.equal(
       adapter.revokeDiscount,
       undefined,
@@ -220,12 +206,7 @@ describe("CommerceAdapterRegistry", () => {
 
   test("7. tryGet() returns null instead of throwing for an unsupported provider", () => {
     const registry = createCommerceAdapterRegistry({
-      SHOPIFY: () => makeFakeAdapter(CommerceProvider.SHOPIFY, {
-        canSyncProducts: true,
-        canCreateDiscount: true,
-        canRevokeDiscount: false,
-        canVerifyWebhooks: true,
-      }),
+      SHOPIFY: () => makeFakeAdapter(CommerceProvider.SHOPIFY, shopifyCapabilities()),
     });
 
     assert.equal(registry.tryGet(CommerceProvider.COMMERCE7), null);
@@ -234,12 +215,7 @@ describe("CommerceAdapterRegistry", () => {
 
   test("registry is constructed via both the class and the factory function", () => {
     const viaClass = new CommerceAdapterRegistry({
-      SHOPIFY: () => makeFakeAdapter(CommerceProvider.SHOPIFY, {
-        canSyncProducts: true,
-        canCreateDiscount: true,
-        canRevokeDiscount: false,
-        canVerifyWebhooks: true,
-      }),
+      SHOPIFY: () => makeFakeAdapter(CommerceProvider.SHOPIFY, shopifyCapabilities()),
     });
     assert.ok(viaClass.get(CommerceProvider.SHOPIFY));
   });

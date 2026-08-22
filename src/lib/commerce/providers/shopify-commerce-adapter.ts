@@ -28,33 +28,35 @@
  * requires `DATABASE_URL` to be set.
  *
  * SECURITY: no method here ever returns, logs, or serializes an access
- * token, refresh token, encrypted payload, or the Shopify webhook secret.
+ * token, refresh token, or encrypted payload.
  * `getConnection()` reads only the `CommerceConnection` row —
  * `CommerceConnectionSecret` is never read by this file.
  */
 
-import { CommerceProvider, type CommerceConnectionStatus, type Prisma } from "@prisma/client";
+import {
+  CommerceProvider,
+  type CommerceConnectionStatus,
+  type Prisma,
+} from "@prisma/client";
 import { extractCurrencyCodeFromProviderMetadata } from "../connection-resolver";
 import type { CommerceAdapter } from "../adapter";
-import { CommerceConnectionNotFoundError, CommerceProviderApiError } from "../errors";
+import {
+  CommerceConnectionNotFoundError,
+  CommerceProviderApiError,
+} from "../errors";
 import type {
   CommerceCapabilities,
   CommerceConnectionResult,
   CommerceConnectionSummary,
   CommerceProduct,
-  CommerceWebhookEventType,
   CreateDiscountInput,
-  CreateDiscountOptions,
   GetDiscountInput,
-  GetDiscountOptions,
-  NormalizedWebhookEvent,
   ProductSyncPageRequest,
   ProductSyncPreparationRequest,
   ProductSyncPageResult,
   ProductSyncResult,
   ProviderDiscount,
   ProviderDiscountLookup,
-  WebhookRequestInput,
 } from "../types";
 
 import {
@@ -79,18 +81,49 @@ import { verifyShopifyWebhookHmac } from "@/lib/shopify";
 // ---------------------------------------------------------------------------
 
 type FetchProductsInput = Parameters<typeof fetchNormalizedShopifyProducts>[0];
-type FetchProductsResult = Awaited<ReturnType<typeof fetchNormalizedShopifyProducts>>;
-type FetchPublishedProductIdsInput = Parameters<typeof fetchPublishedShopifyProductIds>[0];
-type FetchPublishedProductIdsResult = Awaited<ReturnType<typeof fetchPublishedShopifyProductIds>>;
+type FetchProductsResult = Awaited<
+  ReturnType<typeof fetchNormalizedShopifyProducts>
+>;
+type FetchPublishedProductIdsInput = Parameters<
+  typeof fetchPublishedShopifyProductIds
+>[0];
+type FetchPublishedProductIdsResult = Awaited<
+  ReturnType<typeof fetchPublishedShopifyProductIds>
+>;
 
-type CreateDiscountCodeInput = Parameters<typeof createShopifyRewardDiscountCode>[0];
-type CreateDiscountCodeResult = Awaited<ReturnType<typeof createShopifyRewardDiscountCode>>;
+type CreateDiscountCodeInput = Parameters<
+  typeof createShopifyRewardDiscountCode
+>[0];
+type CreateDiscountCodeResult = Awaited<
+  ReturnType<typeof createShopifyRewardDiscountCode>
+>;
 type LookupDiscountByCodeInput = Parameters<typeof getShopifyDiscountByCode>[0];
-type LookupDiscountByCodeResult = Awaited<ReturnType<typeof getShopifyDiscountByCode>>;
-type LookupDiscountByNodeIdInput = Parameters<typeof getShopifyDiscountUsageStatus>[0];
-type LookupDiscountByNodeIdResult = Awaited<ReturnType<typeof getShopifyDiscountUsageStatus>>;
-
+type LookupDiscountByCodeResult = Awaited<
+  ReturnType<typeof getShopifyDiscountByCode>
+>;
+type LookupDiscountByNodeIdInput = Parameters<
+  typeof getShopifyDiscountUsageStatus
+>[0];
+type LookupDiscountByNodeIdResult = Awaited<
+  ReturnType<typeof getShopifyDiscountUsageStatus>
+>;
 type VerifyWebhookHmacInput = Parameters<typeof verifyShopifyWebhookHmac>[0];
+
+/** Shopify transport only; intentionally not part of CommerceAdapter. */
+export type ShopifyWebhookRequest = {
+  rawBody: string;
+  headers: Record<string, string>;
+};
+export type ShopifyVerifiedWebhook = {
+  provider: typeof CommerceProvider.SHOPIFY;
+  type:
+    | "APP_UNINSTALLED"
+    | "ACCOUNT_REDACT"
+    | "CUSTOMER_DATA_REQUEST"
+    | "CUSTOMER_REDACT";
+  externalAccountId: string;
+  payload: unknown;
+};
 
 /** The subset of a `CommerceConnection` row this adapter needs. Never includes `CommerceConnectionSecret`. */
 export type ShopifyCommerceConnectionRow = {
@@ -115,11 +148,13 @@ export type ShopifyCommerceConnectionRow = {
  */
 export type ShopifyCommerceAdapterDeps = {
   /** Loads a `CommerceConnection` row by id, or `null` if it does not exist. */
-  loadConnection(connectionId: string): Promise<ShopifyCommerceConnectionRow | null>;
+  loadConnection(
+    connectionId: string,
+  ): Promise<ShopifyCommerceConnectionRow | null>;
   /** Resolves a valid Shopify access token for a brand. Defaults to `getValidAccessToken`. */
   getAccessToken(
     brandId: string,
-    options?: { connectionId?: string },
+    options?: { connectionId?: string; expectedExternalAccountId?: string },
   ): Promise<GetValidAccessTokenResult>;
   /** Fetches the live product catalog. Defaults to `fetchNormalizedShopifyProducts`. */
   fetchProducts(input: FetchProductsInput): Promise<FetchProductsResult>;
@@ -128,12 +163,18 @@ export type ShopifyCommerceAdapterDeps = {
     input: FetchPublishedProductIdsInput,
   ): Promise<FetchPublishedProductIdsResult>;
   /** Creates a discount code on Shopify. Defaults to `createShopifyRewardDiscountCode`. */
-  createDiscountCode(input: CreateDiscountCodeInput): Promise<CreateDiscountCodeResult>;
+  createDiscountCode(
+    input: CreateDiscountCodeInput,
+  ): Promise<CreateDiscountCodeResult>;
   /** Reads an existing discount by its provider node ID. */
-  lookupDiscountByNodeId(input: LookupDiscountByNodeIdInput): Promise<LookupDiscountByNodeIdResult>;
+  lookupDiscountByNodeId(
+    input: LookupDiscountByNodeIdInput,
+  ): Promise<LookupDiscountByNodeIdResult>;
   /** Reads an existing discount by its human-facing code. */
-  lookupDiscountByCode(input: LookupDiscountByCodeInput): Promise<LookupDiscountByCodeResult>;
-  /** Verifies a webhook HMAC. Defaults to `verifyShopifyWebhookHmac`. */
+  lookupDiscountByCode(
+    input: LookupDiscountByCodeInput,
+  ): Promise<LookupDiscountByCodeResult>;
+  /** Shopify transport verification; routes own Shopify compliance semantics. */
   verifyWebhookHmac(input: VerifyWebhookHmacInput): boolean;
   /** Stamps `CommerceConnection.lastProductSyncAt` after a successful sync. */
   markProductSync(connectionId: string, syncedAt: Date): Promise<void>;
@@ -147,8 +188,8 @@ async function defaultLoadConnection(
   connectionId: string,
 ): Promise<ShopifyCommerceConnectionRow | null> {
   const { default: prisma } = await import("@/lib/prisma");
-  return prisma.commerceConnection.findUnique({
-    where: { id: connectionId },
+  return prisma.commerceConnection.findFirst({
+    where: { id: connectionId, provider: CommerceProvider.SHOPIFY },
     select: {
       id: true,
       brandId: true,
@@ -172,8 +213,8 @@ async function defaultMarkProductSync(
   syncedAt: Date,
 ): Promise<void> {
   const { default: prisma } = await import("@/lib/prisma");
-  await prisma.commerceConnection.update({
-    where: { id: connectionId },
+  await prisma.commerceConnection.updateMany({
+    where: { id: connectionId, provider: CommerceProvider.SHOPIFY },
     data: { lastProductSyncAt: syncedAt },
   });
 }
@@ -196,12 +237,14 @@ const DEFAULT_DEPS: ShopifyCommerceAdapterDeps = {
 
 /**
  * Normalizes `CommerceConnection.grantedScopes` (a `Json?` column) to a
- * `string[]`, tolerating both shapes seen in this codebase: the legacy
- * `Brand.shopifyGrantedScopes` column is a comma-separated string, while the
- * new Json column may hold a genuine array. Anything else (null, object,
- * numbers, etc.) normalizes to `[]` rather than throwing.
+ * `string[]`. Canonical writes use a JSON array; the string branch tolerates
+ * older serialized values without creating a second scope authority.
+ * Anything else (null, object, numbers, etc.) normalizes to `[]` rather than
+ * throwing.
  */
-function normalizeGrantedScopes(raw: Prisma.JsonValue | null | undefined): string[] {
+function normalizeGrantedScopes(
+  raw: Prisma.JsonValue | null | undefined,
+): string[] {
   if (typeof raw === "string") {
     return raw
       .split(",")
@@ -211,7 +254,8 @@ function normalizeGrantedScopes(raw: Prisma.JsonValue | null | undefined): strin
 
   if (Array.isArray(raw)) {
     return raw.filter(
-      (scope): scope is string => typeof scope === "string" && scope.trim().length > 0,
+      (scope): scope is string =>
+        typeof scope === "string" && scope.trim().length > 0,
     );
   }
 
@@ -234,7 +278,6 @@ function toCommerceConnectionSummary(
     installedAt: row.installedAt,
     uninstalledAt: row.uninstalledAt,
     lastProductSyncAt: row.lastProductSyncAt,
-    isLegacyFallback: false,
     currencyCode: extractCurrencyCodeFromProviderMetadata(row.providerMetadata),
   };
 }
@@ -265,7 +308,10 @@ function toCommerceProduct(product: NormalizedShopifyProduct): CommerceProduct {
     // The provider-confirmed storefront-publication fact is deliberately
     // separate from the actual/fallback navigation URL above.
     ...(typeof product.hasProviderStorefrontPublication === "boolean"
-      ? { hasProviderStorefrontPublication: product.hasProviderStorefrontPublication }
+      ? {
+          hasProviderStorefrontPublication:
+            product.hasProviderStorefrontPublication,
+        }
       : {}),
     hasProviderSuppliedStorefrontUrl: product.hasProviderSuppliedStorefrontUrl,
   };
@@ -275,40 +321,35 @@ type ShopifyProductSyncContext = {
   publishedProductIds: ReadonlySet<string>;
 };
 
-function getShopifyProductSyncContext(value: unknown): ShopifyProductSyncContext | null {
+function getShopifyProductSyncContext(
+  value: unknown,
+): ShopifyProductSyncContext | null {
   if (!value || typeof value !== "object") {
     return null;
   }
-  const productIds = (value as { publishedProductIds?: unknown }).publishedProductIds;
+  const productIds = (value as { publishedProductIds?: unknown })
+    .publishedProductIds;
   return productIds instanceof Set ? { publishedProductIds: productIds } : null;
 }
 
-/** Case-insensitive header lookup — inbound webhook headers may arrive in any case. */
 function getHeaderCaseInsensitive(
   headers: Record<string, string>,
   name: string,
 ): string | null {
   const target = name.toLowerCase();
-  for (const key of Object.keys(headers)) {
-    if (key.toLowerCase() === target) {
-      return headers[key];
-    }
-  }
-  return null;
+  return (
+    Object.entries(headers).find(
+      ([key]) => key.toLowerCase() === target,
+    )?.[1] ?? null
+  );
 }
 
-/**
- * Neutral event-type mapping for the webhook topics handled today (see
- * `src/lib/shopify-webhooks.ts` callers under
- * `src/app/api/shopify/webhooks/**`): app/uninstalled + the 3 GDPR/mandatory
- * compliance topics.
- */
-const WEBHOOK_TOPIC_MAP: Record<string, CommerceWebhookEventType> = {
+const SHOPIFY_WEBHOOK_TOPIC_MAP = {
   "app/uninstalled": "APP_UNINSTALLED",
   "shop/redact": "ACCOUNT_REDACT",
   "customers/data_request": "CUSTOMER_DATA_REQUEST",
   "customers/redact": "CUSTOMER_REDACT",
-};
+} as const;
 
 // ---------------------------------------------------------------------------
 // Adapter
@@ -325,18 +366,30 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
 
   getCapabilities(): CommerceCapabilities {
     return {
-      canSyncProducts: true,
-      canCreateDiscount: true,
-      // No provider call today deactivates/revokes a discount code (there is
-      // no discountCodeDeactivate call anywhere in this codebase) — keep
-      // this false and omit revokeDiscount below until that exists.
-      canRevokeDiscount: false,
-      canVerifyWebhooks: true,
+      products: { sync: true, publicDestinations: true },
+      rewards: {
+        create: true,
+        lookup: true,
+        usageLookup: true,
+        revoke: false,
+        fixedAmount: true,
+        percentage: true,
+        minimumSubtotal: true,
+        productSpecific: true,
+        singleUse: true,
+      },
     };
   }
 
-  async getConnection(connectionId: string): Promise<CommerceConnectionResult> {
+  private async loadShopifyConnection(
+    connectionId: string,
+  ): Promise<ShopifyCommerceConnectionRow | null> {
     const row = await this.deps.loadConnection(connectionId);
+    return row?.provider === CommerceProvider.SHOPIFY ? row : null;
+  }
+
+  async getConnection(connectionId: string): Promise<CommerceConnectionResult> {
+    const row = await this.loadShopifyConnection(connectionId);
 
     if (!row) {
       return { ok: false, reason: "NOT_FOUND" };
@@ -350,7 +403,7 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
   }
 
   async syncProducts(connectionId: string): Promise<ProductSyncResult> {
-    const row = await this.deps.loadConnection(connectionId);
+    const row = await this.loadShopifyConnection(connectionId);
 
     if (!row) {
       throw new CommerceConnectionNotFoundError(connectionId);
@@ -359,6 +412,7 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
     const result = await this.deps.fetchProducts({
       shopDomain: row.externalAccountId,
       brandId: row.brandId,
+      connectionId: row.id,
     });
 
     if (!result.ok) {
@@ -402,7 +456,7 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
     connectionId: string,
     request: ProductSyncPreparationRequest,
   ): Promise<ShopifyProductSyncContext> {
-    const row = await this.deps.loadConnection(connectionId);
+    const row = await this.loadShopifyConnection(connectionId);
     if (!row) {
       throw new CommerceConnectionNotFoundError(connectionId);
     }
@@ -410,6 +464,7 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
     const publicationScan = await this.deps.fetchPublishedProductIds({
       shopDomain: row.externalAccountId,
       brandId: row.brandId,
+      connectionId: row.id,
       limit: request.limit,
       maxPages: request.maxPages,
       maxProducts: request.maxProducts,
@@ -418,7 +473,8 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
     if (!publicationScan.ok) {
       throw new CommerceProviderApiError(
         CommerceProvider.SHOPIFY,
-        publicationScan.error || "Failed to retrieve Shopify Online Store publication information.",
+        publicationScan.error ||
+          "Failed to retrieve Shopify Online Store publication information.",
         undefined,
         publicationScan.status,
       );
@@ -436,7 +492,7 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
     connectionId: string,
     request: ProductSyncPageRequest,
   ): Promise<ProductSyncPageResult> {
-    const row = await this.deps.loadConnection(connectionId);
+    const row = await this.loadShopifyConnection(connectionId);
 
     if (!row) {
       throw new CommerceConnectionNotFoundError(connectionId);
@@ -453,6 +509,7 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
     const result = await this.deps.fetchProducts({
       shopDomain: row.externalAccountId,
       brandId: row.brandId,
+      connectionId: row.id,
       ...(request.cursor ? { after: request.cursor } : {}),
       ...(request.limit ? { limit: request.limit } : {}),
       ...(request.signal ? { signal: request.signal } : {}),
@@ -490,33 +547,29 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
     };
   }
 
-  async completeProductSync(connectionId: string, completedAt: Date): Promise<void> {
+  async completeProductSync(
+    connectionId: string,
+    completedAt: Date,
+  ): Promise<void> {
     await this.deps.markProductSync(connectionId, completedAt);
   }
 
   async createDiscount(
     connectionId: string,
     input: CreateDiscountInput,
-    options?: CreateDiscountOptions,
   ): Promise<ProviderDiscount> {
-    const row = await this.deps.loadConnection(connectionId);
+    const row = await this.loadShopifyConnection(connectionId);
 
     if (!row) {
       throw new CommerceConnectionNotFoundError(connectionId);
     }
 
-    // When the caller has already resolved a valid access token (see
-    // `CreateDiscountOptions.preResolvedAccessToken`'s doc comment in
-    // `../types.ts`), use it as-is instead of resolving a second one. This
-    // is what lets a money-path caller like
-    // `src/app/api/rewards/shopify/redeem/route.ts` keep its own
-    // `getValidAccessToken` call — and its own NEEDS_RECONNECT/NOT_CONNECTED
-    // refund handling — as the ONLY token resolution for a given request,
-    // rather than this adapter independently resolving (and potentially
-    // re-refreshing) a second one.
-    const accessToken = options?.preResolvedAccessToken
-      ? options.preResolvedAccessToken
-      : this.resolveAccessToken(await this.deps.getAccessToken(row.brandId, { connectionId }));
+    const accessToken = this.resolveAccessToken(
+      await this.deps.getAccessToken(row.brandId, {
+        connectionId,
+        expectedExternalAccountId: row.externalAccountId,
+      }),
+    );
 
     // Field mapping matches exactly what
     // `src/app/api/rewards/shopify/redeem/route.ts` passes to
@@ -543,8 +596,7 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
       // `result.error` is a Shopify GraphQL/user-error message — never a
       // token. `result.status` / `result.userErrors` are carried through as
       // `httpStatus` / `details` so a caller (the redeem route) can
-      // reproduce the exact status code and persisted diagnostic detail the
-      // direct-call path would have produced for the same failure.
+      // preserve the Shopify transport's status and diagnostic detail.
       throw new CommerceProviderApiError(
         CommerceProvider.SHOPIFY,
         result.error || "Failed to create Shopify discount code.",
@@ -564,24 +616,24 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
   async getDiscount(
     connectionId: string,
     input: GetDiscountInput,
-    options?: GetDiscountOptions,
   ): Promise<ProviderDiscountLookup> {
-    const row = await this.deps.loadConnection(connectionId);
+    const row = await this.loadShopifyConnection(connectionId);
     if (!row) {
       throw new CommerceConnectionNotFoundError(connectionId);
     }
-    if (row.provider !== CommerceProvider.SHOPIFY || row.status !== "CONNECTED") {
+    if (row.status !== "CONNECTED") {
       throw new CommerceProviderApiError(
         CommerceProvider.SHOPIFY,
         "Shopify connection is not available.",
       );
     }
 
-    const accessToken = options?.preResolvedAccessToken
-      ? options.preResolvedAccessToken
-      : this.resolveAccessToken(
-          await this.deps.getAccessToken(row.brandId, { connectionId }),
-        );
+    const accessToken = this.resolveAccessToken(
+      await this.deps.getAccessToken(row.brandId, {
+        connectionId,
+        expectedExternalAccountId: row.externalAccountId,
+      }),
+    );
 
     if (input.externalDiscountId) {
       const result = await this.deps.lookupDiscountByNodeId({
@@ -634,70 +686,58 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
     };
   }
 
-  // revokeDiscount is intentionally NOT implemented — canRevokeDiscount is
+  // revokeDiscount is intentionally NOT implemented — rewards.revoke is
   // false and no provider call for it exists anywhere in this codebase.
 
+  /** Shopify-only verification retained for existing Shopify webhook routes. */
   async verifyAndParseWebhook(
-    // Webhook verification is scoped to the shared app secret + the
-    // `x-shopify-shop-domain` header, not to a specific `CommerceConnection`
-    // row — exactly like `verifyShopifyWebhookRequest` today (see
-    // `src/app/api/shopify/webhooks/**/route.ts`, none of which look up a
-    // connection before verifying). `connectionId` is accepted to satisfy
-    // the neutral `CommerceAdapter` interface but is not otherwise used.
-    connectionId: string,
-    input: WebhookRequestInput,
-  ): Promise<NormalizedWebhookEvent> {
+    _connectionId: string,
+    input: ShopifyWebhookRequest,
+  ): Promise<ShopifyVerifiedWebhook> {
     const secret = process.env.SHOPIFY_API_SECRET;
-
-    if (!secret) {
+    if (!secret)
       throw new CommerceProviderApiError(
         CommerceProvider.SHOPIFY,
         "Missing Shopify API secret.",
       );
-    }
-
-    const hmac = getHeaderCaseInsensitive(input.headers, "x-shopify-hmac-sha256");
-    const verified = this.deps.verifyWebhookHmac({
-      rawBody: input.rawBody,
-      hmac,
-      secret,
-    });
-
-    if (!verified) {
+    if (
+      !this.deps.verifyWebhookHmac({
+        rawBody: input.rawBody,
+        hmac: getHeaderCaseInsensitive(input.headers, "x-shopify-hmac-sha256"),
+        secret,
+      })
+    ) {
       throw new CommerceProviderApiError(
         CommerceProvider.SHOPIFY,
         "Invalid Shopify webhook signature.",
       );
     }
-
-    const topic = getHeaderCaseInsensitive(input.headers, "x-shopify-topic");
-    const type = topic ? WEBHOOK_TOPIC_MAP[topic] : undefined;
-
-    if (!type) {
+    const type =
+      SHOPIFY_WEBHOOK_TOPIC_MAP[
+        getHeaderCaseInsensitive(
+          input.headers,
+          "x-shopify-topic",
+        ) as keyof typeof SHOPIFY_WEBHOOK_TOPIC_MAP
+      ];
+    if (!type)
       throw new CommerceProviderApiError(
         CommerceProvider.SHOPIFY,
-        `Unrecognized Shopify webhook topic: "${topic ?? "(missing)"}".`,
+        "Unrecognized Shopify webhook topic.",
       );
-    }
-
-    const externalAccountId = (
-      getHeaderCaseInsensitive(input.headers, "x-shopify-shop-domain") || ""
-    )
-      .trim()
-      .toLowerCase();
-
     let payload: unknown = null;
     try {
       payload = input.rawBody ? JSON.parse(input.rawBody) : null;
     } catch {
       payload = null;
     }
-
     return {
       provider: CommerceProvider.SHOPIFY,
       type,
-      externalAccountId,
-      receivedAt: new Date(),
+      externalAccountId: (
+        getHeaderCaseInsensitive(input.headers, "x-shopify-shop-domain") ?? ""
+      )
+        .trim()
+        .toLowerCase(),
       payload,
     };
   }

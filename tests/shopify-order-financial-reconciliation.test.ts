@@ -38,6 +38,7 @@ import {
 } from "../src/lib/commerce/providers/shopify-order-financial-reconciliation";
 
 const BRAND_ID = "brand-1";
+const CONNECTION_ID = "shopify-X";
 const SHOP_DOMAIN = "test-shop.myshopify.com";
 const EXTERNAL_ORDER_ID = "1002";
 
@@ -127,10 +128,67 @@ describe("buildShopifyOrderGid", () => {
 // ---------------------------------------------------------------------------
 
 describe("NOT_ELIGIBLE: deterministic reasons reconciliation cannot happen right now", () => {
+  test("X/Y reconciliation requests only the order's exact connection credential", async () => {
+    const tokenCalls: unknown[] = [];
+    const networkCalls: Array<{ url: string; body: unknown }> = [];
+    const getAccessToken: NonNullable<ReconcileShopifyOrderFinancialsDeps["getAccessToken"]> =
+      async (brandId, options) => {
+        tokenCalls.push({ brandId, options });
+        return {
+          ok: true,
+          accessToken: options.connectionId === "shopify-X" ? "TOKEN_X" : "TOKEN_Y",
+        };
+      };
+    const result = await reconcileShopifyOrderFinancials(
+      {
+        brandId: BRAND_ID,
+        connectionId: "shopify-X",
+        shopDomain: "x.myshopify.com",
+        externalOrderId: EXTERNAL_ORDER_ID,
+      },
+      {
+        getAccessToken,
+        fetchImpl: fetchReturning(graphqlSuccess(null), networkCalls),
+      },
+    );
+    await reconcileShopifyOrderFinancials(
+      {
+        brandId: BRAND_ID,
+        connectionId: "shopify-Y",
+        shopDomain: "y.myshopify.com",
+        externalOrderId: EXTERNAL_ORDER_ID,
+      },
+      {
+        getAccessToken,
+        fetchImpl: fetchReturning(graphqlSuccess(null), networkCalls),
+      },
+    );
+
+    assert.equal(result.outcome, "NOT_ELIGIBLE");
+    assert.deepEqual(tokenCalls, [
+      {
+        brandId: BRAND_ID,
+        options: {
+          connectionId: "shopify-X",
+          expectedExternalAccountId: "x.myshopify.com",
+        },
+      },
+      {
+        brandId: BRAND_ID,
+        options: {
+          connectionId: "shopify-Y",
+          expectedExternalAccountId: "y.myshopify.com",
+        },
+      },
+    ]);
+    assert.equal(networkCalls[0]?.url.startsWith("https://x.myshopify.com/"), true);
+    assert.equal(networkCalls[1]?.url.startsWith("https://y.myshopify.com/"), true);
+  });
+
   test("an invalid externalOrderId never reaches the network", async () => {
     const calls: Array<{ url: string; body: unknown }> = [];
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "not-numeric" },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "not-numeric" },
       { getAccessToken: okAccessToken(), fetchImpl: fetchReturning(graphqlSuccess(null), calls) },
     );
     assert.deepEqual(result, { outcome: "NOT_ELIGIBLE", reason: "INVALID_ORDER_ID" });
@@ -140,7 +198,7 @@ describe("NOT_ELIGIBLE: deterministic reasons reconciliation cannot happen right
   test("no usable credential never reaches the network", async () => {
     const calls: Array<{ url: string; body: unknown }> = [];
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
       {
         getAccessToken: async () => ({ ok: false }),
         fetchImpl: fetchReturning(graphqlSuccess(null), calls),
@@ -152,7 +210,7 @@ describe("NOT_ELIGIBLE: deterministic reasons reconciliation cannot happen right
 
   test("Shopify affirmatively returning order: null is ORDER_NOT_FOUND, distinct from a malformed shape", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
       { getAccessToken: okAccessToken(), fetchImpl: fetchReturning(graphqlSuccess(null)) },
     );
     assert.deepEqual(result, { outcome: "NOT_ELIGIBLE", reason: "ORDER_NOT_FOUND" });
@@ -161,7 +219,7 @@ describe("NOT_ELIGIBLE: deterministic reasons reconciliation cannot happen right
   test("a response with no `data` key at all is MALFORMED_SNAPSHOT", async () => {
     const response = { ok: true, json: async () => ({}) } as unknown as Response;
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
       { getAccessToken: okAccessToken(), fetchImpl: fetchReturning(response) },
     );
     assert.deepEqual(result, { outcome: "NOT_ELIGIBLE", reason: "MALFORMED_SNAPSHOT" });
@@ -169,7 +227,7 @@ describe("NOT_ELIGIBLE: deterministic reasons reconciliation cannot happen right
 
   test("missing currencyCode on totalPriceSet.shopMoney is MALFORMED_SNAPSHOT", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -187,7 +245,7 @@ describe("NOT_ELIGIBLE: deterministic reasons reconciliation cannot happen right
 
   test("an unparseable updatedAt is MALFORMED_SNAPSHOT", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -205,7 +263,7 @@ describe("NOT_ELIGIBLE: deterministic reasons reconciliation cannot happen right
 
   test("transactions not shaped as an array is MALFORMED_SNAPSHOT", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -223,7 +281,7 @@ describe("NOT_ELIGIBLE: deterministic reasons reconciliation cannot happen right
 
   test("H (defensive). a settled REFUND transaction whose own shop-currency code disagrees with the order's is unreconcilable data, never silently summed", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -243,7 +301,7 @@ describe("NOT_ELIGIBLE: deterministic reasons reconciliation cannot happen right
 describe("TRANSIENT_FAILURE: environmental conditions that plausibly resolve on retry", () => {
   test("fetch throwing (network error)", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: async () => {
@@ -257,7 +315,7 @@ describe("TRANSIENT_FAILURE: environmental conditions that plausibly resolve on 
   test("a non-2xx HTTP response", async () => {
     const response = { ok: false, json: async () => ({}) } as unknown as Response;
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
       { getAccessToken: okAccessToken(), fetchImpl: fetchReturning(response) },
     );
     assert.deepEqual(result, { outcome: "TRANSIENT_FAILURE" });
@@ -271,7 +329,7 @@ describe("TRANSIENT_FAILURE: environmental conditions that plausibly resolve on 
       },
     } as unknown as Response;
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
       { getAccessToken: okAccessToken(), fetchImpl: fetchReturning(response) },
     );
     assert.deepEqual(result, { outcome: "TRANSIENT_FAILURE" });
@@ -283,7 +341,7 @@ describe("TRANSIENT_FAILURE: environmental conditions that plausibly resolve on 
       json: async () => ({ errors: [{ message: "Throttled" }] }),
     } as unknown as Response;
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: EXTERNAL_ORDER_ID },
       { getAccessToken: okAccessToken(), fetchImpl: fetchReturning(response) },
     );
     assert.deepEqual(result, { outcome: "TRANSIENT_FAILURE" });
@@ -297,7 +355,7 @@ describe("TRANSIENT_FAILURE: environmental conditions that plausibly resolve on 
 describe("RECONCILED: the settlement gate — only kind:REFUND + status:SUCCESS transactions ever count", () => {
   test("A. successful partial refund: shop CAD 1322.57 order, settled shop refund CAD 610.63 -> refunded=61063, PARTIALLY_REFUNDED", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -323,7 +381,7 @@ describe("RECONCILED: the settlement gate — only kind:REFUND + status:SUCCESS 
 
   test("B. successful full cumulative refund: two settled REFUND transactions sum to the full amount -> refunded=132257, REFUNDED", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -349,7 +407,7 @@ describe("RECONCILED: the settlement gate — only kind:REFUND + status:SUCCESS 
 
   test("C. a PENDING refund transaction must NOT reduce settled refunded revenue", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -372,7 +430,7 @@ describe("RECONCILED: the settlement gate — only kind:REFUND + status:SUCCESS 
 
   test("D. a FAILURE refund transaction must NOT reduce settled refunded revenue", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -392,7 +450,7 @@ describe("RECONCILED: the settlement gate — only kind:REFUND + status:SUCCESS 
 
   test("E. an ERROR refund transaction must NOT reduce settled refunded revenue (and neither does AWAITING_RESPONSE or UNKNOWN)", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -416,7 +474,7 @@ describe("RECONCILED: the settlement gate — only kind:REFUND + status:SUCCESS 
 
   test("non-REFUND kinds (AUTHORIZATION, CAPTURE, SALE, VOID, CHANGE) never count even when SUCCESS", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -448,7 +506,7 @@ describe("RECONCILED: the settlement gate — only kind:REFUND + status:SUCCESS 
     // GraphQL-only and absent from REST bodies); the transaction-level sum
     // has no such gap.
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -468,7 +526,7 @@ describe("RECONCILED: the settlement gate — only kind:REFUND + status:SUCCESS 
 
   test("H. multi-currency: shop CAD / presentment USD — the transaction's presentmentMoney (if the fixture even included one) is never read; only shopMoney contributes", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -495,7 +553,7 @@ describe("RECONCILED: the settlement gate — only kind:REFUND + status:SUCCESS 
 
   test("a transaction whose own shop_money is absent (no amountSet at all) contributes nothing, never throws", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -516,7 +574,7 @@ describe("RECONCILED: the settlement gate — only kind:REFUND + status:SUCCESS 
   test("the GraphQL request variable carries the correct gid://shopify/Order/<id>, never the bare numeric id", async () => {
     const calls: Array<{ url: string; body: unknown }> = [];
     await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -538,7 +596,7 @@ describe("RECONCILED: the settlement gate — only kind:REFUND + status:SUCCESS 
 
   test("zero settled refund transactions on an otherwise-normal order reconciles to totalRefundedMinor 0n, not null", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -582,7 +640,7 @@ describe("B/G. transaction-count boundary: never trust or persist a possibly-tru
 
   test("B. 249 transactions (one under Shopify's 250-per-request ceiling) is trusted and summed normally", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -602,7 +660,7 @@ describe("B/G. transaction-count boundary: never trust or persist a possibly-tru
 
   test("B/G. exactly 250 transactions (Shopify's per-request ceiling) is a possible truncation — fails closed, NEVER returns a summed total", async () => {
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -629,7 +687,7 @@ describe("B/G. transaction-count boundary: never trust or persist a possibly-tru
       transaction("REFUND", "SUCCESS", money("610.63", "CAD")), // position 249 of 249
     ];
     const result = await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(
@@ -650,7 +708,7 @@ describe("B/G. transaction-count boundary: never trust or persist a possibly-tru
   test("G-analog. hitting the boundary makes exactly one GraphQL request — there is no retry/second-page request to leak a partial total from", async () => {
     const calls: Array<{ url: string; body: unknown }> = [];
     await reconcileShopifyOrderFinancials(
-      { brandId: BRAND_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
+      { brandId: BRAND_ID, connectionId: CONNECTION_ID, shopDomain: SHOP_DOMAIN, externalOrderId: "1002" },
       {
         getAccessToken: okAccessToken(),
         fetchImpl: fetchReturning(

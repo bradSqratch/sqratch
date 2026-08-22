@@ -1,4 +1,5 @@
-process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
+process.env.DATABASE_URL =
+  "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
 
 /**
  * tests/shopify-webhook-verification.test.ts
@@ -97,12 +98,14 @@ let customersRedactRoute: typeof import("../src/app/api/shopify/webhooks/custome
 let customersDataRequestRoute: typeof import("../src/app/api/shopify/webhooks/customers/data_request/route");
 
 before(async () => {
-  appUninstalledRoute = await import("../src/app/api/shopify/webhooks/app/uninstalled/route");
-  shopRedactRoute = await import("../src/app/api/shopify/webhooks/shop/redact/route");
-  customersRedactRoute = await import("../src/app/api/shopify/webhooks/customers/redact/route");
-  customersDataRequestRoute = await import(
-    "../src/app/api/shopify/webhooks/customers/data_request/route"
-  );
+  appUninstalledRoute =
+    await import("../src/app/api/shopify/webhooks/app/uninstalled/route");
+  shopRedactRoute =
+    await import("../src/app/api/shopify/webhooks/shop/redact/route");
+  customersRedactRoute =
+    await import("../src/app/api/shopify/webhooks/customers/redact/route");
+  customersDataRequestRoute =
+    await import("../src/app/api/shopify/webhooks/customers/data_request/route");
 });
 
 // ---------------------------------------------------------------------------
@@ -117,7 +120,10 @@ const SECRET = "test-webhook-shared-secret-9f3a";
 
 /** Genuine HMAC-SHA256/base64 over raw bytes, exactly as verifyShopifyWebhookHmac computes it. */
 function computeHmac(rawBody: string, secret: string): string {
-  return crypto.createHmac("sha256", secret).update(rawBody, "utf8").digest("base64");
+  return crypto
+    .createHmac("sha256", secret)
+    .update(rawBody, "utf8")
+    .digest("base64");
 }
 
 function escapeRegExp(value: string): string {
@@ -156,7 +162,10 @@ interface WebhookRequestOptions {
   topic?: string;
 }
 
-function buildWebhookRequest(url: string, options: WebhookRequestOptions): NextRequest {
+function buildWebhookRequest(
+  url: string,
+  options: WebhookRequestOptions,
+): NextRequest {
   const headers = new Headers();
   if (options.hmac !== undefined) {
     headers.set(HEADER_HMAC, options.hmac);
@@ -167,7 +176,11 @@ function buildWebhookRequest(url: string, options: WebhookRequestOptions): NextR
   if (options.topic !== undefined) {
     headers.set(HEADER_TOPIC, options.topic);
   }
-  return new NextRequest(url, { method: "POST", headers, body: options.rawBody });
+  return new NextRequest(url, {
+    method: "POST",
+    headers,
+    body: options.rawBody,
+  });
 }
 
 /** Captures console.log/warn/error output produced while `fn` runs, then restores the originals. */
@@ -209,17 +222,28 @@ interface RouteUnderTest {
 // point). Each POST handler is resolved lazily via `getRoutePost()` inside
 // the actual (later-running) test bodies instead.
 const ROUTES: RouteUnderTest[] = [
-  { topic: "app/uninstalled", url: "http://localhost/api/shopify/webhooks/app/uninstalled" },
-  { topic: "shop/redact", url: "http://localhost/api/shopify/webhooks/shop/redact" },
+  {
+    topic: "app/uninstalled",
+    url: "http://localhost/api/shopify/webhooks/app/uninstalled",
+  },
+  {
+    topic: "shop/redact",
+    url: "http://localhost/api/shopify/webhooks/shop/redact",
+  },
   {
     topic: "customers/data_request",
     url: "http://localhost/api/shopify/webhooks/customers/data_request",
   },
-  { topic: "customers/redact", url: "http://localhost/api/shopify/webhooks/customers/redact" },
+  {
+    topic: "customers/redact",
+    url: "http://localhost/api/shopify/webhooks/customers/redact",
+  },
 ];
 
 /** Resolves a topic's POST handler. Only safe to call from inside a running test (after `before()`). */
-function getRoutePost(topic: string): (request: NextRequest) => Promise<Response> {
+function getRoutePost(
+  topic: string,
+): (request: NextRequest) => Promise<Response> {
   switch (topic) {
     case "app/uninstalled":
       return appUninstalledRoute.POST;
@@ -246,7 +270,11 @@ function readSource(relPath: string): string {
 
 describe("verifyShopifyWebhookRequest: core contract shared by all four live topics", () => {
   test("1. a valid signature verifies and yields a normalized (trim+lowercase) shop domain and the correctly parsed payload", async () => {
-    const payloadObj = { id: 99, shop_id: 42, nested: { ok: true, values: [1, 2, 3] } };
+    const payloadObj = {
+      id: 99,
+      shop_id: 42,
+      nested: { ok: true, values: [1, 2, 3] },
+    };
     const rawBody = JSON.stringify(payloadObj);
     const hmac = computeHmac(rawBody, SECRET);
 
@@ -339,10 +367,17 @@ describe("verifyShopifyWebhookRequest: core contract shared by all four live top
 test("6. verifyShopifyWebhookHmac uses crypto.timingSafeEqual, not a naive === comparison, to compare the HMAC", () => {
   const source = readSource("src/lib/shopify.ts");
   const fnStart = source.indexOf("export function verifyShopifyWebhookHmac");
-  assert.notEqual(fnStart, -1, "verifyShopifyWebhookHmac must exist in src/lib/shopify.ts");
+  assert.notEqual(
+    fnStart,
+    -1,
+    "verifyShopifyWebhookHmac must exist in src/lib/shopify.ts",
+  );
 
   const nextExportIdx = source.indexOf("\nexport ", fnStart + 1);
-  const fnBody = source.slice(fnStart, nextExportIdx === -1 ? undefined : nextExportIdx);
+  const fnBody = source.slice(
+    fnStart,
+    nextExportIdx === -1 ? undefined : nextExportIdx,
+  );
 
   assert.match(fnBody, /crypto\.timingSafeEqual\(/);
   assert.doesNotMatch(fnBody, /expectedBuffer\s*===\s*receivedBuffer/);
@@ -422,7 +457,11 @@ describe("9. success responses remain an EMPTY body with status 200 (no JSON), o
         // business-logic block is skipped and every route falls straight
         // through to the shared `new NextResponse(null, { status: 200 })` —
         // this proves the success contract without ever touching prisma.
-        const request = buildWebhookRequest(route.url, { rawBody, hmac, topic: route.topic });
+        const request = buildWebhookRequest(route.url, {
+          rawBody,
+          hmac,
+          topic: route.topic,
+        });
         const response = await getRoutePost(route.topic)(request);
         assert.equal(response.status, 200);
         const text = await response.text();
@@ -442,7 +481,8 @@ describe("1 & 7 end-to-end (DB-free topics): valid signature carries the correct
   // Same reasoning as ROUTES above: only topic/url here, resolved lazily via
   // getRoutePost() inside the test bodies below.
   const dbFreeRoutes = ROUTES.filter(
-    (r) => r.topic === "customers/redact" || r.topic === "customers/data_request",
+    (r) =>
+      r.topic === "customers/redact" || r.topic === "customers/data_request",
   );
 
   for (const route of dbFreeRoutes) {
@@ -464,7 +504,10 @@ describe("1 & 7 end-to-end (DB-free topics): valid signature carries the correct
         assert.equal(await response.text(), "");
 
         const logLine = logged.find((line) => line.includes(route.topic));
-        assert.ok(logLine, "expected a sanitized audit log line for this webhook");
+        assert.ok(
+          logLine,
+          "expected a sanitized audit log line for this webhook",
+        );
         const parsed = JSON.parse(logLine!) as { shopDomain?: string };
         assert.equal(parsed.shopDomain, "end-to-end-test.myshopify.com");
       });
@@ -561,18 +604,27 @@ describe("8. topic identity is bound to a dedicated URL, not the spoofable x-sho
    * fails if a topic is ever attached to the WRONG uri, not just a missing
    * one.
    */
-  function parseWebhookSubscriptions(source: string): Array<{ uri: string; topic: string }> {
+  function parseWebhookSubscriptions(
+    source: string,
+  ): Array<{ uri: string; topic: string }> {
     const blocks = source.split("[[webhooks.subscriptions]]").slice(1);
     const parsed: Array<{ uri: string; topic: string }> = [];
     for (const block of blocks) {
       const uriMatch = block.match(/uri = "([^"]+)"/);
-      const topicsMatch = block.match(/(?:topics|compliance_topics) = \[([^\]]*)\]/);
-      assert.ok(uriMatch, `every [[webhooks.subscriptions]] block must declare a uri`);
+      const topicsMatch = block.match(
+        /(?:topics|compliance_topics) = \[([^\]]*)\]/,
+      );
+      assert.ok(
+        uriMatch,
+        `every [[webhooks.subscriptions]] block must declare a uri`,
+      );
       assert.ok(
         topicsMatch,
         `every [[webhooks.subscriptions]] block must declare topics or compliance_topics`,
       );
-      const topicsInBlock = [...topicsMatch![1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+      const topicsInBlock = [...topicsMatch![1].matchAll(/"([^"]+)"/g)].map(
+        (m) => m[1],
+      );
       for (const topic of topicsInBlock) {
         parsed.push({ uri: uriMatch![1], topic });
       }
@@ -620,7 +672,9 @@ describe("8. topic identity is bound to a dedicated URL, not the spoofable x-sho
   });
 
   test("shopify.app.custom.toml targets the configured ngrok host for every webhook URI", () => {
-    const subscriptions = parseWebhookSubscriptions(readSource("shopify.app.custom.toml"));
+    const subscriptions = parseWebhookSubscriptions(
+      readSource("shopify.app.custom.toml"),
+    );
     for (const { uri, topic } of subscriptions) {
       assert.ok(
         uri.startsWith("https://spyglass-excluding-silliness.ngrok-free.dev/"),
@@ -630,7 +684,9 @@ describe("8. topic identity is bound to a dedicated URL, not the spoofable x-sho
   });
 
   test("shopify.app.toml targets www.sqratch.com for every webhook URI", () => {
-    const subscriptions = parseWebhookSubscriptions(readSource("shopify.app.toml"));
+    const subscriptions = parseWebhookSubscriptions(
+      readSource("shopify.app.toml"),
+    );
     for (const { uri, topic } of subscriptions) {
       assert.ok(
         uri.startsWith("https://www.sqratch.com/"),
@@ -709,11 +765,18 @@ describe("architecture lock: webhook verification does not depend on CommerceCon
     ]) {
       const source = readSource(relPath);
       const verifyIdx = source.indexOf("verifyShopifyWebhookRequest(request)");
-      assert.notEqual(verifyIdx, -1, `${relPath} must call verifyShopifyWebhookRequest(request)`);
+      assert.notEqual(
+        verifyIdx,
+        -1,
+        `${relPath} must call verifyShopifyWebhookRequest(request)`,
+      );
 
       const gateIdx = source.indexOf("if (!verification.ok)");
       assert.notEqual(gateIdx, -1, `${relPath} must gate on !verification.ok`);
-      assert.ok(gateIdx > verifyIdx, `${relPath}: the ok-gate must come after the verify call`);
+      assert.ok(
+        gateIdx > verifyIdx,
+        `${relPath}: the ok-gate must come after the verify call`,
+      );
 
       const firstPrismaIdx = source.indexOf("prisma.");
       if (firstPrismaIdx !== -1) {
@@ -726,11 +789,17 @@ describe("architecture lock: webhook verification does not depend on CommerceCon
   });
 
   test("ShopifyCommerceAdapter.verifyAndParseWebhook accepts connectionId but never uses it in its body, and never looks up a connection", () => {
-    const source = readSource("src/lib/commerce/providers/shopify-commerce-adapter.ts");
+    const source = readSource(
+      "src/lib/commerce/providers/shopify-commerce-adapter.ts",
+    );
     const sigIdx = source.indexOf("async verifyAndParseWebhook(");
-    assert.notEqual(sigIdx, -1, "verifyAndParseWebhook must exist on ShopifyCommerceAdapter");
+    assert.notEqual(
+      sigIdx,
+      -1,
+      "verifyAndParseWebhook must exist on ShopifyCommerceAdapter",
+    );
 
-    const bodyMarker = "Promise<NormalizedWebhookEvent> {";
+    const bodyMarker = "Promise<ShopifyVerifiedWebhook> {";
     const bodyOpenIdx = source.indexOf(bodyMarker, sigIdx);
     assert.notEqual(bodyOpenIdx, -1);
 
@@ -761,8 +830,16 @@ describe("architecture lock: webhook verification does not depend on CommerceCon
   });
 
   test("the adapter's default webhook verifier is the exact same verifyShopifyWebhookHmac function shopify-webhooks.ts uses", () => {
-    const source = readSource("src/lib/commerce/providers/shopify-commerce-adapter.ts");
-    assert.match(source, /import\s*\{\s*verifyShopifyWebhookHmac\s*\}\s*from\s*"@\/lib\/shopify"/);
-    assert.match(source, /verifyWebhookHmac:\s*verifyShopifyWebhookHmac\s*,?\s*\n/);
+    const source = readSource(
+      "src/lib/commerce/providers/shopify-commerce-adapter.ts",
+    );
+    assert.match(
+      source,
+      /import\s*\{\s*verifyShopifyWebhookHmac\s*\}\s*from\s*"@\/lib\/shopify"/,
+    );
+    assert.match(
+      source,
+      /verifyWebhookHmac:\s*verifyShopifyWebhookHmac\s*,?\s*\n/,
+    );
   });
 });

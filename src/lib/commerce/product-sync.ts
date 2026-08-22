@@ -13,21 +13,11 @@
  * module never requires `DATABASE_URL`.
  *
  * ---------------------------------------------------------------------------
- * LEGACY-FALLBACK BRANDS NEVER GET A SILENT EMPTY SUCCESS
+ * MISSING CONNECTIONS NEVER GET A SILENT EMPTY SUCCESS
  * ---------------------------------------------------------------------------
- * `getActiveCommerceConnection` (`./connection-service.ts`) can return a
- * summary with `id: null` — a brand whose Shopify state lives only on the
- * legacy `Brand.shopify*` columns, with no `CommerceConnection` row yet (see
- * that module's header). `CommerceProductSyncRun.connectionId` is a required
- * FK to a real `CommerceConnection` row, so there is nothing to attach a run
- * to for such a brand — and more importantly, silently treating it as "zero
- * products, sync succeeded" would be actively wrong: the brand almost
- * certainly HAS a real catalog, we just have no connection row to sync it
- * against yet. `syncBrandCommerceProducts` returns an explicit
- * `{ status: "SKIPPED", reason: "LEGACY_FALLBACK" }` outcome for this case
- * (and `{ status: "SKIPPED", reason: "NO_CONNECTION" }` when the brand has no
- * connection at all) — never a `SUCCEEDED` outcome with an empty product
- * list, and it never writes anything.
+ * `CommerceProductSyncRun.connectionId` is a required FK to a real
+ * `CommerceConnection` row. A missing connection therefore returns an
+ * explicit skipped outcome, never a false successful zero-product sync.
  *
  * ---------------------------------------------------------------------------
  * FULL vs PARTIAL vs FAILED, AND THE MARK-UNAVAILABLE GUARD
@@ -144,7 +134,10 @@ import type { CommerceAdapter } from "./adapter";
 import { CommerceProviderApiError, UnsupportedCapabilityError } from "./errors";
 import { getCurrencyExponent, providerPriceStringToMinorUnits } from "./money";
 import type { CommerceConnectionSummary, CommerceProduct } from "./types";
-import { getActiveCommerceConnection, getAdapterForConnection } from "./connection-service";
+import {
+  getActiveCommerceConnection,
+  getAdapterForConnection,
+} from "./connection-service";
 
 // ---------------------------------------------------------------------------
 // Public result types
@@ -172,9 +165,7 @@ function zeroStats(): ProductSyncStats {
 
 export type ProductSyncSkippedReason =
   /** The brand has no commerce connection at all for this provider. */
-  | "NO_CONNECTION"
-  /** The brand's connection is legacy-fallback-derived (`summary.id === null`) — no real `CommerceConnection` row to attach a sync run to. */
-  | "LEGACY_FALLBACK";
+  "NO_CONNECTION";
 
 export type ProductSyncOutcome =
   | {
@@ -247,7 +238,12 @@ export type ConnectedProductWriteData = {
 export type ProductWriteDecision =
   | { kind: "CREATE"; data: ConnectedProductWriteData }
   | { kind: "UPDATE"; existingId: string; data: ConnectedProductWriteData }
-  | { kind: "TOUCH"; existingId: string; lastSeenAt: Date; lastSyncRunId: string };
+  | {
+      kind: "TOUCH";
+      existingId: string;
+      lastSeenAt: Date;
+      lastSyncRunId: string;
+    };
 
 export type CreateSyncRunInput = {
   connectionId: string;
@@ -278,7 +274,9 @@ export type ProductSyncDeps = {
   /** Resolves the adapter for `provider`. Throws `UnsupportedProviderError` for an unregistered provider (COMMERCE7 today). Never itself makes a network call. */
   getAdapter(summary: CommerceConnectionSummary): CommerceAdapter;
   /** Loads every existing `ConnectedCommerceProduct` row for this connection, keyed for change detection. */
-  findExistingProducts(connectionId: string): Promise<ExistingConnectedProductRow[]>;
+  findExistingProducts(
+    connectionId: string,
+  ): Promise<ExistingConnectedProductRow[]>;
   /** Creates the `RUNNING` `CommerceProductSyncRun` row. */
   createSyncRun(input: CreateSyncRunInput): Promise<{ id: string }>;
   /** Finalizes a run with its terminal status + counts. */
@@ -341,7 +339,9 @@ async function defaultGetActiveConnection(
   return getActiveCommerceConnection(brandId, provider);
 }
 
-function defaultGetAdapter(summary: CommerceConnectionSummary): CommerceAdapter {
+function defaultGetAdapter(
+  summary: CommerceConnectionSummary,
+): CommerceAdapter {
   return getAdapterForConnection(summary);
 }
 
@@ -355,7 +355,9 @@ async function defaultFindExistingProducts(
   });
 }
 
-async function defaultCreateSyncRun(input: CreateSyncRunInput): Promise<{ id: string }> {
+async function defaultCreateSyncRun(
+  input: CreateSyncRunInput,
+): Promise<{ id: string }> {
   const prisma = await getPrisma();
   const run = await prisma.commerceProductSyncRun.create({
     data: {
@@ -549,7 +551,10 @@ function buildProviderMetadata(product: CommerceProduct): Prisma.JsonObject {
   return metadata;
 }
 
-function jsonStringField(value: Prisma.JsonValue | null | undefined, key: string): string | null {
+function jsonStringField(
+  value: Prisma.JsonValue | null | undefined,
+  key: string,
+): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return null;
   }
@@ -696,7 +701,12 @@ export function decideProductWrite(
   const availabilityChanged = existing.isAvailable !== computed.isAvailable;
 
   if (!fieldsChanged && !availabilityChanged) {
-    return { kind: "TOUCH", existingId: existing.id, lastSeenAt: now, lastSyncRunId: runId };
+    return {
+      kind: "TOUCH",
+      existingId: existing.id,
+      lastSeenAt: now,
+      lastSyncRunId: runId,
+    };
   }
 
   return {
@@ -725,7 +735,10 @@ function classifySyncFailure(error: unknown): { tag: string; message: string } {
       message: error.message.slice(0, MAX_FAILURE_MESSAGE_LENGTH),
     };
   }
-  return { tag: "UNKNOWN_ERROR", message: "Non-Error value thrown during product sync." };
+  return {
+    tag: "UNKNOWN_ERROR",
+    message: "Non-Error value thrown during product sync.",
+  };
 }
 
 function formatFailureSummary(tag: string, message: string): string {
@@ -764,7 +777,11 @@ type CollectedCatalog = {
   providerFailed: boolean;
 };
 
-function positiveBound(value: number | undefined, fallback: number, maximum: number): number {
+function positiveBound(
+  value: number | undefined,
+  fallback: number,
+  maximum: number,
+): number {
   if (!Number.isFinite(value) || !value || value < 1) {
     return fallback;
   }
@@ -772,7 +789,10 @@ function positiveBound(value: number | undefined, fallback: number, maximum: num
 }
 
 function pageFailureSummary(tag: string, message: string): string {
-  return formatFailureSummary(tag, message.slice(0, MAX_FAILURE_MESSAGE_LENGTH));
+  return formatFailureSummary(
+    tag,
+    message.slice(0, MAX_FAILURE_MESSAGE_LENGTH),
+  );
 }
 
 /**
@@ -792,16 +812,31 @@ async function collectCatalog(
       hasNextPage: result.hasNextPage,
       requestedLimit: result.limit,
       failureSummary: result.hasNextPage
-        ? pageFailureSummary("TRUNCATED_PAGINATION", "Adapter returned an incomplete catalog.")
+        ? pageFailureSummary(
+            "TRUNCATED_PAGINATION",
+            "Adapter returned an incomplete catalog.",
+          )
         : null,
       providerFailed: false,
     };
   }
 
-  const pageSize = positiveBound(options.pageSize, DEFAULT_PAGE_SIZE, DEFAULT_PAGE_SIZE);
+  const pageSize = positiveBound(
+    options.pageSize,
+    DEFAULT_PAGE_SIZE,
+    DEFAULT_PAGE_SIZE,
+  );
   const maxPages = positiveBound(options.maxPages, DEFAULT_MAX_PAGES, 10_000);
-  const maxProducts = positiveBound(options.maxProducts, DEFAULT_MAX_PRODUCTS, 1_000_000);
-  const maxDurationMs = positiveBound(options.maxDurationMs, DEFAULT_MAX_DURATION_MS, 10 * 60_000);
+  const maxProducts = positiveBound(
+    options.maxProducts,
+    DEFAULT_MAX_PRODUCTS,
+    1_000_000,
+  );
+  const maxDurationMs = positiveBound(
+    options.maxDurationMs,
+    DEFAULT_MAX_DURATION_MS,
+    10 * 60_000,
+  );
   const now = options.now ?? Date.now;
   const startedAt = now();
   const controller = new AbortController();
@@ -826,15 +861,22 @@ async function collectCatalog(
         signal: controller.signal,
       });
     } catch (error) {
-      const timedOut = controller.signal.aborted || now() - startedAt >= maxDurationMs;
+      const timedOut =
+        controller.signal.aborted || now() - startedAt >= maxDurationMs;
       const classified = classifySyncFailure(error);
       return {
         products: [],
         hasNextPage: true,
         requestedLimit: pageSize,
         failureSummary: timedOut
-          ? pageFailureSummary("PAGINATION_TIMEOUT", "Elapsed-time guard reached before publication preparation completed.")
-          : pageFailureSummary("PROVIDER_PREPARATION_FAILURE", classified.message),
+          ? pageFailureSummary(
+              "PAGINATION_TIMEOUT",
+              "Elapsed-time guard reached before publication preparation completed.",
+            )
+          : pageFailureSummary(
+              "PROVIDER_PREPARATION_FAILURE",
+              classified.message,
+            ),
         providerFailed: !timedOut,
       };
     }
@@ -845,7 +887,10 @@ async function collectCatalog(
           products: deduplicateCatalogProducts(observed),
           hasNextPage: true,
           requestedLimit: pageSize,
-          failureSummary: pageFailureSummary("PAGINATION_TIMEOUT", "Elapsed-time guard reached before catalog completion."),
+          failureSummary: pageFailureSummary(
+            "PAGINATION_TIMEOUT",
+            "Elapsed-time guard reached before catalog completion.",
+          ),
           providerFailed: false,
         };
       }
@@ -859,37 +904,54 @@ async function collectCatalog(
           syncContext,
         });
       } catch (error) {
-        const timedOut = controller.signal.aborted || now() - startedAt >= maxDurationMs;
+        const timedOut =
+          controller.signal.aborted || now() - startedAt >= maxDurationMs;
         const classified = classifySyncFailure(error);
         return {
           products: deduplicateCatalogProducts(observed),
           hasNextPage: true,
           requestedLimit: pageSize,
           failureSummary: timedOut
-            ? pageFailureSummary("PAGINATION_TIMEOUT", "Elapsed-time guard reached before catalog completion.")
+            ? pageFailureSummary(
+                "PAGINATION_TIMEOUT",
+                "Elapsed-time guard reached before catalog completion.",
+              )
             : pageFailureSummary("PROVIDER_PAGE_FAILURE", classified.message),
           providerFailed: !timedOut,
         };
       }
 
       pagesFetched += 1;
-      if (!Array.isArray(page.products) || typeof page.isComplete !== "boolean") {
+      if (
+        !Array.isArray(page.products) ||
+        typeof page.isComplete !== "boolean"
+      ) {
         return {
           products: deduplicateCatalogProducts(observed),
           hasNextPage: true,
           requestedLimit: pageSize,
-          failureSummary: pageFailureSummary("INVALID_PAGE", "Provider returned an invalid product page."),
+          failureSummary: pageFailureSummary(
+            "INVALID_PAGE",
+            "Provider returned an invalid product page.",
+          ),
           providerFailed: false,
         };
       }
 
       for (const product of page.products) {
-        if (!product || typeof product.externalId !== "string" || !product.externalId.trim()) {
+        if (
+          !product ||
+          typeof product.externalId !== "string" ||
+          !product.externalId.trim()
+        ) {
           return {
             products: deduplicateCatalogProducts(observed),
             hasNextPage: true,
             requestedLimit: pageSize,
-            failureSummary: pageFailureSummary("INVALID_PAGE", "Provider returned a product without an external key."),
+            failureSummary: pageFailureSummary(
+              "INVALID_PAGE",
+              "Provider returned a product without an external key.",
+            ),
             providerFailed: false,
           };
         }
@@ -901,7 +963,10 @@ async function collectCatalog(
           products: deduplicateCatalogProducts(observed),
           hasNextPage: true,
           requestedLimit: pageSize,
-          failureSummary: pageFailureSummary("MAX_PRODUCTS_REACHED", "Maximum product guard reached before catalog completion."),
+          failureSummary: pageFailureSummary(
+            "MAX_PRODUCTS_REACHED",
+            "Maximum product guard reached before catalog completion.",
+          ),
           providerFailed: false,
         };
       }
@@ -913,7 +978,10 @@ async function collectCatalog(
             products: deduplicateCatalogProducts(observed),
             hasNextPage: true,
             requestedLimit: pageSize,
-            failureSummary: pageFailureSummary("INVALID_PAGE", "Complete page returned a next cursor."),
+            failureSummary: pageFailureSummary(
+              "INVALID_PAGE",
+              "Complete page returned a next cursor.",
+            ),
             providerFailed: false,
           };
         }
@@ -931,7 +999,10 @@ async function collectCatalog(
           products: deduplicateCatalogProducts(observed),
           hasNextPage: true,
           requestedLimit: pageSize,
-          failureSummary: pageFailureSummary("MISSING_CURSOR", "Incomplete page did not return a usable next cursor."),
+          failureSummary: pageFailureSummary(
+            "MISSING_CURSOR",
+            "Incomplete page did not return a usable next cursor.",
+          ),
           providerFailed: false,
         };
       }
@@ -941,7 +1012,10 @@ async function collectCatalog(
           products: deduplicateCatalogProducts(observed),
           hasNextPage: true,
           requestedLimit: pageSize,
-          failureSummary: pageFailureSummary("CURSOR_LOOP", "Provider returned a repeated catalog cursor."),
+          failureSummary: pageFailureSummary(
+            "CURSOR_LOOP",
+            "Provider returned a repeated catalog cursor.",
+          ),
           providerFailed: false,
         };
       }
@@ -951,7 +1025,10 @@ async function collectCatalog(
           products: deduplicateCatalogProducts(observed),
           hasNextPage: true,
           requestedLimit: pageSize,
-          failureSummary: pageFailureSummary("MAX_PAGES_REACHED", "Maximum page guard reached before catalog completion."),
+          failureSummary: pageFailureSummary(
+            "MAX_PAGES_REACHED",
+            "Maximum page guard reached before catalog completion.",
+          ),
           providerFailed: false,
         };
       }
@@ -965,7 +1042,9 @@ async function collectCatalog(
 }
 
 /** Later pages win for an overlapping external key; first-seen key order remains stable. */
-function deduplicateCatalogProducts(products: CommerceProduct[]): CommerceProduct[] {
+function deduplicateCatalogProducts(
+  products: CommerceProduct[],
+): CommerceProduct[] {
   const byExternalKey = new Map<string, CommerceProduct>();
   for (const product of products) {
     byExternalKey.set(product.externalId, product);
@@ -1000,14 +1079,6 @@ export async function syncBrandCommerceProducts(
     return { status: "SKIPPED", reason: "NO_CONNECTION", brandId, provider };
   }
 
-  if (summary.id === null) {
-    // Legacy-fallback brand — see the file header. Never a silent empty
-    // success: this is reported distinctly so a caller (or a later
-    // reconciliation/backfill tool) can tell "nothing to sync" apart from
-    // "we don't yet have a row to sync against".
-    return { status: "SKIPPED", reason: "LEGACY_FALLBACK", brandId, provider };
-  }
-
   const connectionId = summary.id;
 
   // Resolved BEFORE creating a run row and before any network call — throws
@@ -1015,8 +1086,8 @@ export async function syncBrandCommerceProducts(
   // to the caller with nothing written.
   const adapter = resolvedDeps.getAdapter(summary);
   const capabilities = adapter.getCapabilities();
-  if (!capabilities.canSyncProducts) {
-    throw new UnsupportedCapabilityError(provider, "canSyncProducts");
+  if (!capabilities.products.sync) {
+    throw new UnsupportedCapabilityError(provider, "products.sync");
   }
 
   return runProductSync(
@@ -1092,7 +1163,9 @@ async function runProductSync(
 
   try {
     const existingRows = await deps.findExistingProducts(connectionId);
-    const existingByKey = new Map(existingRows.map((row) => [row.externalKey, row]));
+    const existingByKey = new Map(
+      existingRows.map((row) => [row.externalKey, row]),
+    );
 
     for (const product of catalog.products) {
       const computed = computeProductFields(product, currencyCode);
@@ -1140,7 +1213,8 @@ async function runProductSync(
       stats.failedCount += 1;
     }
     const hadWriteFailures = stats.failedCount > 0;
-    const succeededCount = stats.createdCount + stats.updatedCount + stats.unchangedCount;
+    const succeededCount =
+      stats.createdCount + stats.updatedCount + stats.unchangedCount;
 
     if ((catalog.providerFailed || isTruncated) && succeededCount === 0) {
       finalStatus = "FAILED";
@@ -1163,17 +1237,23 @@ async function runProductSync(
       // falsely describe a partial catalog as complete.
       await adapter.completeProductSync?.(connectionId, now);
     } else {
-      const reasons: string[] = catalog.failureSummary ? [catalog.failureSummary] : [];
+      const reasons: string[] = catalog.failureSummary
+        ? [catalog.failureSummary]
+        : [];
       if (isTruncated && reasons.length === 0) {
-        reasons.push("pagination did not reach the end of the catalog (hasNextPage=true)");
+        reasons.push(
+          "pagination did not reach the end of the catalog (hasNextPage=true)",
+        );
       }
       if (hadWriteFailures) {
         reasons.push(`${stats.failedCount} product write(s) failed`);
       }
-      failureSummary = catalog.failureSummary ?? formatFailureSummary(
-        hadWriteFailures ? "PARTIAL_WRITE_FAILURE" : "TRUNCATED_PAGINATION",
-        `${reasons.join("; ")}; no product was marked unavailable this run.`,
-      );
+      failureSummary =
+        catalog.failureSummary ??
+        formatFailureSummary(
+          hadWriteFailures ? "PARTIAL_WRITE_FAILURE" : "TRUNCATED_PAGINATION",
+          `${reasons.join("; ")}; no product was marked unavailable this run.`,
+        );
       if (hadWriteFailures && catalog.failureSummary) {
         failureSummary = formatFailureSummary(
           "PARTIAL_WRITE_FAILURE",
@@ -1190,7 +1270,8 @@ async function runProductSync(
     // above).
     const { tag, message } = classifySyncFailure(error);
     failureSummary = formatFailureSummary(tag, message);
-    const succeededCount = stats.createdCount + stats.updatedCount + stats.unchangedCount;
+    const succeededCount =
+      stats.createdCount + stats.updatedCount + stats.unchangedCount;
     finalStatus = succeededCount > 0 ? "PARTIAL" : "FAILED";
   } finally {
     // Reached on EVERY exit path out of the try block above — normal

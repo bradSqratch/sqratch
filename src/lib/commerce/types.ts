@@ -9,7 +9,10 @@
  * `CommerceProvider`, not a separate type).
  */
 
-import type { CommerceConnectionStatus, CommerceProvider } from "@prisma/client";
+import type {
+  CommerceConnectionStatus,
+  CommerceProvider,
+} from "@prisma/client";
 
 /**
  * What a given adapter can actually do. Kept deliberately narrow — only the
@@ -18,19 +21,26 @@ import type { CommerceConnectionStatus, CommerceProvider } from "@prisma/client"
  * actually needs them.
  */
 export type CommerceCapabilities = {
-  canSyncProducts: boolean;
-  canCreateDiscount: boolean;
-  canRevokeDiscount: boolean;
-  canVerifyWebhooks: boolean;
+  products: {
+    sync: boolean;
+    publicDestinations: boolean;
+  };
+  rewards: {
+    create: boolean;
+    lookup: boolean;
+    usageLookup: boolean;
+    revoke: boolean;
+    fixedAmount: boolean;
+    percentage: boolean;
+    minimumSubtotal: boolean;
+    productSpecific: boolean;
+    singleUse: boolean;
+  };
 };
 
 /** Provider-neutral state of storefront conversion tracking readiness. */
 export type CommerceThemeTrackingState =
-  | "PERMISSION_REQUIRED"
-  | "NOT_CONFIGURED"
-  | "DISABLED"
-  | "ENABLED"
-  | "UNKNOWN";
+  "PERMISSION_REQUIRED" | "NOT_CONFIGURED" | "DISABLED" | "ENABLED" | "UNKNOWN";
 
 export type CommerceThemeTrackingReadiness = {
   provider: CommerceProvider;
@@ -40,14 +50,13 @@ export type CommerceThemeTrackingReadiness = {
 /**
  * The neutral view of a commerce connection handed to business code.
  *
- * `id` is `null` and `isLegacyFallback` is `true` when this summary was
- * derived from legacy `Brand.shopify*` columns rather than an actual
- * `CommerceConnection` row (pre-migration brands). It never contains any
- * credential field — secrets live only in `CommerceConnectionSecret` and
- * are never surfaced through this type.
+ * It never contains a credential field. A provider adapter owns its
+ * credential policy: Shopify resolves a connection-bound
+ * `CommerceConnectionSecret`; a future Commerce7 adapter will use the
+ * backend app credential with this exact tenant connection identity.
  */
 export type CommerceConnectionSummary = {
-  id: string | null;
+  id: string;
   brandId: string;
   provider: CommerceProvider;
   status: CommerceConnectionStatus;
@@ -59,17 +68,10 @@ export type CommerceConnectionSummary = {
   installedAt: Date | null;
   uninstalledAt: Date | null;
   lastProductSyncAt: Date | null;
-  isLegacyFallback: boolean;
   /**
-   * PHASE 14B.4B — the SINGLE canonical currency representation. For a real
-   * `CommerceConnection` row this is `providerMetadata.currencyCode`
-   * (populated on every install/sync — see `connection-sync.ts`'s
-   * `buildShopifyConnectionSyncInput(FromInstall)`); for a legacy-derived
-   * summary it is `Brand.shopifyCurrencyCode`, since that IS the only value
-   * that ever existed for a pre-cutover brand. There is deliberately no
-   * second currency field anywhere in this codebase — every runtime
-   * consumer must read it from here, not from `Brand.shopifyCurrencyCode`
-   * directly.
+   * The canonical currency representation from
+   * `CommerceConnection.providerMetadata.currencyCode`. Runtime consumers
+   * read it only from this neutral connection summary.
    */
   currencyCode: string | null;
 };
@@ -167,9 +169,8 @@ export type CommerceProduct = {
 };
 
 /**
- * Result of a product sync. Products are always fetched live and never
- * persisted (there is no Product table) — "sync" means "fetch, normalize,
- * and report a timestamp", not "reconcile against stored rows".
+ * Result of one adapter product fetch. The provider-neutral sync service may
+ * subsequently reconcile these normalized products into the persisted catalog.
  *
  * `hasNextPage` / `limit` mirror `fetchNormalizedShopifyProducts`'s own
  * pagination signal (`src/lib/shopify-products.ts`) so a route's `meta`
@@ -248,29 +249,6 @@ export type CreateDiscountInput = {
 };
 
 /**
- * Optional per-call options for `CommerceAdapter.createDiscount`. Kept
- * separate from `CreateDiscountInput` (which is the discount's own business
- * data) because this is caller-transport plumbing, not part of the discount
- * itself.
- *
- * `preResolvedAccessToken`: when the caller has ALREADY resolved a valid
- * provider access token for this connection's brand (e.g.
- * `src/app/api/rewards/shopify/redeem/route.ts` resolves one via
- * `getValidAccessToken` up front — on the money path — so it can react to a
- * NEEDS_RECONNECT/NOT_CONNECTED failure with its own refund-and-respond
- * branch before ever calling the adapter), passing it here tells the
- * adapter to use it as-is instead of resolving its own. This is what avoids
- * a SECOND, independent token resolution: for Shopify's expiring-offline
- * mode a second resolution is not merely wasteful, it can race the DB
- * compare-and-swap refresh lock or trigger a second refresh attempt against
- * the same brand. When omitted, the adapter resolves its own token exactly
- * as it always has.
- */
-export type CreateDiscountOptions = {
-  preResolvedAccessToken?: string;
-};
-
-/**
  * Neutral discount result. Field selection matches exactly what
  * `src/app/api/rewards/shopify/redeem/route.ts` persists today
  * (`shopifyDiscountNodeId`, `code`, `expiresAt` on `ShopifyRewardRedemption`)
@@ -289,11 +267,6 @@ export type GetDiscountInput = {
   code?: string;
 };
 
-/** Transport-only option; the token must already be bound to connectionId. */
-export type GetDiscountOptions = {
-  preResolvedAccessToken?: string;
-};
-
 export type ProviderDiscountLookup =
   | {
       exists: true;
@@ -303,29 +276,3 @@ export type ProviderDiscountLookup =
       expiresAt: Date | null;
     }
   | { exists: false };
-
-/** Framework-neutral webhook request input — deliberately not `NextRequest`. */
-export type WebhookRequestInput = {
-  rawBody: string;
-  headers: Record<string, string>;
-};
-
-/**
- * Neutral event kinds corresponding to the webhook topics handled today
- * (see `src/lib/shopify-webhooks.ts` and its GDPR/mandatory topics:
- * app/uninstalled, shop/redact, customers/data_request, customers/redact).
- */
-export type CommerceWebhookEventType =
-  | "APP_UNINSTALLED"
-  | "ACCOUNT_REDACT"
-  | "CUSTOMER_DATA_REQUEST"
-  | "CUSTOMER_REDACT";
-
-/** A verified, provider-neutral webhook event. `payload` is intentionally `unknown`, never `any`. */
-export type NormalizedWebhookEvent = {
-  provider: CommerceProvider;
-  type: CommerceWebhookEventType;
-  externalAccountId: string;
-  receivedAt: Date;
-  payload: unknown;
-};

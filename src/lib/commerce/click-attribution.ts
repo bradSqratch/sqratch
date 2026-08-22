@@ -54,7 +54,6 @@ import {
 import prisma from "@/lib/prisma";
 import { attachSessionCookie, ensureViewerSession } from "@/lib/session";
 import { getRequestIp, rateLimit, rateLimitResponse } from "@/lib/rate-limit";
-import { normalizeShopDomain } from "@/lib/shopify";
 import {
   CLICK_TOKEN_QUERY_PARAM,
   clickTokenPrefix,
@@ -129,13 +128,8 @@ type ResolvedLink = {
   connectedProductId: string;
   commerceConnectionId: string;
   provider: CommerceProvider;
-  /**
-   * The connection's own `externalAccountId` (for Shopify, the shop domain).
-   * This pins a synthesized Shopify fallback URL to the installed shop. A
-   * provider-supplied Shopify URL may instead use the merchant's custom domain;
-   * its provenance is a server-persisted metadata fact, never client input.
-   */
-  connectionExternalAccountId: string;
+  /** Canonical provider-verified storefront destination, never an account id. */
+  connectionStorefrontUrl: string | null;
   hasProviderSuppliedStorefrontUrl: boolean;
 };
 
@@ -267,7 +261,7 @@ function resolveVisitorCampaign(access: ExperienceAccessContext) {
  * anything else (notably `javascript:`, `data:`) is refused outright.
  *
  * NOTE ON WHAT THIS CHECK CANNOT DO. A synthesized URL is pinned to the
- * connection's own `externalAccountId`. A Shopify URL explicitly supplied by
+ * connection's canonical storefront URL. A Shopify URL explicitly supplied by
  * the provider may use the merchant's custom domain and is accepted only over
  * HTTPS with server-persisted provenance. Neither structural check proves
  * publication; the `hasPublicStorefrontUrl` predicate in every finder query
@@ -275,7 +269,7 @@ function resolveVisitorCampaign(access: ExperienceAccessContext) {
  */
 function validateDestination(
   productUrl: string,
-  expectedShopDomain: string,
+  storefrontUrl: string | null,
   provider: CommerceProvider,
   hasProviderSuppliedStorefrontUrl: boolean,
 ): URL | null {
@@ -307,15 +301,19 @@ function validateDestination(
     return parsed.protocol === "https:" && parsed.hostname ? parsed : null;
   }
 
-  if (!parsed.hostname || !expectedShopDomain) {
+  if (!parsed.hostname || !storefrontUrl) {
     return null;
   }
 
   // A click redirect is security-sensitive: without a provider domain we
   // cannot prove a historical snapshot remains a product destination. Fail
   // closed instead of turning the route into a durable open redirect.
-  const expectedHost =
-    normalizeShopDomain(expectedShopDomain) || expectedShopDomain.toLowerCase();
+  let expectedHost: string;
+  try {
+    expectedHost = new URL(storefrontUrl).hostname.toLowerCase();
+  } catch {
+    return null;
+  }
   if (parsed.hostname !== expectedHost) return null;
 
   return parsed;
@@ -364,15 +362,20 @@ const CANONICAL_DESTINATION_SELECT = {
   connectionId: true,
   provider: true,
   providerMetadata: true,
-  connection: { select: { externalAccountId: true } },
+  connection: { select: { storefrontUrl: true } },
 } as const;
 
 function hasProviderSuppliedStorefrontUrl(providerMetadata: unknown): boolean {
-  if (!providerMetadata || typeof providerMetadata !== "object" || Array.isArray(providerMetadata)) {
+  if (
+    !providerMetadata ||
+    typeof providerMetadata !== "object" ||
+    Array.isArray(providerMetadata)
+  ) {
     return false;
   }
   return (
-    (providerMetadata as Record<string, unknown>).storefrontUrlSource === "PROVIDER"
+    (providerMetadata as Record<string, unknown>).storefrontUrlSource ===
+    "PROVIDER"
   );
 }
 
@@ -455,8 +458,10 @@ const DEFAULT_DEPS: CommerceClickDeps = {
       connectedProductId: product.id,
       commerceConnectionId: product.connectionId,
       provider: product.provider,
-      connectionExternalAccountId: product.connection.externalAccountId,
-      hasProviderSuppliedStorefrontUrl: hasProviderSuppliedStorefrontUrl(product.providerMetadata),
+      connectionStorefrontUrl: product.connection.storefrontUrl,
+      hasProviderSuppliedStorefrontUrl: hasProviderSuppliedStorefrontUrl(
+        product.providerMetadata,
+      ),
     };
   },
   async findBrandStorefrontProduct({
@@ -508,14 +513,13 @@ const DEFAULT_DEPS: CommerceClickDeps = {
       connectedProductId: product.id,
       commerceConnectionId: product.connectionId,
       provider: product.provider,
-      connectionExternalAccountId: product.connection.externalAccountId,
-      hasProviderSuppliedStorefrontUrl: hasProviderSuppliedStorefrontUrl(product.providerMetadata),
+      connectionStorefrontUrl: product.connection.storefrontUrl,
+      hasProviderSuppliedStorefrontUrl: hasProviderSuppliedStorefrontUrl(
+        product.providerMetadata,
+      ),
     };
   },
-  async findCampaignProduct({
-    campaignAssignmentId,
-    experienceId,
-  }) {
+  async findCampaignProduct({ campaignAssignmentId, experienceId }) {
     const assignment = await prisma.campaignCommerceProduct.findFirst({
       where: {
         id: campaignAssignmentId,
@@ -581,8 +585,10 @@ const DEFAULT_DEPS: CommerceClickDeps = {
       connectedProductId: product.id,
       commerceConnectionId: product.connectionId,
       provider: product.provider,
-      connectionExternalAccountId: product.connection.externalAccountId,
-      hasProviderSuppliedStorefrontUrl: hasProviderSuppliedStorefrontUrl(product.providerMetadata),
+      connectionStorefrontUrl: product.connection.storefrontUrl,
+      hasProviderSuppliedStorefrontUrl: hasProviderSuppliedStorefrontUrl(
+        product.providerMetadata,
+      ),
     };
   },
   async recordAttribution(input) {
@@ -757,7 +763,7 @@ export async function handleCommerceClick(
 
     const destination = validateDestination(
       link.productUrl,
-      link.connectionExternalAccountId,
+      link.connectionStorefrontUrl,
       link.provider,
       link.hasProviderSuppliedStorefrontUrl,
     );

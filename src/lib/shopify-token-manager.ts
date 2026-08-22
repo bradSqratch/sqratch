@@ -580,8 +580,9 @@ async function performTokenRefresh(
  */
 async function readWinnerToken(
   brandId: string,
+  connectionId: string,
 ): Promise<GetValidAccessTokenResult | null> {
-  const resolved = await resolveRuntimeCredential(brandId);
+  const resolved = await resolveRuntimeCredential(brandId, connectionId);
   if (resolved.outcome === "NOT_CONNECTED") {
     return { ok: false, reason: "NOT_CONNECTED" };
   }
@@ -614,7 +615,18 @@ async function readWinnerToken(
  */
 export async function getValidAccessToken(
   brandId: string,
-  options?: { tokenEndpoint?: TokenEndpointFn; skipScopeCheck?: boolean; connectionId?: string },
+  options?: {
+    tokenEndpoint?: TokenEndpointFn;
+    skipScopeCheck?: boolean;
+    connectionId?: string;
+    /**
+     * When an account-specific caller already knows the canonical provider
+     * identity, require the connection selected by `connectionId` to carry
+     * that same identity. This prevents pairing connection X's domain with
+     * connection Y's credential during relink/concurrent-connection flows.
+     */
+    expectedExternalAccountId?: string;
+  },
 ): Promise<GetValidAccessTokenResult> {
   const tokenEndpoint = options?.tokenEndpoint ?? defaultTokenEndpoint;
 
@@ -628,6 +640,14 @@ export async function getValidAccessToken(
     return { ok: false, reason: "NEEDS_RECONNECT" };
   }
   const credential = resolved.credential;
+
+  if (
+    options?.expectedExternalAccountId !== undefined &&
+    credential.shopDomain?.trim().toLowerCase() !==
+      options.expectedExternalAccountId.trim().toLowerCase()
+  ) {
+    return { ok: false, reason: "NOT_CONNECTED" };
+  }
 
   // ---------------------------------------------------------------------------
   // LEGACY_OFFLINE path — custom apps, non-expiring tokens (no refresh)
@@ -745,7 +765,7 @@ async function runRefreshUnderLease(
   } catch (err: unknown) {
     if ((err as { staleWriter?: boolean }).staleWriter) {
       return (
-        (await readWinnerToken(credential.brandId)) ?? {
+        (await readWinnerToken(credential.brandId, credential.connectionId!)) ?? {
           ok: false,
           reason: "NEEDS_RECONNECT",
         }
@@ -758,7 +778,7 @@ async function runRefreshUnderLease(
 
       if (!marked) {
         return (
-          (await readWinnerToken(credential.brandId)) ?? {
+          (await readWinnerToken(credential.brandId, credential.connectionId!)) ?? {
             ok: false,
             reason: "NEEDS_RECONNECT",
           }
@@ -837,6 +857,7 @@ export type ApplyGrantedScopesUpdateResult =
   | {
       applied: true;
       brandId: string;
+      connectionId: string;
       /**
        * True when the row's status was `REQUIRES_RECONNECT` WITH a
        * credential still on file at the moment this update was resolved —
@@ -951,7 +972,12 @@ export async function applyGrantedScopesUpdate(input: {
     });
     if (result.count !== 1) return { applied: false, reason: "SUPERSEDED" };
 
-    return { applied: true, brandId: connection.brandId, wasScopeDriftReconnect };
+    return {
+      applied: true,
+      brandId: connection.brandId,
+      connectionId: connection.id,
+      wasScopeDriftReconnect,
+    };
   }
 
   // PHASE 14C-A: no canonical connection exists for this domain — no legacy
@@ -1002,12 +1028,19 @@ export async function applyGrantedScopesUpdate(input: {
  * separate consequence of the original bug and is left for deliberate
  * Brand Admin action, not auto-reversed by this fix.
  */
-export async function healScopeDriftReconnect(brandId: string): Promise<boolean> {
+export async function healScopeDriftReconnect(
+  brandId: string,
+  connectionId?: string,
+): Promise<boolean> {
   // PHASE 14C-A: CANONICAL-ONLY heal — targeted status write, CAS-guarded on
   // `CommerceConnection.status === "REQUIRES_RECONNECT"` (see
   // `healShopifyCredentialConnected`), so this is a safe no-op if the row
   // already moved on. No legacy `Brand` read or write.
-  const canonicalHeal = await healShopifyCredentialConnected(brandId);
+  const canonicalHeal = await healShopifyCredentialConnected(
+    brandId,
+    undefined,
+    connectionId,
+  );
 
   if (canonicalHeal.outcome !== "HEALED") {
     return false;
@@ -1016,7 +1049,11 @@ export async function healScopeDriftReconnect(brandId: string): Promise<boolean>
   // Same shop, same currency, same client id — this heals a status flag, it
   // does not represent any actual change of shop identity. Sourced fresh
   // from the just-healed canonical credential, never from `Brand`.
-  const healedCredential = await loadShopifyCredential(brandId);
+  const healedCredential = await loadShopifyCredential(
+    brandId,
+    undefined,
+    connectionId,
+  );
   if (healedCredential.outcome === "OK") {
     const db = await getDb();
     const c = healedCredential.credential;
@@ -1134,7 +1171,11 @@ export type ReconcileShopifyConnectionScopesResult =
  */
 export async function reconcileShopifyConnectionScopes(
   brandId: string,
-  deps: { tokenEndpoint?: TokenEndpointFn; fetchImpl?: typeof fetch } = {},
+  deps: {
+    connectionId?: string;
+    tokenEndpoint?: TokenEndpointFn;
+    fetchImpl?: typeof fetch;
+  } = {},
 ): Promise<ReconcileShopifyConnectionScopesResult> {
   // PHASE 14B.4B — CANONICAL ELIGIBILITY. Whether this brand is even a
   // candidate for reconciliation is now decided from the CANONICAL
@@ -1145,7 +1186,11 @@ export async function reconcileShopifyConnectionScopes(
   // REQUIRES_RECONNECT guard is exactly the sticky gate this reconciliation
   // exists to get past. A corrupt canonical secret fails closed here too —
   // it is never "rescued" from the legacy row.
-  const canonicalForReconcile = await loadShopifyCredential(brandId);
+  const canonicalForReconcile = await loadShopifyCredential(
+    brandId,
+    undefined,
+    deps.connectionId,
+  );
   if (canonicalForReconcile.outcome === "CORRUPT_SECRET") {
     return { outcome: "CREDENTIAL_INVALID" };
   }
@@ -1241,7 +1286,10 @@ export async function reconcileShopifyConnectionScopes(
 
   let healedConnection = false;
   if (wasRequiresReconnect && applied.applied) {
-    healedConnection = await healScopeDriftReconnect(brandId);
+    healedConnection = await healScopeDriftReconnect(
+      brandId,
+      reconcileCredential.connectionId ?? undefined,
+    );
   }
 
   return {

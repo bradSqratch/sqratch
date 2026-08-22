@@ -184,20 +184,10 @@ describe("describeSyncOutcome — every documented outcome", () => {
     assert.doesNotMatch(notice.message, /run-secret-like-id|detail/);
   });
 
-  test("SKIPPED/NO_CONNECTION is an error, distinct from LEGACY_FALLBACK", () => {
+  test("SKIPPED/NO_CONNECTION is an error", () => {
     const notice = describeSyncOutcome({ status: "SKIPPED", code: "NO_CONNECTION" });
     assert.equal(notice.tone, "error");
     assert.match(notice.message, /no commerce connection|connect a store/i);
-  });
-
-  test("SKIPPED/LEGACY_FALLBACK is an error, distinct message from NO_CONNECTION", () => {
-    const notice = describeSyncOutcome({ status: "SKIPPED", code: "LEGACY_FALLBACK" });
-    assert.equal(notice.tone, "error");
-    assert.match(notice.message, /reconnect/i);
-    assert.notEqual(
-      notice.message,
-      describeSyncOutcome({ status: "SKIPPED", code: "NO_CONNECTION" }).message,
-    );
   });
 
   test("SYNC_IN_PROGRESS is not a success", () => {
@@ -215,12 +205,11 @@ describe("describeSyncOutcome — every documented outcome", () => {
     assert.match(notice.message, /Shopify returned 500/);
   });
 
-  test("all six outcomes produce distinct messages", () => {
+  test("all five outcomes produce distinct messages", () => {
     const messages = [
       describeSyncOutcome({ status: "SUCCEEDED" }),
       describeSyncOutcome({ status: "PARTIAL" }),
       describeSyncOutcome({ status: "SKIPPED", code: "NO_CONNECTION" }),
-      describeSyncOutcome({ status: "SKIPPED", code: "LEGACY_FALLBACK" }),
       describeSyncOutcome({ status: "SYNC_IN_PROGRESS" }),
       describeSyncOutcome({ status: "SYNC_FAILED", failureSummary: null }),
     ].map((n) => n.message);

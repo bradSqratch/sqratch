@@ -76,7 +76,10 @@ export async function PUT(
 
     if (!shopCurrency && isConnected && connectionSummary) {
       try {
-        const tokenResult = await getValidAccessToken(brand.id);
+        const tokenResult = await getValidAccessToken(brand.id, {
+          connectionId: connectionSummary.id,
+          expectedExternalAccountId: connectionSummary.externalAccountId,
+        });
         if (tokenResult.ok) {
           const currencyResult = await getShopifyShopCurrencyWithAccessToken({
             shopDomain: connectionSummary.externalAccountId,
@@ -84,12 +87,10 @@ export async function PUT(
           });
           if (currencyResult.ok) {
             shopCurrency = currencyResult.currencyCode;
-            if (connectionSummary.id) {
-              await recordCommerceConnectionCurrencyCode(
-                connectionSummary.id,
-                shopCurrency,
-              );
-            }
+            await recordCommerceConnectionCurrencyCode(
+              connectionSummary.id,
+              shopCurrency,
+            );
           }
         }
       } catch (err) {
@@ -114,6 +115,7 @@ export async function PUT(
         validateProductsBelongToConnectedStore({
           shopDomain: currentShopDomain!,
           brandId: brand.id,
+          connectionId: connectionSummary!.id,
           products,
         }),
     });

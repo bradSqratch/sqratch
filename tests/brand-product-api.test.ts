@@ -331,21 +331,6 @@ describe("POST /api/brand/products/sync", () => {
     assert.equal(body.code, "NO_CONNECTION");
   });
 
-  test("SKIPPED (LEGACY_FALLBACK) is a 400 error, never a 200", async () => {
-    const res = await productsSyncImpl({
-      getContext: async () => makeContext(BRAND),
-      findRunningRun: async () => null,
-      runSync: async (brandId) => ({
-        status: "SKIPPED",
-        reason: "LEGACY_FALLBACK",
-        brandId,
-        provider: CommerceProvider.SHOPIFY,
-      }),
-    });
-    assert.equal(res.status, 400);
-    const body = await res.json();
-    assert.equal(body.code, "LEGACY_FALLBACK");
-  });
 
   test("a RUNNING run younger than the concurrency window yields 409, and runSync is never called", async () => {
     const res = await productsSyncImpl({

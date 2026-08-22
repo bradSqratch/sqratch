@@ -87,7 +87,7 @@ import { decryptSecret } from "../src/lib/crypto";
 import {
   mapCommerceConnectionToSummary,
   extractCurrencyCodeFromProviderMetadata,
-  normalizeLegacyGrantedScopes,
+  normalizeGrantedScopes,
   normalizeGrantedScopesJson,
   pickPreferredConnectionRow,
   resolveCommerceConnectionForBrand,
@@ -438,19 +438,10 @@ describe("resolveCommerceConnectionForBrand — canonical-only (PHASE 14C-A: no 
 
     assert.ok(result);
     assert.equal(result?.id, "conn-real");
-    assert.equal(result?.isLegacyFallback, false);
     assert.equal(result?.displayName, "real-connection");
   });
 
-  // PHASE 14C-A: this used to assert a legacy Brand fallback summary
-  // (id: null, isLegacyFallback: true). The operator verified via live SQL
-  // that every currently-installed Shopify merchant already has a canonical
-  // CommerceConnection row, so that fallback was removed entirely —
-  // `resolveCommerceConnectionForBrand`'s deps no longer even have a
-  // `findLegacyBrandFields` slot to inject. The real invariant this test
-  // protects — "no canonical row means no connection" — is unchanged;
-  // only the shape of the answer (previously a legacy-derived summary, now
-  // bare `null`) changed with it.
+  // No canonical row means no connection.
   test("2. no connection row -> null, no legacy fallback", async () => {
     const result = await resolveCommerceConnectionForBrand(
       "brand-1",
@@ -535,7 +526,6 @@ describe("Phase 13: a single Brand may hold Shopify AND Commerce7 connections si
     assert.equal(result?.id, "conn-shopify");
     assert.equal(result?.provider, CommerceProvider.SHOPIFY);
     assert.equal(result?.externalAccountId, "acme.myshopify.com");
-    assert.equal(result?.isLegacyFallback, false);
   });
 
   test("resolving COMMERCE7 returns only the Commerce7 connection, with no Shopify identifiers leaking in", async () => {
@@ -552,7 +542,6 @@ describe("Phase 13: a single Brand may hold Shopify AND Commerce7 connections si
     assert.equal(result?.provider, CommerceProvider.COMMERCE7);
     assert.equal(result?.externalAccountId, "acme-winery-tenant");
     assert.doesNotMatch(String(result?.externalAccountId), /myshopify/);
-    assert.equal(result?.isLegacyFallback, false);
   });
 
   // PHASE 14C-A: no legacy fallback exists for any provider anymore — a
@@ -671,13 +660,13 @@ describe("pickPreferredConnectionRow tiebreak", () => {
 describe("grantedScopes normalization", () => {
   test("6a. comma-separated legacy string trims and drops empties", () => {
     assert.deepEqual(
-      normalizeLegacyGrantedScopes("read_products, write_discounts,,  "),
+      normalizeGrantedScopes("read_products, write_discounts,,  "),
       ["read_products", "write_discounts"],
     );
   });
 
   test("6b. null legacy string normalizes to []", () => {
-    assert.deepEqual(normalizeLegacyGrantedScopes(null), []);
+    assert.deepEqual(normalizeGrantedScopes(null), []);
   });
 
   test("6c. Json array normalizes to string[]", () => {
@@ -703,20 +692,13 @@ describe("grantedScopes normalization", () => {
 // ---------------------------------------------------------------------------
 // mapCommerceConnectionToSummary
 //
-// PHASE 14C-A: `mapLegacyBrandToConnectionSummary` was deleted from
-// connection-resolver.ts along with the rest of the legacy-fallback read
-// path (operator-verified: no live merchant needs it). Its direct unit
-// tests are removed with it — the invariants they protected (no shop
-// domain -> null; a legacy-derived summary always carries isPrimary:true /
-// isLegacyFallback:true / id:null) no longer apply to any reachable code
-// path.
+// Only persisted CommerceConnection rows map to summaries.
 // ---------------------------------------------------------------------------
 
 describe("pure mapping helpers", () => {
-  test("mapCommerceConnectionToSummary maps every field and sets isLegacyFallback: false", () => {
+  test("mapCommerceConnectionToSummary maps canonical fields", () => {
     const row = makeConnectionRow();
     const summary = mapCommerceConnectionToSummary(row);
-    assert.equal(summary.isLegacyFallback, false);
     assert.equal(summary.id, row.id);
     assert.equal(summary.brandId, row.brandId);
     assert.deepEqual(summary.grantedScopes, ["read_products"]);
@@ -725,9 +707,7 @@ describe("pure mapping helpers", () => {
   // ---------------------------------------------------------------------
   // M. PHASE 14B.4B — currency comes from the SINGLE canonical
   // representation: `CommerceConnection.providerMetadata.currencyCode` for a
-  // real row, `Brand.shopifyCurrencyCode` ONLY for the legacy fallback (no
-  // canonical row exists at all). No second/duplicate currency field exists
-  // anywhere in the codebase.
+  // persisted connection metadata. No duplicate currency authority exists.
   // ---------------------------------------------------------------------
   test("M. mapCommerceConnectionToSummary sources currencyCode from providerMetadata.currencyCode", () => {
     const row = makeConnectionRow({

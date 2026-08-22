@@ -155,14 +155,10 @@ describe("getActiveCommerceConnection — canonical-only", () => {
 
     assert.ok(result);
     assert.equal(result?.id, "conn-real");
-    assert.equal(result?.isLegacyFallback, false);
     assert.equal(result?.displayName, "real-connection");
   });
 
-  // PHASE 14C-A: this used to assert a legacy-derived fallback summary
-  // (id: null, isLegacyFallback: true) — that fallback was removed
-  // entirely (operator-verified: no live merchant needs it), so
-  // `getActiveCommerceConnection` now returns bare `null` here.
+  // No canonical row means no connection.
   test("3. no row exists -> null", async () => {
     const result = await getActiveCommerceConnection("brand-1", CommerceProvider.SHOPIFY, {
       findConnectionRows: async () => [],
@@ -283,18 +279,25 @@ describe("getPrimaryCommerceConnection", () => {
 describe("getCommerceCapabilities / getAdapterForConnection", () => {
   test("8a. SHOPIFY resolves capabilities without throwing", () => {
     const capabilities = getCommerceCapabilities(CommerceProvider.SHOPIFY);
-    assert.equal(capabilities.canSyncProducts, true);
-    assert.equal(capabilities.canCreateDiscount, true);
-    assert.equal(capabilities.canVerifyWebhooks, true);
+    assert.equal(capabilities.products.sync, true);
+    assert.equal(capabilities.rewards.create, true);
   });
 
   test("8b. COMMERCE7 returns an all-false CommerceCapabilities, never throws", () => {
     const capabilities = getCommerceCapabilities(CommerceProvider.COMMERCE7);
     assert.deepEqual(capabilities, {
-      canSyncProducts: false,
-      canCreateDiscount: false,
-      canRevokeDiscount: false,
-      canVerifyWebhooks: false,
+      products: { sync: false, publicDestinations: false },
+      rewards: {
+        create: false,
+        lookup: false,
+        usageLookup: false,
+        revoke: false,
+        fixedAmount: false,
+        percentage: false,
+        minimumSubtotal: false,
+        productSpecific: false,
+        singleUse: false,
+      },
     });
   });
 
@@ -312,7 +315,6 @@ describe("getCommerceCapabilities / getAdapterForConnection", () => {
       installedAt: null,
       uninstalledAt: null,
       lastProductSyncAt: null,
-      isLegacyFallback: false,
       currencyCode: null,
     };
 
@@ -335,7 +337,6 @@ describe("getCommerceCapabilities / getAdapterForConnection", () => {
       installedAt: null,
       uninstalledAt: null,
       lastProductSyncAt: null,
-      isLegacyFallback: false,
       currencyCode: null,
     };
 
@@ -361,7 +362,6 @@ function makeSummary(overrides: Partial<CommerceConnectionSummary> = {}): Commer
     installedAt: null,
     uninstalledAt: null,
     lastProductSyncAt: null,
-    isLegacyFallback: false,
     currencyCode: null,
     ...overrides,
   };

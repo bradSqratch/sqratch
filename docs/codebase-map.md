@@ -6,21 +6,31 @@
 
 ## A. Top-Level Architecture
 
-| Concern | Technology / Approach |
-|---|---|
-| **Framework** | Next.js 15 App Router (React Server + Client components) |
-| **Language** | TypeScript throughout |
-| **Routing** | App Router — `src/app/` directory; route groups `(auth)`, `(home)`, `(withSidebar)` |
-| **Auth / Session** | next-auth v4 (`credentials` provider + JWT strategy); custom `sqr_session` cookie for anonymous QR tracking |
-| **Database ORM** | Prisma 7 — PostgreSQL via Supabase (separate `DATABASE_URL` + `DIRECT_URL`) |
-| **File Storage** | Supabase Storage; lesson videos use signed browser-to-Supabase uploads (`docs/lesson-video-uploads.md`) |
-| **Email** | SMTP via Mailtrap-compatible credentials; async queue via `EmailQueue` table + `/api/internal/email-worker` |
-| **Shopify** | Public embedded session-token/token-exchange flow (expiring offline tokens) plus legacy custom-app compatibility (`LEGACY_OFFLINE`); Admin GraphQL API v2026-04 |
-| **Encryption** | AES-256-GCM via `APP_ENCRYPTION_KEY`; used to store Shopify access + refresh tokens at rest |
-| **Rate Limiting** | In-memory fixed-window limiter (`src/lib/rate-limit.ts`); per-instance on Vercel serverless |
-| **Analytics** | Internal `AnalyticsEvent` table + Google Analytics (`NEXT_PUBLIC_GA_ID`) |
-| **CI** | GitHub Actions (`verify` job): prisma generate/validate, typecheck, lint, test, build, `npm audit --omit=dev` |
-| **Deployment** | Vercel (env structure, `NEXTAUTH_URL`, `VERCEL` reference) |
+### Commerce provider boundary
+
+`CommerceConnection` is the sole connection identity authority and
+`CommerceConnectionEvent` is provider-neutral lifecycle history. Provider
+adapters own credential policy: Shopify uses the exact connection's
+`CommerceConnectionSecret`; future Commerce7 uses an app-global backend
+credential with an exact tenant connection, not a copied tenant secret. Reward
+and points runtime is provider-neutral; physical Shopify reward table/column
+names are compatibility mappings only.
+
+| Concern            | Technology / Approach                                                                                                                                           |
+| ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Framework**      | Next.js 15 App Router (React Server + Client components)                                                                                                        |
+| **Language**       | TypeScript throughout                                                                                                                                           |
+| **Routing**        | App Router — `src/app/` directory; route groups `(auth)`, `(home)`, `(withSidebar)`                                                                             |
+| **Auth / Session** | next-auth v4 (`credentials` provider + JWT strategy); custom `sqr_session` cookie for anonymous QR tracking                                                     |
+| **Database ORM**   | Prisma 7 — PostgreSQL via Supabase (separate `DATABASE_URL` + `DIRECT_URL`)                                                                                     |
+| **File Storage**   | Supabase Storage; lesson videos use signed browser-to-Supabase uploads (`docs/lesson-video-uploads.md`)                                                         |
+| **Email**          | SMTP via Mailtrap-compatible credentials; async queue via `EmailQueue` table + `/api/internal/email-worker`                                                     |
+| **Shopify**        | Public embedded session-token/token-exchange flow (expiring offline tokens) plus legacy custom-app compatibility (`LEGACY_OFFLINE`); Admin GraphQL API v2026-04 |
+| **Encryption**     | AES-256-GCM via `APP_ENCRYPTION_KEY`; used to store Shopify access + refresh tokens at rest                                                                     |
+| **Rate Limiting**  | In-memory fixed-window limiter (`src/lib/rate-limit.ts`); per-instance on Vercel serverless                                                                     |
+| **Analytics**      | Internal `AnalyticsEvent` table + Google Analytics (`NEXT_PUBLIC_GA_ID`)                                                                                        |
+| **CI**             | GitHub Actions (`verify` job): prisma generate/validate, typecheck, lint, test, build, `npm audit --omit=dev`                                                   |
+| **Deployment**     | Vercel (env structure, `NEXTAUTH_URL`, `VERCEL` reference)                                                                                                      |
 
 ---
 
@@ -88,7 +98,7 @@ sqratch/
 │   │   ├── shopify-discounts.ts ← Shopify Admin GraphQL discount CRUD
 │   │   ├── shopify-products.ts  ← Shopify Admin GraphQL product fetch
 │   │   ├── shopify-webhooks.ts  ← Webhook HMAC verification helper
-│   │   ├── shopify-connection-transitions.ts ← Records ShopifyConnectionEvent history (connect/relink/disconnect/uninstall)
+│   │   ├── shopify-connection-transitions.ts ← Records provider-neutral CommerceConnectionEvent lifecycle history
 │   │   ├── crypto.ts          ← AES-256-GCM encrypt/decrypt (Shopify tokens)
 │   │   ├── rate-limit.ts      ← In-memory rate limiter (fixed-window, per-instance)
 │   │   ├── brand-auth.ts      ← Brand admin session gating
@@ -126,83 +136,83 @@ sqratch/
 
 ### Public Routes (no auth required)
 
-| Route | File | Purpose |
-|---|---|---|
-| `/` | `(home)/page.tsx` | Marketing landing page |
-| `/home` | `home/page.tsx` | Alternate home |
-| `/about` | `about/page.tsx` | About page |
-| `/contact` | `contact/page.tsx` | Contact page |
-| `/privacy` | `privacy/page.tsx` | Privacy policy |
-| `/terms` | `terms/page.tsx` | Terms of service |
-| `/support` | `support/page.tsx` | Support page |
-| `/q/[qrCodeData]` | `q/[qrCodeData]/page.tsx` | QR scan entry — resolves code → campaign |
-| `/c/[campaignSlug]` | `c/[campaignSlug]/page.tsx` | Campaign landing after scan |
-| `/x/[experienceSlug]` | `x/[experienceSlug]/page.tsx` | Experience hub (public) |
-| `/x/[experienceSlug]/courses/[courseSlug]` | `...courses/[courseSlug]/page.tsx` | Course detail |
-| `/x/[experienceSlug]/lessons/[lessonId]` | `...lessons/[lessonId]/page.tsx` | Lesson viewer |
-| `/x/[experienceSlug]/shop` | `...shop/page.tsx` | Experience shop tab (Shopify products + rewards) |
-| `/x/[experienceSlug]/posts` | `...posts/page.tsx` | Experience posts/community |
-| `/x/[experienceSlug]/qa` | `...qa/page.tsx` | Experience Q&A |
-| `/shopify` | `shopify/route.ts` | Shopify app install landing (embedded); server-rendered HTML route handler, not a page component; no shop query leak |
-| `/approval-pending` | `approval-pending/page.tsx` | Brand/creator approval pending screen |
-| `/dev/email-preview` | `dev/email-preview/route.ts` | Dev email preview — returns 404 when `NODE_ENV === "production"` |
+| Route                                      | File                               | Purpose                                                                                                              |
+| ------------------------------------------ | ---------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `/`                                        | `(home)/page.tsx`                  | Marketing landing page                                                                                               |
+| `/home`                                    | `home/page.tsx`                    | Alternate home                                                                                                       |
+| `/about`                                   | `about/page.tsx`                   | About page                                                                                                           |
+| `/contact`                                 | `contact/page.tsx`                 | Contact page                                                                                                         |
+| `/privacy`                                 | `privacy/page.tsx`                 | Privacy policy                                                                                                       |
+| `/terms`                                   | `terms/page.tsx`                   | Terms of service                                                                                                     |
+| `/support`                                 | `support/page.tsx`                 | Support page                                                                                                         |
+| `/q/[qrCodeData]`                          | `q/[qrCodeData]/page.tsx`          | QR scan entry — resolves code → campaign                                                                             |
+| `/c/[campaignSlug]`                        | `c/[campaignSlug]/page.tsx`        | Campaign landing after scan                                                                                          |
+| `/x/[experienceSlug]`                      | `x/[experienceSlug]/page.tsx`      | Experience hub (public)                                                                                              |
+| `/x/[experienceSlug]/courses/[courseSlug]` | `...courses/[courseSlug]/page.tsx` | Course detail                                                                                                        |
+| `/x/[experienceSlug]/lessons/[lessonId]`   | `...lessons/[lessonId]/page.tsx`   | Lesson viewer                                                                                                        |
+| `/x/[experienceSlug]/shop`                 | `...shop/page.tsx`                 | Experience shop tab (Shopify products + rewards)                                                                     |
+| `/x/[experienceSlug]/posts`                | `...posts/page.tsx`                | Experience posts/community                                                                                           |
+| `/x/[experienceSlug]/qa`                   | `...qa/page.tsx`                   | Experience Q&A                                                                                                       |
+| `/shopify`                                 | `shopify/route.ts`                 | Shopify app install landing (embedded); server-rendered HTML route handler, not a page component; no shop query leak |
+| `/approval-pending`                        | `approval-pending/page.tsx`        | Brand/creator approval pending screen                                                                                |
+| `/dev/email-preview`                       | `dev/email-preview/route.ts`       | Dev email preview — returns 404 when `NODE_ENV === "production"`                                                     |
 
 ### Auth Routes
 
-| Route | File | Purpose |
-|---|---|---|
-| `/login` | `(auth)/login/page.tsx` | Login page |
-| `/signup` | `(auth)/signup/page.tsx` | Signup page |
+| Route           | File                           | Purpose            |
+| --------------- | ------------------------------ | ------------------ |
+| `/login`        | `(auth)/login/page.tsx`        | Login page         |
+| `/signup`       | `(auth)/signup/page.tsx`       | Signup page        |
 | `/verify-email` | `(auth)/verify-email/page.tsx` | Email verification |
 
 ### Dashboard Routes (auth required — `role: USER+`)
 
-| Route | File | Purpose |
-|---|---|---|
-| `/dashboard` | `(withSidebar)/dashboard/page.tsx` | User dashboard overview |
-| `/dashboard/points` | `.../points/page.tsx` | User points + transaction history + reward redemption |
-| `/profile` | `(withSidebar)/profile/page.tsx` | User profile edit — authenticated-only via `middleware.ts` matcher, no role restriction |
+| Route               | File                               | Purpose                                                                                 |
+| ------------------- | ---------------------------------- | --------------------------------------------------------------------------------------- |
+| `/dashboard`        | `(withSidebar)/dashboard/page.tsx` | User dashboard overview                                                                 |
+| `/dashboard/points` | `.../points/page.tsx`              | User points + transaction history + reward redemption                                   |
+| `/profile`          | `(withSidebar)/profile/page.tsx`   | User profile edit — authenticated-only via `middleware.ts` matcher, no role restriction |
 
 ### Brand Dashboard Routes (auth + Brand-management policy, enforced in `dashboard/brand/layout.tsx`)
 
-| Route | Purpose |
-|---|---|
-| `/dashboard/brand/campaigns` | Campaign list + management |
-| `/dashboard/brand/campaigns/new` | Create campaign |
-| `/dashboard/brand/campaigns/[id]/edit` | Edit campaign |
-| `/dashboard/brand/campaigns/[id]/experiences` | Attach experiences to campaign |
-| `/dashboard/brand/rewards` | Reward offers management |
-| `/dashboard/brand/qr-batches` | QR batch list (paginated) |
-| `/dashboard/brand/qr-batches/new` | Create QR batch |
-| `/dashboard/brand/shopify` | Shopify integration status |
-| `/dashboard/brand/shopify/install` | Shopify install confirmation UI |
-| `/dashboard/brand/profile` | Brand profile edit |
-| `/dashboard/brand/analytics` | Brand analytics |
+| Route                                         | Purpose                         |
+| --------------------------------------------- | ------------------------------- |
+| `/dashboard/brand/campaigns`                  | Campaign list + management      |
+| `/dashboard/brand/campaigns/new`              | Create campaign                 |
+| `/dashboard/brand/campaigns/[id]/edit`        | Edit campaign                   |
+| `/dashboard/brand/campaigns/[id]/experiences` | Attach experiences to campaign  |
+| `/dashboard/brand/rewards`                    | Reward offers management        |
+| `/dashboard/brand/qr-batches`                 | QR batch list (paginated)       |
+| `/dashboard/brand/qr-batches/new`             | Create QR batch                 |
+| `/dashboard/brand/shopify`                    | Shopify integration status      |
+| `/dashboard/brand/shopify/install`            | Shopify install confirmation UI |
+| `/dashboard/brand/profile`                    | Brand profile edit              |
+| `/dashboard/brand/analytics`                  | Brand analytics                 |
 
 ### Creator Dashboard Routes (auth + `CREATOR` role, enforced in `dashboard/creator/layout.tsx` — no ADMIN override)
 
-| Route | Purpose |
-|---|---|
-| `/dashboard/creator/experiences` | Experience list |
-| `/dashboard/creator/experiences/new` | Create experience |
-| `/dashboard/creator/experiences/[id]/edit` | Edit experience |
-| `/dashboard/creator/experiences/[id]/courses` | Manage courses |
-| `/dashboard/creator/courses/[id]/lessons` | Manage lessons |
-| `/dashboard/creator/posts` | Creator posts |
-| `/dashboard/creator/analytics` | Creator analytics |
+| Route                                         | Purpose           |
+| --------------------------------------------- | ----------------- |
+| `/dashboard/creator/experiences`              | Experience list   |
+| `/dashboard/creator/experiences/new`          | Create experience |
+| `/dashboard/creator/experiences/[id]/edit`    | Edit experience   |
+| `/dashboard/creator/experiences/[id]/courses` | Manage courses    |
+| `/dashboard/creator/courses/[id]/lessons`     | Manage lessons    |
+| `/dashboard/creator/posts`                    | Creator posts     |
+| `/dashboard/creator/analytics`                | Creator analytics |
 
 ### Admin Routes (auth + `ADMIN` role)
 
-| Route | Purpose | Enforcement |
-|---|---|---|
-| `/admin/qr-management` | QR code admin tools | `middleware.ts` (`isAdminRoute`) |
-| `/admin/user-management` | User admin | `middleware.ts` (`isAdminRoute`) |
-| `/admin/campaigns-management` | Campaign admin | `middleware.ts` (`isAdminRoute`) |
-| `/admin/print-qr` | QR printing tool | `middleware.ts` (`isAdminRoute`) |
-| `/dashboard/admin/approvals` | Brand/creator approval queue | `dashboard/admin/layout.tsx` (middleware only checks `/dashboard/**` is authenticated, not role — the path doesn't match `isAdminRoute`) |
-| `/dashboard/admin/brands` | Brand list | `dashboard/admin/layout.tsx` |
-| `/dashboard/admin/users` | User list | `dashboard/admin/layout.tsx` |
-| `/dashboard/admin/campaigns` | Campaign list | `dashboard/admin/layout.tsx` |
+| Route                         | Purpose                      | Enforcement                                                                                                                              |
+| ----------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `/admin/qr-management`        | QR code admin tools          | `middleware.ts` (`isAdminRoute`)                                                                                                         |
+| `/admin/user-management`      | User admin                   | `middleware.ts` (`isAdminRoute`)                                                                                                         |
+| `/admin/campaigns-management` | Campaign admin               | `middleware.ts` (`isAdminRoute`)                                                                                                         |
+| `/admin/print-qr`             | QR printing tool             | `middleware.ts` (`isAdminRoute`)                                                                                                         |
+| `/dashboard/admin/approvals`  | Brand/creator approval queue | `dashboard/admin/layout.tsx` (middleware only checks `/dashboard/**` is authenticated, not role — the path doesn't match `isAdminRoute`) |
+| `/dashboard/admin/brands`     | Brand list                   | `dashboard/admin/layout.tsx`                                                                                                             |
+| `/dashboard/admin/users`      | User list                    | `dashboard/admin/layout.tsx`                                                                                                             |
+| `/dashboard/admin/campaigns`  | Campaign list                | `dashboard/admin/layout.tsx`                                                                                                             |
 
 ---
 
@@ -210,127 +220,127 @@ sqratch/
 
 ### Auth APIs
 
-| Method | Path | Auth | Rate Limit | Purpose | Side Effects |
-|---|---|---|---|---|---|
-| POST | `/api/auth/signup` | None | 5/15 min per IP | User signup (email+password) | Creates an unverified `USER` plus an HMAC-backed verification challenge |
-| POST | `/api/auth/send-email-verification` | Session | 5/15 min per IP | Triggers email verification send | Replaces a peppered HMAC challenge and queues email; public response is generic |
-| POST | `/api/auth/verify-email` | None | — | Consume six-digit challenge; merge anon unlocks | Atomically verifies the user and queues one welcome email only for ordinary self-service users without Creator/Brand applications |
-| * | `/api/auth/[...nextauth]` | — | — | next-auth handler (signin/signout/session) | JWT callback checks `User.sessionVersion` and account state against the database |
+| Method | Path                                | Auth    | Rate Limit      | Purpose                                         | Side Effects                                                                                                                      |
+| ------ | ----------------------------------- | ------- | --------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/api/auth/signup`                  | None    | 5/15 min per IP | User signup (email+password)                    | Creates an unverified `USER` plus an HMAC-backed verification challenge                                                           |
+| POST   | `/api/auth/send-email-verification` | Session | 5/15 min per IP | Triggers email verification send                | Replaces a peppered HMAC challenge and queues email; public response is generic                                                   |
+| POST   | `/api/auth/verify-email`            | None    | —               | Consume six-digit challenge; merge anon unlocks | Atomically verifies the user and queues one welcome email only for ordinary self-service users without Creator/Brand applications |
+| *      | `/api/auth/[...nextauth]`           | —       | —               | next-auth handler (signin/signout/session)      | JWT callback checks `User.sessionVersion` and account state against the database                                                  |
 
 ### Public APIs (no auth required)
 
-| Method | Path | Rate Limit | Purpose | Key DB Tables |
-|---|---|---|---|---|
-| POST | `/api/public/scan` | 60/60 min per IP | Process QR scan | `QRCode`, `CampaignUnlock`, `PointTransaction`, `AnalyticsEvent`, `UserSession` |
-| GET | `/api/public/experience/[experienceSlug]` | — | Fetch experience data | `Experience`, `Campaign`, `Course` |
-| GET | `/api/public/experience/[slug]/courses/[courseSlug]` | — | Fetch course + lessons | `Course`, `Lesson` |
-| GET | `/api/public/experience/[slug]/lessons/[lessonId]` | — | Fetch lesson | `Lesson`, `LessonProgress` |
-| GET | `/api/public/experience/[slug]/products` | — | Fetch experience shop products (canonical catalog only; no live Shopify fallback) | `CampaignCommerceProduct`, `BrandCommerceProduct`, `ConnectedCommerceProduct` |
-| GET | `/api/public/experience/[slug]/lessons/[id]/products` | — | Fetch lesson products (canonical; gated on `hasPublicStorefrontUrl`) | `CampaignLessonProduct`, `BrandCommerceProduct`, `ConnectedCommerceProduct` |
-| GET | `/api/public/campaign/[campaignSlug]` | — | Fetch campaign data | `Campaign`, `Experience` |
-| GET | `/api/public/get-campaign-name?campaignId=` | — | Resolve campaign name (public) | `Campaign` |
-| GET | `/api/public/viewer-status` | — | Get viewer unlock status | `CampaignUnlock` |
-| POST | `/api/public/session` | — | Create/update session cookie | `UserSession` |
-| POST | `/api/public/waitlist` | 10/60 min per IP | Join waitlist | `WaitlistEntry` |
+| Method | Path                                                  | Rate Limit       | Purpose                                                                           | Key DB Tables                                                                   |
+| ------ | ----------------------------------------------------- | ---------------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| POST   | `/api/public/scan`                                    | 60/60 min per IP | Process QR scan                                                                   | `QRCode`, `CampaignUnlock`, `PointTransaction`, `AnalyticsEvent`, `UserSession` |
+| GET    | `/api/public/experience/[experienceSlug]`             | —                | Fetch experience data                                                             | `Experience`, `Campaign`, `Course`                                              |
+| GET    | `/api/public/experience/[slug]/courses/[courseSlug]`  | —                | Fetch course + lessons                                                            | `Course`, `Lesson`                                                              |
+| GET    | `/api/public/experience/[slug]/lessons/[lessonId]`    | —                | Fetch lesson                                                                      | `Lesson`, `LessonProgress`                                                      |
+| GET    | `/api/public/experience/[slug]/products`              | —                | Fetch experience shop products (canonical catalog only; no live Shopify fallback) | `CampaignCommerceProduct`, `BrandCommerceProduct`, `ConnectedCommerceProduct`   |
+| GET    | `/api/public/experience/[slug]/lessons/[id]/products` | —                | Fetch lesson products (canonical; gated on `hasPublicStorefrontUrl`)              | `CampaignLessonProduct`, `BrandCommerceProduct`, `ConnectedCommerceProduct`     |
+| GET    | `/api/public/campaign/[campaignSlug]`                 | —                | Fetch campaign data                                                               | `Campaign`, `Experience`                                                        |
+| GET    | `/api/public/get-campaign-name?campaignId=`           | —                | Resolve campaign name (public)                                                    | `Campaign`                                                                      |
+| GET    | `/api/public/viewer-status`                           | —                | Get viewer unlock status                                                          | `CampaignUnlock`                                                                |
+| POST   | `/api/public/session`                                 | —                | Create/update session cookie                                                      | `UserSession`                                                                   |
+| POST   | `/api/public/waitlist`                                | 10/60 min per IP | Join waitlist                                                                     | `WaitlistEntry`                                                                 |
 
 ### User APIs (auth required)
 
-| Method | Path | Purpose | Side Effects |
-|---|---|---|---|
-| GET | `/api/user/me` | Get current user | None |
-| PATCH | `/api/user/profile` | Update user profile | Updates `User` |
-| POST | `/api/user/change-password` | Change password | Updates `User.password` |
-| GET | `/api/user/progress` | Get lesson progress | None |
-| GET | `/api/user/unlocks` | Get campaign unlocks | None |
-| GET | `/api/me/dashboard-summary` | Dashboard summary stats | None |
+| Method | Path                        | Purpose                 | Side Effects            |
+| ------ | --------------------------- | ----------------------- | ----------------------- |
+| GET    | `/api/user/me`              | Get current user        | None                    |
+| PATCH  | `/api/user/profile`         | Update user profile     | Updates `User`          |
+| POST   | `/api/user/change-password` | Change password         | Updates `User.password` |
+| GET    | `/api/user/progress`        | Get lesson progress     | None                    |
+| GET    | `/api/user/unlocks`         | Get campaign unlocks    | None                    |
+| GET    | `/api/me/dashboard-summary` | Dashboard summary stats | None                    |
 
 ### Brand APIs (auth + BRAND_ADMIN)
 
-| Method | Path | Auth | Purpose | Side Effects |
-|---|---|---|---|---|
-| GET/POST | `/api/brand/campaigns` | BRAND_ADMIN | List / create campaigns | Creates `Campaign` |
-| GET/PATCH/DELETE | `/api/brand/campaigns/[id]` | BRAND_ADMIN + ownership | Get/update/delete campaign | Modifies `Campaign` |
-| POST | `/api/brand/campaigns/[id]/attach-experience` | BRAND_ADMIN | Link experience to campaign | Creates `CampaignExperience` |
-| GET/POST | `/api/brand/qr-batches` | BRAND_ADMIN | List (paginated) / create QR batches | Creates `QRCodeBatch`, bulk generates `QRCode` rows |
-| GET/PATCH | `/api/brand/qr-batches/[id]` | BRAND_ADMIN | Get/update batch | |
-| GET | `/api/brand/qr-batches/[id]/export` | BRAND_ADMIN | CSV export (formula-injection sanitised) | None |
-| PATCH | `/api/brand/qr-codes/[id]` | BRAND_ADMIN | Update single QR code | |
-| GET/PATCH | `/api/brand/profile` | BRAND_ADMIN | Get/update brand profile | Updates `Brand` |
-| GET/POST | `/api/brand/rewards/offers` | BRAND_ADMIN | List / create reward offers | Creates `BrandRewardOffer` + `BrandRewardOfferProduct` |
-| GET/PATCH/DELETE | `/api/brand/rewards/offers/[offerId]` | BRAND_ADMIN + ownership | Manage offer | Modifies offer |
-| GET | `/api/brand/shopify/status` | BRAND_ADMIN | Shopify connection status | None |
-| GET | `/api/brand/shopify/products` | BRAND_ADMIN | Fetch products from Shopify | Calls Shopify Admin GraphQL |
-| POST | `/api/brand/shopify/disconnect` | BRAND_ADMIN | Disconnect Shopify | Sets `shopifyConnectionStatus=DISCONNECTED` |
-| GET | `/api/brand/analytics` | BRAND_ADMIN | Brand analytics | None |
+| Method           | Path                                          | Auth                    | Purpose                                  | Side Effects                                           |
+| ---------------- | --------------------------------------------- | ----------------------- | ---------------------------------------- | ------------------------------------------------------ |
+| GET/POST         | `/api/brand/campaigns`                        | BRAND_ADMIN             | List / create campaigns                  | Creates `Campaign`                                     |
+| GET/PATCH/DELETE | `/api/brand/campaigns/[id]`                   | BRAND_ADMIN + ownership | Get/update/delete campaign               | Modifies `Campaign`                                    |
+| POST             | `/api/brand/campaigns/[id]/attach-experience` | BRAND_ADMIN             | Link experience to campaign              | Creates `CampaignExperience`                           |
+| GET/POST         | `/api/brand/qr-batches`                       | BRAND_ADMIN             | List (paginated) / create QR batches     | Creates `QRCodeBatch`, bulk generates `QRCode` rows    |
+| GET/PATCH        | `/api/brand/qr-batches/[id]`                  | BRAND_ADMIN             | Get/update batch                         |                                                        |
+| GET              | `/api/brand/qr-batches/[id]/export`           | BRAND_ADMIN             | CSV export (formula-injection sanitised) | None                                                   |
+| PATCH            | `/api/brand/qr-codes/[id]`                    | BRAND_ADMIN             | Update single QR code                    |                                                        |
+| GET/PATCH        | `/api/brand/profile`                          | BRAND_ADMIN             | Get/update brand profile                 | Updates `Brand`                                        |
+| GET/POST         | `/api/brand/rewards/offers`                   | BRAND_ADMIN             | List / create reward offers              | Creates `BrandRewardOffer` + `BrandRewardOfferProduct` |
+| GET/PATCH/DELETE | `/api/brand/rewards/offers/[offerId]`         | BRAND_ADMIN + ownership | Manage offer                             | Modifies offer                                         |
+| GET              | `/api/brand/shopify/status`                   | BRAND_ADMIN             | Shopify connection status                | None                                                   |
+| GET              | `/api/brand/shopify/products`                 | BRAND_ADMIN             | Fetch products from Shopify              | Calls Shopify Admin GraphQL                            |
+| POST             | `/api/brand/shopify/disconnect`               | BRAND_ADMIN             | Disconnect Shopify                       | Sets `shopifyConnectionStatus=DISCONNECTED`            |
+| GET              | `/api/brand/analytics`                        | BRAND_ADMIN             | Brand analytics                          | None                                                   |
 
 ### Admin APIs (auth + ADMIN)
 
-| Method | Path | Purpose |
-|---|---|---|
-| PATCH | `/api/admin/user-management/update-or-delete-users/[id]` | Update user (email normalised to lowercase) |
-| DELETE | `/api/admin/user-management/update-or-delete-users/[id]` | Delete user (409 if campaigns/QR codes exist) |
-| GET | `/api/admin/user-management/get-user-emails` | List user emails |
-| POST | `/api/admin/user-management/get-or-create-users` | Bulk user lookup/create |
-| PATCH | `/api/admin/approvals/brand/[requestId]` | Approve/reject brand request |
-| PATCH | `/api/admin/approvals/creator/[requestId]` | Approve/reject creator request |
-| GET | `/api/admin/approvals` | List pending approvals |
-| GET | `/api/admin/brands` | List all brands |
-| GET | `/api/admin/users` | List all users |
-| GET/PATCH/DELETE | `/api/admin/campaigns/[id]` | Manage individual campaigns |
-| GET | `/api/admin/campaigns` | List campaigns |
+| Method           | Path                                                     | Purpose                                       |
+| ---------------- | -------------------------------------------------------- | --------------------------------------------- |
+| PATCH            | `/api/admin/user-management/update-or-delete-users/[id]` | Update user (email normalised to lowercase)   |
+| DELETE           | `/api/admin/user-management/update-or-delete-users/[id]` | Delete user (409 if campaigns/QR codes exist) |
+| GET              | `/api/admin/user-management/get-user-emails`             | List user emails                              |
+| POST             | `/api/admin/user-management/get-or-create-users`         | Bulk user lookup/create                       |
+| PATCH            | `/api/admin/approvals/brand/[requestId]`                 | Approve/reject brand request                  |
+| PATCH            | `/api/admin/approvals/creator/[requestId]`               | Approve/reject creator request                |
+| GET              | `/api/admin/approvals`                                   | List pending approvals                        |
+| GET              | `/api/admin/brands`                                      | List all brands                               |
+| GET              | `/api/admin/users`                                       | List all users                                |
+| GET/PATCH/DELETE | `/api/admin/campaigns/[id]`                              | Manage individual campaigns                   |
+| GET              | `/api/admin/campaigns`                                   | List campaigns                                |
 
 ### Shopify OAuth & Install APIs
 
-| Method | Path | Auth | Rate Limit | Purpose | Side Effects |
-|---|---|---|---|---|---|
-| GET | `/api/shopify/oauth/start` | None | 20/60 min per IP | Begin OAuth; redirect to Shopify | Creates `TokenStore` (state, 10min TTL) |
-| GET | `/api/shopify/oauth/callback` | None | — | Receive Shopify callback; timing-safe HMAC verify, timestamp freshness, state consumed before token exchange | Exchanges code for token; creates pending install `TokenStore` (24hr TTL) |
-| POST | `/api/shopify/embedded/session` | Bearer session token | — | App Bridge token exchange (public distribution only) | Encrypts tokens, creates `TokenStore` pending install |
-| GET | `/api/shopify/installations/[installId]` | Session + Brand-management policy (see Auth Contracts) | — | Load eligible existing Brands for this pending install | None |
-| POST | `/api/shopify/installations/[installId]` | Session + Brand-management policy (see Auth Contracts) | — | Link install to an existing eligible Brand — never creates a Brand; a `createBrand` payload is rejected with 400 | Updates `Brand` (all token fields), deletes pending `TokenStore` |
+| Method | Path                                     | Auth                                                   | Rate Limit       | Purpose                                                                                                          | Side Effects                                                              |
+| ------ | ---------------------------------------- | ------------------------------------------------------ | ---------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| GET    | `/api/shopify/oauth/start`               | None                                                   | 20/60 min per IP | Begin OAuth; redirect to Shopify                                                                                 | Creates `TokenStore` (state, 10min TTL)                                   |
+| GET    | `/api/shopify/oauth/callback`            | None                                                   | —                | Receive Shopify callback; timing-safe HMAC verify, timestamp freshness, state consumed before token exchange     | Exchanges code for token; creates pending install `TokenStore` (24hr TTL) |
+| POST   | `/api/shopify/embedded/session`          | Bearer session token                                   | —                | App Bridge token exchange (public distribution only)                                                             | Encrypts tokens, creates `TokenStore` pending install                     |
+| GET    | `/api/shopify/installations/[installId]` | Session + Brand-management policy (see Auth Contracts) | —                | Load eligible existing Brands for this pending install                                                           | None                                                                      |
+| POST   | `/api/shopify/installations/[installId]` | Session + Brand-management policy (see Auth Contracts) | —                | Link install to an existing eligible Brand — never creates a Brand; a `createBrand` payload is rejected with 400 | Updates `Brand` (all token fields), deletes pending `TokenStore`          |
 
 ### Shopify Webhook APIs (no auth — HMAC verified)
 
-| Method | Path | Trigger | DB Effect |
-|---|---|---|---|
-| POST | `/api/shopify/webhooks/app/uninstalled` | Shop uninstalls app | Clears credential/token fields, sets `Brand.shopifyConnectionStatus=UNINSTALLED`; `shopifyShopDomain` is intentionally preserved for relink; records a `ShopifyConnectionEvent` |
-| POST | `/api/shopify/webhooks/customers/data_request` | GDPR data request | Sanitized audit log only — no data returned (SQRATCH stores no Shopify-customer-keyed data) |
-| POST | `/api/shopify/webhooks/customers/redact` | GDPR customer redact | Sanitized audit log only — no rows deleted (SQRATCH stores no Shopify-customer-keyed data) |
-| POST | `/api/shopify/webhooks/shop/redact` | GDPR shop redact | Nulls `Brand` Shopify credentials/domain, anonymizes `ShopifyRewardRedemption` Shopify metadata, deactivates the brand's `BrandRewardOffer` rows, scrubs the domain from `ShopifyConnectionEvent` history, deletes orphaned OAuth `TokenStore` rows; SQRATCH business/ledger records are preserved — see `docs/shopify-data-inventory.md` |
+| Method | Path                                           | Trigger              | DB Effect                                                                                                                                                                                                                             |
+| ------ | ---------------------------------------------- | -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| POST   | `/api/shopify/webhooks/app/uninstalled`        | Shop uninstalls app  | Invalidates the canonical Shopify secret, sets the canonical `CommerceConnection` status to `UNINSTALLED`, and records a provider-neutral `CommerceConnectionEvent`                                                                   |
+| POST   | `/api/shopify/webhooks/customers/data_request` | GDPR data request    | Sanitized audit log only — no data returned (SQRATCH stores no Shopify-customer-keyed data)                                                                                                                                           |
+| POST   | `/api/shopify/webhooks/customers/redact`       | GDPR customer redact | Sanitized audit log only — no rows deleted (SQRATCH stores no Shopify-customer-keyed data)                                                                                                                                            |
+| POST   | `/api/shopify/webhooks/shop/redact`            | GDPR shop redact     | Strictly erases the canonical Shopify connection after privacy scrubbing Shopify-scoped provider metadata and `CommerceConnectionEvent` history; SQRATCH business/ledger records are preserved — see `docs/shopify-data-inventory.md` |
 
 ### Reward APIs (auth required)
 
-| Method | Path | Auth | Purpose | Side Effects |
-|---|---|---|---|---|
-| GET | `/api/rewards/shopify` | Session | List available reward offers for viewer (includes `computedAvailability`) | None |
-| POST | `/api/rewards/shopify/redeem` | Session | Redeem reward (debit points + issue discount) | Creates `ShopifyRewardRedemption` + `PointTransaction`, calls Shopify GraphQL; bounded 3-attempt code-collision retry |
-| GET | `/api/rewards/shopify/redemptions` | Session | List user's redemptions (includes `shopUrl`) | None |
-| POST | `/api/rewards/shopify/redemptions/[id]/refresh-status` | Session | Re-check discount usage from Shopify | State-machine guard via `canRefresh()`; calls Shopify GraphQL; may transition ISSUED→USED/EXPIRED |
+| Method | Path                                                   | Auth    | Purpose                                                                   | Side Effects                                                                                                          |
+| ------ | ------------------------------------------------------ | ------- | ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| GET    | `/api/rewards/shopify`                                 | Session | List available reward offers for viewer (includes `computedAvailability`) | None                                                                                                                  |
+| POST   | `/api/rewards/shopify/redeem`                          | Session | Redeem reward (debit points + issue discount)                             | Creates `ShopifyRewardRedemption` + `PointTransaction`, calls Shopify GraphQL; bounded 3-attempt code-collision retry |
+| GET    | `/api/rewards/shopify/redemptions`                     | Session | List user's redemptions (includes `shopUrl`)                              | None                                                                                                                  |
+| POST   | `/api/rewards/shopify/redemptions/[id]/refresh-status` | Session | Re-check discount usage from Shopify                                      | State-machine guard via `canRefresh()`; calls Shopify GraphQL; may transition ISSUED→USED/EXPIRED                     |
 
 ### Internal Worker APIs (cron-triggered)
 
-| Method | Path | Auth | Purpose |
-|---|---|---|---|
-| POST | `/api/internal/email-worker` | `x-cron-secret` | Revalidate and process bounded `WELCOME` jobs; retry failures with backoff, recover stale claims, and mark ineligible jobs `SKIPPED` |
-| POST | `/api/internal/reconcile-redemptions` | `x-cron-secret` | Reconcile stuck `POINTS_DEBITED` redemptions (limit 20, 5 min minimum age, 5 max attempts) |
+| Method | Path                                  | Auth            | Purpose                                                                                                                              |
+| ------ | ------------------------------------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| POST   | `/api/internal/email-worker`          | `x-cron-secret` | Revalidate and process bounded `WELCOME` jobs; retry failures with backoff, recover stale claims, and mark ineligible jobs `SKIPPED` |
+| POST   | `/api/internal/reconcile-redemptions` | `x-cron-secret` | Reconcile stuck `POINTS_DEBITED` redemptions (limit 20, 5 min minimum age, 5 max attempts)                                           |
 
 ### Progress APIs (session or auth)
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/api/progress/lesson` | Record lesson progress (anonymous or logged in) |
-| POST | `/api/progress/merge` | Merge anonymous progress into user after login |
+| Method | Path                   | Purpose                                         |
+| ------ | ---------------------- | ----------------------------------------------- |
+| POST   | `/api/progress/lesson` | Record lesson progress (anonymous or logged in) |
+| POST   | `/api/progress/merge`  | Merge anonymous progress into user after login  |
 
 ### Upload APIs (auth + role-scoped ownership)
 
-| Method | Path | Purpose |
-|---|---|---|
-| POST | `/api/uploads/storage-object` | Generic storage upload (ADMIN broad, BRAND_ADMIN brand-path, CREATOR own experience/avatar) |
-| POST | `/api/uploads/experience-video` | Experience video upload (ownership verified, experienceId required) |
-| POST | `/api/uploads/experience-cover` | Experience cover image |
-| POST | `/api/uploads/brand-asset` | Brand asset upload |
-| POST | `/api/uploads/user-avatar` | User avatar upload |
-| POST | `/api/uploads/video` | Video upload |
+| Method | Path                            | Purpose                                                                                     |
+| ------ | ------------------------------- | ------------------------------------------------------------------------------------------- |
+| POST   | `/api/uploads/storage-object`   | Generic storage upload (ADMIN broad, BRAND_ADMIN brand-path, CREATOR own experience/avatar) |
+| POST   | `/api/uploads/experience-video` | Experience video upload (ownership verified, experienceId required)                         |
+| POST   | `/api/uploads/experience-cover` | Experience cover image                                                                      |
+| POST   | `/api/uploads/brand-asset`      | Brand asset upload                                                                          |
+| POST   | `/api/uploads/user-avatar`      | User avatar upload                                                                          |
+| POST   | `/api/uploads/video`            | Video upload                                                                                |
 
 ---
 
@@ -338,18 +348,18 @@ sqratch/
 
 ### Core Identity Models
 
-| Model | Purpose | Key Relationships | Lifecycle Notes |
-|---|---|---|---|
-| `User` | End user, brand admin, creator, or SQRATCH admin | Has many `BrandMember`, `CreatorProfile`, `CampaignUnlock`, `PointTransaction`, `ShopifyRewardRedemption`, `UserSession` | `role` enum controls access everywhere; balances live on `UserPointAccount` (see Points below), not on `User`; `isActive` and `sessionVersion` are checked in the JWT callback |
-| `UserSession` | Anonymous + authenticated browsing session | Belongs to `User?`, `Campaign?`, `QRCode?` | Created on QR scan; promoted to userId on login via `/api/progress/merge` |
-| `EmailVerificationToken` | HMAC-backed email verification challenge | Belongs to `User` | Six-digit code is never stored; expires after 10 minutes, exhausts after five failed attempts, and is atomically consumed |
+| Model                    | Purpose                                          | Key Relationships                                                                                                        | Lifecycle Notes                                                                                                                                                                |
+| ------------------------ | ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `User`                   | End user, brand admin, creator, or SQRATCH admin | Has many `BrandMember`, `CreatorProfile`, `CampaignUnlock`, `PointTransaction`, `ShopifyRewardRedemption`, `UserSession` | `role` enum controls access everywhere; balances live on `UserPointAccount` (see Points below), not on `User`; `isActive` and `sessionVersion` are checked in the JWT callback |
+| `UserSession`            | Anonymous + authenticated browsing session       | Belongs to `User?`, `Campaign?`, `QRCode?`                                                                               | Created on QR scan; promoted to userId on login via `/api/progress/merge`                                                                                                      |
+| `EmailVerificationToken` | HMAC-backed email verification challenge         | Belongs to `User`                                                                                                        | Six-digit code is never stored; expires after 10 minutes, exhausts after five failed attempts, and is atomically consumed                                                      |
 
 ### Brand & Campaign Models
 
-| Model | Purpose | Key Relationships | Lifecycle Notes |
-|---|---|---|---|
-| `Brand` | A brand entity (e.g. retailer using Shopify) | Has `BrandMember[]`, `Campaign[]`, `BrandRewardOffer[]`, `ShopifyRewardRedemption[]` | Token fields: `shopifyAdminAccessTokenEncrypted`, `shopifyRefreshTokenEncrypted` (AES-256-GCM); `shopifyAuthMode` enum (`LEGACY_OFFLINE` or `EXPIRING_OFFLINE`); `shopifyTokenRefreshLockedUntil` (CAS refresh lease); `shopifyConnectionStatus` drives all Shopify features; `REQUIRES_RECONNECT` for permanent refresh failure |
-| `BrandMember` | User ↔ Brand membership | `User`, `Brand` | `role: ADMIN\|MANAGER\|VIEWER`; only ADMIN+MANAGER can take actions |
+| Model         | Purpose                                      | Key Relationships                                                                    | Lifecycle Notes                                                                                                                                                                                                                                                                                                                  |
+| ------------- | -------------------------------------------- | ------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Brand`       | A brand entity (e.g. retailer using Shopify) | Has `BrandMember[]`, `Campaign[]`, `BrandRewardOffer[]`, `ShopifyRewardRedemption[]`, `CommerceConnection[]` | Shopify connection and credential state lives exclusively on canonical commerce models; `Brand` has no Shopify credential/status fields |
+| `BrandMember` | User ↔ Brand membership                      | `User`, `Brand`                                                                      | `role: ADMIN\|MANAGER\|VIEWER`; only ADMIN+MANAGER can take actions                                                                                                                                                                                                                                                              |
 
 Brand-scoped requests resolve through `src/lib/brand-context.ts` and the HttpOnly `sqratch_active_brand_id` cookie. The cookie is accepted only when the current user still has the required membership; multi-brand requests without a selection return `ACTIVE_BRAND_REQUIRED` instead of choosing an arbitrary membership.
 | `BrandRequest` | Request to become a brand admin | `User` (owner), `User` (reviewer) | `ApprovalStatus: PENDING\|APPROVED\|REJECTED` |
@@ -358,31 +368,31 @@ Brand-scoped requests resolve through `src/lib/brand-context.ts` and the HttpOnl
 
 ### QR Code Models
 
-| Model | Purpose | Notes |
-|---|---|---|
-| `QRCode` | Individual QR code | `status: NEW\|USED\|INVALID`; `qrCodeData` is the unique scan token; transitions to USED atomically via `redeemQrCodeForUser` |
-| `QRCodeBatch` | Group of QR codes for a campaign | Used for print management and bounded paginated listing + CSV export (formula-injection sanitised) |
+| Model         | Purpose                          | Notes                                                                                                                         |
+| ------------- | -------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `QRCode`      | Individual QR code               | `status: NEW\|USED\|INVALID`; `qrCodeData` is the unique scan token; transitions to USED atomically via `redeemQrCodeForUser` |
+| `QRCodeBatch` | Group of QR codes for a campaign | Used for print management and bounded paginated listing + CSV export (formula-injection sanitised)                            |
 
 ### Experience / Content Models
 
-| Model | Purpose | Key Relationships |
-|---|---|---|
-| `CreatorProfile` | Creator's public profile | `User`, `Experience[]` |
-| `CreatorRequest` | Request to become a creator | `User` |
-| `Experience` | Top-level content hub (video, courses, posts, QA) | `CreatorProfile`, `Course[]`, `Post[]`, `Question[]`, `CampaignExperience[]` |
-| `Course` | A course within an experience | `Experience`, `Lesson[]`; `access: PUBLIC\|PRIVATE` |
-| `Lesson` | A video lesson within a course | `Course`, `LessonProgress[]`, `CampaignLessonProduct[]` |
-| `LessonProgress` | Per-user or per-session lesson progress | `User?`, `UserSession?`, `Lesson`; unique on `(userId, lessonId)` or `(sessionId, lessonId)` |
-| `Post` | Community post on an experience | `Experience`, `PostComment[]` |
+| Model            | Purpose                                           | Key Relationships                                                                            |
+| ---------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `CreatorProfile` | Creator's public profile                          | `User`, `Experience[]`                                                                       |
+| `CreatorRequest` | Request to become a creator                       | `User`                                                                                       |
+| `Experience`     | Top-level content hub (video, courses, posts, QA) | `CreatorProfile`, `Course[]`, `Post[]`, `Question[]`, `CampaignExperience[]`                 |
+| `Course`         | A course within an experience                     | `Experience`, `Lesson[]`; `access: PUBLIC\|PRIVATE`                                          |
+| `Lesson`         | A video lesson within a course                    | `Course`, `LessonProgress[]`, `CampaignLessonProduct[]`                                      |
+| `LessonProgress` | Per-user or per-session lesson progress           | `User?`, `UserSession?`, `Lesson`; unique on `(userId, lessonId)` or `(sessionId, lessonId)` |
+| `Post`           | Community post on an experience                   | `Experience`, `PostComment[]`                                                                |
 
 ### Rewards Models
 
-| Model | Purpose | Dangerous Fields |
-|---|---|---|
-| `BrandRewardOffer` | A reward offer created by a brand | `pointsCost`, `discountAmountCents`, `discountPercentageBasisPoints`, `maxTotalRedemptions`, `maxRedemptionsPerUser`; supports `FIXED_AMOUNT` and `PERCENTAGE` discount types; `appliesTo` supports `ALL_PRODUCTS` and `SPECIFIC_PRODUCTS` |
-| `BrandRewardOfferProduct` | Specific Shopify products a reward applies to | `shopifyProductGid` must be a valid Shopify GID |
-| `ShopifyRewardRedemption` | Single redemption event | `idempotencyKey` (unique); `status` state machine (8 states); `code` (unique discount code); `shopifyDiscountNodeId` links to Shopify; reconciliation fields: `reconcileLockedUntil`, `reconcileAttempts`, `needsManualReview`, `lastReconcileReason` |
-| `PointTransaction` | Immutable audit log of point changes | `points` can be negative (debit); `reason` enum; **never delete rows**; unique on `(userId, qrCodeId)` prevents QR double-award; unique on `(shopifyRewardRedemptionId, reason)` prevents refund duplication |
+| Model                     | Purpose                                       | Dangerous Fields                                                                                                                                                                                                                                      |
+| ------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BrandRewardOffer`        | A reward offer created by a brand             | `pointsCost`, `discountAmountCents`, `discountPercentageBasisPoints`, `maxTotalRedemptions`, `maxRedemptionsPerUser`; supports `FIXED_AMOUNT` and `PERCENTAGE` discount types; `appliesTo` supports `ALL_PRODUCTS` and `SPECIFIC_PRODUCTS`            |
+| `BrandRewardOfferProduct` | Specific Shopify products a reward applies to | `shopifyProductGid` must be a valid Shopify GID                                                                                                                                                                                                       |
+| `ShopifyRewardRedemption` | Single redemption event                       | `idempotencyKey` (unique); `status` state machine (8 states); `code` (unique discount code); `shopifyDiscountNodeId` links to Shopify; reconciliation fields: `reconcileLockedUntil`, `reconcileAttempts`, `needsManualReview`, `lastReconcileReason` |
+| `PointTransaction`        | Immutable audit log of point changes          | `points` can be negative (debit); `reason` enum; **never delete rows**; unique on `(userId, qrCodeId)` prevents QR double-award; unique on `(shopifyRewardRedemptionId, reason)` prevents refund duplication                                          |
 
 ### Points
 
@@ -390,26 +400,26 @@ Brand-scoped requests resolve through `src/lib/brand-context.ts` and the HttpOnl
 
 ### Internal / Support Models
 
-| Model | Purpose |
-|---|---|
-| `TokenStore` | Key-value store for short-lived tokens (Shopify OAuth state, pending install payloads — both LEGACY and EXPIRING shapes). Keyed by `service` string. Always check `expiresAt` |
-| `EmailQueue` | Async email queue created after successful ordinary-user verification; processed by `/api/internal/email-worker` |
-| `WaitlistEntry` | Marketing waitlist signups |
-| `AnalyticsEvent` | Internal analytics events (QR scans, lesson views, etc.) |
+| Model            | Purpose                                                                                                                                                                       |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `TokenStore`     | Key-value store for short-lived tokens (Shopify OAuth state, pending install payloads — both LEGACY and EXPIRING shapes). Keyed by `service` string. Always check `expiresAt` |
+| `EmailQueue`     | Async email queue created after successful ordinary-user verification; processed by `/api/internal/email-worker`                                                              |
+| `WaitlistEntry`  | Marketing waitlist signups                                                                                                                                                    |
+| `AnalyticsEvent` | Internal analytics events (QR scans, lesson views, etc.)                                                                                                                      |
 
 ### Enums Summary
 
-| Enum | Values |
-|---|---|
-| `Role` | `USER`, `ADMIN`, `CREATOR`, `BRAND_ADMIN` |
-| `ApprovalStatus` | `PENDING`, `APPROVED`, `REJECTED` |
-| `QRStatus` | `NEW`, `USED`, `INVALID` |
-| `ShopifyConnectionStatus` | `DISCONNECTED`, `CONNECTED`, `UNINSTALLED`, `REQUIRES_RECONNECT` |
-| `ShopifyAuthMode` | `LEGACY_OFFLINE`, `EXPIRING_OFFLINE` |
+| Enum                            | Values                                                                                      |
+| ------------------------------- | ------------------------------------------------------------------------------------------- |
+| `Role`                          | `USER`, `ADMIN`, `CREATOR`, `BRAND_ADMIN`                                                   |
+| `ApprovalStatus`                | `PENDING`, `APPROVED`, `REJECTED`                                                           |
+| `QRStatus`                      | `NEW`, `USED`, `INVALID`                                                                    |
+| `ShopifyConnectionStatus`       | `DISCONNECTED`, `CONNECTED`, `UNINSTALLED`, `REQUIRES_RECONNECT`                            |
+| `ShopifyAuthMode`               | `LEGACY_OFFLINE`, `EXPIRING_OFFLINE`                                                        |
 | `ShopifyRewardRedemptionStatus` | `PENDING`, `POINTS_DEBITED`, `ISSUED`, `USED`, `EXPIRED`, `FAILED`, `REFUNDED`, `CANCELLED` |
-| `PointReason` | `QR_SCAN`, `BONUS`, `REFERRAL`, `SHOPIFY_REWARD_REDEMPTION`, `SHOPIFY_REWARD_REFUND` |
-| `RewardAppliesTo` | `ALL_PRODUCTS`, `SPECIFIC_PRODUCTS` |
-| `RewardDiscountType` | `FIXED_AMOUNT`, `PERCENTAGE` |
+| `PointReason`                   | `QR_SCAN`, `BONUS`, `REFERRAL`, `SHOPIFY_REWARD_REDEMPTION`, `SHOPIFY_REWARD_REFUND`        |
+| `RewardAppliesTo`               | `ALL_PRODUCTS`, `SPECIFIC_PRODUCTS`                                                         |
+| `RewardDiscountType`            | `FIXED_AMOUNT`, `PERCENTAGE`                                                                |
 
 ---
 
@@ -552,7 +562,7 @@ getValidAccessToken(brandId) called by any Shopify API consumer
 User at /x/[slug]/shop or /dashboard/points clicks "Redeem"
   → Client holds one idempotencyKey per offer (useRef map); reused on retry, fresh on new intent
   → POST /api/rewards/shopify/redeem { offerId, idempotencyKey, experienceSlug? }
-    
+
     1. Auth: getServerSession → must be logged in
     2. Idempotency: check ShopifyRewardRedemption by idempotencyKey
        → If exists + same user + same offer: return cached result (idempotencyMatch)
@@ -562,7 +572,7 @@ User at /x/[slug]/shop or /dashboard/points clicks "Redeem"
     5. Check brand.shopifyConnectionStatus === CONNECTED
     6. Availability check (getRewardOfferAvailability) using CLAIM_COUNTED_REDEMPTION_STATUSES
     7. Check getUserSpendablePointBalance() >= offer.pointsCost
-    
+
     8. SERIALIZABLE TRANSACTION:
        → Re-check offer + Shopify connection (inside TX)
        → Re-check limits (inside TX)
@@ -572,7 +582,7 @@ User at /x/[slug]/shop or /dashboard/points clicks "Redeem"
          → If count !== 1: throw INSUFFICIENT_POINTS (race condition guard)
        → Create PointTransaction(-pointsCost, SHOPIFY_REWARD_REDEMPTION)
        → Update redemption status → POINTS_DEBITED
-    
+
     9. Call createShopifyRewardDiscountCode() → Shopify GraphQL mutation
        → Bounded 3-attempt retry on generated code collision (P2002 on code only)
        → If fails: REFUND TRANSACTION:
@@ -580,7 +590,7 @@ User at /x/[slug]/shop or /dashboard/points clicks "Redeem"
           → Create PointTransaction(+pointsCost, SHOPIFY_REWARD_REFUND)
           → Update redemption status → REFUNDED
           → Return error + refunded redemption
-    
+
    10. If Shopify succeeds:
        → Update redemption: status=ISSUED, shopifyDiscountNodeId, issuedAt, expiresAt
        → Return redemption with discount code
@@ -627,11 +637,11 @@ CRON: POST /api/internal/reconcile-redemptions (x-cron-secret, every 10 min)
 Merchant uninstalls app from Shopify admin
   → POST /api/shopify/webhooks/app/uninstalled
     → verifyShopifyWebhookRequest() — HMAC check against SHOPIFY_API_SECRET
-    → Brand.updateMany({ shopifyShopDomain: shop })
-      → shopifyAdminAccessTokenEncrypted = null
-      → shopifyConnectionStatus = UNINSTALLED
-      → shopifyUninstalledAt = now()
-    → Returns 200 (Shopify expects 200 regardless)
+    → resolve provider=SHOPIFY + externalAccountId=verified shop
+    → stale-generation fence protects a newer reinstall/relink
+    → delete CommerceConnectionSecret and mark the canonical connection UNINSTALLED
+    → record provider-neutral CommerceConnectionEvent lifecycle history
+    → Return non-2xx on retryable persistence failure; idempotent repeat delivery returns 200
 ```
 
 ---
@@ -667,27 +677,24 @@ All email inputs are lowercased: sign-in (`authorize`), signup, admin PATCH, sen
 
 ### Distribution Modes
 
-| Mode | Env Var | Auth Flow | Token Type | Config |
-|---|---|---|---|---|
-| **Public** | `SHOPIFY_APP_DISTRIBUTION=public` | App Bridge session token → token exchange | Expiring offline (1h access, 90d rotating refresh) | `shopify.app.toml` |
-| **Custom** | `SHOPIFY_APP_DISTRIBUTION=custom` | OAuth code exchange | Legacy non-expiring offline | `shopify.app.custom.toml` |
+| Mode       | Env Var                           | Auth Flow                                 | Token Type                                         | Config                    |
+| ---------- | --------------------------------- | ----------------------------------------- | -------------------------------------------------- | ------------------------- |
+| **Public** | `SHOPIFY_APP_DISTRIBUTION=public` | App Bridge session token → token exchange | Expiring offline (1h access, 90d rotating refresh) | `shopify.app.toml`        |
+| **Custom** | `SHOPIFY_APP_DISTRIBUTION=custom` | OAuth code exchange                       | Legacy non-expiring offline                        | `shopify.app.custom.toml` |
 
 ### Scopes
 
-Exactly: `read_products`, `read_discounts`, `write_discounts`. Do NOT add customer/order/payment/billing/write_products scopes.
+Exactly: `read_products`, `read_orders`, `read_themes`, `read_discounts`, `write_discounts`. Do not add customer/payment/billing/write_products/read_all_orders scopes.
 
-### Token Storage (Brand model)
+### Canonical Shopify Connection and Credential Storage
 
-| Field | Purpose |
-|---|---|
-| `shopifyAdminAccessTokenEncrypted` | AES-256-GCM encrypted access token |
-| `shopifyAccessTokenExpiresAt` | Expiry timestamp (expiring mode only) |
-| `shopifyRefreshTokenEncrypted` | AES-256-GCM encrypted refresh token (expiring mode only) |
-| `shopifyRefreshTokenExpiresAt` | Refresh token expiry (90 days) |
-| `shopifyGrantedScopes` | Comma-separated granted scopes |
-| `shopifyClientId` | Client ID used for this installation |
-| `shopifyAuthMode` | `LEGACY_OFFLINE` or `EXPIRING_OFFLINE` |
-| `shopifyTokenRefreshLockedUntil` | CAS lock for concurrent refresh prevention |
+| Authority | Purpose |
+| --------- | ------- |
+| `CommerceConnection` | Provider, status, Shopify account identity, storefront URL, client ID, canonical granted scopes, lifecycle timestamps, sync state, and provider metadata/currency |
+| `CommerceConnectionSecret.encryptedPayload` | Encrypted access/refresh tokens, expiries, and canonical Shopify auth mode |
+| `CommerceConnectionSecret.refreshLockId` / `refreshLockedUntil` | Database CAS lease for concurrent token refresh and stale-writer protection |
+
+`Brand` contains no Shopify connection, credential, status, domain, currency, scope, auth-mode, or refresh-lease authority.
 
 ### Webhook Management
 
@@ -703,13 +710,13 @@ All webhooks are TOML-managed (`shopify.app.toml` / `shopify.app.custom.toml`). 
 
 ### Protected Routes
 
-| Endpoint | Key | Limit | Window |
-|---|---|---|---|
-| `/api/auth/signup` | `signup:{ip}` | 5 | 15 min |
-| `/api/auth/send-email-verification` | `send-verify-email:{ip}` | 5 | 15 min |
-| `/api/public/waitlist` | `waitlist:{ip}` | 10 | 60 min |
-| `/api/shopify/oauth/start` | `shopify-oauth-start:{ip}` | 20 | 60 min |
-| `/api/public/scan` | `scan:{ip}` | 60 | 60 min |
+| Endpoint                            | Key                        | Limit | Window |
+| ----------------------------------- | -------------------------- | ----- | ------ |
+| `/api/auth/signup`                  | `signup:{ip}`              | 5     | 15 min |
+| `/api/auth/send-email-verification` | `send-verify-email:{ip}`   | 5     | 15 min |
+| `/api/public/waitlist`              | `waitlist:{ip}`            | 10    | 60 min |
+| `/api/shopify/oauth/start`          | `shopify-oauth-start:{ip}` | 20    | 60 min |
+| `/api/public/scan`                  | `scan:{ip}`                | 60    | 60 min |
 
 ### Limitations
 
@@ -730,6 +737,7 @@ The number of test files and individual tests changes as the codebase grows — 
 ### CI Pipeline (`.github/workflows/ci.yml`)
 
 Runs on push to `main` and all PRs:
+
 1. `npm ci`
 2. `npx prisma generate`
 3. `npx prisma validate`
@@ -766,21 +774,22 @@ No database is required for the standard CI run — nearly all tests use mocked 
 
 ### Key Index Summary
 
-| Table | Index | Purpose |
-|---|---|---|
-| `ShopifyRewardRedemption` | `(offerId, status)` | Global offer cap query |
-| `ShopifyRewardRedemption` | `(offerId, userId, status)` | Per-user offer cap query |
-| `ShopifyRewardRedemption` | `(status, needsManualReview, createdAt)` | Reconciliation batch selection |
-| `PointTransaction` | `(shopifyRewardRedemptionId, reason)` UNIQUE | Exactly-once refund guard |
-| `CampaignUnlock` | `(campaignId, anonKey) WHERE anonKey IS NOT NULL AND userId IS NULL` PARTIAL UNIQUE | Anonymous unlock dedup |
-| `EmailVerificationToken` | `(userId)` | User-based token lookup |
-| `TokenStore` | `(expiresAt)` | Expiry-based cleanup |
+| Table                     | Index                                                                               | Purpose                        |
+| ------------------------- | ----------------------------------------------------------------------------------- | ------------------------------ |
+| `ShopifyRewardRedemption` | `(offerId, status)`                                                                 | Global offer cap query         |
+| `ShopifyRewardRedemption` | `(offerId, userId, status)`                                                         | Per-user offer cap query       |
+| `ShopifyRewardRedemption` | `(status, needsManualReview, createdAt)`                                            | Reconciliation batch selection |
+| `PointTransaction`        | `(shopifyRewardRedemptionId, reason)` UNIQUE                                        | Exactly-once refund guard      |
+| `CampaignUnlock`          | `(campaignId, anonKey) WHERE anonKey IS NOT NULL AND userId IS NULL` PARTIAL UNIQUE | Anonymous unlock dedup         |
+| `EmailVerificationToken`  | `(userId)`                                                                          | User-based token lookup        |
+| `TokenStore`              | `(expiresAt)`                                                                       | Expiry-based cleanup           |
 
 ---
 
 ## L. Risk Map
 
 ### Auth-Sensitive Files
+
 - `src/middleware.ts` — route protection; removing a route from `matcher` or `isProtectedRoute` exposes it publicly
 - `src/lib/auth-session.ts` — typed `AuthResolvers` DI seam; `realAuthResolvers` is the only production resolver. No global hooks, no `NODE_ENV` bypass — tests inject mocks by calling `…Impl` functions directly
 - `src/lib/brand-auth.ts` — `getBrandAdminContext()` / `getBrandManagementContext()` — one shared implementation, called in every Brand/Shopify-management API and the `/dashboard/brand/**` layout (see "Brand-management authorization policy" in `docs/agent-context.md`)
@@ -791,6 +800,7 @@ No database is required for the standard CI run — nearly all tests use mocked 
 - `src/app/api/auth/[...nextauth]/options.ts` — JWT callback adds `role`, `isActive`, `roleCheckedAt` to token; deactivated/missing users set `token.accountInvalidated = true`, and the session callback then returns `user: undefined` (forced sign-out)
 
 ### Payment / Discount / Points-Sensitive Files
+
 - `src/app/api/rewards/shopify/redeem/route.ts` — **HIGHEST RISK** — serializable transaction, point debit, Shopify discount creation, idempotency, bounded code-collision retry, refund logic
 - `src/lib/points.ts` — `awardQrScanPoint()` — idempotency relies on unique DB constraint
 - `src/lib/reward-offers.ts` — `getRewardOfferAvailability()` — gating logic checked inside TX
@@ -799,6 +809,7 @@ No database is required for the standard CI run — nearly all tests use mocked 
 - `src/lib/reward-reconciliation.ts` — exactly-once refund catches P2002 OUTSIDE the transaction
 
 ### Webhook / HMAC-Sensitive Files
+
 - `src/lib/shopify.ts` — `verifyShopifyWebhookHmac()`, `safeHmacEqual()` — timing-safe compare
 - `src/lib/shopify-webhooks.ts` — `verifyShopifyWebhookRequest()` — called by all 4 webhook handlers
 - `src/lib/shopify-session-token.ts` — `timingSafeBase64urlEqual()` — signature verified BEFORE claims parsed
@@ -806,20 +817,24 @@ No database is required for the standard CI run — nearly all tests use mocked 
 - `src/middleware.ts:7` — webhook bypass; do not remove this without understanding consequences
 
 ### Encryption-Sensitive Files
+
 - `src/lib/crypto.ts` — AES-256-GCM; key is derived from `APP_ENCRYPTION_KEY`; changing the key breaks all existing encrypted tokens
-- `prisma/schema.prisma` — `Brand.shopifyAdminAccessTokenEncrypted` and `Brand.shopifyRefreshTokenEncrypted` — contains encrypted Shopify tokens; never log or return raw
+- `prisma/schema.prisma` — `CommerceConnectionSecret.encryptedPayload` contains provider-specific connection credentials where applicable; never log or return raw
 
 ### Rate-Limiting Risks
+
 - In-memory `Map` resets per serverless cold start; not deployment-wide enforcement
 - Legitimate high-volume QR campaigns need 60/hr headroom per IP — adjust if campaigns exceed this
 - No rate limit on `/api/rewards/shopify/redeem` (relies on point balance + idempotency instead)
 
 ### Production Exposure Risks
+
 - `/dev/email-preview` and `/dev/email-preview/invite` — dev-only; both return HTTP 404 when `NODE_ENV === "production"`
 - User deletion returns 409 for users with campaigns/QR codes — deactivation is the recommended alternative
 - Forced sign-out uses the `token.accountInvalidated` flag (JWT callback) + `user: undefined` (session callback); this relies on next-auth v4 runtime behavior — monitor on next-auth upgrades
 
 ### Files That Can Break Shopify Review
+
 - `src/app/api/shopify/webhooks/` — all 4 GDPR webhooks must respond 200 (Shopify tests these)
 - `src/lib/shopify.ts:SHOPIFY_SCOPES` — `read_products`, `read_orders`, `read_themes`, `read_discounts`, and `write_discounts` are requested
 - `src/lib/shopify-session-token.ts` — embedded auth; removing signature verification fails review
@@ -841,6 +856,7 @@ No database is required for the standard CI run — nearly all tests use mocked 
 ### For Shopify Work
 
 Read these files first:
+
 1. `src/lib/shopify.ts` — API version, scopes, HMAC helpers, OAuth helpers
 2. `src/lib/shopify-session-token.ts` — App Bridge JWT verification
 3. `src/lib/shopify-token-manager.ts` — Token lifecycle, CAS refresh, scope check
@@ -850,6 +866,7 @@ Read these files first:
 7. `src/app/api/shopify/embedded/session/route.ts` — token exchange endpoint
 
 **Never:**
+
 - Store `decryptSecret(...)` in any log or response body
 - Bypass HMAC verification on webhooks
 - Remove `timingSafeEqual` / `timingSafeBase64urlEqual` from any HMAC check
@@ -859,6 +876,7 @@ Read these files first:
 ### For Points / Rewards Work
 
 Read these files first:
+
 1. `src/lib/reward-redemption-state.ts` — state machine (single source of truth for all status logic)
 2. `src/lib/reward-reconciliation.ts` — stuck-redemption recovery
 3. `src/lib/points.ts` — `awardQrScanPoint()`
@@ -868,6 +886,7 @@ Read these files first:
 7. `src/app/api/rewards/shopify/redeem/route.ts` — full redemption transaction
 
 **Never:**
+
 - Remove the `isolationLevel: Serializable` from the redemption transaction
 - Remove the `debit.count !== 1` guard (race condition protection)
 - Skip the idempotency key check at the top of the redeem handler
@@ -879,12 +898,14 @@ Read these files first:
 ### For QR / Campaign Work
 
 Read these files first:
+
 1. `src/lib/qr-redemption.ts` — atomic QR status transition
 2. `src/app/api/public/scan/route.ts` — full scan handler
 3. `src/lib/anon-merge-keys.ts` — anonymous merge-key collection
 4. `prisma/schema.prisma` — `QRCode`, `CampaignUnlock`, `PointTransaction` models
 
 **Never:**
+
 - Change `QRCode` status transitions outside of `redeemQrCodeForUser()`
 - Remove the `status: "NEW"` filter in `updateMany` — it's the atomic guard against double-redemption
 - Remove the partial unique index migration for anonymous unlock dedup

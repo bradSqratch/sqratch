@@ -1047,6 +1047,7 @@ describe("financial reconciliation orchestration through handleShopifyOrderWebho
       assert.equal(reconcile.calls.length, 1);
       assert.deepEqual(reconcile.calls[0], {
         brandId: "brand-1",
+        connectionId: "conn-1",
         shopDomain: "reconciliation-test.myshopify.com",
         externalOrderId: "5551",
       });

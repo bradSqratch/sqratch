@@ -1,5 +1,7 @@
-process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
-process.env.COMMERCE_CLICK_TOKEN_PEPPER = "test-pepper-for-commerce-click-attribution-tests-only";
+process.env.DATABASE_URL =
+  "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
+process.env.COMMERCE_CLICK_TOKEN_PEPPER =
+  "test-pepper-for-commerce-click-attribution-tests-only";
 
 /**
  * tests/commerce-click-attribution.test.ts
@@ -53,12 +55,15 @@ let ipCounter = 0;
 
 function req(options: { headers?: Record<string, string> } = {}) {
   ipCounter += 1;
-  return new NextRequest("https://sqratch.test/api/public/experience/exp/products/click/link-1", {
-    headers: {
-      "x-forwarded-for": `10.0.0.${ipCounter}`,
-      ...options.headers,
+  return new NextRequest(
+    "https://sqratch.test/api/public/experience/exp/products/click/link-1",
+    {
+      headers: {
+        "x-forwarded-for": `10.0.0.${ipCounter}`,
+        ...options.headers,
+      },
     },
-  });
+  );
 }
 
 function access(
@@ -94,18 +99,16 @@ function access(
         avatarUrl: null,
         user: { name: "Creator" },
       },
-      campaigns:
-        overrides.campaigns ??
-        [
-          {
-            campaignId: "campaign-A",
-            campaign: {
-              id: "campaign-A",
-              name: "Campaign A",
-              brand: { id: "brand-1", name: "Acme", slug: "acme", logoUrl: null },
-            },
+      campaigns: overrides.campaigns ?? [
+        {
+          campaignId: "campaign-A",
+          campaign: {
+            id: "campaign-A",
+            name: "Campaign A",
+            brand: { id: "brand-1", name: "Acme", slug: "acme", logoUrl: null },
           },
-        ],
+        },
+      ],
     },
     campaignIds: (overrides.campaigns ?? []).map((item) => item.campaignId),
     storedCampaignId: overrides.storedCampaignId ?? null,
@@ -163,7 +166,7 @@ function resolvedLink(overrides: Partial<Record<string, unknown>> = {}) {
     connectedProductId: "connected-1",
     commerceConnectionId: "connection-1",
     provider: "SHOPIFY" as const,
-    connectionExternalAccountId: "acme.test",
+    connectionStorefrontUrl: "https://acme.test",
     hasProviderSuppliedStorefrontUrl: false,
     ...overrides,
   };
@@ -180,7 +183,9 @@ function lessonLink(overrides: Partial<Record<string, unknown>> = {}) {
   });
 }
 
-function deps(overrides: Partial<CommerceClickDeps> = {}): Partial<CommerceClickDeps> {
+function deps(
+  overrides: Partial<CommerceClickDeps> = {},
+): Partial<CommerceClickDeps> {
   return {
     getAccess: async () => access(),
     ensureSession: async () => "minted-session",
@@ -197,7 +202,11 @@ async function click(
   overrides: Partial<CommerceClickDeps> = {},
   request = req(),
 ) {
-  return handleCommerceClick(request, { experienceSlug: "exp", surface }, deps(overrides));
+  return handleCommerceClick(
+    request,
+    { experienceSlug: "exp", surface },
+    deps(overrides),
+  );
 }
 
 /**
@@ -219,7 +228,8 @@ describe("cross-brand and cross-campaign integrity", () => {
   test("resolved brandId always comes from the looked-up link row, never a poisoned dependency's echo of client input", async () => {
     const captured: AttributionInput[] = [];
     const response = await click(SHOP_SURFACE, {
-      findBrandStorefrontProduct: async () => resolvedLink({ brandId: "brand-real" }),
+      findBrandStorefrontProduct: async () =>
+        resolvedLink({ brandId: "brand-real" }),
       recordAttribution: async (input) => {
         captured.push(input);
       },
@@ -236,7 +246,9 @@ describe("cross-brand and cross-campaign integrity", () => {
   test("a lesson attachment scoped to a different campaign than the visitor's resolved context yields the generic 404, not the destination", async () => {
     const response = await click(LESSON_SURFACE, {
       getAccess: async () =>
-        access({ entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" } }),
+        access({
+          entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" },
+        }),
       findCampaignLessonProduct: async () =>
         lessonLink({ scope: { campaignId: "campaign-OTHER", isActive: true } }),
     });
@@ -246,10 +258,11 @@ describe("cross-brand and cross-campaign integrity", () => {
 
   test("an inactive lesson scope is denied instead of becoming a global click target", async () => {
     const response = await click(LESSON_SURFACE, {
-      getAccess: async () => access({
-        entryContext: { kind: "DIRECT" },
-        campaigns: twoEligibleCampaigns(),
-      }),
+      getAccess: async () =>
+        access({
+          entryContext: { kind: "DIRECT" },
+          campaigns: twoEligibleCampaigns(),
+        }),
       findCampaignLessonProduct: async () =>
         lessonLink({ scope: { campaignId: "campaign-A", isActive: false } }),
     });
@@ -259,12 +272,15 @@ describe("cross-brand and cross-campaign integrity", () => {
 
   test("direct lesson union rejects a scope whose campaign is no longer linked to the Experience", async () => {
     const response = await click(LESSON_SURFACE, {
-      getAccess: async () => access({
-        entryContext: { kind: "DIRECT" },
-        campaigns: twoEligibleCampaigns(),
-      }),
+      getAccess: async () =>
+        access({
+          entryContext: { kind: "DIRECT" },
+          campaigns: twoEligibleCampaigns(),
+        }),
       findCampaignLessonProduct: async () =>
-        lessonLink({ scope: { campaignId: "campaign-removed", isActive: true } }),
+        lessonLink({
+          scope: { campaignId: "campaign-removed", isActive: true },
+        }),
     });
 
     assert.equal(response.status, 404);
@@ -318,7 +334,9 @@ describe("cross-brand and cross-campaign integrity", () => {
     );
     const codeOnly = source
       .split("\n")
-      .filter((line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"))
+      .filter(
+        (line) => !line.trim().startsWith("//") && !line.trim().startsWith("*"),
+      )
       .join("\n");
     assert.doesNotMatch(codeOnly, /experienceProductLink/i);
     assert.doesNotMatch(codeOnly, /lessonProductLink/i);
@@ -332,11 +350,12 @@ describe("cross-brand and cross-campaign integrity", () => {
     const twoCampaigns = twoEligibleCampaigns();
 
     const response = await click(SHOP_SURFACE, {
-      getAccess: async () => access({
-        campaigns: twoCampaigns,
-        storedCampaignId: "campaign-A",
-        entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" },
-      }),
+      getAccess: async () =>
+        access({
+          campaigns: twoCampaigns,
+          storedCampaignId: "campaign-A",
+          entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" },
+        }),
       recordAttribution: async (input) => {
         captured.push(input);
       },
@@ -352,11 +371,12 @@ describe("cross-brand and cross-campaign integrity", () => {
     const twoCampaigns = twoEligibleCampaigns();
 
     const response = await click(SHOP_SURFACE, {
-      getAccess: async () => access({
-        campaigns: twoCampaigns,
-        storedCampaignId: "campaign-B",
-        entryContext: { kind: "CAMPAIGN", campaignId: "campaign-B" },
-      }),
+      getAccess: async () =>
+        access({
+          campaigns: twoCampaigns,
+          storedCampaignId: "campaign-B",
+          entryContext: { kind: "CAMPAIGN", campaignId: "campaign-B" },
+        }),
       recordAttribution: async (input) => {
         captured.push(input);
       },
@@ -391,7 +411,9 @@ describe("cross-brand and cross-campaign integrity", () => {
     const captured: AttributionInput[] = [];
     const response = await click(LESSON_SURFACE, {
       getAccess: async () =>
-        access({ entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" } }),
+        access({
+          entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" },
+        }),
       findCampaignLessonProduct: async () => lessonLink(),
       recordAttribution: async (input) => {
         captured.push(input);
@@ -414,13 +436,24 @@ describe("cross-brand and cross-campaign integrity", () => {
       join(process.cwd(), "src/lib/commerce/click-attribution.ts"),
       "utf8",
     );
-    const createStart = source.indexOf("prisma.commerceClickAttribution.create");
+    const createStart = source.indexOf(
+      "prisma.commerceClickAttribution.create",
+    );
     assert.ok(createStart > 0);
     const createBody = source.slice(createStart);
-    assert.match(createBody, /campaignLessonProductId: input\.campaignLessonProductId/);
-    assert.match(createBody, /brandCommerceProductId: input\.brandCommerceProductId/);
+    assert.match(
+      createBody,
+      /campaignLessonProductId: input\.campaignLessonProductId/,
+    );
+    assert.match(
+      createBody,
+      /brandCommerceProductId: input\.brandCommerceProductId/,
+    );
     assert.match(createBody, /connectedProductId: input\.connectedProductId/);
-    assert.match(createBody, /commerceConnectionId: input\.commerceConnectionId/);
+    assert.match(
+      createBody,
+      /commerceConnectionId: input\.commerceConnectionId/,
+    );
     assert.doesNotMatch(createBody, /lessonProductLinkId:/);
     assert.doesNotMatch(createBody, /experienceProductLinkId:/);
   });
@@ -457,7 +490,10 @@ describe("cross-brand and cross-campaign integrity", () => {
       { kind: "CAMPAIGN_PRODUCT", campaignAssignmentId: "assignment-a" },
       {
         getAccess: async () =>
-          access({ campaigns: twoEligibleCampaigns(), entryContext: { kind: "DIRECT" } }),
+          access({
+            campaigns: twoEligibleCampaigns(),
+            entryContext: { kind: "DIRECT" },
+          }),
         findCampaignProduct: async (options) => {
           assert.equal(options.campaignAssignmentId, "assignment-a");
           return resolvedLink({
@@ -530,7 +566,11 @@ describe("public lesson click: foreign ids fail closed against the real containm
   // WHERE. This is not a stub of the property under test — the fixture doesn't
   // know the "right answer" in advance, it re-derives it from the same three
   // fields the real query filters on.
-  const REAL_ROW = { id: "clp-real", lessonId: "lesson-1", experienceId: "experience-1" };
+  const REAL_ROW = {
+    id: "clp-real",
+    lessonId: "lesson-1",
+    experienceId: "experience-1",
+  };
 
   function containmentMirroringFinder() {
     return async (options: {
@@ -545,13 +585,21 @@ describe("public lesson click: foreign ids fail closed against the real containm
       ) {
         return null;
       }
-      return lessonLink({ id: REAL_ROW.id, campaignLessonProductId: REAL_ROW.id, scope: null });
+      return lessonLink({
+        id: REAL_ROW.id,
+        campaignLessonProductId: REAL_ROW.id,
+        scope: null,
+      });
     };
   }
 
   test("a foreign CampaignLessonProduct id fails closed with the generic 404 (item 5)", async () => {
     const response = await click(
-      { kind: "LESSON", lessonId: REAL_ROW.lessonId, campaignLessonProductId: "forged-clp-id" },
+      {
+        kind: "LESSON",
+        lessonId: REAL_ROW.lessonId,
+        campaignLessonProductId: "forged-clp-id",
+      },
       { findCampaignLessonProduct: containmentMirroringFinder() },
     );
 
@@ -560,7 +608,11 @@ describe("public lesson click: foreign ids fail closed against the real containm
 
   test("a foreign Lesson id fails closed the same way, even with the correct product id (item 6)", async () => {
     const response = await click(
-      { kind: "LESSON", lessonId: "forged-lesson-id", campaignLessonProductId: REAL_ROW.id },
+      {
+        kind: "LESSON",
+        lessonId: "forged-lesson-id",
+        campaignLessonProductId: REAL_ROW.id,
+      },
       { findCampaignLessonProduct: containmentMirroringFinder() },
     );
 
@@ -569,7 +621,11 @@ describe("public lesson click: foreign ids fail closed against the real containm
 
   test("control: the exact matching id+lesson combination succeeds (proves the finder above isn't just always-null)", async () => {
     const response = await click(
-      { kind: "LESSON", lessonId: REAL_ROW.lessonId, campaignLessonProductId: REAL_ROW.id },
+      {
+        kind: "LESSON",
+        lessonId: REAL_ROW.lessonId,
+        campaignLessonProductId: REAL_ROW.id,
+      },
       { findCampaignLessonProduct: containmentMirroringFinder() },
     );
 
@@ -659,7 +715,9 @@ describe("forged input handling", () => {
   test("a data: destination scheme is also rejected", async () => {
     const response = await click(SHOP_SURFACE, {
       findBrandStorefrontProduct: async () =>
-        resolvedLink({ productUrl: "data:text/html,<script>alert(1)</script>" }),
+        resolvedLink({
+          productUrl: "data:text/html,<script>alert(1)</script>",
+        }),
     });
 
     assert.equal(response.status, 404);
@@ -677,7 +735,7 @@ describe("forged input handling", () => {
     assert.doesNotMatch(source, /await request\.json\(\)/);
     assert.match(
       source,
-      /validateDestination\(\s*link\.productUrl,\s*link\.connectionExternalAccountId,\s*link\.provider,\s*link\.hasProviderSuppliedStorefrontUrl,?\s*\)/,
+      /validateDestination\(\s*link\.productUrl,\s*link\.connectionStorefrontUrl,\s*link\.provider,\s*link\.hasProviderSuppliedStorefrontUrl,?\s*\)/,
     );
   });
 });
@@ -751,13 +809,19 @@ describe("redirect target and PII", () => {
     assert.equal(response.status, 302);
     const location = response.headers.get("location") || "";
 
-    assert.match(location, /^https:\/\/acme\.test\/products\/widget\?sqratch_ref=[A-Za-z0-9_-]{43}$/);
+    assert.match(
+      location,
+      /^https:\/\/acme\.test\/products\/widget\?sqratch_ref=[A-Za-z0-9_-]{43}$/,
+    );
     // The redirect carries the URL query param (`sqratch_ref`), never the
     // underscore-prefixed Shopify cart-attribute key (`_sqratch_ref`); the two
     // are separate constants and must not be crossed.
     assert.doesNotMatch(location, /_sqratch_ref/);
     assert.doesNotMatch(location, /@/); // no email pattern
-    assert.doesNotMatch(location, /bcp-1|brand-1|campaign-A|creator-1|experience-1/);
+    assert.doesNotMatch(
+      location,
+      /bcp-1|brand-1|campaign-A|creator-1|experience-1/,
+    );
   });
 
   test("Cache-Control and Referrer-Policy are set on the redirect (never cached, never leaked to the merchant's referer logs)", async () => {
@@ -769,7 +833,10 @@ describe("redirect target and PII", () => {
   test("an existing ?ref= on the merchant's own URL is left untouched, not clobbered", async () => {
     const response = await click(SHOP_SURFACE, {
       findBrandStorefrontProduct: async () =>
-        resolvedLink({ productUrl: "https://acme.test/products/widget?ref=merchant-own-value" }),
+        resolvedLink({
+          productUrl:
+            "https://acme.test/products/widget?ref=merchant-own-value",
+        }),
     });
 
     const location = response.headers.get("location") || "";
@@ -872,7 +939,10 @@ describe("no token-lookup/redemption path exists yet in Phase 6", () => {
 
 describe("schema-level idempotency seam (unused by Phase 6 code)", () => {
   test("CommerceClickAttribution has consumedAt/consumedByOrderRef columns, unreferenced by any Phase 6 runtime code path", () => {
-    const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
+    const schema = readFileSync(
+      join(process.cwd(), "prisma/schema.prisma"),
+      "utf8",
+    );
     assert.match(schema, /model CommerceClickAttribution \{/);
     assert.match(schema, /consumedAt\s+DateTime\?/);
     assert.match(schema, /consumedByOrderRef\s+String\?/);
@@ -977,7 +1047,11 @@ describe("Phase 8.3 commerce click attribution matrix", () => {
   test("Matrix 9: Direct Experience visitor clicks Lesson product -> entryCampaignId=null, productCampaignId=Campaign A, campaignLessonProductId populated", async () => {
     const captured: AttributionInput[] = [];
     const response = await click(
-      { kind: "LESSON", lessonId: "lesson-1", campaignLessonProductId: "clp-1" },
+      {
+        kind: "LESSON",
+        lessonId: "lesson-1",
+        campaignLessonProductId: "clp-1",
+      },
       {
         getAccess: async () =>
           access({
@@ -1203,7 +1277,9 @@ describe("Phase 10 durable capture: surface and attributedBrandId per surface ki
     for (const surface of surfaces) {
       const response = await click(surface, {
         getAccess: async () =>
-          access({ entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" } }),
+          access({
+            entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" },
+          }),
         findBrandStorefrontProduct: async () => resolvedLink({ scope: null }),
         findCampaignProduct: async () =>
           resolvedLink({
@@ -1212,27 +1288,37 @@ describe("Phase 10 durable capture: surface and attributedBrandId per surface ki
           }),
         findCampaignLessonProduct: async () => lessonLink(),
         recordAttribution: async (input) => {
-          assert.ok(input.surface, "surface must never be recorded as undefined");
+          assert.ok(
+            input.surface,
+            "surface must never be recorded as undefined",
+          );
           recorded.add(input.surface);
         },
       });
       assert.equal(response.status, 302);
     }
 
-    const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
+    const schema = readFileSync(
+      join(process.cwd(), "prisma/schema.prisma"),
+      "utf8",
+    );
     const enumBody = /enum CommerceClickSurface \{([\s\S]*?)\n\}/.exec(schema);
-    assert.ok(enumBody, "prisma/schema.prisma must declare enum CommerceClickSurface");
+    assert.ok(
+      enumBody,
+      "prisma/schema.prisma must declare enum CommerceClickSurface",
+    );
     const enumValues = new Set(
       enumBody[1]
         .split("\n")
         .map((line) => line.trim())
-        .filter((line) => line.length > 0 && !line.startsWith("///"))
+        .filter((line) => line.length > 0 && !line.startsWith("///")),
     );
 
-    assert.deepEqual(
-      [...recorded].sort(),
-      ["BRAND_STOREFRONT", "CAMPAIGN_PRODUCT", "LESSON"],
-    );
+    assert.deepEqual([...recorded].sort(), [
+      "BRAND_STOREFRONT",
+      "CAMPAIGN_PRODUCT",
+      "LESSON",
+    ]);
     assert.deepEqual([...recorded].sort(), [...enumValues].sort());
   });
 
@@ -1288,11 +1374,16 @@ describe("Phase 10 durable capture: surface and attributedBrandId per surface ki
     );
     assert.match(source, /surface\?: PersistedClickSurface;/);
     assert.match(source, /attributedBrandId\?: string \| null;/);
-    const createStart = source.indexOf("prisma.commerceClickAttribution.create");
+    const createStart = source.indexOf(
+      "prisma.commerceClickAttribution.create",
+    );
     assert.ok(createStart > 0);
     const createBody = source.slice(createStart);
     assert.match(createBody, /surface: input\.surface \?\? null,/);
-    assert.match(createBody, /attributedBrandId: input\.attributedBrandId \?\? null,/);
+    assert.match(
+      createBody,
+      /attributedBrandId: input\.attributedBrandId \?\? null,/,
+    );
   });
 
   test("a NOT NULL-style mint failure on the durability columns still redirects the visitor (fail-open, per the migration's stated rationale)", async () => {
@@ -1364,7 +1455,9 @@ describe("Phase 10 write-once durability: no code path rewrites surface or attri
   /** The call's own argument text, up to and including its closing `});`. */
   function callPayload(source: string, startIndex: number): string {
     const end = source.indexOf("});", startIndex);
-    return end === -1 ? source.slice(startIndex) : source.slice(startIndex, end + 3);
+    return end === -1
+      ? source.slice(startIndex)
+      : source.slice(startIndex, end + 3);
   }
 
   const sources = collectSourceFiles(SRC_ROOT).map((file) => ({
@@ -1374,12 +1467,19 @@ describe("Phase 10 write-once durability: no code path rewrites surface or attri
   }));
 
   test("the walk sees the whole src tree, including the modules under test (guards against a vacuously-passing sweep)", () => {
-    assert.ok(sources.length > 100, `expected a real tree, saw ${sources.length} files`);
+    assert.ok(
+      sources.length > 100,
+      `expected a real tree, saw ${sources.length} files`,
+    );
     const relatives = sources.map((entry) => entry.relative);
     assert.ok(relatives.includes("src/lib/commerce/click-attribution.ts"));
-    assert.ok(relatives.includes("src/lib/commerce/commerce-click-analytics.ts"));
     assert.ok(
-      relatives.includes("src/lib/commerce/commerce-click-analytics-repository.ts"),
+      relatives.includes("src/lib/commerce/commerce-click-analytics.ts"),
+    );
+    assert.ok(
+      relatives.includes(
+        "src/lib/commerce/commerce-click-analytics-repository.ts",
+      ),
     );
     assert.ok(relatives.includes("src/lib/commerce/order-ingestion.ts"));
   });
@@ -1451,7 +1551,11 @@ describe("Phase 10 write-once durability: no code path rewrites surface or attri
       }
     }
 
-    assert.equal(inserts.length, 1, `expected exactly one INSERT, saw ${inserts.length}`);
+    assert.equal(
+      inserts.length,
+      1,
+      `expected exactly one INSERT, saw ${inserts.length}`,
+    );
     assert.equal(inserts[0].relative, "src/lib/commerce/click-attribution.ts");
     assert.match(inserts[0].payload, /surface: input\.surface \?\? null,/);
     assert.match(
@@ -1503,7 +1607,11 @@ describe("Phase 10 write-once durability: no code path rewrites surface or attri
         `${relative} must not infer a surface from campaignLessonProductId`,
       );
       // No assignment to either durable column, in any form.
-      assert.doesNotMatch(code, /surface\s*=[^=]/, `${relative} assigns to surface`);
+      assert.doesNotMatch(
+        code,
+        /surface\s*=[^=]/,
+        `${relative} assigns to surface`,
+      );
       assert.doesNotMatch(
         code,
         /attributedBrandId\s*=[^=]/,
@@ -1544,7 +1652,11 @@ describe("Phase 11 provider neutrality and click-only boundary in the analytics 
       // A `provider === "SHOPIFY"` test, a switch case on one, or any
       // provider-specific helper would make the analytics Shopify-shaped rather
       // than provider-neutral. `provider` may only ever be grouped by.
-      assert.doesNotMatch(source, /provider\s*[=!]==?\s*["']SHOPIFY["']/i, file);
+      assert.doesNotMatch(
+        source,
+        /provider\s*[=!]==?\s*["']SHOPIFY["']/i,
+        file,
+      );
       assert.doesNotMatch(source, /["']SHOPIFY["']\s*[=!]==?\s*/i, file);
       assert.doesNotMatch(source, /case\s+["']SHOPIFY["']/i, file);
       assert.doesNotMatch(source, /isShopify|shopifyOnly|SHOPIFY_/i, file);
@@ -1590,7 +1702,10 @@ describe("migration shape: 20260807160000_add_commerce_click_attribution", () =>
     ),
     "utf8",
   );
-  const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
+  const schema = readFileSync(
+    join(process.cwd(), "prisma/schema.prisma"),
+    "utf8",
+  );
 
   test("is additive-only: no UPDATE/DELETE/TRUNCATE/DROP, no ALTER ... DROP, outside comments", () => {
     assert.match(migration, /PREFLIGHT/);
@@ -1601,7 +1716,10 @@ describe("migration shape: 20260807160000_add_commerce_click_attribution", () =>
       .filter((line) => !line.trim().startsWith("--"))
       .join("\n");
 
-    assert.equal(/^\s*(?:UPDATE|DELETE|TRUNCATE|DROP)\b/im.test(codeOnly), false);
+    assert.equal(
+      /^\s*(?:UPDATE|DELETE|TRUNCATE|DROP)\b/im.test(codeOnly),
+      false,
+    );
     assert.equal(/^\s*ALTER TABLE .*\s+DROP\b/im.test(codeOnly), false);
     assert.match(codeOnly, /CREATE TABLE "CommerceClickAttribution"/);
   });
@@ -1615,13 +1733,19 @@ describe("migration shape: 20260807160000_add_commerce_click_attribution", () =>
       migration,
       /FOREIGN KEY \("productCampaignId", "brandId"\) REFERENCES "Campaign"\("id", "brandId"\)/,
     );
-    assert.equal(/CREATE UNIQUE INDEX "Campaign_id_brandId_key"/.test(migration), false);
+    assert.equal(
+      /CREATE UNIQUE INDEX "Campaign_id_brandId_key"/.test(migration),
+      false,
+    );
     assert.equal(
       /CREATE UNIQUE INDEX .* ON "BrandCommerceProduct"/.test(migration),
       false,
     );
     assert.equal(/ALTER TABLE "Campaign" ADD/.test(migration), false);
-    assert.equal(/ALTER TABLE "BrandCommerceProduct" ADD/.test(migration), false);
+    assert.equal(
+      /ALTER TABLE "BrandCommerceProduct" ADD/.test(migration),
+      false,
+    );
   });
 
   test("tokenHash is the only unique index on the new table, and no money/order fields exist", () => {
@@ -1635,7 +1759,10 @@ describe("migration shape: 20260807160000_add_commerce_click_attribution", () =>
   test("schema documents direct entry separately from product authorization", () => {
     assert.match(schema, /entryCampaignId\s+String\?/);
     assert.match(schema, /productCampaignId\s+String\?/);
-    assert.match(schema, /entryCampaignContextResolved\s+Boolean\s+@default\(false\)/);
+    assert.match(
+      schema,
+      /entryCampaignContextResolved\s+Boolean\s+@default\(false\)/,
+    );
   });
 });
 
@@ -1652,7 +1779,10 @@ describe("migration shape: 20260808150000_add_commerce_click_analytics_durabilit
     ),
     "utf8",
   );
-  const schema = readFileSync(join(process.cwd(), "prisma/schema.prisma"), "utf8");
+  const schema = readFileSync(
+    join(process.cwd(), "prisma/schema.prisma"),
+    "utf8",
+  );
 
   /**
    * Executable SQL only, stripped the same way the 20260807160000 block above
@@ -1674,7 +1804,10 @@ describe("migration shape: 20260808150000_add_commerce_click_analytics_durabilit
   }
 
   test("is additive-only: no UPDATE/DELETE/TRUNCATE/DROP, no ALTER ... DROP, no ALTER COLUMN, outside comments", () => {
-    assert.equal(/^\s*(?:UPDATE|DELETE|TRUNCATE|DROP)\b/im.test(codeOnly), false);
+    assert.equal(
+      /^\s*(?:UPDATE|DELETE|TRUNCATE|DROP)\b/im.test(codeOnly),
+      false,
+    );
     assert.equal(/^\s*ALTER TABLE .*\s+DROP\b/im.test(codeOnly), false);
     assert.equal(/\bALTER COLUMN\b/i.test(codeOnly), false);
     assert.equal(/\bDROP\b/i.test(codeOnly), false);
@@ -1692,7 +1825,10 @@ describe("migration shape: 20260808150000_add_commerce_click_analytics_durabilit
     assert.match(migration, /^--\s*ROLLBACK LIMITATION\b/m);
     // The two facts those sections exist to record, so a future edit cannot keep
     // the headings while dropping the reasoning that makes them load-bearing.
-    assert.match(migration, /"attributedBrandId" IS DELIBERATELY NOT A FOREIGN KEY/);
+    assert.match(
+      migration,
+      /"attributedBrandId" IS DELIBERATELY NOT A FOREIGN KEY/,
+    );
     assert.match(migration, /NO BACKFILL, ON PURPOSE/);
   });
 
@@ -1738,7 +1874,8 @@ describe("migration shape: 20260808150000_add_commerce_click_analytics_durabilit
     // Ten statements total and nothing else: 1 + 1 + 8, counted independently of
     // the per-form regexes above so an unnoticed eleventh statement cannot hide.
     assert.equal(
-      codeOnly.split(";").filter((statement) => statement.trim().length > 0).length,
+      codeOnly.split(";").filter((statement) => statement.trim().length > 0)
+        .length,
       10,
     );
 
@@ -1748,7 +1885,10 @@ describe("migration shape: 20260808150000_add_commerce_click_analytics_durabilit
     );
     // The single ALTER TABLE adds precisely the two Phase 10 columns and only
     // ever touches CommerceClickAttribution.
-    assert.match(codeOnly, /ALTER TABLE "CommerceClickAttribution" ADD COLUMN\s+"attributedBrandId" TEXT,/);
+    assert.match(
+      codeOnly,
+      /ALTER TABLE "CommerceClickAttribution" ADD COLUMN\s+"attributedBrandId" TEXT,/,
+    );
     assert.match(codeOnly, /ADD COLUMN\s+"surface" "CommerceClickSurface";/);
     assert.equal(
       /ALTER TABLE (?!"CommerceClickAttribution")/.test(codeOnly),
@@ -1791,12 +1931,18 @@ describe("migration shape: 20260808150000_add_commerce_click_analytics_durabilit
     // fail-open (see the durability describe block above).
     assert.match(codeOnly, /"attributedBrandId" TEXT,/);
     assert.equal(/"attributedBrandId" TEXT NOT NULL/i.test(codeOnly), false);
-    assert.equal(/"surface" "CommerceClickSurface" NOT NULL/i.test(codeOnly), false);
+    assert.equal(
+      /"surface" "CommerceClickSurface" NOT NULL/i.test(codeOnly),
+      false,
+    );
     assert.equal(/\bDEFAULT\b/i.test(codeOnly), false);
 
     // The schema agrees: a plain optional scalar, not a relation field.
     assert.match(schema, /attributedBrandId String\?/);
-    assert.equal(/attributedBrandId String\?[^\n]*@relation/.test(schema), false);
+    assert.equal(
+      /attributedBrandId String\?[^\n]*@relation/.test(schema),
+      false,
+    );
     assert.match(schema, /surface CommerceClickSurface\?/);
   });
 });

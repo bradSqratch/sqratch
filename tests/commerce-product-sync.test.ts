@@ -28,13 +28,13 @@ process.env.APP_ENCRYPTION_KEY ||= "test-encryption-key-for-commerce-product-syn
  *  11. The existing catalog survives a provider error unchanged.
  *  12. A reappearing product is restored to available and unavailableSince cleared.
  *  13. Sync statistics are correct across create/update/unchanged/markedUnavailable/failed.
- *  14. A legacy-fallback brand (summary.id === null) and a brand with no connection both return
- *      an explicit SKIPPED outcome, not a silent success, and write nothing.
+ *  14. A brand with no canonical connection returns an explicit SKIPPED
+ *      outcome, not a silent success, and writes nothing.
  *  15. providerMetadata contains ONLY whitelisted fields.
  *  16. COMMERCE7 is controlled: UnsupportedProviderError, no network call.
  *
  * Bonus coverage: the capability guard (an adapter that reports
- * canSyncProducts:false) also throws before any run row is created.
+ * products.sync:false) also throws before any run row is created.
  */
 
 import { test, describe } from "node:test";
@@ -76,7 +76,6 @@ function makeSummary(overrides: Partial<CommerceConnectionSummary> = {}): Commer
     installedAt: new Date("2026-01-01T00:00:00Z"),
     uninstalledAt: null,
     lastProductSyncAt: null,
-    isLegacyFallback: false,
     currencyCode: null,
     ...overrides,
   };
@@ -130,10 +129,18 @@ function makeAdapter(
     provider: CommerceProvider.SHOPIFY,
     getCapabilities(): CommerceCapabilities {
       return {
-        canSyncProducts: true,
-        canCreateDiscount: false,
-        canRevokeDiscount: false,
-        canVerifyWebhooks: false,
+        products: { sync: true, publicDestinations: true },
+        rewards: {
+          create: false,
+          lookup: false,
+          usageLookup: false,
+          revoke: false,
+          fixedAmount: false,
+          percentage: false,
+          minimumSubtotal: false,
+          productSpecific: false,
+          singleUse: false,
+        },
         ...capabilities,
       };
     },
@@ -153,10 +160,18 @@ function makePagedAdapter(
     provider: CommerceProvider.SHOPIFY,
     getCapabilities(): CommerceCapabilities {
       return {
-        canSyncProducts: true,
-        canCreateDiscount: false,
-        canRevokeDiscount: false,
-        canVerifyWebhooks: false,
+        products: { sync: true, publicDestinations: true },
+        rewards: {
+          create: false,
+          lookup: false,
+          usageLookup: false,
+          revoke: false,
+          fixedAmount: false,
+          percentage: false,
+          minimumSubtotal: false,
+          productSpecific: false,
+          singleUse: false,
+        },
       };
     },
     async getConnection() {
@@ -819,43 +834,6 @@ describe("syncBrandCommerceProducts", () => {
     });
   });
 
-  test("14. a legacy-fallback brand and a brand with no connection both return SKIPPED and write nothing", async () => {
-    const store = new FakeStore();
-    store.connections.set(
-      "brand-legacy",
-      makeSummary({ id: null, isLegacyFallback: true, brandId: "brand-legacy" }),
-    );
-    // brand-none: no entry in store.connections at all -> getActiveConnection returns null.
-
-    const legacyOutcome = await syncBrandCommerceProducts(
-      "brand-legacy",
-      CommerceProvider.SHOPIFY,
-      {},
-      makeDeps(store),
-    );
-    assert.deepEqual(legacyOutcome, {
-      status: "SKIPPED",
-      reason: "LEGACY_FALLBACK",
-      brandId: "brand-legacy",
-      provider: CommerceProvider.SHOPIFY,
-    });
-
-    const noConnectionOutcome = await syncBrandCommerceProducts(
-      "brand-none",
-      CommerceProvider.SHOPIFY,
-      {},
-      makeDeps(store),
-    );
-    assert.deepEqual(noConnectionOutcome, {
-      status: "SKIPPED",
-      reason: "NO_CONNECTION",
-      brandId: "brand-none",
-      provider: CommerceProvider.SHOPIFY,
-    });
-
-    assert.equal(store.rows.size, 0);
-    assert.equal(store.runs.size, 0);
-  });
 
   test("15. providerMetadata contains ONLY whitelisted fields", async () => {
     const store = new FakeStore();
@@ -1224,13 +1202,13 @@ describe("syncBrandCommerceProducts", () => {
     assert.deepEqual(completed, []);
   });
 
-  test("bonus: an adapter without canSyncProducts throws UnsupportedCapabilityError before any run is created", async () => {
+  test("bonus: an adapter without products.sync throws UnsupportedCapabilityError before any run is created", async () => {
     const store = new FakeStore();
     const adapter = makeAdapter(
       async () => {
         throw new Error("syncProducts should not be called");
       },
-      { canSyncProducts: false },
+      { products: { sync: false, publicDestinations: true } },
     );
     setupBrand(store, "brand-1", "conn-1", adapter);
 

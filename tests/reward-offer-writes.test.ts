@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { resolveRewardOfferUpdate } from "../src/lib/reward-offers";
+import {
+  resolveRewardOfferUpdate,
+  validateProductsBelongToConnectedStore,
+} from "../src/lib/reward-offers";
 
 const baseExisting = {
   discountType: "FIXED_AMOUNT" as const,
@@ -19,6 +22,61 @@ const validBody = {
   appliesTo: "ALL_PRODUCTS",
   isActive: false,
 };
+
+test("reward product validation preserves the exact Shopify connection and account", async () => {
+  const transportInputs: unknown[] = [];
+  const fetchProducts = async (input: Parameters<
+    typeof import("../src/lib/shopify-products")["fetchNormalizedShopifyProducts"]
+  >[0]) => {
+    transportInputs.push(input);
+    return {
+      ok: true,
+      items: [{ shopifyProductGid: "gid://shopify/Product/1" }],
+      hasNextPage: false,
+      limit: 250,
+      endCursor: null,
+    } as Awaited<
+      ReturnType<
+        typeof import("../src/lib/shopify-products")["fetchNormalizedShopifyProducts"]
+      >
+    >;
+  };
+  const x = await validateProductsBelongToConnectedStore(
+    {
+      brandId: "brand-A",
+      connectionId: "shopify-X",
+      shopDomain: "x.myshopify.com",
+      products: [{ externalProductId: "gid://shopify/Product/1" }],
+    },
+    { fetchProducts },
+  );
+  const y = await validateProductsBelongToConnectedStore(
+    {
+      brandId: "brand-A",
+      connectionId: "shopify-Y",
+      shopDomain: "y.myshopify.com",
+      products: [{ externalProductId: "gid://shopify/Product/1" }],
+    },
+    { fetchProducts },
+  );
+
+  assert.deepEqual(x, { ok: true });
+  assert.deepEqual(y, { ok: true });
+  assert.deepEqual(transportInputs, [
+    {
+      brandId: "brand-A",
+      connectionId: "shopify-X",
+      shopDomain: "x.myshopify.com",
+      limit: 250,
+    },
+    {
+      brandId: "brand-A",
+      connectionId: "shopify-Y",
+      shopDomain: "y.myshopify.com",
+      limit: 250,
+    },
+  ]);
+});
 
 test("normal save of a mismatched currency-dependent offer is rejected without acknowledgement", async () => {
   const result = await resolveRewardOfferUpdate({

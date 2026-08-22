@@ -116,10 +116,13 @@ const commerceConnectionDelegateStub = {
   // (full row + nested secret) — both keyed on brandId+provider. Returns the
   // full shape (a superset of either real `select`) so both callers see real
   // values rather than `undefined`.
-  findFirst: async (args: { where: { brandId: string; provider: string } }) => {
+  findFirst: async (args: { where: { id?: string; brandId: string; provider: string } }) => {
     const match =
       connections.find(
-        (c) => c.brandId === args.where.brandId && c.provider === args.where.provider,
+        (c) =>
+          c.brandId === args.where.brandId &&
+          c.provider === args.where.provider &&
+          (args.where.id === undefined || c.id === args.where.id),
       ) ?? null;
     if (!match) return null;
     return {
@@ -236,6 +239,45 @@ beforeEach(() => {
 });
 
 describe("reconcileShopifyConnectionScopes", () => {
+  test("X/Y pull reconciliation uses the exact requested connection", async () => {
+    connections = [
+      makeConnection({
+        id: "shopify-X",
+        externalAccountId: "x.myshopify.com",
+        hasSecret: true,
+        accessToken: "TOKEN_X",
+      }),
+      makeConnection({
+        id: "shopify-Y",
+        externalAccountId: "y.myshopify.com",
+        hasSecret: true,
+        accessToken: "TOKEN_Y",
+      }),
+    ];
+    const calls: Array<{ url: string; token: string | null }> = [];
+    const fetchImpl: typeof fetch = async (url, init) => {
+      calls.push({
+        url: String(url),
+        token: new Headers(init?.headers).get("X-Shopify-Access-Token"),
+      });
+      return graphQLScopesResponse(["read_products", "write_discounts"]);
+    };
+
+    await reconcileShopifyConnectionScopes("brand-recon-1", {
+      connectionId: "shopify-X",
+      fetchImpl,
+    });
+    await reconcileShopifyConnectionScopes("brand-recon-1", {
+      connectionId: "shopify-Y",
+      fetchImpl,
+    });
+
+    assert.deepEqual(calls, [
+      { url: "https://x.myshopify.com/admin/api/2026-04/graphql.json", token: "TOKEN_X" },
+      { url: "https://y.myshopify.com/admin/api/2026-04/graphql.json", token: "TOKEN_Y" },
+    ]);
+  });
+
   test("NOT_ELIGIBLE: no such brand", async () => {
     const result = await reconcileShopifyConnectionScopes("does-not-exist");
     assert.deepEqual(result, { outcome: "NOT_ELIGIBLE", reason: "NO_BRAND" });

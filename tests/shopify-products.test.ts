@@ -22,14 +22,10 @@ process.env.NEXTAUTH_SECRET = "test-secret-for-shopify-products-tests-32ch";
  *     canned GraphQL JSON bodies, keyed off the `after` variable in the
  *     request body so a test can hand back different pages.
  *   - `getValidAccessToken` (called internally, not injectable) resolves
- *     for a fake brand by having `prisma.brand.findUnique` — reached via
- *     shopify-token-manager's lazy `getDb()` — replaced with a stub
- *     returning a LEGACY_OFFLINE brand row, exactly like the
- *     "getValidAccessToken → mirror orchestration" tests in
- *     tests/shopify-token-manager.test.ts (`prismaModule.brand = {...}`).
- *     LEGACY_OFFLINE is deliberately chosen because it returns the
- *     decrypted token after a single `reloadBrand` read, with no lock/CAS/
- *     mirror logic to also fake.
+ *     against two fake canonical `CommerceConnection` rows with encrypted
+ *     `CommerceConnectionSecret` payloads. LEGACY_OFFLINE auth semantics are
+ *     used so the test can focus on exact connection/account selection rather
+ *     than refresh locking.
  */
 
 import { before, beforeEach, after as afterAll, test, describe } from "node:test";
@@ -44,42 +40,38 @@ import {
 } from "../src/lib/shopify-products";
 
 // ---------------------------------------------------------------------------
-// Fake prisma.brand — makes getValidAccessToken resolve without a real DB.
+// Fake canonical connections — makes getValidAccessToken resolve without DB I/O.
 // ---------------------------------------------------------------------------
 
 const FAKE_BRAND_ID = "brand-products-test-1";
+const FAKE_CONNECTION_ID = "conn-products-test-1";
 const FAKE_SHOP_DOMAIN = "products-test-shop.myshopify.com";
 const FAKE_ACCESS_TOKEN = "shpat_products_test_token";
+const SECOND_CONNECTION_ID = "conn-products-test-2";
+const SECOND_SHOP_DOMAIN = "products-test-shop-y.myshopify.com";
+const SECOND_ACCESS_TOKEN = "shpat_products_test_token_y";
 
-let originalBrandDelegate: unknown;
 let originalCommerceConnectionDelegate: unknown;
 
 before(async () => {
   const prismaModule = (await import("../src/lib/prisma")).default as unknown as {
-    brand: Record<string, unknown>;
     commerceConnection: Record<string, unknown>;
   };
-  // PHASE 14B: `getValidAccessToken` resolves the CANONICAL credential first
-  // (`CommerceConnection` -> `CommerceConnectionSecret`), so this harness
-  // models the canonical row rather than only the legacy `Brand` mirror. The
-  // `Brand` fake below is retained deliberately: it holds the SAME token, so
-  // any regression that starts reading it instead still yields a working
-  // fetch, while the canonical row proves this suite runs on the real
-  // authority path.
   originalCommerceConnectionDelegate = prismaModule.commerceConnection;
   prismaModule.commerceConnection = {
-    async findFirst() {
+    async findFirst(args: { where?: { id?: string } }) {
+      const useSecond = args.where?.id === SECOND_CONNECTION_ID;
       return {
-        id: "conn-products-test-1",
+        id: useSecond ? SECOND_CONNECTION_ID : FAKE_CONNECTION_ID,
         brandId: FAKE_BRAND_ID,
         status: "CONNECTED",
-        externalAccountId: FAKE_SHOP_DOMAIN,
+        externalAccountId: useSecond ? SECOND_SHOP_DOMAIN : FAKE_SHOP_DOMAIN,
         providerClientId: "client_products_test",
         grantedScopes: ["read_products", "read_discounts", "write_discounts"],
         secret: {
           encryptedPayload: encryptSecret(
             JSON.stringify({
-              accessToken: FAKE_ACCESS_TOKEN,
+              accessToken: useSecond ? SECOND_ACCESS_TOKEN : FAKE_ACCESS_TOKEN,
               accessTokenExpiresAt: null,
               refreshToken: null,
               refreshTokenExpiresAt: null,
@@ -90,34 +82,12 @@ before(async () => {
       };
     },
   };
-  originalBrandDelegate = prismaModule.brand;
-  prismaModule.brand = {
-    async findUnique() {
-      return {
-        id: FAKE_BRAND_ID,
-        shopifyShopDomain: FAKE_SHOP_DOMAIN,
-        shopifyAdminAccessTokenEncrypted: encryptSecret(FAKE_ACCESS_TOKEN),
-        shopifyConnectionStatus: "CONNECTED",
-        shopifyAuthMode: "LEGACY_OFFLINE",
-        shopifyAccessTokenExpiresAt: null,
-        shopifyRefreshTokenEncrypted: null,
-        shopifyRefreshTokenExpiresAt: null,
-        shopifyGrantedScopes: "read_products,read_discounts,write_discounts",
-        shopifyClientId: "client_products_test",
-        shopifyTokenRefreshLockedUntil: null,
-        shopifyTokenRefreshLockId: null,
-        shopifyCurrencyCode: "USD",
-      };
-    },
-  };
 });
 
 afterAll(async () => {
   const prismaModule = (await import("../src/lib/prisma")).default as unknown as {
-    brand: unknown;
     commerceConnection: unknown;
   };
-  prismaModule.brand = originalBrandDelegate;
   prismaModule.commerceConnection = originalCommerceConnectionDelegate;
 });
 
@@ -142,6 +112,7 @@ let pagesByCursor: Map<string | null, FakePage>;
 let publishedPagesByCursor: Map<string | null, FakePublishedPage>;
 let fetchCallCount = 0;
 let lastFetchBody: { variables?: { first?: number; after?: string | null } } | null = null;
+let fetchTargets: Array<{ url: string; token: string | null }> = [];
 
 let originalFetch: typeof globalThis.fetch;
 
@@ -156,14 +127,20 @@ afterAll(() => {
 beforeEach(() => {
   fetchCallCount = 0;
   lastFetchBody = null;
+  fetchTargets = [];
   pagesByCursor = new Map();
   publishedPagesByCursor = new Map();
 
   globalThis.fetch = (async (
-    _url: string | URL | Request,
+    url: string | URL | Request,
     init?: RequestInit,
   ): Promise<Response> => {
     fetchCallCount += 1;
+    const headers = new Headers(init?.headers);
+    fetchTargets.push({
+      url: String(url),
+      token: headers.get("X-Shopify-Access-Token"),
+    });
     const body = init?.body ? JSON.parse(String(init.body)) : {};
     lastFetchBody = body;
     const after: string | null = body?.variables?.after ?? null;
@@ -229,6 +206,41 @@ function rawProductNode(
 // ---------------------------------------------------------------------------
 
 describe("fetchNormalizedShopifyProducts — new GraphQL field parsing", () => {
+  test("X/Y credentials stay bound to the exact connection and account", async () => {
+    pagesByCursor.set(null, {
+      nodes: [rawProductNode()],
+      hasNextPage: false,
+      endCursor: null,
+    });
+
+    const x = await fetchNormalizedShopifyProducts({
+      shopDomain: FAKE_SHOP_DOMAIN,
+      brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
+    });
+    const y = await fetchNormalizedShopifyProducts({
+      shopDomain: SECOND_SHOP_DOMAIN,
+      brandId: FAKE_BRAND_ID,
+      connectionId: SECOND_CONNECTION_ID,
+    });
+
+    assert.equal(x.ok, true);
+    assert.equal(y.ok, true);
+    assert.deepEqual(fetchTargets, [
+      { url: `https://${FAKE_SHOP_DOMAIN}/admin/api/2026-04/graphql.json`, token: FAKE_ACCESS_TOKEN },
+      { url: `https://${SECOND_SHOP_DOMAIN}/admin/api/2026-04/graphql.json`, token: SECOND_ACCESS_TOKEN },
+    ]);
+
+    const callsBeforeMismatch = fetchCallCount;
+    const mismatch = await fetchNormalizedShopifyProducts({
+      shopDomain: SECOND_SHOP_DOMAIN,
+      brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
+    });
+    assert.equal(mismatch.ok, false);
+    assert.equal(fetchCallCount, callsBeforeMismatch, "domain mismatch must fail before Shopify I/O");
+  });
+
   test("parses description, status, createdAt, updatedAt, and variant sku into NormalizedShopifyProduct", async () => {
     pagesByCursor.set(null, {
       nodes: [rawProductNode()],
@@ -239,6 +251,7 @@ describe("fetchNormalizedShopifyProducts — new GraphQL field parsing", () => {
     const result = await fetchNormalizedShopifyProducts({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
     });
 
     assert.equal(result.ok, true);
@@ -281,6 +294,7 @@ describe("fetchNormalizedShopifyProducts — new GraphQL field parsing", () => {
     const result = await fetchNormalizedShopifyProducts({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
     });
 
     assert.equal(result.ok, true);
@@ -304,6 +318,7 @@ describe("fetchNormalizedShopifyProducts — new GraphQL field parsing", () => {
     const result = await fetchNormalizedShopifyProducts({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
       publishedProductIds: new Set(["gid://shopify/Product/1"]),
     });
 
@@ -331,6 +346,7 @@ describe("fetchNormalizedShopifyProducts — new GraphQL field parsing", () => {
     const result = await fetchNormalizedShopifyProducts({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
       publishedProductIds: new Set(),
     });
 
@@ -350,6 +366,7 @@ describe("fetchNormalizedShopifyProducts — new GraphQL field parsing", () => {
     const result = await fetchNormalizedShopifyProducts({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
       publishedProductIds: new Set(),
     });
 
@@ -376,6 +393,7 @@ describe("fetchNormalizedShopifyProducts — new GraphQL field parsing", () => {
     const result = await fetchNormalizedShopifyProducts({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
       publishedProductIds: new Set(["gid://shopify/Product/1"]),
     });
 
@@ -401,6 +419,7 @@ describe("fetchNormalizedShopifyProducts — new GraphQL field parsing", () => {
     const result = await fetchNormalizedShopifyProducts({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
       publishedProductIds: new Set(["gid://shopify/Product/1"]),
     });
 
@@ -416,6 +435,7 @@ describe("fetchNormalizedShopifyProducts — new GraphQL field parsing", () => {
     await fetchNormalizedShopifyProducts({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
     });
 
     const queryText = String((lastFetchBody as unknown as { query?: string })?.query ?? "");
@@ -454,6 +474,7 @@ describe("fetchPublishedShopifyProductIds — authoritative Online Store publica
     const result = await fetchPublishedShopifyProductIds({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
       limit: 2,
     });
 
@@ -480,6 +501,7 @@ describe("fetchPublishedShopifyProductIds — authoritative Online Store publica
     const missingCursor = await fetchPublishedShopifyProductIds({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
     });
     assert.equal(missingCursor.ok, false);
 
@@ -496,6 +518,7 @@ describe("fetchPublishedShopifyProductIds — authoritative Online Store publica
     const cursorLoop = await fetchPublishedShopifyProductIds({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
     });
     assert.equal(cursorLoop.ok, false);
 
@@ -507,6 +530,7 @@ describe("fetchPublishedShopifyProductIds — authoritative Online Store publica
     const capped = await fetchPublishedShopifyProductIds({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
       maxPages: 1,
     });
     assert.equal(capped.ok, false);
@@ -523,6 +547,7 @@ describe("fetchPublishedShopifyProductIds — authoritative Online Store publica
       const result = await fetchPublishedShopifyProductIds({
         shopDomain: FAKE_SHOP_DOMAIN,
         brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
       });
       assert.equal(result.ok, false);
     } finally {
@@ -551,6 +576,7 @@ describe("fetchNormalizedShopifyProducts — single-call cursor pagination", () 
     const firstPage = await fetchNormalizedShopifyProducts({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
     });
     assert.equal(firstPage.ok, true);
     if (!firstPage.ok) return;
@@ -561,6 +587,7 @@ describe("fetchNormalizedShopifyProducts — single-call cursor pagination", () 
     const secondPage = await fetchNormalizedShopifyProducts({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
       after: firstPage.endCursor ?? undefined,
     });
     assert.equal(secondPage.ok, true);
@@ -573,7 +600,7 @@ describe("fetchNormalizedShopifyProducts — single-call cursor pagination", () 
   test("omitting `after` preserves single-page, first-page behavior (sends after: null)", async () => {
     pagesByCursor.set(null, { nodes: [], hasNextPage: false, endCursor: null });
 
-    await fetchNormalizedShopifyProducts({ shopDomain: FAKE_SHOP_DOMAIN, brandId: FAKE_BRAND_ID });
+    await fetchNormalizedShopifyProducts({ shopDomain: FAKE_SHOP_DOMAIN, brandId: FAKE_BRAND_ID, connectionId: FAKE_CONNECTION_ID });
 
     assert.equal(lastFetchBody?.variables?.after, null);
   });
@@ -600,6 +627,7 @@ describe("fetchAllNormalizedShopifyProducts — multi-page loop", () => {
     const result = await fetchAllNormalizedShopifyProducts({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
       pageSize: 1,
     });
 
@@ -632,6 +660,7 @@ describe("fetchAllNormalizedShopifyProducts — multi-page loop", () => {
     const result = await fetchAllNormalizedShopifyProducts({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
       pageSize: 1,
       maxPages: 2,
     });
@@ -661,6 +690,7 @@ describe("fetchAllNormalizedShopifyProducts — multi-page loop", () => {
     const result = await fetchAllNormalizedShopifyProducts({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
     });
 
     assert.equal(result.ok, true);
@@ -685,6 +715,7 @@ describe("fetchAllNormalizedShopifyProducts — multi-page loop", () => {
     const result = await fetchAllNormalizedShopifyProducts({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
       pageSize: 1,
     });
 
@@ -718,6 +749,7 @@ describe("fetchAllNormalizedShopifyProducts — multi-page loop", () => {
     const result = await fetchAllNormalizedShopifyProducts({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
       pageSize: 1,
       maxPages: 5,
     });
@@ -770,6 +802,7 @@ describe("fetchAllNormalizedShopifyProducts — multi-page loop", () => {
     const result = await fetchAllNormalizedShopifyProducts({
       shopDomain: FAKE_SHOP_DOMAIN,
       brandId: FAKE_BRAND_ID,
+      connectionId: FAKE_CONNECTION_ID,
       pageSize: 1,
     });
 

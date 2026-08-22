@@ -694,11 +694,16 @@ export async function invalidateShopifyCredential(
 export async function healShopifyCredentialConnected(
   brandId: string,
   deps?: ShopifyCredentialStoreDeps,
+  connectionId?: string,
 ): Promise<{ outcome: "HEALED" | "NOT_ELIGIBLE" | "NO_CONNECTION" }> {
   const db = await getDb(deps);
 
   const connection = (await db.commerceConnection.findFirst({
-    where: { brandId, provider: CommerceProvider.SHOPIFY },
+    where: {
+      brandId,
+      provider: CommerceProvider.SHOPIFY,
+      ...(connectionId ? { id: connectionId } : {}),
+    },
     orderBy: CONNECTION_ORDER_BY,
     select: { id: true },
   })) as { id: string } | null;

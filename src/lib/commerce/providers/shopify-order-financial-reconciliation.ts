@@ -222,6 +222,7 @@ export type ReconcileShopifyOrderFinancialsDeps = {
   /** Defaults to the real `getValidAccessToken`. Injectable for tests. */
   getAccessToken?: (
     brandId: string,
+    options: { connectionId: string; expectedExternalAccountId: string },
   ) => Promise<{ ok: true; accessToken: string } | { ok: false }>;
 };
 
@@ -242,8 +243,9 @@ function readMoneyValue(value: unknown): string | null {
 
 async function defaultGetAccessToken(
   brandId: string,
+  options: { connectionId: string; expectedExternalAccountId: string },
 ): Promise<{ ok: true; accessToken: string } | { ok: false }> {
-  const result = await getValidAccessToken(brandId);
+  const result = await getValidAccessToken(brandId, options);
   return result.ok ? { ok: true, accessToken: result.accessToken } : { ok: false };
 }
 
@@ -252,7 +254,12 @@ async function defaultGetAccessToken(
  * the file header for the full outcome contract and settlement reasoning.
  */
 export async function reconcileShopifyOrderFinancials(
-  params: { brandId: string; shopDomain: string; externalOrderId: string },
+  params: {
+    brandId: string;
+    connectionId: string;
+    shopDomain: string;
+    externalOrderId: string;
+  },
   deps: ReconcileShopifyOrderFinancialsDeps = {},
 ): Promise<ReconcileShopifyOrderFinancialsResult> {
   const gid = buildShopifyOrderGid(params.externalOrderId);
@@ -261,7 +268,10 @@ export async function reconcileShopifyOrderFinancials(
   }
 
   const getAccessToken = deps.getAccessToken ?? defaultGetAccessToken;
-  const tokenResult = await getAccessToken(params.brandId);
+  const tokenResult = await getAccessToken(params.brandId, {
+    connectionId: params.connectionId,
+    expectedExternalAccountId: params.shopDomain,
+  });
   if (!tokenResult.ok) {
     return { outcome: "NOT_ELIGIBLE", reason: "NO_CREDENTIAL" };
   }

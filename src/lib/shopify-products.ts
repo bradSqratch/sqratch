@@ -363,12 +363,16 @@ export type ShopifyPublishedProductIdsResult =
 export async function fetchPublishedShopifyProductIds(options: {
   shopDomain: string;
   brandId: string;
+  connectionId: string;
   limit?: number;
   maxPages?: number;
   maxProducts?: number;
   signal?: AbortSignal;
 }): Promise<ShopifyPublishedProductIdsResult> {
-  const tokenResult = await getValidAccessToken(options.brandId);
+  const tokenResult = await getValidAccessToken(options.brandId, {
+    connectionId: options.connectionId,
+    expectedExternalAccountId: options.shopDomain,
+  });
   if (!tokenResult.ok) {
     return {
       ok: false,
@@ -463,6 +467,7 @@ export async function fetchPublishedShopifyProductIds(options: {
 export async function fetchNormalizedShopifyProducts(options: {
   shopDomain: string;
   brandId: string;
+  connectionId: string;
   limit?: number;
   currency?: string;
   /**
@@ -483,12 +488,11 @@ export async function fetchNormalizedShopifyProducts(options: {
    * missing members would otherwise be incorrectly treated as unpublished.
    */
   publishedProductIds?: ReadonlySet<string>;
-  /** @deprecated Pass brandId instead; encryptedToken is kept for callers
-   *  that have not yet been migrated. When brandId is provided the token
-   *  manager is used and this field is ignored. */
-  encryptedToken?: string;
 }) {
-  const tokenResult = await getValidAccessToken(options.brandId);
+  const tokenResult = await getValidAccessToken(options.brandId, {
+    connectionId: options.connectionId,
+    expectedExternalAccountId: options.shopDomain,
+  });
 
   if (!tokenResult.ok) {
     return {
@@ -576,6 +580,7 @@ export async function fetchNormalizedShopifyProducts(options: {
 export async function fetchAllNormalizedShopifyProducts(options: {
   shopDomain: string;
   brandId: string;
+  connectionId: string;
   /** Page size per request. Defaults to 100 (Shopify's practical per-page ceiling used elsewhere in this file). */
   pageSize?: number;
   currency?: string;
@@ -606,6 +611,7 @@ export async function fetchAllNormalizedShopifyProducts(options: {
     const page = await fetchNormalizedShopifyProducts({
       shopDomain: options.shopDomain,
       brandId: options.brandId,
+      connectionId: options.connectionId,
       limit: pageSize,
       currency: options.currency,
       after,

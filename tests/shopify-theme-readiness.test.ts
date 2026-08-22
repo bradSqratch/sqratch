@@ -7,6 +7,7 @@ import { SQRATCH_ATTRIBUTION_EMBED_BLOCK_HANDLE } from "../src/lib/commerce/shop
 
 const input = {
   brandId: "brand-1",
+  connectionId: "shopify-X",
   shopDomain: "store.myshopify.com",
   apiKey: "0123456789abcdef0123456789abcdef",
   grantedScopes: ["read_products", "read_themes"],
@@ -50,6 +51,116 @@ const SQRATCH_TYPE_UNDER_CUSTOM_APP = documentedBlockType(
 );
 
 describe("app-embed detection matches Shopify's documented settings_data.json format", () => {
+  test("X/Y theme checks request only the exact connection credential", async () => {
+    const tokenX = "shpat_theme_token_x_valid_123456";
+    const tokenY = "shpat_theme_token_y_valid_654321";
+    const credentials = new Map([
+      ["shopify-X", { externalAccountId: "x.myshopify.com", accessToken: tokenX }],
+      ["shopify-Y", { externalAccountId: "y.myshopify.com", accessToken: tokenY }],
+    ]);
+    const tokenCalls: unknown[] = [];
+    const networkCalls: Array<{ url: string; accessToken: string | null }> = [];
+    const exactToken: typeof import("../src/lib/shopify-token-manager")["getValidAccessToken"] =
+      async (brandId, options) => {
+      tokenCalls.push({ brandId, options });
+      const credential = options?.connectionId
+        ? credentials.get(options.connectionId)
+        : undefined;
+      if (
+        !credential ||
+        credential.externalAccountId !== options?.expectedExternalAccountId
+      ) {
+        return { ok: false as const, reason: "NOT_CONNECTED" as const };
+      }
+      return { ok: true as const, accessToken: credential.accessToken };
+    };
+    const fetchImpl: typeof fetch = async (url, init) => {
+      networkCalls.push({
+        url: String(url),
+        accessToken: new Headers(init?.headers).get("X-Shopify-Access-Token"),
+      });
+      return new Response(
+        String(url).includes("themes.json")
+          ? JSON.stringify({ themes: [{ id: 42, role: "main" }] })
+          : JSON.stringify({ asset: { value: JSON.stringify({ current: { blocks: {} } }) } }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
+    };
+
+    const xReadiness = await getShopifyThemeTrackingReadiness(
+      { ...input, connectionId: "shopify-X", shopDomain: "x.myshopify.com" },
+      {
+        getAccessToken: exactToken,
+        fetchImpl,
+      },
+    );
+    const yReadiness = await getShopifyThemeTrackingReadiness(
+      { ...input, connectionId: "shopify-Y", shopDomain: "y.myshopify.com" },
+      {
+        getAccessToken: exactToken,
+        fetchImpl,
+      },
+    );
+    const networkCallsBeforeMismatch = networkCalls.length;
+    const mismatchReadiness = await getShopifyThemeTrackingReadiness(
+      { ...input, connectionId: "shopify-X", shopDomain: "y.myshopify.com" },
+      { getAccessToken: exactToken, fetchImpl },
+    );
+
+    assert.equal(xReadiness.state, "NOT_CONFIGURED");
+    assert.equal(yReadiness.state, "NOT_CONFIGURED");
+    assert.equal(mismatchReadiness.state, "UNKNOWN");
+    assert.deepEqual(tokenCalls, [
+      {
+        brandId: "brand-1",
+        options: {
+          connectionId: "shopify-X",
+          expectedExternalAccountId: "x.myshopify.com",
+          skipScopeCheck: true,
+        },
+      },
+      {
+        brandId: "brand-1",
+        options: {
+          connectionId: "shopify-Y",
+          expectedExternalAccountId: "y.myshopify.com",
+          skipScopeCheck: true,
+        },
+      },
+      {
+        brandId: "brand-1",
+        options: {
+          connectionId: "shopify-X",
+          expectedExternalAccountId: "y.myshopify.com",
+          skipScopeCheck: true,
+        },
+      },
+    ]);
+    assert.deepEqual(networkCalls, [
+      {
+        url: "https://x.myshopify.com/admin/api/2026-04/themes.json?role=main",
+        accessToken: tokenX,
+      },
+      {
+        url: "https://x.myshopify.com/admin/api/2026-04/themes/42/assets.json?asset[key]=config/settings_data.json",
+        accessToken: tokenX,
+      },
+      {
+        url: "https://y.myshopify.com/admin/api/2026-04/themes.json?role=main",
+        accessToken: tokenY,
+      },
+      {
+        url: "https://y.myshopify.com/admin/api/2026-04/themes/42/assets.json?asset[key]=config/settings_data.json",
+        accessToken: tokenY,
+      },
+    ]);
+    assert.equal(
+      networkCalls.length,
+      networkCallsBeforeMismatch,
+      "an exact-connection/account mismatch must fail before Shopify I/O",
+    );
+  });
+
   test("a live ENABLED embed under the PRODUCTION app handle is detected as ENABLED", async () => {
     const readiness = await getShopifyThemeTrackingReadiness(input, {
       getAccessToken: token,

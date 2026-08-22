@@ -41,9 +41,5 @@ export type {
   ProductSyncPreparationRequest,
   ProductSyncPageResult,
   CreateDiscountInput,
-  CreateDiscountOptions,
   ProviderDiscount,
-  WebhookRequestInput,
-  CommerceWebhookEventType,
-  NormalizedWebhookEvent,
 } from "./types";

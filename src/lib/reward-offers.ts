@@ -394,11 +394,16 @@ export function serializeRewardOffer(
 export async function validateProductsBelongToConnectedStore(input: {
   shopDomain: string;
   brandId: string;
+  connectionId: string;
   products: Array<{ externalProductId: string }>;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
-  const result = await fetchNormalizedShopifyProducts({
+}, deps: {
+  fetchProducts?: typeof fetchNormalizedShopifyProducts;
+} = {}): Promise<{ ok: true } | { ok: false; error: string }> {
+  const fetchProducts = deps.fetchProducts ?? fetchNormalizedShopifyProducts;
+  const result = await fetchProducts({
     shopDomain: input.shopDomain,
     brandId: input.brandId,
+    connectionId: input.connectionId,
     limit: 250,
   });
 

@@ -28,8 +28,10 @@ import {
   assertTransition,
   CommerceRewardRedemptionStatus,
 } from "@/lib/reward-redemption-state";
-import { getValidAccessToken } from "@/lib/shopify-token-manager";
-import { isConnectionUsable, resolveCommerceConnectionForExternalAccount } from "@/lib/commerce/connection-service";
+import {
+  isConnectionUsable,
+  resolveCommerceConnectionForExternalAccount,
+} from "@/lib/commerce/connection-service";
 import { defaultCommerceAdapterRegistry } from "@/lib/commerce/default-registry";
 import { CommerceProviderApiError } from "@/lib/commerce/errors";
 
@@ -113,25 +115,26 @@ export type ReconciliationDeps = {
    *   4. If P2002: set status = REFUNDED without incrementing (idempotent).
    * Returns 'refunded' | 'already_refunded' | 'skipped'.
    */
-  refundRow(row: ReconciliationRow): Promise<"refunded" | "already_refunded" | "skipped">;
+  refundRow(
+    row: ReconciliationRow,
+  ): Promise<"refunded" | "already_refunded" | "skipped">;
 
   /** Resolves an exact provider/account connection before any credential use. */
   resolveConnection(row: ReconciliationRow): Promise<{ id: string } | null>;
-  /** Resolves the credential only for that exact connection. */
-  getToken(
-    brandId: string,
-    connectionId: string,
-    provider: CommerceProvider,
-  ): Promise<{ ok: true; accessToken: string } | { ok: false; reason: string }>;
-
   /** Looks up the discount by node ID (if known). */
   lookupByNodeId(opts: {
     provider: CommerceProvider;
     connectionId: string;
-    accessToken: string;
     discountNodeId: string;
   }): Promise<
-    | { ok: true; exists: true; status: string | null; endsAt: Date | null; asyncUsageCount: number; discountNodeId: string }
+    | {
+        ok: true;
+        exists: true;
+        status: string | null;
+        endsAt: Date | null;
+        asyncUsageCount: number;
+        discountNodeId: string;
+      }
     | { ok: true; exists: false }
     | { ok: false; status: number; error: string }
   >;
@@ -140,10 +143,16 @@ export type ReconciliationDeps = {
   lookupByCode(opts: {
     provider: CommerceProvider;
     connectionId: string;
-    accessToken: string;
     code: string;
   }): Promise<
-    | { ok: true; exists: true; discountNodeId: string; status: string | null; endsAt: Date | null; asyncUsageCount: number }
+    | {
+        ok: true;
+        exists: true;
+        discountNodeId: string;
+        status: string | null;
+        endsAt: Date | null;
+        asyncUsageCount: number;
+      }
     | { ok: true; exists: false }
     | { ok: false; status: number; error: string }
   >;
@@ -154,7 +163,13 @@ export type ReconciliationDeps = {
 // ---------------------------------------------------------------------------
 
 export type ReconciliationDecision =
-  | { action: "COMPLETE_ISSUED"; discountNodeId?: string; status: string | null; endsAt: Date | null; asyncUsageCount: number }
+  | {
+      action: "COMPLETE_ISSUED";
+      discountNodeId?: string;
+      status: string | null;
+      endsAt: Date | null;
+      asyncUsageCount: number;
+    }
   | { action: "REFUND"; reason: string }
   | { action: "RETAIN"; reason: string; markManualReview?: boolean };
 
@@ -164,7 +179,14 @@ export type ReconciliationDecision =
  */
 export function makeReconciliationDecision(
   lookupResult:
-    | { ok: true; exists: true; discountNodeId: string; status: string | null; endsAt: Date | null; asyncUsageCount: number }
+    | {
+        ok: true;
+        exists: true;
+        discountNodeId: string;
+        status: string | null;
+        endsAt: Date | null;
+        asyncUsageCount: number;
+      }
     | { ok: true; exists: false }
     | { ok: false; status: number; error: string },
   reconcileAttempts: number,
@@ -181,7 +203,10 @@ export function makeReconciliationDecision(
   }
 
   if (lookupResult.ok && !lookupResult.exists) {
-    return { action: "REFUND", reason: "reconciled: discount not found on Shopify" };
+    return {
+      action: "REFUND",
+      reason: "reconciled: discount not found on Shopify",
+    };
   }
 
   // Ambiguous (HTTP/network/timeout error)
@@ -242,30 +267,27 @@ export async function reconcileStuckRedemptionsWithDeps(
       continue;
     }
 
-    // --- Token ---
     const connection = await deps.resolveConnection(row);
     if (!connection) {
       await deps.updateReconcileMetadata(row.id, {
-        lastReconcileReason: "historical provider account is not currently connected",
+        lastReconcileReason:
+          "historical provider account is not currently connected",
         reconcileLockedUntil: null,
       });
       summary.retained++;
       continue;
     }
-    const tokenResult = await deps.getToken(row.brandId, connection.id, row.provider);
-    if (!tokenResult.ok) {
-      const reason = "shop disconnected / token unavailable";
-      await deps.updateReconcileMetadata(row.id, {
-        lastReconcileReason: reason,
-        reconcileLockedUntil: null,
-      });
-      summary.retained++;
-      continue;
-    }
-
-    // --- Shopify lookup ---
+    // The adapter resolves its own provider credential for this exact
+    // connection. Reconciliation never receives or transports a token.
     let lookupResult:
-      | { ok: true; exists: true; discountNodeId: string; status: string | null; endsAt: Date | null; asyncUsageCount: number }
+      | {
+          ok: true;
+          exists: true;
+          discountNodeId: string;
+          status: string | null;
+          endsAt: Date | null;
+          asyncUsageCount: number;
+        }
       | { ok: true; exists: false }
       | { ok: false; status: number; error: string };
 
@@ -274,7 +296,6 @@ export async function reconcileStuckRedemptionsWithDeps(
       const byNodeId = await deps.lookupByNodeId({
         provider: row.provider,
         connectionId: connection.id,
-        accessToken: tokenResult.accessToken,
         discountNodeId: row.externalDiscountId,
       });
       if (byNodeId.ok && byNodeId.exists) {
@@ -293,16 +314,22 @@ export async function reconcileStuckRedemptionsWithDeps(
       lookupResult = await deps.lookupByCode({
         provider: row.provider,
         connectionId: connection.id,
-        accessToken: tokenResult.accessToken,
         code: row.code,
       });
     }
 
     // --- Decision ---
-    const decision = makeReconciliationDecision(lookupResult, row.reconcileAttempts, maxAttempts);
+    const decision = makeReconciliationDecision(
+      lookupResult,
+      row.reconcileAttempts,
+      maxAttempts,
+    );
 
     if (decision.action === "COMPLETE_ISSUED") {
-      assertTransition(CommerceRewardRedemptionStatus.POINTS_DEBITED, CommerceRewardRedemptionStatus.ISSUED);
+      assertTransition(
+        CommerceRewardRedemptionStatus.POINTS_DEBITED,
+        CommerceRewardRedemptionStatus.ISSUED,
+      );
       await deps.completeToIssued(row.id, {
         externalDiscountId: decision.discountNodeId,
         externalDiscountStatus: decision.status,
@@ -315,7 +342,10 @@ export async function reconcileStuckRedemptionsWithDeps(
     }
 
     if (decision.action === "REFUND") {
-      assertTransition(CommerceRewardRedemptionStatus.POINTS_DEBITED, CommerceRewardRedemptionStatus.REFUNDED);
+      assertTransition(
+        CommerceRewardRedemptionStatus.POINTS_DEBITED,
+        CommerceRewardRedemptionStatus.REFUNDED,
+      );
       const outcome = await deps.refundRow(row);
       if (outcome === "refunded" || outcome === "already_refunded") {
         summary.refunded++;
@@ -451,7 +481,9 @@ function buildProductionDeps(): ReconciliationDeps {
             where: { id: row.id },
             select: { status: true },
           });
-          if (current?.status !== CommerceRewardRedemptionStatus.POINTS_DEBITED) {
+          if (
+            current?.status !== CommerceRewardRedemptionStatus.POINTS_DEBITED
+          ) {
             return "skipped" as const;
           }
 
@@ -485,7 +517,9 @@ function buildProductionDeps(): ReconciliationDeps {
             },
           });
 
-          return refund.applied ? ("refunded" as const) : ("already_refunded" as const);
+          return refund.applied
+            ? ("refunded" as const)
+            : ("already_refunded" as const);
         });
       } catch (err: unknown) {
         // P2002 = unique constraint violation on uq_point_tx_redemption_reason.
@@ -504,7 +538,8 @@ function buildProductionDeps(): ReconciliationDeps {
             data: {
               status: CommerceRewardRedemptionStatus.REFUNDED,
               errorMessage: "reconciled: discount not found (idempotent)",
-              lastReconcileReason: "reconciled: discount not found (idempotent refund)",
+              lastReconcileReason:
+                "reconciled: discount not found (idempotent refund)",
               reconcileLockedUntil: null,
             },
           });
@@ -525,25 +560,18 @@ function buildProductionDeps(): ReconciliationDeps {
         : null;
     },
 
-    async getToken(brandId, connectionId, provider) {
-      if (provider !== CommerceProvider.SHOPIFY) {
-        return { ok: false as const, reason: "provider credential unavailable" };
-      }
-      const result = await getValidAccessToken(brandId, { connectionId });
-      if (!result.ok) {
-        return { ok: false, reason: result.reason };
-      }
-      return { ok: true, accessToken: result.accessToken };
-    },
-
-    async lookupByNodeId({ provider, connectionId, accessToken, discountNodeId }) {
+    async lookupByNodeId({ provider, connectionId, discountNodeId }) {
       try {
         const adapter = defaultCommerceAdapterRegistry.get(provider);
         const result = await adapter.getDiscount?.(connectionId, {
           externalDiscountId: discountNodeId,
-        }, { preResolvedAccessToken: accessToken });
+        });
         if (!result) {
-          return { ok: false as const, status: 501, error: "discount lookup unsupported" };
+          return {
+            ok: false as const,
+            status: 501,
+            error: "discount lookup unsupported",
+          };
         }
         return result.exists
           ? {
@@ -558,22 +586,25 @@ function buildProductionDeps(): ReconciliationDeps {
       } catch (error) {
         return {
           ok: false as const,
-          status: error instanceof CommerceProviderApiError ? error.httpStatus ?? 502 : 502,
+          status:
+            error instanceof CommerceProviderApiError
+              ? (error.httpStatus ?? 502)
+              : 502,
           error: "provider discount lookup failed",
         };
       }
     },
 
-    async lookupByCode({ provider, connectionId, accessToken, code }) {
+    async lookupByCode({ provider, connectionId, code }) {
       try {
         const adapter = defaultCommerceAdapterRegistry.get(provider);
-        const result = await adapter.getDiscount?.(
-          connectionId,
-          { code },
-          { preResolvedAccessToken: accessToken },
-        );
+        const result = await adapter.getDiscount?.(connectionId, { code });
         if (!result) {
-          return { ok: false as const, status: 501, error: "discount lookup unsupported" };
+          return {
+            ok: false as const,
+            status: 501,
+            error: "discount lookup unsupported",
+          };
         }
         return result.exists
           ? {
@@ -588,7 +619,10 @@ function buildProductionDeps(): ReconciliationDeps {
       } catch (error) {
         return {
           ok: false as const,
-          status: error instanceof CommerceProviderApiError ? error.httpStatus ?? 502 : 502,
+          status:
+            error instanceof CommerceProviderApiError
+              ? (error.httpStatus ?? 502)
+              : 502,
           error: "provider discount lookup failed",
         };
       }
