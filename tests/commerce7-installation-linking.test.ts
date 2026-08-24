@@ -1021,6 +1021,32 @@ describe("provider isolation", () => {
     );
   });
 
+  // PHASE 16C1 superseded the original form of this test: Commerce7 now HAS a
+  // registered adapter. What Phase 16B actually needs to stay true is narrower
+  // and still holds — the installation/linking lifecycle grants Commerce7 no
+  // reward, discount, or public-destination behavior.
+  test("42. the registered Commerce7 adapter exposes catalog reads only — no rewards, no public destinations", async () => {
+    const { defaultCommerceAdapterRegistry } =
+      await import("../src/lib/commerce/default-registry");
+
+    const adapter = defaultCommerceAdapterRegistry.get("COMMERCE7" as never);
+    const capabilities = adapter.getCapabilities();
+
+    assert.equal(capabilities.products.publicDestinations, false);
+    for (const [name, value] of Object.entries(capabilities.rewards)) {
+      assert.equal(
+        value,
+        false,
+        `rewards.${name} must not be claimed by Commerce7`,
+      );
+    }
+
+    const surface = adapter as unknown as Record<string, unknown>;
+    for (const method of ["createDiscount", "getDiscount", "revokeDiscount"]) {
+      assert.equal(surface[method], undefined, `${method} must not exist`);
+    }
+  });
+
   test("markProviderInstallation* helpers are provider-scoped", async () => {
     await markProviderInstallationInstalled(prismaModule as never, {
       provider: "SHOPIFY" as never,

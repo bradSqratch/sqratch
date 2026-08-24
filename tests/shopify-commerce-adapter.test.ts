@@ -59,7 +59,6 @@ import {
 import {
   CommerceConnectionNotFoundError,
   CommerceProviderApiError,
-  UnsupportedProviderError,
 } from "../src/lib/commerce/errors";
 import type { CreateDiscountInput } from "../src/lib/commerce/types";
 import type { CommerceAdapter } from "../src/lib/commerce/adapter";
@@ -908,7 +907,7 @@ describe("ShopifyCommerceAdapter", () => {
     });
   });
 
-  test("13. the default registry resolves SHOPIFY to a ShopifyCommerceAdapter instance, and COMMERCE7 throws UnsupportedProviderError", () => {
+  test("13. the default registry resolves each provider to its own adapter, and Shopify capabilities are unchanged", () => {
     const shopifyAdapter = defaultCommerceAdapterRegistry.get(
       CommerceProvider.SHOPIFY,
     );
@@ -929,12 +928,28 @@ describe("ShopifyCommerceAdapter", () => {
       },
     });
 
-    assert.throws(
-      () => defaultCommerceAdapterRegistry.get(CommerceProvider.COMMERCE7),
-      (error: unknown) => {
-        assert.ok(error instanceof UnsupportedProviderError);
-        return true;
-      },
+    // PHASE 16C1: COMMERCE7 is now registered (read-only catalog). It must
+    // resolve to its OWN adapter — never to the Shopify one — and must not
+    // have acquired any Shopify capability by being registered alongside it.
+    const commerce7Adapter = defaultCommerceAdapterRegistry.get(
+      CommerceProvider.COMMERCE7,
     );
+    assert.equal(commerce7Adapter.provider, CommerceProvider.COMMERCE7);
+    assert.ok(!(commerce7Adapter instanceof ShopifyCommerceAdapter));
+    assert.notEqual(commerce7Adapter, shopifyAdapter);
+    assert.deepEqual(commerce7Adapter.getCapabilities(), {
+      products: { sync: true, publicDestinations: false },
+      rewards: {
+        create: false,
+        lookup: false,
+        usageLookup: false,
+        revoke: false,
+        fixedAmount: false,
+        percentage: false,
+        minimumSubtotal: false,
+        productSpecific: false,
+        singleUse: false,
+      },
+    });
   });
 });

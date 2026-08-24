@@ -14,7 +14,7 @@ import { UnsupportedCapabilityError, UnsupportedProviderError } from "@/lib/comm
 
 /**
  * `POST /api/brand/products/sync` — triggers a product sync for the brand's
- * active SHOPIFY commerce connection via `syncBrandCommerceProducts`
+ * active commerce connection for ONE provider via `syncBrandCommerceProducts`
  * (`src/lib/commerce/product-sync.ts`, which this route never reimplements
  * or bypasses).
  *
@@ -36,8 +36,25 @@ export type BrandProductsSyncDeps = {
   getContext(): Promise<BrandAdminContext | null>;
   /** Finds a `RUNNING` sync run for this brand started within the concurrency window, or `null`. */
   findRunningRun(brandId: string, notBefore: Date): Promise<RunningSyncRun | null>;
-  runSync(brandId: string): Promise<ProductSyncOutcome>;
+  runSync(brandId: string, provider: CommerceProvider): Promise<ProductSyncOutcome>;
 };
+
+/**
+ * PHASE 16C1: the provider is explicit rather than hard-coded, so a brand on
+ * Commerce7 syncs through the same neutral service. DEFAULTS to SHOPIFY, so
+ * every existing caller (the Products dashboard posts no body) keeps
+ * byte-identical behavior. Only the two known providers are accepted — an
+ * unrecognized value is rejected rather than silently treated as Shopify.
+ */
+function parseProvider(value: unknown): CommerceProvider | null {
+  if (value === undefined || value === null) {
+    return CommerceProvider.SHOPIFY;
+  }
+  if (value === CommerceProvider.SHOPIFY || value === CommerceProvider.COMMERCE7) {
+    return value;
+  }
+  return null;
+}
 
 async function defaultFindRunningRun(
   brandId: string,
@@ -50,8 +67,11 @@ async function defaultFindRunningRun(
   });
 }
 
-async function defaultRunSync(brandId: string): Promise<ProductSyncOutcome> {
-  return syncBrandCommerceProducts(brandId, CommerceProvider.SHOPIFY, {
+async function defaultRunSync(
+  brandId: string,
+  provider: CommerceProvider,
+): Promise<ProductSyncOutcome> {
+  return syncBrandCommerceProducts(brandId, provider, {
     triggeredBy: "brand-api",
   });
 }
@@ -62,12 +82,24 @@ const DEFAULT_DEPS: BrandProductsSyncDeps = {
   runSync: defaultRunSync,
 };
 
-export async function POST() {
-  return productsSyncImpl();
+export async function POST(request: Request) {
+  const body = await request.json().catch(() => null);
+  return productsSyncImpl({}, (body as { provider?: unknown } | null)?.provider);
 }
 
-export async function productsSyncImpl(overrides: Partial<BrandProductsSyncDeps> = {}) {
+export async function productsSyncImpl(
+  overrides: Partial<BrandProductsSyncDeps> = {},
+  requestedProvider?: unknown,
+) {
   const deps: BrandProductsSyncDeps = { ...DEFAULT_DEPS, ...overrides };
+
+  const provider = parseProvider(requestedProvider);
+  if (!provider) {
+    return NextResponse.json(
+      { error: "Unsupported commerce provider.", code: "UNSUPPORTED_PROVIDER" },
+      { status: 400 },
+    );
+  }
 
   try {
     const context = await deps.getContext();
@@ -99,7 +131,7 @@ export async function productsSyncImpl(overrides: Partial<BrandProductsSyncDeps>
 
     let outcome: ProductSyncOutcome;
     try {
-      outcome = await deps.runSync(brand.id);
+      outcome = await deps.runSync(brand.id, provider);
     } catch (error) {
       if (error instanceof UnsupportedProviderError || error instanceof UnsupportedCapabilityError) {
         return NextResponse.json({ error: error.message, code: error.code }, { status: 400 });
@@ -111,7 +143,7 @@ export async function productsSyncImpl(overrides: Partial<BrandProductsSyncDeps>
       const message =
         outcome.reason === "NO_CONNECTION"
           ? "No commerce connection is configured for this brand."
-          : "This brand's Shopify connection needs to be reconnected before syncing products.";
+          : "This brand's commerce connection needs to be reconnected before syncing products.";
       return NextResponse.json({ error: message, code: outcome.reason }, { status: 400 });
     }
 

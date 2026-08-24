@@ -55,7 +55,6 @@ import {
   type BatchCommerceConnectionServiceDeps,
   type CommerceConnectionRow,
 } from "../src/lib/commerce/connection-service";
-import { UnsupportedProviderError } from "../src/lib/commerce/errors";
 import { ShopifyCommerceAdapter } from "../src/lib/commerce/providers/shopify-commerce-adapter";
 import type { CommerceConnectionSummary } from "../src/lib/commerce/types";
 
@@ -283,10 +282,14 @@ describe("getCommerceCapabilities / getAdapterForConnection", () => {
     assert.equal(capabilities.rewards.create, true);
   });
 
-  test("8b. COMMERCE7 returns an all-false CommerceCapabilities, never throws", () => {
+  // PHASE 16C1: COMMERCE7 is now a REGISTERED adapter with real, read-only
+  // catalog support. Its capabilities are no longer all-false — but every
+  // reward capability, and public destinations, must still report false
+  // because none of that is implemented.
+  test("8b. COMMERCE7 reports catalog-only capabilities: products.sync true, everything else false", () => {
     const capabilities = getCommerceCapabilities(CommerceProvider.COMMERCE7);
     assert.deepEqual(capabilities, {
-      products: { sync: false, publicDestinations: false },
+      products: { sync: true, publicDestinations: false },
       rewards: {
         create: false,
         lookup: false,
@@ -323,7 +326,7 @@ describe("getCommerceCapabilities / getAdapterForConnection", () => {
     assert.equal(adapter.provider, CommerceProvider.SHOPIFY);
   });
 
-  test("8d. getAdapterForConnection throws UnsupportedProviderError for COMMERCE7, never a network call", () => {
+  test("8d. getAdapterForConnection resolves COMMERCE7 to the Commerce7 adapter, never a network call", () => {
     const summary: CommerceConnectionSummary = {
       id: "conn-1",
       brandId: "brand-1",
@@ -340,7 +343,14 @@ describe("getCommerceCapabilities / getAdapterForConnection", () => {
       currencyCode: null,
     };
 
-    assert.throws(() => getAdapterForConnection(summary), UnsupportedProviderError);
+    const adapter = getAdapterForConnection(summary);
+    assert.equal(adapter.provider, CommerceProvider.COMMERCE7);
+    // Resolution is pure construction — no connection load, no provider call.
+    assert.equal(typeof adapter.syncProducts, "function");
+    // Reward methods are not merely disabled by capabilities; they do not exist.
+    const surface = adapter as unknown as Record<string, unknown>;
+    assert.equal(surface.createDiscount, undefined);
+    assert.equal(surface.revokeDiscount, undefined);
   });
 });
 
