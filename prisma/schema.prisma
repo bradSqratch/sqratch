@@ -529,6 +529,62 @@ model CommerceConnectionSecret {
   connection CommerceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
 }
 
+/// PHASE 16B — provider-neutral record of a provider-side app installation that
+/// may not yet be linked to a SQRATCH Brand.
+///
+/// A Commerce7 (or any future provider) merchant installs the app on their own
+/// tenant BEFORE SQRATCH knows which Brand owns it. This model represents
+/// exactly that pre-link state and nothing more.
+///
+/// DELIBERATELY HAS NO `brandId`. Brand ownership authority lives ONLY on
+/// `CommerceConnection` — duplicating it here would recreate the two-sources-
+/// of-truth class of bug the canonical commerce migration removed. Linking is
+/// performed by an authenticated SQRATCH Brand Admin (see
+/// `CommerceConnectionLinkIntent`), never inferred from installer identity.
+///
+/// Holds NO credential material. Commerce7's App Secret is app-global and
+/// comes from backend environment configuration, never from the database.
+model CommerceProviderInstallation {
+  id                String                     @id @default(cuid())
+  provider          CommerceProvider
+  externalAccountId String
+  status            CommerceInstallationStatus @default(INSTALLED)
+  installedAt       DateTime                   @default(now())
+  uninstalledAt     DateTime?
+  createdAt         DateTime                   @default(now())
+  updatedAt         DateTime                   @updatedAt
+
+  linkIntents CommerceConnectionLinkIntent[]
+
+  @@unique([provider, externalAccountId])
+  @@index([provider, status])
+}
+
+/// PHASE 16B — a short-lived, single-use intent to link an installed provider
+/// account to a SQRATCH Brand.
+///
+/// The raw token is cryptographically random (256 bits), base64url-encoded, and
+/// NEVER persisted — only its SHA-256 digest is stored, so a database read can
+/// never yield a usable token. Consumption is an atomic compare-and-swap on
+/// (tokenHash, consumedAt IS NULL, expiresAt > now), so exactly one concurrent
+/// confirmation can win.
+///
+/// Stores NO provider credential and NO provider account token.
+model CommerceConnectionLinkIntent {
+  id             String    @id @default(cuid())
+  installationId String
+  /// SHA-256 hex digest of the raw token. The raw token is never stored.
+  tokenHash      String    @unique
+  expiresAt      DateTime
+  consumedAt     DateTime?
+  createdAt      DateTime  @default(now())
+
+  installation CommerceProviderInstallation @relation(fields: [installationId], references: [id], onDelete: Cascade)
+
+  @@index([installationId, consumedAt])
+  @@index([expiresAt])
+}
+
 model ConnectedCommerceProduct {
   id                        String                     @id @default(cuid())
   connectionId              String
@@ -1407,6 +1463,11 @@ enum ExperienceVideoSource {
   UPLOAD
 
   @@map("CampaignVideoSource")
+}
+
+enum CommerceInstallationStatus {
+  INSTALLED
+  UNINSTALLED
 }
 
 enum CommerceConnectionEventType {
