@@ -80,9 +80,16 @@ type SyncRunRow = {
   finishedAt: string | null;
 };
 
-type BrandShopifyStatus = {
-  shopifyShopDomain: string | null;
-  shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED";
+type BrandCommerceStatus = {
+  connection: {
+    connectionId: string;
+    provider: string;
+    status: string;
+    displayName: string;
+    externalAccountId: string;
+    isConnected: boolean;
+    lastProductSyncAt: string | null;
+  } | null;
 } | null;
 
 type AvailabilityFilter = "available" | "unavailable" | "all";
@@ -133,7 +140,7 @@ function formatDateTime(value: string | null): string {
 const PAGE_LIMIT = 50;
 
 export function BrandProductsClient() {
-  const [brandStatus, setBrandStatus] = useState<BrandShopifyStatus>(null);
+  const [brandStatus, setBrandStatus] = useState<BrandCommerceStatus>(null);
   const [connections, setConnections] = useState<SyncRunRow[]>([]);
   const [connectionId, setConnectionId] = useState<string>("");
 
@@ -249,7 +256,12 @@ export function BrandProductsClient() {
 
   const loadBrandStatus = useCallback(async () => {
     try {
-      const status = await fetchJson<BrandShopifyStatus>("/api/brand/shopify/status");
+      // PHASE 16C2: provider-neutral — never assumes Shopify. Whichever
+      // provider the brand is actually connected to (or none) comes back
+      // with the exact same field names.
+      const status = await fetchJson<BrandCommerceStatus>(
+        "/api/brand/commerce/status",
+      );
       setBrandStatus(status);
     } catch {
       // Non-fatal — the connected-store summary just stays blank.
@@ -270,9 +282,14 @@ export function BrandProductsClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, availability, connectionId]);
 
-  const provider = connections[0]?.provider || "SHOPIFY";
-  const providerLabel = provider === "SHOPIFY" ? "Shopify" : provider;
-  const isConnected = brandStatus?.shopifyConnectionStatus === "CONNECTED";
+  const activeConnection = brandStatus?.connection ?? null;
+  const providerLabel =
+    activeConnection?.provider === "SHOPIFY"
+      ? "Shopify"
+      : activeConnection?.provider === "COMMERCE7"
+        ? "Commerce7"
+        : activeConnection?.provider || "";
+  const isConnected = activeConnection?.isConnected === true;
 
   const lastSyncLabel = useMemo(() => {
     const run = meta?.lastSyncRun;
@@ -285,13 +302,35 @@ export function BrandProductsClient() {
   }, [meta]);
 
   async function runSync() {
+    // PHASE 16C2: the button is already disabled when this is true, but the
+    // guard is repeated here so no POST can ever be emitted for a
+    // non-CONNECTED (or absent) connection — belt and braces, not merely a
+    // UI affordance.
+    if (!isConnected) {
+      return;
+    }
+
     setSyncing(true);
     setSyncNotice(null);
 
     try {
+      // PHASE 16C2: send the EXACT connection identity the brand is actually
+      // using — never rely on the backend's "missing provider => Shopify"
+      // default, which exists only for legacy callers. When no connection is
+      // known yet, the body is empty and the backend reports NO_CONNECTION,
+      // same as before this phase.
       const response = await fetch("/api/brand/products/sync", {
         method: "POST",
         credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(
+          activeConnection
+            ? {
+                provider: activeConnection.provider,
+                connectionId: activeConnection.connectionId,
+              }
+            : {},
+        ),
       });
       const json = await response.json().catch(() => null);
 
@@ -475,7 +514,12 @@ export function BrandProductsClient() {
         <Button
           type="button"
           onClick={() => void runSync()}
-          disabled={syncing}
+          disabled={syncing || !isConnected}
+          title={
+            !isConnected
+              ? "Connect a commerce store, or reconnect the one that needs it, before syncing products."
+              : undefined
+          }
           className="rounded-full border border-white bg-white text-black hover:bg-white/90"
         >
           <RefreshCw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
@@ -489,20 +533,24 @@ export function BrandProductsClient() {
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
               <p className="text-sm text-white/55">Connected store</p>
               <p className="mt-2 text-sm text-white/80">
-                {brandStatus?.shopifyShopDomain || "Not connected"}
+                {activeConnection?.externalAccountId || "Not connected"}
               </p>
-              <span className="mt-2 inline-flex rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs text-white/70">
-                {providerLabel}
-              </span>
+              {activeConnection ? (
+                <span className="mt-2 inline-flex rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs text-white/70">
+                  {providerLabel}
+                </span>
+              ) : null}
             </div>
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
               <p className="text-sm text-white/55">Connection status</p>
               <p className="mt-2 text-2xl font-semibold">
                 {isConnected
                   ? "Connected"
-                  : brandStatus?.shopifyConnectionStatus === "UNINSTALLED"
+                  : activeConnection?.status === "UNINSTALLED"
                     ? "Uninstalled"
-                    : "Not connected"}
+                    : activeConnection?.status === "REQUIRES_RECONNECT"
+                      ? "Needs reconnect"
+                      : "Not connected"}
               </p>
             </div>
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
@@ -517,7 +565,7 @@ export function BrandProductsClient() {
             </div>
           ) : null}
           <p className="text-xs leading-5 text-white/50">
-            Changes made in Shopify, including changing a product between Active and Draft,
+            Changes made in {providerLabel || "your store"}, including changing a product between Active and Draft,
             appear in SQRATCH after the next successful product sync.
           </p>
         </div>
@@ -577,8 +625,8 @@ export function BrandProductsClient() {
           <p className="text-sm text-white/65">Loading products...</p>
         ) : !isConnected && products.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-6 text-sm text-white/55">
-            No commerce store is connected yet. Connect Shopify from the Shopify page,
-            then come back here to sync products.
+            No commerce store is connected yet. Connect a store from the Store
+            page, then come back here to sync products.
           </div>
         ) : products.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-6 text-sm text-white/55">

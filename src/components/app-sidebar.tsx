@@ -159,8 +159,13 @@ export function AppSidebar() {
       roles: ["BRAND_ADMIN"],
     },
     {
-      title: "Shopify",
-      url: "/dashboard/brand/shopify",
+      // PHASE 16C2: provider-neutral entry point — a Commerce7 brand should
+      // never see a "Shopify" nav item. The dedicated Shopify OAuth/install
+      // page (/dashboard/brand/shopify) is unchanged and still reachable
+      // (linked from this page for a Shopify-connected brand); this label
+      // now points at the neutral status page instead.
+      title: "Store",
+      url: "/dashboard/brand/commerce",
       icon: Store,
       roles: ["BRAND_ADMIN"],
     },

@@ -31,7 +31,10 @@ process.env.APP_ENCRYPTION_KEY ||= "test-encryption-key-for-commerce-product-syn
  *  14. A brand with no canonical connection returns an explicit SKIPPED
  *      outcome, not a silent success, and writes nothing.
  *  15. providerMetadata contains ONLY whitelisted fields.
- *  16. COMMERCE7 is controlled: UnsupportedProviderError, no network call.
+ *  16. An unregistered adapter is controlled: UnsupportedProviderError, no network call
+ *      (PHASE 16C1 note: COMMERCE7 IS registered in the real default registry —
+ *      this test injects a FAKE registry deliberately missing it, to prove the
+ *      generic "no adapter" guard, not real Commerce7 support).
  *
  * Bonus coverage: the capability guard (an adapter that reports
  * products.sync:false) also throws before any run row is created.
@@ -864,13 +867,19 @@ describe("syncBrandCommerceProducts", () => {
     assert.equal(/token|secret|encrypted|password|authorization/i.test(serialized), false);
   });
 
-  test("16. COMMERCE7 is controlled: throws UnsupportedProviderError, no network call", async () => {
+  test("16. an adapter missing from the (injected, fake) registry is controlled: throws UnsupportedProviderError, no network call", async () => {
+    // NOTE: this uses COMMERCE7 only as a convenient enum value. The real
+    // default registry HAS registered a Commerce7 adapter since Phase 16C1
+    // (see tests/commerce7-product-catalog.test.ts) — this test's `makeDeps`
+    // fake registry is what deliberately omits it, to exercise the generic
+    // "provider has no adapter" guard in isolation from any real provider.
     const store = new FakeStore();
     store.connections.set(
       "brand-c7",
       makeSummary({ id: "conn-c7", brandId: "brand-c7", provider: CommerceProvider.COMMERCE7 }),
     );
-    // Deliberately do NOT register a CommerceProvider.COMMERCE7 adapter.
+    // Deliberately do NOT register a CommerceProvider.COMMERCE7 adapter in
+    // THIS FAKE store (unrelated to, and does not affect, the real registry).
 
     await assert.rejects(
       () => syncBrandCommerceProducts("brand-c7", CommerceProvider.COMMERCE7, {}, makeDeps(store)),

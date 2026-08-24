@@ -8,9 +8,16 @@ import {
 import prisma from "@/lib/prisma";
 import {
   syncBrandCommerceProducts,
+  syncCommerceConnectionById,
   type ProductSyncOutcome,
 } from "@/lib/commerce/product-sync";
-import { UnsupportedCapabilityError, UnsupportedProviderError } from "@/lib/commerce/errors";
+import {
+  CommerceConnectionMismatchError,
+  CommerceConnectionNotFoundError,
+  CommerceConnectionNotReadyError,
+  UnsupportedCapabilityError,
+  UnsupportedProviderError,
+} from "@/lib/commerce/errors";
 
 /**
  * `POST /api/brand/products/sync` — triggers a product sync for the brand's
@@ -36,7 +43,18 @@ export type BrandProductsSyncDeps = {
   getContext(): Promise<BrandAdminContext | null>;
   /** Finds a `RUNNING` sync run for this brand started within the concurrency window, or `null`. */
   findRunningRun(brandId: string, notBefore: Date): Promise<RunningSyncRun | null>;
-  runSync(brandId: string, provider: CommerceProvider): Promise<ProductSyncOutcome>;
+  /**
+   * `connectionId` is OPTIONAL and, when present, is an EXACT
+   * `CommerceConnection.id` the caller selected — never merely "sync
+   * whichever connection this provider prefers". Ownership/provider
+   * verification happens inside `syncCommerceConnectionById`, before any
+   * provider I/O; this dep only chooses which entry point to call.
+   */
+  runSync(
+    brandId: string,
+    provider: CommerceProvider,
+    connectionId: string | null,
+  ): Promise<ProductSyncOutcome>;
 };
 
 /**
@@ -70,7 +88,14 @@ async function defaultFindRunningRun(
 async function defaultRunSync(
   brandId: string,
   provider: CommerceProvider,
+  connectionId: string | null,
 ): Promise<ProductSyncOutcome> {
+  if (connectionId) {
+    return syncCommerceConnectionById(
+      { brandId, provider, connectionId },
+      { triggeredBy: "brand-api" },
+    );
+  }
   return syncBrandCommerceProducts(brandId, provider, {
     triggeredBy: "brand-api",
   });
@@ -84,12 +109,14 @@ const DEFAULT_DEPS: BrandProductsSyncDeps = {
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
-  return productsSyncImpl({}, (body as { provider?: unknown } | null)?.provider);
+  const parsed = body as { provider?: unknown; connectionId?: unknown } | null;
+  return productsSyncImpl({}, parsed?.provider, parsed?.connectionId);
 }
 
 export async function productsSyncImpl(
   overrides: Partial<BrandProductsSyncDeps> = {},
   requestedProvider?: unknown,
+  requestedConnectionId?: unknown,
 ) {
   const deps: BrandProductsSyncDeps = { ...DEFAULT_DEPS, ...overrides };
 
@@ -100,6 +127,14 @@ export async function productsSyncImpl(
       { status: 400 },
     );
   }
+
+  // Only a non-empty string is ever treated as an exact-connection request —
+  // anything else silently falls back to the provider-preferred lookup,
+  // exactly today's behavior.
+  const connectionId =
+    typeof requestedConnectionId === "string" && requestedConnectionId.trim()
+      ? requestedConnectionId.trim()
+      : null;
 
   try {
     const context = await deps.getContext();
@@ -131,10 +166,39 @@ export async function productsSyncImpl(
 
     let outcome: ProductSyncOutcome;
     try {
-      outcome = await deps.runSync(brand.id, provider);
+      outcome = await deps.runSync(brand.id, provider, connectionId);
     } catch (error) {
       if (error instanceof UnsupportedProviderError || error instanceof UnsupportedCapabilityError) {
         return NextResponse.json({ error: error.message, code: error.code }, { status: 400 });
+      }
+      // A caller-selected connectionId that does not exist, does not belong
+      // to this brand, or belongs to a different provider — verified INSIDE
+      // syncCommerceConnectionById before any provider I/O. Not-found and
+      // wrong-brand are deliberately indistinguishable to the caller.
+      if (error instanceof CommerceConnectionNotFoundError) {
+        return NextResponse.json(
+          { error: "That commerce connection was not found.", code: error.code },
+          { status: 404 },
+        );
+      }
+      if (error instanceof CommerceConnectionMismatchError) {
+        return NextResponse.json(
+          { error: "That connection does not belong to the requested provider.", code: error.code },
+          { status: 400 },
+        );
+      }
+      // The connection exists, belongs to this brand, and matches the
+      // requested provider — but its lifecycle status is not CONNECTED
+      // (UNINSTALLED / DISCONNECTED / REQUIRES_RECONNECT). Distinct from the
+      // 404/400 cases above: this is a real, owned, correctly-identified
+      // connection, so a controlled 409 is safe to return — never the same
+      // 404 used for a foreign/nonexistent id, and never a silent fallback
+      // to a different connection.
+      if (error instanceof CommerceConnectionNotReadyError) {
+        return NextResponse.json(
+          { error: "Commerce connection is not connected.", code: error.code },
+          { status: 409 },
+        );
       }
       throw error;
     }

@@ -131,12 +131,19 @@
 
 import { CommerceProvider, type Prisma } from "@prisma/client";
 import type { CommerceAdapter } from "./adapter";
-import { CommerceProviderApiError, UnsupportedCapabilityError } from "./errors";
+import {
+  CommerceConnectionMismatchError,
+  CommerceConnectionNotFoundError,
+  CommerceConnectionNotReadyError,
+  CommerceProviderApiError,
+  UnsupportedCapabilityError,
+} from "./errors";
 import { getCurrencyExponent, providerPriceStringToMinorUnits } from "./money";
 import type { CommerceConnectionSummary, CommerceProduct } from "./types";
 import {
   getActiveCommerceConnection,
   getAdapterForConnection,
+  getCommerceConnectionById,
 } from "./connection-service";
 
 // ---------------------------------------------------------------------------
@@ -165,7 +172,15 @@ function zeroStats(): ProductSyncStats {
 
 export type ProductSyncSkippedReason =
   /** The brand has no commerce connection at all for this provider. */
-  "NO_CONNECTION";
+  | "NO_CONNECTION"
+  /**
+   * A connection exists for this provider but its `status` is not
+   * `CONNECTED` (e.g. `UNINSTALLED`, `DISCONNECTED`, `REQUIRES_RECONNECT`).
+   * PHASE 16C2: the canonical product-sync lifecycle invariant — provider
+   * I/O never runs against a non-CONNECTED connection. Never silently swaps
+   * in a different connection or auto-reconnects.
+   */
+  | "NOT_CONNECTED";
 
 export type ProductSyncOutcome =
   | {
@@ -271,7 +286,7 @@ export type ProductSyncDeps = {
     brandId: string,
     provider: CommerceProvider,
   ): Promise<CommerceConnectionSummary | null>;
-  /** Resolves the adapter for `provider`. Throws `UnsupportedProviderError` for an unregistered provider (COMMERCE7 today). Never itself makes a network call. */
+  /** Resolves the adapter for `provider`. Throws `UnsupportedProviderError` for an unregistered provider (no live example today: SHOPIFY and COMMERCE7 are both registered as of Phase 16C1). Never itself makes a network call. */
   getAdapter(summary: CommerceConnectionSummary): CommerceAdapter;
   /** Loads every existing `ConnectedCommerceProduct` row for this connection, keyed for change detection. */
   findExistingProducts(
@@ -1079,6 +1094,17 @@ export async function syncBrandCommerceProducts(
     return { status: "SKIPPED", reason: "NO_CONNECTION", brandId, provider };
   }
 
+  // PHASE 16C2: the canonical product-sync lifecycle invariant applies here
+  // too, not only to the exact-connection-id entry point below. The
+  // "preferred" resolver does not itself filter by status, so this boundary
+  // must — never silently select a different connection, never auto-heal.
+  // A non-CONNECTED preferred row is reported as an ordinary SKIPPED outcome
+  // (not a thrown error) so the legacy no-body caller keeps its existing
+  // SKIPPED-outcome contract unchanged.
+  if (summary.status !== "CONNECTED") {
+    return { status: "SKIPPED", reason: "NOT_CONNECTED", brandId, provider };
+  }
+
   const connectionId = summary.id;
 
   // Resolved BEFORE creating a run row and before any network call — throws
@@ -1099,6 +1125,99 @@ export async function syncBrandCommerceProducts(
     options,
     resolvedDeps,
   );
+}
+
+export type SyncCommerceConnectionByIdInput = {
+  brandId: string;
+  provider: CommerceProvider;
+  connectionId: string;
+};
+
+/**
+ * PHASE 16C2: syncs an EXACT `CommerceConnection.id` rather than the brand's
+ * "preferred" connection for a provider. Exists so a provider-neutral UI that
+ * lets a Brand Admin pick a specific connection (relevant once a brand can
+ * hold more than one connection for the same provider) can never have that
+ * selection silently resolve to a different account.
+ *
+ * Verifies, BEFORE any adapter/provider I/O and BEFORE any
+ * `CommerceProductSyncRun` row is created:
+ *   1. the connection exists;
+ *   2. it belongs to `input.brandId` — a mismatch throws the SAME
+ *      `CommerceConnectionNotFoundError` as a genuinely missing id, so a
+ *      caller can never learn that a connectionId exists under a different
+ *      brand;
+ *   3. its provider matches `input.provider` exactly — a mismatch throws
+ *      `CommerceConnectionMismatchError` (a caller/UI bug, safe to name);
+ *   4. its `status` is `CONNECTED` — a mismatch throws
+ *      `CommerceConnectionNotReadyError`. This is the canonical product-sync
+ *      lifecycle invariant: `UNINSTALLED` / `DISCONNECTED` /
+ *      `REQUIRES_RECONNECT` must never reach account-specific provider
+ *      transport, even though the connection is genuinely this brand's own
+ *      and genuinely the right provider. Never silently falls back to a
+ *      different connection or auto-reconnects — the caller must fix the
+ *      connection first.
+ *   5. the resolved adapter actually supports `products.sync`.
+ *
+ * Reuses `runProductSync` — the exact same persistence engine
+ * `syncBrandCommerceProducts` uses — so there is no second, divergent catalog
+ * write path.
+ */
+export async function syncCommerceConnectionById(
+  input: SyncCommerceConnectionByIdInput,
+  options: SyncBrandCommerceProductsOptions = {},
+  deps: Partial<ProductSyncDeps> & {
+    getConnectionById?(connectionId: string): Promise<CommerceConnectionSummary | null>;
+  } = {},
+): Promise<ProductSyncOutcome> {
+  const { getConnectionById = defaultGetConnectionById, ...persistenceOverrides } = deps;
+  const resolvedDeps = resolveDeps(persistenceOverrides);
+
+  const summary = await getConnectionById(input.connectionId);
+
+  if (!summary || summary.brandId !== input.brandId) {
+    throw new CommerceConnectionNotFoundError(input.connectionId);
+  }
+
+  if (summary.provider !== input.provider) {
+    throw new CommerceConnectionMismatchError(
+      input.connectionId,
+      input.provider,
+      summary.provider,
+    );
+  }
+
+  if (summary.status !== "CONNECTED") {
+    throw new CommerceConnectionNotReadyError(
+      summary.id,
+      summary.provider,
+      summary.status,
+    );
+  }
+
+  // Same ordering guarantee as syncBrandCommerceProducts: resolved BEFORE any
+  // run row or network call.
+  const adapter = resolvedDeps.getAdapter(summary);
+  const capabilities = adapter.getCapabilities();
+  if (!capabilities.products.sync) {
+    throw new UnsupportedCapabilityError(input.provider, "products.sync");
+  }
+
+  return runProductSync(
+    input.brandId,
+    input.provider,
+    summary.id,
+    summary.currencyCode,
+    adapter,
+    options,
+    resolvedDeps,
+  );
+}
+
+async function defaultGetConnectionById(
+  connectionId: string,
+): Promise<CommerceConnectionSummary | null> {
+  return getCommerceConnectionById(connectionId);
 }
 
 async function runProductSync(

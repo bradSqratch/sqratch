@@ -39,10 +39,11 @@
  * construction (see `./types.ts`). Connection usability is therefore a
  * status/account predicate only; the provider adapter enforces its own
  * credential policy before transport. Shopify requires a connection-bound
- * `CommerceConnectionSecret`; a future Commerce7 adapter will use an
+ * `CommerceConnectionSecret`; the Commerce7 adapter (registered since
+ * Phase 16C1 — `./providers/commerce7-commerce-adapter.ts`) uses an
  * app-global backend credential together with the exact tenant connection
- * identity, without requiring a connection secret merely because status is
- * `CONNECTED`.
+ * identity instead, without requiring a connection secret merely because
+ * status is `CONNECTED`.
  *
  * For Shopify, the following write-path invariant remains relevant:
  *   - `CommerceConnection.status` is set to `CONNECTED` ONLY in the same
@@ -65,14 +66,17 @@
  * `getCommerceCapabilities` NEVER THROWS (a deliberate, consistent choice)
  * ---------------------------------------------------------------------------
  * `getCommerceCapabilities` returns an all-`false` `CommerceCapabilities`
- * for an unsupported provider (COMMERCE7 today) rather than throwing —
- * chosen because "what can this provider do" is a query callers should be
- * able to branch on freely (e.g. to grey out a button) without a
- * provider-support try/catch at every call site. `getAdapterForConnection`
- * makes the OPPOSITE choice deliberately: it throws `UnsupportedProviderError`
- * for an unsupported provider, because "give me the adapter to actually call
- * a method on" has no sane non-throwing fallback value — returning `null`
- * would just move the crash to the next line (`adapter.syncProducts(...)`)
+ * for an unregistered provider (every `CommerceProvider` enum value has a
+ * registered adapter today — SHOPIFY and, since Phase 16C1, COMMERCE7 — so
+ * this path only fires for a future provider value added to the enum before
+ * an adapter for it exists) rather than throwing — chosen because "what can
+ * this provider do" is a query callers should be able to branch on freely
+ * (e.g. to grey out a button) without a provider-support try/catch at every
+ * call site. `getAdapterForConnection` makes the OPPOSITE choice
+ * deliberately: it throws `UnsupportedProviderError` for an unregistered
+ * provider, because "give me the adapter to actually call a method on" has
+ * no sane non-throwing fallback value — returning `null` would just move the
+ * crash to the next line (`adapter.syncProducts(...)`)
  * with a worse error. Both behaviors are achieved via the registry's own
  * `tryGet` (non-throwing) / `get` (throwing) methods respectively — this
  * file does not re-implement that choice, only picks which one each function
@@ -222,6 +226,51 @@ export async function getActiveCommerceConnection(
   deps: Partial<CommerceConnectionServiceDeps> = {},
 ): Promise<CommerceConnectionSummary | null> {
   return resolvePreferredConnection(brandId, provider, resolveServiceDeps(deps));
+}
+
+/**
+ * PHASE 16C2: resolves the ONE commerce connection a provider-neutral surface
+ * (e.g. a "Commerce" dashboard card) should show for a brand, without the
+ * caller having to already know which provider that brand uses.
+ *
+ * Queries every `CommerceProvider` value in parallel via the SAME
+ * `getActiveCommerceConnection` this file already exposes per-provider — this
+ * is a thin fan-out/pick, never a second connection-resolution policy. A
+ * brand is expected to have at most one REAL active provider at a time today,
+ * but the schema does not forbid rows under two providers, so ties are broken
+ * deterministically:
+ *   1. `CONNECTED` beats any other status.
+ *   2. Among equally-(dis)connected candidates, the most recently installed
+ *      wins (a null `installedAt` sorts last).
+ * Returns `null` only when the brand has no connection under ANY provider.
+ */
+export async function getActiveCommerceConnectionAnyProvider(
+  brandId: string,
+  deps: Partial<CommerceConnectionServiceDeps> = {},
+): Promise<CommerceConnectionSummary | null> {
+  const resolvedDeps = resolveServiceDeps(deps);
+  const results = await Promise.all(
+    Object.values(CommerceProvider).map((provider) =>
+      resolvePreferredConnection(brandId, provider, resolvedDeps),
+    ),
+  );
+  const candidates = results.filter(
+    (summary): summary is CommerceConnectionSummary => summary !== null,
+  );
+
+  if (candidates.length === 0) {
+    return null;
+  }
+
+  return [...candidates].sort((a, b) => {
+    if (a.status !== b.status) {
+      if (a.status === "CONNECTED") return -1;
+      if (b.status === "CONNECTED") return 1;
+    }
+    const aInstalledAt = a.installedAt?.getTime() ?? Number.NEGATIVE_INFINITY;
+    const bInstalledAt = b.installedAt?.getTime() ?? Number.NEGATIVE_INFINITY;
+    return bInstalledAt - aInstalledAt;
+  })[0];
 }
 
 /**
@@ -465,9 +514,14 @@ export async function getPrimaryCommerceConnection(
 
 /**
  * Reports which optional operations `provider` supports. Never throws — an
- * unsupported provider (COMMERCE7 today) reports every capability `false`
- * rather than raising `UnsupportedProviderError`. See the file header for
- * why this is the opposite choice from `getAdapterForConnection`.
+ * UNREGISTERED provider (no live example today: both SHOPIFY and COMMERCE7
+ * have registered adapters as of Phase 16C1) reports every capability
+ * `false` rather than raising `UnsupportedProviderError`. A REGISTERED
+ * provider's own `getCapabilities()` answers instead — for COMMERCE7 that is
+ * `products.sync: true`, `products.publicDestinations: false`, and every
+ * reward capability `false` (see `./providers/commerce7-commerce-adapter.ts`),
+ * NOT all-false. See the file header for why the unregistered-provider
+ * fallback is the opposite choice from `getAdapterForConnection`.
  */
 export function getCommerceCapabilities(
   provider: CommerceProvider,
@@ -498,9 +552,10 @@ export function getCommerceCapabilities(
 
 /**
  * Returns the `CommerceAdapter` for `summary.provider`. Throws
- * `UnsupportedProviderError` for a provider with no registered adapter
- * (COMMERCE7 today) — see the file header for why this, unlike
- * `getCommerceCapabilities`, throws rather than returning a fallback value.
+ * `UnsupportedProviderError` for a provider with no registered adapter (no
+ * live example today: SHOPIFY and COMMERCE7 are both registered as of Phase
+ * 16C1) — see the file header for why this, unlike `getCommerceCapabilities`,
+ * throws rather than returning a fallback value.
  * Never makes a network call: the registry only constructs (and memoizes)
  * the adapter object, which itself only stores its dependencies at
  * construction time.

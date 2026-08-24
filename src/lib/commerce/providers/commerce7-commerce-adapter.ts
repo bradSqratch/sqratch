@@ -8,6 +8,14 @@
  *      connection id can never resolve here — it fails before any provider I/O.
  *   2. The tenant is taken EXCLUSIVELY from `connection.externalAccountId`.
  *      No caller, and no browser, can supply or influence it.
+ *   3. PHASE 16C2: `status === CONNECTED` is required before any
+ *      account-specific Commerce7 API call (`syncProducts`,
+ *      `fetchProductPage`), via `requireConnected` below — an `UNINSTALLED`
+ *      / `DISCONNECTED` / `REQUIRES_RECONNECT` connection throws
+ *      `CommerceConnectionNotReadyError` before the app-global credential is
+ *      even read. This is DEFENSE IN DEPTH: `../product-sync.ts` already
+ *      enforces the same invariant before ever calling into this adapter;
+ *      this check exists for a caller that reaches the adapter directly.
  *
  * CREDENTIALS: app-global, from backend environment configuration only. This
  * adapter never reads or writes `CommerceConnectionSecret`.
@@ -24,7 +32,10 @@ import {
   type Prisma,
 } from "@prisma/client";
 import type { CommerceAdapter } from "../adapter";
-import { CommerceConnectionNotFoundError } from "../errors";
+import {
+  CommerceConnectionNotFoundError,
+  CommerceConnectionNotReadyError,
+} from "../errors";
 import type {
   CommerceCapabilities,
   CommerceConnectionResult,
@@ -198,6 +209,21 @@ export class Commerce7CommerceAdapter implements CommerceAdapter {
   }
 
   /**
+   * PHASE 16C2: DEFENSE IN DEPTH. `syncCommerceConnectionById` /
+   * `syncBrandCommerceProducts` (`../product-sync.ts`) already enforce
+   * `status === CONNECTED` before ever calling into this adapter — this is
+   * the second, independent check for a caller that reaches the adapter
+   * directly. Throws BEFORE any Commerce7 API call (`fetchAllCommerce7Products`
+   * / `fetchCommerce7ProductPage`), i.e. before the app-global credential is
+   * even read.
+   */
+  private requireConnected(row: Commerce7CommerceConnectionRow): void {
+    if (row.status !== "CONNECTED") {
+      throw new CommerceConnectionNotReadyError(row.id, row.provider, row.status);
+    }
+  }
+
+  /**
    * Whole-catalog fetch-and-normalize. Products are not persisted here; the
    * neutral sync service owns reconciliation.
    */
@@ -207,6 +233,7 @@ export class Commerce7CommerceAdapter implements CommerceAdapter {
     if (!row) {
       throw new CommerceConnectionNotFoundError(connectionId);
     }
+    this.requireConnected(row);
 
     const products = await fetchAllCommerce7Products(
       { tenant: row.externalAccountId },
@@ -245,6 +272,7 @@ export class Commerce7CommerceAdapter implements CommerceAdapter {
     if (!row) {
       throw new CommerceConnectionNotFoundError(connectionId);
     }
+    this.requireConnected(row);
 
     const page = await fetchCommerce7ProductPage(
       {

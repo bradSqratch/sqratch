@@ -34,11 +34,17 @@ const COMMERCE7_API_BASE = "https://api.commerce7.com/v1";
 export const COMMERCE7_START_CURSOR = "start";
 
 /**
- * Commerce7 monetary fields are documented as integer CENTS, i.e. a minor-unit
- * exponent of 2. The canonical catalog stores integer minor units, so this
- * module converts cents to the decimal STRING form that the neutral persistence
- * layer parses (`priceRangeRaw`), using integer/string arithmetic only — never
- * a float divide-then-multiply round trip.
+ * PHASE 16C2: Commerce7's official API documentation
+ * (developer.commerce7.com/docs/commerce7-apis) states plainly that "Currency
+ * amounts are stored in Commerce7 in cents" — this is now DOCUMENTED provider
+ * API semantics, not an inference from sandbox behavior. Exponent 2 is
+ * therefore fixed, not derived from a currency code (see the currency-source
+ * note in `computeCommerce7Availability`'s neighboring exports below for why
+ * no currency CODE has an equally authoritative source yet). The canonical
+ * catalog stores integer minor units, so this module converts cents to the
+ * decimal STRING form the neutral persistence layer parses (`priceRangeRaw`),
+ * using integer/string arithmetic only — never a float divide-then-multiply
+ * round trip.
  */
 const COMMERCE7_MINOR_UNIT_EXPONENT = 2;
 
@@ -116,6 +122,18 @@ export function minorUnitsToDecimalString(
  *
  * Anything unrecognized fails closed to `false` on both — this never invents an
  * access rule Commerce7 does not document.
+ *
+ * PHASE 16C2: `isPublicEligible` is a NECESSARY component of true public
+ * eligibility, deliberately NOT sufficient by itself and NOT yet wired to
+ * `hasProviderStorefrontPublication` below (which stays hard-coded `false`
+ * regardless of this value). Full public eligibility additionally requires a
+ * verified `CommerceConnection.storefrontUrl` and provider destination
+ * provenance — neither exists yet (see the fail-closed note on
+ * `normalizeCommerce7Product`) — so a Club/Group/Allocation product is
+ * already unreachable as a public destination today for the SAME reason
+ * every Commerce7 product is: no product can produce a public URL yet. This
+ * field exists so that guard is ready to compose in the moment a real
+ * storefront source is found, without re-deriving the access-tier logic then.
  */
 export type Commerce7Availability = {
   isCatalogAvailable: boolean;
@@ -205,16 +223,32 @@ function readDate(value: unknown): Date | null {
 /**
  * Normalizes one Commerce7 product into the canonical neutral contract.
  *
- * PUBLIC DESTINATION — FAIL CLOSED (Phase 16C1). Commerce7's product object
- * documents `slug` but NO canonical storefront URL, and a tenant's storefront
- * host is not derivable from the tenant id (the sandbox's
- * `<tenant>.v2-template.commerce7.com` is a template host, not a platform
- * invariant). This function therefore NEVER synthesizes a product URL:
- * `productUrl` is the empty string (canonical absence for a NOT NULL column),
- * `hasProviderStorefrontPublication` and `hasProviderSuppliedStorefrontUrl` are
- * both `false`, so `ConnectedCommerceProduct.hasPublicStorefrontUrl` persists
- * `false` and no public click destination can ever be produced. Phase 16C2
- * resolves a verified storefront base URL separately.
+ * PUBLIC DESTINATION — FAIL CLOSED (Phase 16C1, RECONFIRMED Phase 16C2).
+ * Commerce7's product object documents `slug` but NO canonical storefront
+ * URL, and a tenant's storefront host is not derivable from the tenant id
+ * (the sandbox's `<tenant>.v2-template.commerce7.com` is a template host,
+ * not a platform invariant).
+ *
+ * Phase 16C2 specifically researched whether Commerce7 exposes an
+ * authoritative tenant storefront/website base URL through the REST API
+ * (developer.commerce7.com's full documentation index, its API Overview
+ * page, and the merchant help center) or through the already-integrated
+ * `GET /v1/account/user` extension-auth endpoint. Commerce7's own merchant
+ * help documentation CONFIRMS the storefront host is a per-tenant,
+ * admin-editable "Website URL" setting — proving the sandbox's
+ * `v2-template.commerce7.com` host is exactly the non-guaranteed default the
+ * original fail-closed decision assumed, not a platform-wide formula — but
+ * no documented REST endpoint exposes that setting's current value. No such
+ * source was found, so per this phase's explicit instruction not to guess,
+ * NOTHING CHANGED here: this function still never synthesizes a product URL.
+ * `productUrl` is the empty string (canonical absence for a NOT NULL
+ * column), `hasProviderStorefrontPublication` and
+ * `hasProviderSuppliedStorefrontUrl` are both `false`, so
+ * `ConnectedCommerceProduct.hasPublicStorefrontUrl` persists `false` and no
+ * public click destination can ever be produced. A future phase with a
+ * genuine authoritative source (e.g. a documented Tenant/Settings endpoint,
+ * or a value provable through the Admin Extension context) can resolve this
+ * without touching the fail-closed default.
  *
  * Returns `null` for a product with no usable external id — the neutral sync
  * service rejects the whole page in that case rather than persisting a partial.
@@ -238,9 +272,19 @@ export function normalizeCommerce7Product(raw: unknown): CommerceProduct | null 
   // a min/max range. A product with no variant carrying a usable integer price
   // yields a null range rather than a fabricated zero — the domain contract is
   // explicit that a missing price must never be invented.
+  //
+  // PHASE 16C2: `Number.isSafeInteger`, not merely `Number.isInteger` — a
+  // value like `2 ** 53` is technically an "integer" by `Number.isInteger`
+  // but is no longer guaranteed to round-trip exactly through IEEE-754
+  // double precision, so it must never be trusted as an exact cents amount.
+  // Negative/malformed amounts are NOT special-cased here: they pass through
+  // to `minorUnitsToDecimalString` -> `providerPriceStringToMinorUnits` in
+  // the canonical layer, whose `NEGATIVE`/`OUT_OF_RANGE` results already null
+  // that bound rather than persist a corrupt price — see this file's
+  // `minorUnitsToDecimalString` and `../product-sync.ts`'s `computePrice`.
   const variantPrices = variants
     .map((variant) => variant.price)
-    .filter((price): price is number => Number.isInteger(price));
+    .filter((price): price is number => Number.isSafeInteger(price));
 
   const minCents = variantPrices.length ? Math.min(...variantPrices) : null;
   const maxCents = variantPrices.length ? Math.max(...variantPrices) : null;
@@ -278,8 +322,25 @@ export function normalizeCommerce7Product(raw: unknown): CommerceProduct | null 
     imageUrl: images[0] ?? null,
     images,
     priceText: null,
-    // Commerce7's product payload documents no currency, and the canonical
-    // layer resolves currency from the CONNECTION, never from the product.
+    // PHASE 16C2: Commerce7's product payload documents no currency field,
+    // and the canonical layer resolves currency from the CONNECTION
+    // (`CommerceConnectionSummary.currencyCode`), never from the product —
+    // this stays empty exactly as it did in 16C1.
+    //
+    // A genuine attempt was made this phase to find an AUTHORITATIVE
+    // Commerce7 source for a tenant's currency (developer.commerce7.com's
+    // full doc index, its API Overview page, and the merchant-facing
+    // General Settings help article, which confirms currency IS a real
+    // per-tenant setting — "based on the country you used to signup...
+    // can be edited" — but is a merchant-admin-UI setting, not one exposed
+    // by any documented REST endpoint or by the already-integrated
+    // `GET /v1/account/user`). No such endpoint was found, so per this
+    // phase's explicit instruction not to guess, no currency resolution was
+    // added: `CommerceConnection.providerMetadata.currencyCode` stays
+    // unset for Commerce7 until a real source is found, and every Commerce7
+    // product's persisted price fields correctly stay null (see
+    // `computePrice` in `../product-sync.ts`) rather than assuming a
+    // currency.
     currency: "",
     priceRange: {
       min: minCents === null ? null : minCents / 10 ** COMMERCE7_MINOR_UNIT_EXPONENT,

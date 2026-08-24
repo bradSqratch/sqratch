@@ -407,7 +407,12 @@ describe("POST /api/brand/products/sync", () => {
     assert.equal(body.data.runId, "run-1");
   });
 
-  test("COMMERCE7 (or any unregistered provider) stays controlled: UnsupportedProviderError maps to 400, no network call implied", async () => {
+  // NOTE: uses CommerceProvider.COMMERCE7 only as a convenient enum value to
+  // construct the error. Commerce7 itself IS registered in the real default
+  // registry since Phase 16C1 (see tests/commerce7-product-catalog.test.ts) —
+  // this route-level test is only proving the generic error-to-HTTP mapping
+  // for whatever `runSync` throws, independent of any specific provider.
+  test("an UnsupportedProviderError from runSync maps to 400, no network call implied", async () => {
     const res = await productsSyncImpl({
       getContext: async () => makeContext(BRAND),
       findRunningRun: async () => null,

@@ -330,6 +330,48 @@ describe("Commerce7 products enter the canonical catalog", () => {
     assert.equal(row.priceMinorUnitExponent, 2);
   });
 
+  test("H. a negative Commerce7 variant price with a KNOWN connection currency never persists a negative (or any) invalid amount", async () => {
+    // Same production path as test 16 above (real syncBrandCommerceProducts
+    // -> real Commerce7CommerceAdapter -> real fetchCommerce7ProductPage ->
+    // real normalizeCommerce7Product -> real computeProductFields ->
+    // decideProductWrite -> a CREATE write), the ONLY difference being the
+    // variant price is negative. Currency comes from `summary.currencyCode`
+    // — the exact same `CommerceConnectionSummary.currencyCode` field
+    // production reads (sourced from `CommerceConnection.providerMetadata`
+    // via `extractCurrencyCodeFromProviderMetadata` — see
+    // connection-resolver.ts), not a test-only authority.
+    const catalog = new Catalog();
+    const deps = makeDeps(
+      catalog,
+      makeFetch([
+        { body: { products: [c7Product({ variants: [{ id: "v1", price: -500 }] })] } },
+      ]),
+      summary({ currencyCode: "CAD" }),
+    );
+
+    const outcome = await syncBrandCommerceProducts(BRAND_ID, CommerceProvider.COMMERCE7, {}, deps);
+    assert.equal(outcome.status, "SUCCEEDED", "an invalid price does not fail the whole sync");
+
+    const row = catalog.forConnection(CONNECTION_ID)[0];
+    assert.ok(row, "the product row is still created — invalid money nulls only the money fields");
+
+    // THE invariant this test exists to prove: no negative (or otherwise
+    // invalid) integer is ever persisted. This assertion is exact, not a
+    // range/truthy check, so it fails immediately if production regressed to
+    // persisting -500 (or any other negative value) here.
+    assert.equal(row.priceMinMinor, null);
+    assert.equal(row.priceMaxMinor, null);
+
+    // PRODUCTION'S ACTUAL CONTRACT (computePrice in product-sync.ts): when
+    // the brand currency IS known, currencyCode and priceMinorUnitExponent
+    // are resolved from THAT currency independently of whether any
+    // individual price string parsed — only the specific invalid amount(s)
+    // are nulled. This is the existing behavior; this test asserts it
+    // exactly rather than the alternative (nulling the whole tuple).
+    assert.equal(row.currencyCode, "CAD");
+    assert.equal(row.priceMinorUnitExponent, 2);
+  });
+
   test("an unknown connection currency yields null prices, never a guessed currency", async () => {
     const catalog = new Catalog();
     const deps = makeDeps(

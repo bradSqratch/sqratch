@@ -1,12 +1,11 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
-import { CommerceProvider } from "@prisma/client";
 
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
 import { normalizeUserRole } from "@/lib/admin-auth";
 import { resolveActiveBrandContext } from "@/lib/brand-context";
-import { getActiveCommerceConnection, isConnectionUsable } from "@/lib/commerce/connection-service";
+import { getActiveCommerceConnectionAnyProvider, isConnectionUsable } from "@/lib/commerce/connection-service";
 
 type RecentActivityItem = {
   label: string;
@@ -121,15 +120,19 @@ async function getBrandAdminCards(userId: string) {
     }),
   ]);
 
-  // PHASE 14B.4B: the dashboard's Shopify connection/sync-health signal now
+  // PHASE 14B.4B: the dashboard's commerce connection/sync-health signal
   // comes from the CANONICAL connection summary — genuinely canonical-first
   // as of this phase (see connection-service.ts) — never Brand.shopify*
   // directly. `isConnectionUsable` reproduces the exact three-part
   // connected/token/status gate this route used to hand-roll.
-  const commerceSummary = await getActiveCommerceConnection(brand.id, CommerceProvider.SHOPIFY);
-  const hasShopifyConnection = commerceSummary !== null && isConnectionUsable(commerceSummary);
+  //
+  // PHASE 16C2: resolved across EVERY provider, not hard-coded to Shopify —
+  // a Commerce7-connected brand must see its real sync status here too,
+  // never a false "DISCONNECTED" merely because it isn't on Shopify.
+  const commerceSummary = await getActiveCommerceConnectionAnyProvider(brand.id);
+  const hasCommerceConnection = commerceSummary !== null && isConnectionUsable(commerceSummary);
   const syncWindow = getStartOfLastDays(7);
-  const productSyncStatus = !hasShopifyConnection
+  const productSyncStatus = !hasCommerceConnection
     ? "DISCONNECTED"
     : commerceSummary?.lastProductSyncAt &&
         commerceSummary.lastProductSyncAt >= syncWindow

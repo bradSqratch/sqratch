@@ -23,14 +23,18 @@ test("member learning activity remains AnalyticsEvent-backed", () => {
 });
 
 // ---------------------------------------------------------------------------
-// G. PHASE 14B.4B — dashboard's Shopify connection/sync-health signal is
-// canonical-first (CommerceConnection via getActiveCommerceConnection),
-// never a direct Brand.shopify* gate.
+// G. PHASE 14B.4B — dashboard's commerce connection/sync-health signal is
+// canonical-first (CommerceConnection), never a direct Brand.shopify* gate.
+// PHASE 16C2 — that resolution is now PROVIDER-NEUTRAL
+// (getActiveCommerceConnectionAnyProvider), not hard-coded to Shopify, so a
+// Commerce7-connected brand's dashboard card reflects its real status too.
 // ---------------------------------------------------------------------------
 
-test("G. brand admin cards derive hasShopifyConnection from the canonical connection summary, not Brand.shopify* directly", () => {
-  assert.match(source, /getActiveCommerceConnection\(/);
+test("G. brand admin cards derive their connection signal from the canonical, provider-neutral connection summary, not Brand.shopify* directly", () => {
+  assert.match(source, /getActiveCommerceConnectionAnyProvider\(/);
   assert.match(source, /isConnectionUsable\(/);
+  // Must not be hard-coded back to a single provider.
+  assert.doesNotMatch(source, /getActiveCommerceConnection\(\s*brand\.id,\s*CommerceProvider\.SHOPIFY/);
   // The old three-part Brand.shopify* gate must be gone.
   assert.doesNotMatch(
     source,

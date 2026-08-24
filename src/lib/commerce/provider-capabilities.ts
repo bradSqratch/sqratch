@@ -49,15 +49,22 @@ import { CommerceProvider } from "@prisma/client";
  *               when the synchronized row records that Shopify supplied the
  *               exact URL; a SQRATCH-synthesized fallback stays host-pinned.
  *
- *   COMMERCE7 — false, deliberately FAIL-CLOSED. Commerce7's storefront-URL
- *               provenance has not been verified against its API (no
- *               Commerce7 adapter exists yet, and this codebase does not
- *               guess provider contracts). Until that adapter lands and its
- *               URL provenance is confirmed, Commerce7 destinations stay
- *               host-pinned. This is a conservative default that can only
- *               reject a legitimate redirect, never permit an illegitimate
- *               one — and flipping it is a one-line, reviewable change once
- *               the evidence exists.
+ *   COMMERCE7 — false, deliberately FAIL-CLOSED. A Commerce7 adapter has
+ *               existed since Phase 16C1 (read-only product catalog), but its
+ *               storefront-URL provenance is still unverified: Commerce7's
+ *               product object documents no canonical storefront URL, and
+ *               Phase 16C2 specifically researched (and failed to find) an
+ *               authoritative API source for a tenant's public site URL —
+ *               see the fail-closed note on `normalizeCommerce7Product` in
+ *               `./providers/commerce7-products.ts`. Every Commerce7
+ *               `CommerceProduct.productUrl` is therefore the empty string
+ *               today, so this predicate is not yet exercised for Commerce7
+ *               at all; it stays `false` so the day a product URL IS
+ *               populated, it is host-pinned by default rather than silently
+ *               trusted. This is a conservative default that can only reject
+ *               a legitimate redirect, never permit an illegitimate one —
+ *               and flipping it is a one-line, reviewable change once a
+ *               verified storefront source exists.
  */
 export function providerTrustsSuppliedStorefrontUrl(
   provider: CommerceProvider,

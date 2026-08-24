@@ -18,7 +18,7 @@
  * by the caller.
  */
 
-import type { CommerceProvider } from "@prisma/client";
+import type { CommerceConnectionStatus, CommerceProvider } from "@prisma/client";
 
 /**
  * Base class for every error raised by the commerce abstraction layer.
@@ -85,6 +85,77 @@ export class CommerceConnectionNotFoundError extends CommerceError {
     this.name = "CommerceConnectionNotFoundError";
     this.connectionId = connectionId;
     Object.setPrototypeOf(this, CommerceConnectionNotFoundError.prototype);
+  }
+}
+
+/**
+ * Thrown when a caller asks to operate on a specific `CommerceConnection.id`
+ * for a `CommerceProvider` other than the one that connection actually
+ * belongs to (e.g. requesting a Shopify sync against a Commerce7
+ * connection id). Deliberately distinct from `CommerceConnectionNotFoundError`
+ * — this connection DOES exist and DOES belong to the caller's brand; only the
+ * provider identity is wrong, which is a caller/UI bug rather than an
+ * authorization failure, so it is safe to name the mismatch explicitly.
+ */
+export class CommerceConnectionMismatchError extends CommerceError {
+  readonly connectionId: string;
+  readonly requestedProvider: CommerceProvider;
+  readonly actualProvider: CommerceProvider;
+
+  constructor(
+    connectionId: string,
+    requestedProvider: CommerceProvider,
+    actualProvider: CommerceProvider,
+  ) {
+    super(
+      `Commerce connection "${connectionId}" belongs to provider "${actualProvider}", not the requested "${requestedProvider}".`,
+      "COMMERCE_CONNECTION_PROVIDER_MISMATCH",
+    );
+    this.name = "CommerceConnectionMismatchError";
+    this.connectionId = connectionId;
+    this.requestedProvider = requestedProvider;
+    this.actualProvider = actualProvider;
+    Object.setPrototypeOf(this, CommerceConnectionMismatchError.prototype);
+  }
+}
+
+/**
+ * Thrown when a caller asks to perform account-specific provider I/O
+ * (product sync, etc.) against a `CommerceConnection` that EXISTS, and
+ * belongs to the caller's own brand, and matches the requested provider —
+ * but whose `status` is not `CONNECTED`.
+ *
+ * The canonical lifecycle contract: `UNINSTALLED` / `DISCONNECTED` /
+ * `REQUIRES_RECONNECT` must never reach account-specific provider transport.
+ * This is that boundary's typed failure. Deliberately distinct from
+ * `CommerceConnectionNotFoundError` (existence/ownership) and
+ * `CommerceConnectionMismatchError` (provider identity) — this connection is
+ * genuinely the caller's own, correctly identified connection; only its
+ * lifecycle state disqualifies it, which is safe to state plainly (it is
+ * never used to answer "does connection X exist" for an unowned id).
+ *
+ * Carries only `connectionId`, `provider`, and the actual `status` — never a
+ * credential, token, or other connection metadata.
+ */
+export class CommerceConnectionNotReadyError extends CommerceError {
+  readonly connectionId: string;
+  readonly provider: CommerceProvider;
+  readonly status: CommerceConnectionStatus;
+
+  constructor(
+    connectionId: string,
+    provider: CommerceProvider,
+    status: CommerceConnectionStatus,
+  ) {
+    super(
+      `Commerce connection "${connectionId}" is not connected (status: "${status}").`,
+      "COMMERCE_CONNECTION_NOT_READY",
+    );
+    this.name = "CommerceConnectionNotReadyError";
+    this.connectionId = connectionId;
+    this.provider = provider;
+    this.status = status;
+    Object.setPrototypeOf(this, CommerceConnectionNotReadyError.prototype);
   }
 }
 

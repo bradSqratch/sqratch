@@ -353,4 +353,30 @@ describe("static source assertions", () => {
     assert.match(clientSource, /Shows this product in the public SQRATCH campaign storefront/i);
     assert.match(clientSource, /eligible for future campaign assignment/i);
   });
+
+  // -------------------------------------------------------------------------
+  // PHASE 16C2 FINAL LIFECYCLE REPAIR — 7. Sync action gated on CONNECTED.
+  // -------------------------------------------------------------------------
+
+  test("7. the Sync button is disabled whenever the active connection is not CONNECTED", () => {
+    assert.match(clientSource, /disabled=\{syncing \|\| !isConnected\}/);
+  });
+
+  test("7. runSync() itself refuses to run (not merely the button) when not connected — belt and braces", () => {
+    const fnStart = clientSource.indexOf("async function runSync()");
+    assert.ok(fnStart > -1, "runSync function not found");
+    const fnBody = clientSource.slice(fnStart, fnStart + 400);
+    assert.match(fnBody, /if \(!isConnected\)\s*\{\s*return;/);
+  });
+
+  test("7. the sync request body carries the EXACT active provider + connectionId, never a bare empty-body-implies-Shopify call when connected", () => {
+    const fnStart = clientSource.indexOf("async function runSync()");
+    const fnBody = clientSource.slice(fnStart, fnStart + 1200);
+    assert.match(fnBody, /provider: activeConnection\.provider/);
+    assert.match(fnBody, /connectionId: activeConnection\.connectionId/);
+  });
+
+  test("never labels a non-connected state as \"Shopify disconnected\" — copy is provider-neutral", () => {
+    assert.doesNotMatch(clientSource, /Shopify disconnected/i);
+  });
 });
