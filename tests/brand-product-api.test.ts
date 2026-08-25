@@ -318,7 +318,6 @@ describe("POST /api/brand/products/sync", () => {
   test("SKIPPED (NO_CONNECTION) is a 400 error, never a 200", async () => {
     const res = await productsSyncImpl({
       getContext: async () => makeContext(BRAND),
-      findRunningRun: async () => null,
       runSync: async (brandId) => ({
         status: "SKIPPED",
         reason: "NO_CONNECTION",
@@ -331,18 +330,20 @@ describe("POST /api/brand/products/sync", () => {
     assert.equal(body.code, "NO_CONNECTION");
   });
 
-
-  test("a RUNNING run younger than the concurrency window yields 409, and runSync is never called", async () => {
+  // PHASE 19 REPAIR (P1-2): the RUNNING-run guard is no longer a separate
+  // route-level pre-check — it is now the ATOMIC claim inside `runSync`
+  // itself (see `product-sync.ts`'s `claimProductSyncRun`), surfaced here
+  // as an `ALREADY_RUNNING` outcome.
+  test("an ALREADY_RUNNING outcome from runSync yields 409 with the running run's id", async () => {
     const res = await productsSyncImpl({
       getContext: async () => makeContext(BRAND),
-      findRunningRun: async () => ({
-        id: "run-in-progress",
+      runSync: async (brandId) => ({
+        status: "ALREADY_RUNNING",
+        brandId,
+        provider: CommerceProvider.SHOPIFY,
         connectionId: "conn-1",
-        startedAt: new Date(),
+        runningRun: { id: "run-in-progress", startedAt: new Date() },
       }),
-      runSync: async () => {
-        throw new Error("runSync must not be called while a run is in progress");
-      },
     });
     assert.equal(res.status, 409);
     const body = await res.json();
@@ -353,7 +354,6 @@ describe("POST /api/brand/products/sync", () => {
   test("FAILED outcome surfaces as a non-2xx error with the sanitized failureSummary, not success", async () => {
     const res = await productsSyncImpl({
       getContext: async () => makeContext(BRAND),
-      findRunningRun: async () => null,
       runSync: async (brandId) => ({
         status: "FAILED",
         brandId,
@@ -398,7 +398,6 @@ describe("POST /api/brand/products/sync", () => {
     };
     const res = await productsSyncImpl({
       getContext: async () => makeContext(BRAND),
-      findRunningRun: async () => null,
       runSync: async () => outcome,
     });
     assert.equal(res.status, 200);
@@ -415,7 +414,6 @@ describe("POST /api/brand/products/sync", () => {
   test("an UnsupportedProviderError from runSync maps to 400, no network call implied", async () => {
     const res = await productsSyncImpl({
       getContext: async () => makeContext(BRAND),
-      findRunningRun: async () => null,
       runSync: async () => {
         throw new UnsupportedProviderError(CommerceProvider.COMMERCE7);
       },

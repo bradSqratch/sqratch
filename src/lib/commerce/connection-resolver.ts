@@ -149,6 +149,22 @@ export function extractCurrencyCodeFromProviderMetadata(
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
+/**
+ * PHASE 16 BIG ROUND / SUBPHASE 1 — mirrors
+ * `extractCurrencyCodeFromProviderMetadata` for the merchant-confirmed
+ * Commerce7 product-page route written by
+ * `configureCommerce7Storefront` (`./providers/commerce7-storefront-configuration.ts`).
+ */
+export function extractProductRouteFromProviderMetadata(
+  raw: Prisma.JsonValue | null | undefined,
+): string | null {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const value = (raw as Record<string, unknown>).productRoute;
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
 /** Maps a real `CommerceConnection` row to the neutral summary shape. */
 export function mapCommerceConnectionToSummary(
   row: CommerceConnectionRow,
@@ -167,6 +183,7 @@ export function mapCommerceConnectionToSummary(
     uninstalledAt: row.uninstalledAt,
     lastProductSyncAt: row.lastProductSyncAt,
     currencyCode: extractCurrencyCodeFromProviderMetadata(row.providerMetadata),
+    productRoute: extractProductRouteFromProviderMetadata(row.providerMetadata),
   };
 }
 

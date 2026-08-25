@@ -49,22 +49,30 @@ import { CommerceProvider } from "@prisma/client";
  *               when the synchronized row records that Shopify supplied the
  *               exact URL; a SQRATCH-synthesized fallback stays host-pinned.
  *
- *   COMMERCE7 — false, deliberately FAIL-CLOSED. A Commerce7 adapter has
- *               existed since Phase 16C1 (read-only product catalog), but its
- *               storefront-URL provenance is still unverified: Commerce7's
- *               product object documents no canonical storefront URL, and
- *               Phase 16C2 specifically researched (and failed to find) an
- *               authoritative API source for a tenant's public site URL —
- *               see the fail-closed note on `normalizeCommerce7Product` in
- *               `./providers/commerce7-products.ts`. Every Commerce7
- *               `CommerceProduct.productUrl` is therefore the empty string
- *               today, so this predicate is not yet exercised for Commerce7
- *               at all; it stays `false` so the day a product URL IS
- *               populated, it is host-pinned by default rather than silently
- *               trusted. This is a conservative default that can only reject
- *               a legitimate redirect, never permit an illegitimate one —
- *               and flipping it is a one-line, reviewable change once a
- *               verified storefront source exists.
+ *   COMMERCE7 — false, deliberately FAIL-CLOSED, and now ACTIVELY LOAD-BEARING.
+ *               Commerce7's product object documents no canonical storefront
+ *               URL, and Phase 16C2 specifically researched (and failed to
+ *               find) an authoritative API source for a tenant's public site
+ *               URL. PHASE 16 BIG ROUND / SUBPHASE 2 resolved that a
+ *               different way: a Brand Admin explicitly configures the
+ *               storefront URL and product route
+ *               (`configureCommerce7Storefront`), and
+ *               `computeCommerce7ProductDestination`
+ *               (`./providers/commerce7-products.ts`) CONSTRUCTS
+ *               `productUrl` from that merchant-confirmed config. So
+ *               Commerce7 `productUrl` values are no longer always empty —
+ *               but they are SQRATCH-constructed, never provider-supplied,
+ *               which is exactly why this predicate must stay `false`:
+ *               `normalizeCommerce7Product` also pins
+ *               `hasProviderSuppliedStorefrontUrl` to `false`
+ *               unconditionally, and `validateDestination` therefore
+ *               re-validates every Commerce7 destination against the
+ *               connection's own `storefrontUrl` via exact-origin pinning.
+ *               That re-validation always succeeds for a legitimately
+ *               constructed URL (it was built FROM that exact origin) and
+ *               rejects anything else. Flipping this to `true` would
+ *               silently disable that origin pin, so it stays `false` unless
+ *               and until Commerce7 exposes a verified storefront source.
  */
 export function providerTrustsSuppliedStorefrontUrl(
   provider: CommerceProvider,

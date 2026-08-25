@@ -586,15 +586,21 @@ describe("normalization contract", () => {
 
 // ===========================================================================
 describe("20/21. adapter capabilities and registry wiring", () => {
-  test("Commerce7 capabilities report catalog-only support", () => {
+  test("Commerce7 capabilities report catalog sync and public destinations, no rewards", () => {
     const { adapter } = makeAdapter(connectionRow());
     const capabilities = adapter.getCapabilities();
 
     assert.equal(capabilities.products.sync, true);
+    // PHASE 16 BIG ROUND / SUBPHASE 2: a merchant-confirmed storefront config
+    // now produces a real, host-pinned public destination — see
+    // tests/commerce7-storefront-public-destinations.test.ts for the full
+    // eligibility-gate coverage. An UNCONFIGURED connection still safely
+    // yields `productUrl: ""` for every product; this flag reports genuine
+    // capability, not "every product currently has a destination."
     assert.equal(
       capabilities.products.publicDestinations,
-      false,
-      "no verified storefront destination exists in this phase",
+      true,
+      "Subphase 2 implemented merchant-configured public destinations",
     );
     for (const [name, value] of Object.entries(capabilities.rewards)) {
       assert.equal(value, false, `rewards.${name} must not be claimed`);

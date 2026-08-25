@@ -40,6 +40,7 @@
 
 import { NextResponse, type NextRequest } from "next/server";
 import type {
+  CommerceConnectionStatus,
   CommerceProvider,
   // Aliased because this module already exports its own richer
   // `CommerceClickSurface` (the per-request discriminated union below). The
@@ -131,6 +132,16 @@ type ResolvedLink = {
   /** Canonical provider-verified storefront destination, never an account id. */
   connectionStorefrontUrl: string | null;
   hasProviderSuppliedStorefrontUrl: boolean;
+  /**
+   * PHASE 18 REPAIR (P1-3): the resolving connection's live status, read in
+   * THIS SAME query as everything else above — the freshest read this
+   * request has. `handleCommerceClick` asserts this is still `"CONNECTED"`
+   * immediately before minting attribution/redirecting
+   * (`assertConnectionStillConnected`), as a defense-in-depth belt-and-braces
+   * layer alongside the query-level `PUBLICLY_CLICKABLE_CONNECTED_PRODUCT`
+   * predicate every finder's WHERE clause already applies.
+   */
+  connectionStatus: CommerceConnectionStatus;
 };
 
 export type CommerceClickDeps = {
@@ -308,13 +319,24 @@ function validateDestination(
   // A click redirect is security-sensitive: without a provider domain we
   // cannot prove a historical snapshot remains a product destination. Fail
   // closed instead of turning the route into a durable open redirect.
-  let expectedHost: string;
+  //
+  // PHASE 18 REPAIR (P2-4F): compares the full ORIGIN (scheme + host +
+  // port), not merely `hostname`. `hostname` alone ignores the port, so
+  // `https://winery.com:8443` and `https://winery.com` (default port 443)
+  // previously compared as "the same host" — a stored `productUrl` on one
+  // port would have been accepted even though the connection's configured
+  // storefront is on a DIFFERENT port. `URL.origin` is exact — an
+  // unspecified default port and an explicit `:443` normalize to the same
+  // origin string (both are simply `https://winery.com`), so this is
+  // strictly a tightening, never a spurious rejection of two URLs that
+  // genuinely point at the same origin.
+  let expectedOrigin: string;
   try {
-    expectedHost = new URL(storefrontUrl).hostname.toLowerCase();
+    expectedOrigin = new URL(storefrontUrl).origin;
   } catch {
     return null;
   }
-  if (parsed.hostname !== expectedHost) return null;
+  if (parsed.origin !== expectedOrigin) return null;
 
   return parsed;
 }
@@ -345,9 +367,23 @@ function truncate(value: string | null, max: number): string | null {
  * the identical pair, so a hidden card is never clickable and a rendered card is
  * never denied.
  */
+/**
+ * PHASE 18 REPAIR (P1-3): the gate now ALSO requires the owning
+ * `CommerceConnection.status === "CONNECTED"` — an UNINSTALLED/DISCONNECTED/
+ * REQUIRES_RECONNECT store's products must never remain publicly listable or
+ * clickable merely because the last sync happened to leave `isAvailable`/
+ * `hasPublicStorefrontUrl` true. This is the QUERY-LEVEL half of the gate; a
+ * row failing it simply never resolves, which is indistinguishable from a
+ * genuinely missing row to every caller (same uniform 404 the rest of this
+ * file already relies on). The RUNTIME half (re-checked after the row
+ * resolves, immediately before minting attribution/redirecting) lives in
+ * `assertConnectionStillConnected` below — defense in depth against stale
+ * ORM/cached state, not a substitute for this predicate.
+ */
 const PUBLICLY_CLICKABLE_CONNECTED_PRODUCT = {
   isAvailable: true,
   hasPublicStorefrontUrl: true,
+  connection: { is: { status: "CONNECTED" as const } },
 } as const;
 
 /**
@@ -355,6 +391,10 @@ const PUBLICLY_CLICKABLE_CONNECTED_PRODUCT = {
  * connection that owns it, and the provider. Shared by every finder so no
  * surface can accidentally resolve a destination without also pinning its
  * connection.
+ *
+ * `connection.status` is selected (not merely filtered on above) so the
+ * RUNTIME re-check (`assertConnectionStillConnected`) can verify it against
+ * the freshest read this request has, without a second query.
  */
 const CANONICAL_DESTINATION_SELECT = {
   id: true,
@@ -362,7 +402,7 @@ const CANONICAL_DESTINATION_SELECT = {
   connectionId: true,
   provider: true,
   providerMetadata: true,
-  connection: { select: { storefrontUrl: true } },
+  connection: { select: { storefrontUrl: true, status: true } },
 } as const;
 
 function hasProviderSuppliedStorefrontUrl(providerMetadata: unknown): boolean {
@@ -459,6 +499,7 @@ const DEFAULT_DEPS: CommerceClickDeps = {
       commerceConnectionId: product.connectionId,
       provider: product.provider,
       connectionStorefrontUrl: product.connection.storefrontUrl,
+      connectionStatus: product.connection.status,
       hasProviderSuppliedStorefrontUrl: hasProviderSuppliedStorefrontUrl(
         product.providerMetadata,
       ),
@@ -514,6 +555,7 @@ const DEFAULT_DEPS: CommerceClickDeps = {
       commerceConnectionId: product.connectionId,
       provider: product.provider,
       connectionStorefrontUrl: product.connection.storefrontUrl,
+      connectionStatus: product.connection.status,
       hasProviderSuppliedStorefrontUrl: hasProviderSuppliedStorefrontUrl(
         product.providerMetadata,
       ),
@@ -586,6 +628,7 @@ const DEFAULT_DEPS: CommerceClickDeps = {
       commerceConnectionId: product.connectionId,
       provider: product.provider,
       connectionStorefrontUrl: product.connection.storefrontUrl,
+      connectionStatus: product.connection.status,
       hasProviderSuppliedStorefrontUrl: hasProviderSuppliedStorefrontUrl(
         product.providerMetadata,
       ),
@@ -760,6 +803,24 @@ export async function handleCommerceClick(
     // brand or accept one from the request.
     const entryCampaignId = visitorCampaign?.campaignId ?? null;
     const productCampaignId = link.scope?.campaignId ?? null;
+
+    // PHASE 18 REPAIR (P1-3): runtime defense-in-depth, alongside (never
+    // instead of) the query-level `PUBLICLY_CLICKABLE_CONNECTED_PRODUCT`
+    // predicate every finder's WHERE clause applies. `link.connectionStatus`
+    // is the freshest read this request has (from the very query that just
+    // resolved this destination) — this assertion exists so a future
+    // refactor that weakens the query predicate (e.g. moving a field from
+    // `where` to `select` by mistake) fails LOUD here rather than silently
+    // reopening a disconnected store's products to the public.
+    if (link.connectionStatus !== "CONNECTED") {
+      console.warn("[commerce/click] Rejected click for a non-CONNECTED connection:", {
+        surface: options.surface.kind,
+        experienceId: access.experience.id,
+        clickTargetId: link.id,
+        connectionStatus: link.connectionStatus,
+      });
+      return genericNotFound();
+    }
 
     const destination = validateDestination(
       link.productUrl,

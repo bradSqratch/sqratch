@@ -1022,17 +1022,21 @@ describe("provider isolation", () => {
   });
 
   // PHASE 16C1 superseded the original form of this test: Commerce7 now HAS a
-  // registered adapter. What Phase 16B actually needs to stay true is narrower
-  // and still holds — the installation/linking lifecycle grants Commerce7 no
-  // reward, discount, or public-destination behavior.
-  test("42. the registered Commerce7 adapter exposes catalog reads only — no rewards, no public destinations", async () => {
+  // registered adapter. PHASE 16 BIG ROUND / SUBPHASE 2 further superseded
+  // its public-destinations assumption: a merchant-configured connection can
+  // now produce a real public destination (see
+  // tests/commerce7-storefront-public-destinations.test.ts). What Phase 16B
+  // actually needs to stay true is narrower and still holds — the
+  // installation/linking lifecycle grants Commerce7 no reward or discount
+  // behavior.
+  test("42. the registered Commerce7 adapter exposes catalog reads and public destinations — still no rewards", async () => {
     const { defaultCommerceAdapterRegistry } =
       await import("../src/lib/commerce/default-registry");
 
     const adapter = defaultCommerceAdapterRegistry.get("COMMERCE7" as never);
     const capabilities = adapter.getCapabilities();
 
-    assert.equal(capabilities.products.publicDestinations, false);
+    assert.equal(capabilities.products.publicDestinations, true);
     for (const [name, value] of Object.entries(capabilities.rewards)) {
       assert.equal(
         value,

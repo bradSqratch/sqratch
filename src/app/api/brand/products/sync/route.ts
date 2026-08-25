@@ -5,7 +5,6 @@ import {
   getBrandManagementContext,
   type BrandAdminContext,
 } from "@/lib/brand-auth";
-import prisma from "@/lib/prisma";
 import {
   syncBrandCommerceProducts,
   syncCommerceConnectionById,
@@ -29,26 +28,32 @@ import {
  * mapped onto a 200, which would misreport "nothing to sync" as "sync
  * succeeded".
  *
- * Guards against overlapping runs: refuses a new run while a `RUNNING` run
- * for this brand is younger than `RUNNING_RUN_STALE_AFTER_MS`, returning
- * 409. A `RUNNING` row older than that is treated as abandoned (e.g. a
- * crashed process) and does not block a new attempt.
+ * PHASE 19 REPAIR (P1-2): this route no longer runs its OWN "is there a
+ * RUNNING run" pre-check — that used to be a plain, non-atomic SELECT here,
+ * followed several calls later by a separate INSERT inside
+ * `syncCommerceConnectionById` / `syncBrandCommerceProducts`, with no
+ * transaction spanning both. Two near-simultaneous requests for the same
+ * connection could both observe "no RUNNING row" and both proceed. That
+ * check-then-create race is now closed at the source: `runSync` (via
+ * `product-sync.ts`'s `claimProductSyncRun`) performs the check AND the
+ * create atomically, inside one transaction that row-locks the exact
+ * `CommerceConnection`. This route only interprets whatever
+ * `ProductSyncOutcome` that atomic claim produced — an `ALREADY_RUNNING`
+ * status maps to the same 409 the old pre-check used to return.
  */
-
-const RUNNING_RUN_STALE_AFTER_MS = 5 * 60 * 1000;
-
-export type RunningSyncRun = { id: string; connectionId: string; startedAt: Date };
 
 export type BrandProductsSyncDeps = {
   getContext(): Promise<BrandAdminContext | null>;
-  /** Finds a `RUNNING` sync run for this brand started within the concurrency window, or `null`. */
-  findRunningRun(brandId: string, notBefore: Date): Promise<RunningSyncRun | null>;
   /**
    * `connectionId` is OPTIONAL and, when present, is an EXACT
    * `CommerceConnection.id` the caller selected — never merely "sync
    * whichever connection this provider prefers". Ownership/provider
    * verification happens inside `syncCommerceConnectionById`, before any
-   * provider I/O; this dep only chooses which entry point to call.
+   * provider I/O; this dep only chooses which entry point to call. Both
+   * entry points resolve the exact connection BEFORE attempting the
+   * atomic RUNNING-run claim (see `product-sync.ts`), so this legacy
+   * bodyless path gets the same per-connection atomicity as the
+   * exact-connectionId path.
    */
   runSync(
     brandId: string,
@@ -74,17 +79,6 @@ function parseProvider(value: unknown): CommerceProvider | null {
   return null;
 }
 
-async function defaultFindRunningRun(
-  brandId: string,
-  notBefore: Date,
-): Promise<RunningSyncRun | null> {
-  return prisma.commerceProductSyncRun.findFirst({
-    where: { brandId, status: "RUNNING", startedAt: { gte: notBefore } },
-    orderBy: [{ startedAt: "desc" }],
-    select: { id: true, connectionId: true, startedAt: true },
-  });
-}
-
 async function defaultRunSync(
   brandId: string,
   provider: CommerceProvider,
@@ -103,7 +97,6 @@ async function defaultRunSync(
 
 const DEFAULT_DEPS: BrandProductsSyncDeps = {
   getContext: getBrandManagementContext,
-  findRunningRun: defaultFindRunningRun,
   runSync: defaultRunSync,
 };
 
@@ -150,20 +143,6 @@ export async function productsSyncImpl(
     // The ONLY brand id ever used below.
     const brand = context.membership.brand;
 
-    const notBefore = new Date(Date.now() - RUNNING_RUN_STALE_AFTER_MS);
-    const runningRun = await deps.findRunningRun(brand.id, notBefore);
-
-    if (runningRun) {
-      return NextResponse.json(
-        {
-          error: "A product sync is already in progress for this brand.",
-          code: "SYNC_IN_PROGRESS",
-          runId: runningRun.id,
-        },
-        { status: 409 },
-      );
-    }
-
     let outcome: ProductSyncOutcome;
     try {
       outcome = await deps.runSync(brand.id, provider, connectionId);
@@ -209,6 +188,21 @@ export async function productsSyncImpl(
           ? "No commerce connection is configured for this brand."
           : "This brand's commerce connection needs to be reconnected before syncing products.";
       return NextResponse.json({ error: message, code: outcome.reason }, { status: 400 });
+    }
+
+    // PHASE 19 REPAIR (P1-2): the atomic claim inside `runSync` found an
+    // existing fresh RUNNING run for this exact connection — the same 409
+    // this route used to return from its own (now-removed, non-atomic)
+    // pre-check.
+    if (outcome.status === "ALREADY_RUNNING") {
+      return NextResponse.json(
+        {
+          error: "A product sync is already in progress for this connection.",
+          code: "SYNC_IN_PROGRESS",
+          runId: outcome.runningRun.id,
+        },
+        { status: 409 },
+      );
     }
 
     if (outcome.status === "FAILED") {

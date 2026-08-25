@@ -27,6 +27,11 @@ import {
   getCommerce7AppConfig,
   normalizeCommerce7Tenant,
 } from "./commerce7";
+import {
+  buildCommerce7ProductDestinationUrl,
+  validateCommerce7ProductRoute,
+  validateCommerce7StorefrontUrl,
+} from "./commerce7-connection-config";
 
 const COMMERCE7_API_BASE = "https://api.commerce7.com/v1";
 
@@ -123,17 +128,13 @@ export function minorUnitsToDecimalString(
  * Anything unrecognized fails closed to `false` on both — this never invents an
  * access rule Commerce7 does not document.
  *
- * PHASE 16C2: `isPublicEligible` is a NECESSARY component of true public
- * eligibility, deliberately NOT sufficient by itself and NOT yet wired to
- * `hasProviderStorefrontPublication` below (which stays hard-coded `false`
- * regardless of this value). Full public eligibility additionally requires a
- * verified `CommerceConnection.storefrontUrl` and provider destination
- * provenance — neither exists yet (see the fail-closed note on
- * `normalizeCommerce7Product`) — so a Club/Group/Allocation product is
- * already unreachable as a public destination today for the SAME reason
- * every Commerce7 product is: no product can produce a public URL yet. This
- * field exists so that guard is ready to compose in the moment a real
- * storefront source is found, without re-deriving the access-tier logic then.
+ * `isPublicEligible` is a NECESSARY but not sufficient component of true
+ * public eligibility: it is combined with a verified, merchant-confirmed
+ * `CommerceConnection.storefrontUrl`/`productRoute` and a usable `slug` by
+ * `computeCommerce7ProductDestination` below (PHASE 16 BIG ROUND / SUBPHASE
+ * 2) before `hasProviderStorefrontPublication` is ever set `true`. A
+ * Club/Group/Allocation product, or one on an unconfigured connection,
+ * remains unreachable as a public destination regardless of this value.
  */
 export type Commerce7Availability = {
   isCatalogAvailable: boolean;
@@ -221,39 +222,103 @@ function readDate(value: unknown): Date | null {
 }
 
 /**
+ * Merchant-confirmed storefront configuration, as persisted by
+ * `configureCommerce7Storefront` (`./commerce7-storefront-configuration.ts`)
+ * onto `CommerceConnection.storefrontUrl` /
+ * `CommerceConnection.providerMetadata.productRoute`. `null` fields mean the
+ * Brand Admin has not configured that value yet.
+ */
+export type Commerce7StorefrontConfig = {
+  storefrontUrl: string | null;
+  productRoute: string | null;
+};
+
+/**
+ * PHASE 16 BIG ROUND / SUBPHASE 2 — computes a Commerce7 product's public
+ * destination from MERCHANT-CONFIRMED config (never provider-supplied, never
+ * derived from `tenantId`). Requires ALL of:
+ *   1. `config` is present (the connection has been configured — see
+ *      Subphase 1) and both `storefrontUrl` and `productRoute` still pass
+ *      the SAME validators the write path enforced (defensive
+ *      re-validation, not a second policy).
+ *   2. `availability.isPublicEligible` — webStatus/adminStatus both
+ *      `"Available"` AND `security.availableTo === "Public"` (see
+ *      `computeCommerce7Availability` above). An Allocation/Group/Club
+ *      product, or a Retired/Hidden one, never qualifies.
+ *   3. The product has a non-empty `slug`.
+ *   4. `buildCommerce7ProductDestinationUrl` accepts the slug (rejects any
+ *      slash/traversal attempt) and returns a URL whose origin is byte-equal
+ *      to the configured storefront origin.
+ * Any failure yields `{ productUrl: "", isPublic: false }` — the same
+ * canonical absence as before this phase existed. Never throws.
+ */
+function computeCommerce7ProductDestination(
+  record: Record<string, unknown>,
+  availability: Commerce7Availability,
+  config?: Commerce7StorefrontConfig,
+): { productUrl: string; isPublic: boolean } {
+  const CLOSED = { productUrl: "", isPublic: false } as const;
+
+  if (!config || !availability.isPublicEligible) {
+    return CLOSED;
+  }
+
+  const storefrontResult = validateCommerce7StorefrontUrl(config.storefrontUrl ?? "");
+  if (!storefrontResult.ok) {
+    return CLOSED;
+  }
+  const routeResult = validateCommerce7ProductRoute(config.productRoute ?? "");
+  if (!routeResult.ok) {
+    return CLOSED;
+  }
+
+  const slug = readTrimmed(record.slug);
+  if (!slug) {
+    return CLOSED;
+  }
+
+  const url = buildCommerce7ProductDestinationUrl(storefrontResult.value, routeResult.value, slug);
+  if (!url) {
+    return CLOSED;
+  }
+
+  return { productUrl: url, isPublic: true };
+}
+
+/**
  * Normalizes one Commerce7 product into the canonical neutral contract.
  *
- * PUBLIC DESTINATION — FAIL CLOSED (Phase 16C1, RECONFIRMED Phase 16C2).
- * Commerce7's product object documents `slug` but NO canonical storefront
- * URL, and a tenant's storefront host is not derivable from the tenant id
- * (the sandbox's `<tenant>.v2-template.commerce7.com` is a template host,
- * not a platform invariant).
+ * PUBLIC DESTINATION (Phase 16C1/16C2: fail-closed, no verified storefront
+ * source existed. PHASE 16 BIG ROUND / SUBPHASE 2: resolved — a Brand Admin
+ * now explicitly configures the storefront URL and product-page route via
+ * `configureCommerce7Storefront`, so `productUrl` is computed by
+ * `computeCommerce7ProductDestination` above from that MERCHANT-CONFIRMED
+ * config, never from `tenantId` and never from a provider-supplied host.)
  *
- * Phase 16C2 specifically researched whether Commerce7 exposes an
- * authoritative tenant storefront/website base URL through the REST API
- * (developer.commerce7.com's full documentation index, its API Overview
- * page, and the merchant help center) or through the already-integrated
- * `GET /v1/account/user` extension-auth endpoint. Commerce7's own merchant
- * help documentation CONFIRMS the storefront host is a per-tenant,
- * admin-editable "Website URL" setting — proving the sandbox's
- * `v2-template.commerce7.com` host is exactly the non-guaranteed default the
- * original fail-closed decision assumed, not a platform-wide formula — but
- * no documented REST endpoint exposes that setting's current value. No such
- * source was found, so per this phase's explicit instruction not to guess,
- * NOTHING CHANGED here: this function still never synthesizes a product URL.
- * `productUrl` is the empty string (canonical absence for a NOT NULL
- * column), `hasProviderStorefrontPublication` and
- * `hasProviderSuppliedStorefrontUrl` are both `false`, so
- * `ConnectedCommerceProduct.hasPublicStorefrontUrl` persists `false` and no
- * public click destination can ever be produced. A future phase with a
- * genuine authoritative source (e.g. a documented Tenant/Settings endpoint,
- * or a value provable through the Admin Extension context) can resolve this
- * without touching the fail-closed default.
+ * `hasProviderSuppliedStorefrontUrl` stays `false` UNCONDITIONALLY — this
+ * product's URL is always SQRATCH-constructed from connection config, never
+ * returned by Commerce7 itself, so it must never be treated as
+ * provider-supplied navigation data the way Shopify's `onlineStoreUrl` is
+ * (see `providerTrustsSuppliedStorefrontUrl` in `../provider-capabilities.ts`,
+ * which deliberately answers `false` for COMMERCE7). The click-redirect path
+ * (`validateDestination` in `../click-attribution.ts`) therefore always
+ * re-validates a Commerce7 destination against the connection's own
+ * `storefrontUrl` via its host-pinning fallback — which
+ * `buildCommerce7ProductDestinationUrl` already guarantees will match, since
+ * it constructs the URL FROM that exact origin.
+ *
+ * `config` is omitted entirely (not merely `null`) by every caller until the
+ * connection has genuinely been configured, so an unconfigured Commerce7
+ * connection continues to produce `productUrl: ""` / public: false exactly
+ * as it always has.
  *
  * Returns `null` for a product with no usable external id — the neutral sync
  * service rejects the whole page in that case rather than persisting a partial.
  */
-export function normalizeCommerce7Product(raw: unknown): CommerceProduct | null {
+export function normalizeCommerce7Product(
+  raw: unknown,
+  config?: Commerce7StorefrontConfig,
+): CommerceProduct | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return null;
   }
@@ -311,36 +376,27 @@ export function normalizeCommerce7Product(raw: unknown): CommerceProduct | null 
     .map((variant) => readTrimmed(variant.sku))
     .filter((sku): sku is string => Boolean(sku));
 
+  const destination = computeCommerce7ProductDestination(record, availability, config);
+
   return {
     externalId,
     title,
     // Commerce7's slug is the product handle. It is carried as neutral catalog
-    // data ONLY — it is never combined with a host to build a URL.
+    // data ONLY — it is never combined with a host to build a URL here; that
+    // happens exclusively inside `computeCommerce7ProductDestination` above,
+    // which pins the result to the merchant-configured storefront origin.
     handle: readTrimmed(record.slug),
-    // Canonical absence: see the fail-closed note above.
-    productUrl: "",
+    productUrl: destination.productUrl,
     imageUrl: images[0] ?? null,
     images,
     priceText: null,
-    // PHASE 16C2: Commerce7's product payload documents no currency field,
-    // and the canonical layer resolves currency from the CONNECTION
-    // (`CommerceConnectionSummary.currencyCode`), never from the product —
-    // this stays empty exactly as it did in 16C1.
-    //
-    // A genuine attempt was made this phase to find an AUTHORITATIVE
-    // Commerce7 source for a tenant's currency (developer.commerce7.com's
-    // full doc index, its API Overview page, and the merchant-facing
-    // General Settings help article, which confirms currency IS a real
-    // per-tenant setting — "based on the country you used to signup...
-    // can be edited" — but is a merchant-admin-UI setting, not one exposed
-    // by any documented REST endpoint or by the already-integrated
-    // `GET /v1/account/user`). No such endpoint was found, so per this
-    // phase's explicit instruction not to guess, no currency resolution was
-    // added: `CommerceConnection.providerMetadata.currencyCode` stays
-    // unset for Commerce7 until a real source is found, and every Commerce7
-    // product's persisted price fields correctly stay null (see
-    // `computePrice` in `../product-sync.ts`) rather than assuming a
-    // currency.
+    // Commerce7's product payload documents no currency field, so this stays
+    // empty per-product exactly as it always has. The canonical layer
+    // resolves currency from the CONNECTION
+    // (`CommerceConnectionSummary.currencyCode`), which — as of PHASE 16 BIG
+    // ROUND / SUBPHASE 1 — is a genuine Brand-Admin-confirmed value written
+    // by `configureCommerce7Storefront`, not merely a placeholder awaiting a
+    // future source.
     currency: "",
     priceRange: {
       min: minCents === null ? null : minCents / 10 ** COMMERCE7_MINOR_UNIT_EXPONENT,
@@ -356,8 +412,9 @@ export function normalizeCommerce7Product(raw: unknown): CommerceProduct | null 
     status: availability.statusToken,
     providerCreatedAt: readDate(record.createdAt),
     providerUpdatedAt: readDate(record.updatedAt),
-    // FAIL CLOSED — no verified Commerce7 storefront destination exists yet.
-    hasProviderStorefrontPublication: false,
+    hasProviderStorefrontPublication: destination.isPublic,
+    // ALWAYS false — see the `hasProviderSuppliedStorefrontUrl` doc comment
+    // on `normalizeCommerce7Product` above.
     hasProviderSuppliedStorefrontUrl: false,
   };
 }
@@ -371,6 +428,14 @@ export type Commerce7ProductRequest = {
   tenant: string;
   cursor?: string | null;
   signal?: AbortSignal;
+  /**
+   * Merchant-confirmed storefront config for THIS exact connection (see
+   * `Commerce7StorefrontConfig` above). Omitted (not merely `null`) means
+   * "not configured" — every normalized product then gets `productUrl: ""`.
+   * Named distinctly from the local `config` (app credential) binding below
+   * to avoid confusion between the two.
+   */
+  storefrontConfig?: Commerce7StorefrontConfig;
 };
 
 /**
@@ -447,7 +512,7 @@ export async function fetchCommerce7ProductPage(
 
   const products: CommerceProduct[] = [];
   for (const entry of rawProducts) {
-    const normalized = normalizeCommerce7Product(entry);
+    const normalized = normalizeCommerce7Product(entry, request.storefrontConfig);
     if (!normalized) {
       providerError("Commerce7 returned a product without a usable id.");
     }
@@ -476,7 +541,7 @@ const MAX_CATALOG_PAGES = 200;
  * truncated catalog would mark live products as gone.
  */
 export async function fetchAllCommerce7Products(
-  request: { tenant: string; signal?: AbortSignal },
+  request: { tenant: string; signal?: AbortSignal; storefrontConfig?: Commerce7StorefrontConfig },
   deps: { fetchImpl?: Commerce7Fetch } = {},
 ): Promise<CommerceProduct[]> {
   const products: CommerceProduct[] = [];
@@ -490,7 +555,12 @@ export async function fetchAllCommerce7Products(
     }
 
     const page: Commerce7ProductPage = await fetchCommerce7ProductPage(
-      { tenant: request.tenant, cursor, signal: request.signal },
+      {
+        tenant: request.tenant,
+        cursor,
+        signal: request.signal,
+        storefrontConfig: request.storefrontConfig,
+      },
       deps,
     );
     pages += 1;

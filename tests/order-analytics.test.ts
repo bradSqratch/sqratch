@@ -36,6 +36,52 @@ test("conversion analytics excludes unattributed orders from conversion values a
   assert.deepEqual(result.attributedOrdersByLesson, [{ id: "lesson-a", orders: 1 }]);
 });
 
+// -----------------------------------------------------------------------
+// PHASE 17 — Commerce7 conversion analytics parity (Part 3).
+// -----------------------------------------------------------------------
+test("a Commerce7 order WITH attribution counts as a conversion identically to Shopify — provider is inert for conversion purposes", () => {
+  const attribution = {
+    entryCampaignId: "entry-c7",
+    productCampaignId: "product-c7",
+    experienceId: "experience-c7",
+    creatorProfileId: "creator-c7",
+    lessonId: "lesson-c7",
+    connectedProductId: "catalog-c7",
+  };
+  const result = buildConversionAnalytics([
+    {
+      provider: CommerceProvider.COMMERCE7, financialStatus: "PAID", currencyCode: "USD",
+      totalMinor: BigInt(4000), totalRefundedMinor: BigInt(0), netRevenueMinor: BigInt(4000),
+      attribution, lineItems: [{ connectedProductId: "catalog-c7" }],
+    },
+  ]);
+  assert.equal(result.attributedOrders, 1);
+  assert.equal(result.currentlyNetPositivePaidOrders, 1);
+  assert.deepEqual(result.grossAttributedRevenueByCurrency, [{ currencyCode: "USD", minor: "4000" }]);
+  assert.deepEqual(result.attributedOrdersByProvider, [{ id: "COMMERCE7", orders: 1 }]);
+  assert.deepEqual(result.attributedOrdersByCreator, [{ id: "creator-c7", orders: 1 }]);
+});
+
+test("a REFUNDED (via tender-derived financial status) Commerce7 order reflects zero current net revenue, never counted as net-positive", () => {
+  const attribution = {
+    entryCampaignId: null, productCampaignId: null, experienceId: "e", creatorProfileId: "c",
+    lessonId: null, connectedProductId: "p",
+  };
+  const result = buildConversionAnalytics([
+    {
+      // Mirrors what commerce7-order-normalizer.ts now derives from a fully
+      // refunded tender: financialStatus REFUNDED, netRevenueMinor 0.
+      provider: CommerceProvider.COMMERCE7, financialStatus: "REFUNDED", currencyCode: "USD",
+      totalMinor: BigInt(5900), totalRefundedMinor: BigInt(5900), netRevenueMinor: BigInt(0),
+      attribution, lineItems: [],
+    },
+  ]);
+  assert.equal(result.attributedOrders, 1);
+  assert.equal(result.currentlyNetPositivePaidOrders, 0);
+  assert.equal(result.fullyRefundedOrders, 1);
+  assert.deepEqual(result.netAttributedRevenueByCurrency, []);
+});
+
 test("conversion analytics separates historical attribution from current financial state", () => {
   const base = {
     provider: CommerceProvider.SHOPIFY,

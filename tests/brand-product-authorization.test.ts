@@ -221,7 +221,6 @@ describe("brand product routes — client-supplied brandId is never trusted", ()
     let calledBrandId: string | null = null;
     const res = await productsSyncImpl({
       getContext: async () => makeContext(CONTEXT_BRAND),
-      findRunningRun: async () => null,
       runSync: async (brandId) => {
         calledBrandId = brandId;
         const outcome: ProductSyncOutcome = {

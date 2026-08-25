@@ -283,13 +283,16 @@ describe("getCommerceCapabilities / getAdapterForConnection", () => {
   });
 
   // PHASE 16C1: COMMERCE7 is now a REGISTERED adapter with real, read-only
-  // catalog support. Its capabilities are no longer all-false — but every
-  // reward capability, and public destinations, must still report false
-  // because none of that is implemented.
-  test("8b. COMMERCE7 reports catalog-only capabilities: products.sync true, everything else false", () => {
+  // catalog support. Its capabilities are no longer all-false. PHASE 16 BIG
+  // ROUND / SUBPHASE 2: publicDestinations is now true too (a
+  // merchant-configured connection can produce a real public destination —
+  // see tests/commerce7-storefront-public-destinations.test.ts). Every
+  // reward capability still reports false because none of that is
+  // implemented.
+  test("8b. COMMERCE7 reports catalog + public-destination capabilities, no rewards", () => {
     const capabilities = getCommerceCapabilities(CommerceProvider.COMMERCE7);
     assert.deepEqual(capabilities, {
-      products: { sync: true, publicDestinations: false },
+      products: { sync: true, publicDestinations: true },
       rewards: {
         create: false,
         lookup: false,

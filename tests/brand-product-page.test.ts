@@ -358,22 +358,37 @@ describe("static source assertions", () => {
   // PHASE 16C2 FINAL LIFECYCLE REPAIR — 7. Sync action gated on CONNECTED.
   // -------------------------------------------------------------------------
 
-  test("7. the Sync button is disabled whenever the active connection is not CONNECTED", () => {
-    assert.match(clientSource, /disabled=\{syncing \|\| !isConnected\}/);
+  test("7. the Sync button is disabled whenever canSync is false", () => {
+    // PHASE 18 REPAIR (P2-4A): `canSync` folds in "not CONNECTED",
+    // "explicit selection required," AND "the connections list hasn't
+    // definitively loaded yet" — the button can never be enabled based on
+    // the single-preferred `/api/brand/commerce/status` read alone.
+    assert.match(clientSource, /disabled=\{syncing \|\| !canSync\}/);
   });
 
-  test("7. runSync() itself refuses to run (not merely the button) when not connected — belt and braces", () => {
+  test("7. runSync() itself refuses to run (not merely the button) unless canSync AND an exact target connection are both present — belt and braces", () => {
     const fnStart = clientSource.indexOf("async function runSync()");
     assert.ok(fnStart > -1, "runSync function not found");
-    const fnBody = clientSource.slice(fnStart, fnStart + 400);
-    assert.match(fnBody, /if \(!isConnected\)\s*\{\s*return;/);
+    const fnBody = clientSource.slice(fnStart, fnStart + 1100);
+    assert.match(fnBody, /if \(!canSync \|\| !syncTargetConnection\)\s*\{\s*return;/);
   });
 
-  test("7. the sync request body carries the EXACT active provider + connectionId, never a bare empty-body-implies-Shopify call when connected", () => {
+  test("7. the sync request body carries the EXACT syncTargetConnection provider + connectionId — never the display-only/status-fallback connection", () => {
     const fnStart = clientSource.indexOf("async function runSync()");
-    const fnBody = clientSource.slice(fnStart, fnStart + 1200);
-    assert.match(fnBody, /provider: activeConnection\.provider/);
-    assert.match(fnBody, /connectionId: activeConnection\.connectionId/);
+    const fnBody = clientSource.slice(fnStart, fnStart + 1600);
+    assert.match(fnBody, /provider: syncTargetConnection\.provider/);
+    assert.match(fnBody, /connectionId: syncTargetConnection\.connectionId/);
+  });
+
+  test("7b. syncTargetConnection is NEVER derived from brandStatus — only from the definitively-ready connections list", () => {
+    // PHASE 18 REPAIR (P2-4A): source-level lock against the exact defect
+    // the review found — an actionable sync target must never fall back to
+    // the single-preferred status connection while the authoritative list
+    // is still loading/failed/incomplete.
+    assert.match(
+      clientSource,
+      /const syncTargetConnection =\s*connectionsListStatus === "ready" \? selectedConnection : null;/,
+    );
   });
 
   test("never labels a non-connected state as \"Shopify disconnected\" — copy is provider-neutral", () => {

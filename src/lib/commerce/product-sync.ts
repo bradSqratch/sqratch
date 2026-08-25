@@ -145,6 +145,11 @@ import {
   getAdapterForConnection,
   getCommerceConnectionById,
 } from "./connection-service";
+import {
+  deriveCurrencyCodeForFingerprint,
+  deriveProductConfigurationFingerprint,
+} from "./product-config-fingerprint";
+import { lockCommerceConnectionForTransaction } from "./connection-row-lock";
 
 // ---------------------------------------------------------------------------
 // Public result types
@@ -188,6 +193,20 @@ export type ProductSyncOutcome =
       reason: ProductSyncSkippedReason;
       brandId: string;
       provider: CommerceProvider;
+    }
+  | {
+      /**
+       * PHASE 19 REPAIR (P1-2): the atomic claim (see `claimProductSyncRun`)
+       * found an existing, still-fresh `RUNNING` run for this EXACT
+       * connection and refused to start a second one. Distinct from
+       * `SKIPPED` (which means "there is nothing to do") — this means
+       * "there IS work, but another run already owns it right now."
+       */
+      status: "ALREADY_RUNNING";
+      brandId: string;
+      provider: CommerceProvider;
+      connectionId: string;
+      runningRun: { id: string; startedAt: Date };
     }
   | {
       status: "SUCCEEDED" | "PARTIAL" | "FAILED";
@@ -267,6 +286,16 @@ export type CreateSyncRunInput = {
   triggeredBy: string | null;
 };
 
+/**
+ * PHASE 19 REPAIR (P1-2): the outcome of `claimProductSyncRun` — a
+ * discriminated union so a caller can never mistake "I claimed a NEW run"
+ * for "someone else already owns one." See that dep's own doc comment for
+ * the atomicity guarantee.
+ */
+export type ClaimSyncRunResult =
+  | { status: "CLAIMED"; run: { id: string } }
+  | { status: "ALREADY_RUNNING"; runningRun: { id: string; startedAt: Date } };
+
 export type FinalizeSyncRunInput = {
   status: "SUCCEEDED" | "PARTIAL" | "FAILED";
   finishedAt: Date;
@@ -292,18 +321,69 @@ export type ProductSyncDeps = {
   findExistingProducts(
     connectionId: string,
   ): Promise<ExistingConnectedProductRow[]>;
-  /** Creates the `RUNNING` `CommerceProductSyncRun` row. */
-  createSyncRun(input: CreateSyncRunInput): Promise<{ id: string }>;
+  /**
+   * PHASE 19 REPAIR (P1-2): atomically checks for an existing `RUNNING`
+   * run for this EXACT connection and, if none exists, creates one — as
+   * ONE database transaction that also serializes on the exact
+   * `CommerceConnection` row (see the default implementation's doc
+   * comment for the locking mechanism). This REPLACES the prior
+   * `createSyncRun` (always-create) + a separate, non-atomic
+   * `findRunningRun` pre-check that used to live in the route layer: two
+   * near-simultaneous requests for the SAME connection could both observe
+   * "no RUNNING row" before either had written its own. Folding the check
+   * and the create into one transaction closes that window. The claimed
+   * row becomes THE run `runProductSync` uses for the rest of this call —
+   * nothing else ever creates a second `CommerceProductSyncRun` row for
+   * this invocation.
+   *
+   * PHASE 20 REPAIR (stale-run lease repair, P1): there is deliberately NO
+   * age-based staleness window here anymore — ANY existing `RUNNING` row
+   * for this connection, regardless of how old, yields `ALREADY_RUNNING`.
+   * See `runProductSync`'s doc comment (above its call site) for why: this
+   * codebase has no field that safely proves a `RUNNING` row is abandoned
+   * rather than merely long-running, so an age cutoff could — and, before
+   * this repair, did — reclaim a connection out from under a genuinely
+   * live sync, producing two concurrent writers for the same connection.
+   * A `RUNNING` row is authoritative until `finalizeSyncRun` closes it.
+   */
+  claimProductSyncRun(input: CreateSyncRunInput): Promise<ClaimSyncRunResult>;
   /** Finalizes a run with its terminal status + counts. */
   finalizeSyncRun(runId: string, input: FinalizeSyncRunInput): Promise<void>;
-  /** Applies one product's create/update/touch decision. */
+  /**
+   * PHASE 19 REPAIR (P1-1): applies one product's create/update/touch
+   * decision — and, when `expectedFingerprint` is non-null, does so
+   * ATOMICALLY with a live config-freshness recheck, inside ONE database
+   * transaction that also serializes on the exact `CommerceConnection`
+   * row (see the default implementation's doc comment). This is what
+   * makes stale-data safety a property the write itself GUARANTEES before
+   * it commits, rather than something a separate cleanup step restores
+   * afterward: if the live fingerprint no longer matches
+   * `expectedFingerprint` (or cannot be read at all) at the moment this
+   * transaction actually persists the row, the implementation must
+   * silently substitute a SANITIZED decision (money/public-destination
+   * fields forced to their safe fail-closed values) instead of `decision`
+   * — never write `decision` as given. `expectedFingerprint: null` means
+   * the caller already knows the baseline itself was untrustworthy (the
+   * PRE-fetch read failed) — in that case `decision` is assumed to
+   * already be pre-sanitized by the caller, and no live recheck is
+   * meaningful (there is nothing trustworthy to compare against), so the
+   * implementation writes it as given without opening a locking
+   * transaction for it.
+   *
+   * Returns whether the write that actually committed was the trusted,
+   * as-given `decision` (`true`) or a sanitized substitute (`false`) —
+   * informational only; `runProductSync` does not need this to enforce
+   * correctness (the final safety net still runs regardless), but it is
+   * useful for logging/telemetry.
+   */
   applyProductWrite(
     connectionId: string,
     brandId: string,
     provider: CommerceProvider,
     externalKey: string,
     decision: ProductWriteDecision,
-  ): Promise<void>;
+    expectedFingerprint: string | null,
+  ): Promise<{ trustworthy: boolean }>;
   /**
    * Marks every currently-available product for `connectionId` whose
    * `externalKey` is NOT in `seenExternalKeys` as unavailable (setting
@@ -319,6 +399,59 @@ export type ProductSyncDeps = {
     now: Date,
     runId: string,
   ): Promise<{ count: number }>;
+  /**
+   * PHASE 16-18 REPAIR (config-vs-sync race, P1-1): a cheap, CONFIG-ONLY
+   * fingerprint of the connection — see `./product-config-fingerprint.ts`
+   * for the exact field list and, critically, WHY `updatedAt` /
+   * `lastProductSyncAt` must never be part of it (a normal successful sync
+   * writes `lastProductSyncAt` to itself via `completeProductSync`, which
+   * bumps Prisma's `@updatedAt` — using that as the fingerprint made every
+   * successful sync self-invalidate). `runProductSync` reads this THREE
+   * times: once per product write (a live recheck against the baseline
+   * captured by `getConnectionConfigSnapshot`, narrowing the race window
+   * from "the whole sync" down to "this one product's write"), and once
+   * more after every write the sync will ever make (the final safety net)
+   * — see `runProductSync` for the full fail-CLOSED state machine. Returns
+   * `null` if the connection is gone (a real, meaningful value — never
+   * conflated with a read FAILURE, which the caller wraps separately; see
+   * `readConnectionFingerprint`).
+   */
+  getConnectionFingerprint(connectionId: string): Promise<string | null>;
+  /**
+   * PHASE 16-18 REPAIR (P1-1): a ONE-TIME baseline read, taken as the very
+   * first action of a sync run, before any catalog fetch or write. Returns
+   * BOTH the config-only fingerprint AND the currency code extracted from
+   * the SAME row read — deliberately not two separate reads, and
+   * deliberately not the `currencyCode` a caller might have resolved
+   * earlier (e.g. via `getActiveCommerceConnection`, which can run a full
+   * DB round-trip — `createSyncRun` — before this read happens): if a
+   * configuration change landed in that gap, an earlier-resolved
+   * `currencyCode` could already be stale relative to a fingerprint
+   * captured moments later, and every live per-write recheck against that
+   * stale-but-matching fingerprint would then wrongly authorize it. Reading
+   * both from one row eliminates that gap by construction. Returns `null`
+   * only if the connection row is gone.
+   */
+  getConnectionConfigSnapshot(
+    connectionId: string,
+  ): Promise<{ fingerprint: string; currencyCode: string | null } | null>;
+  /**
+   * PHASE 16-18 REPAIR (P1-1/P1-2/4A): scoped to the EXACT connection only.
+   * Called from `runProductSync`'s final safety net when the configuration
+   * fingerprint could not be proven unchanged across the whole sync.
+   * Nulls `currencyCode`/`priceMinMinor`/`priceMaxMinor`/
+   * `priceMinorUnitExponent` AND sets `hasPublicStorefrontUrl: false` in
+   * ONE atomic write (never two independent calls that could leave a
+   * partial cleanup if one succeeds and the other fails — see 4A) —
+   * mirrors the fail-closed state `configureCommerce7Storefront`'s own
+   * invalidation applies on a genuine config save (see
+   * `./providers/commerce7-storefront-configuration.ts`), duplicated here
+   * (not imported) so this file stays provider-neutral. MUST throw on
+   * failure rather than swallow it — `runProductSync` depends on that to
+   * enforce P1-2 (a required safety write that failed must never let the
+   * run report SUCCEEDED).
+   */
+  invalidateStaleConfigDerivedFields(connectionId: string): Promise<void>;
 };
 
 async function getPrisma() {
@@ -354,6 +487,59 @@ async function defaultGetActiveConnection(
   return getActiveCommerceConnection(brandId, provider);
 }
 
+const CONFIG_FINGERPRINT_SELECT = {
+  provider: true,
+  storefrontUrl: true,
+  providerMetadata: true,
+} as const;
+
+async function readConnectionConfigRow(connectionId: string) {
+  const prisma = await getPrisma();
+  return prisma.commerceConnection.findUnique({
+    where: { id: connectionId },
+    select: CONFIG_FINGERPRINT_SELECT,
+  });
+}
+
+async function defaultGetConnectionFingerprint(
+  connectionId: string,
+): Promise<string | null> {
+  const row = await readConnectionConfigRow(connectionId);
+  return row ? deriveProductConfigurationFingerprint(row) : null;
+}
+
+async function defaultGetConnectionConfigSnapshot(
+  connectionId: string,
+): Promise<{ fingerprint: string; currencyCode: string | null } | null> {
+  const row = await readConnectionConfigRow(connectionId);
+  if (!row) {
+    return null;
+  }
+  return {
+    fingerprint: deriveProductConfigurationFingerprint(row),
+    currencyCode: deriveCurrencyCodeForFingerprint(row.providerMetadata),
+  };
+}
+
+async function defaultInvalidateStaleConfigDerivedFields(
+  connectionId: string,
+): Promise<void> {
+  const prisma = await getPrisma();
+  // ONE UPDATE statement — atomic by construction, never a partial
+  // cleanup where currency is nulled but the public destination isn't (or
+  // vice versa). See the P1-2/4A doc comment on this dep's type.
+  await prisma.connectedCommerceProduct.updateMany({
+    where: { connectionId },
+    data: {
+      currencyCode: null,
+      priceMinMinor: null,
+      priceMaxMinor: null,
+      priceMinorUnitExponent: null,
+      hasPublicStorefrontUrl: false,
+    },
+  });
+}
+
 function defaultGetAdapter(
   summary: CommerceConnectionSummary,
 ): CommerceAdapter {
@@ -370,21 +556,66 @@ async function defaultFindExistingProducts(
   });
 }
 
-async function defaultCreateSyncRun(
+/**
+ * PHASE 19 REPAIR (P1-2, real-lock round): serializes on the exact
+ * `CommerceConnection` row via `lockCommerceConnectionForTransaction` (see
+ * `./connection-row-lock.ts` for the full justification and empirical
+ * proof that this — unlike the prior round's `data: {}` — is a REAL
+ * PostgreSQL row lock), then performs the RUNNING-run check and the create
+ * through the SAME transaction client (`tx`) — so a second, concurrent call
+ * for the SAME `connectionId` genuinely blocks at the row lock until the
+ * first commits, rather than racing a plain SELECT against a plain INSERT
+ * the way the original best-effort guard did.
+ *
+ * The row lock is held only for the duration of THIS transaction (check +
+ * possible create) — never across provider HTTP, which has not started yet
+ * at the point this is called (see `runProductSync`). A connectionId that
+ * no longer exists makes the locking `update()` itself throw (Prisma's
+ * standard "record not found" behavior for `update`, unlike `findUnique`) —
+ * an acceptable, safe failure mode for this already-extremely-narrow race
+ * (the connection was resolved successfully by the caller only moments
+ * earlier): it surfaces as a request-level error, never as a claim
+ * silently succeeding against a nonexistent connection.
+ */
+async function defaultClaimProductSyncRun(
   input: CreateSyncRunInput,
-): Promise<{ id: string }> {
+): Promise<ClaimSyncRunResult> {
   const prisma = await getPrisma();
-  const run = await prisma.commerceProductSyncRun.create({
-    data: {
-      connectionId: input.connectionId,
-      brandId: input.brandId,
-      provider: input.provider,
-      status: "RUNNING",
-      triggeredBy: input.triggeredBy ?? undefined,
-    },
-    select: { id: true },
+  return prisma.$transaction(async (tx) => {
+    // Real row lock — see ./connection-row-lock.ts. A concurrent claim
+    // attempt for the SAME connectionId blocks here until this transaction
+    // commits or rolls back — this is what turns "check for RUNNING, then
+    // create" into one atomic critical section.
+    await lockCommerceConnectionForTransaction(tx, input.connectionId);
+
+    // PHASE 20 REPAIR: no `startedAt` age filter — see this function's
+    // interface doc comment (`claimProductSyncRun`) for why an age cutoff
+    // is unsafe here. ANY RUNNING row for this connection blocks a new
+    // claim, no matter how long it has been running.
+    const existing = await tx.commerceProductSyncRun.findFirst({
+      where: {
+        connectionId: input.connectionId,
+        status: "RUNNING",
+      },
+      orderBy: [{ startedAt: "desc" }],
+      select: { id: true, startedAt: true },
+    });
+    if (existing) {
+      return { status: "ALREADY_RUNNING" as const, runningRun: existing };
+    }
+
+    const run = await tx.commerceProductSyncRun.create({
+      data: {
+        connectionId: input.connectionId,
+        brandId: input.brandId,
+        provider: input.provider,
+        status: "RUNNING",
+        triggeredBy: input.triggeredBy ?? undefined,
+      },
+      select: { id: true },
+    });
+    return { status: "CLAIMED" as const, run };
   });
-  return { id: run.id };
 }
 
 async function defaultFinalizeSyncRun(
@@ -410,42 +641,106 @@ async function defaultFinalizeSyncRun(
   });
 }
 
-async function defaultApplyProductWrite(
+/** Structural subset of the Prisma client (or a live transaction handle) `persistDecision` needs — satisfied by both `prisma` and a `tx` callback argument. */
+type ProductWriteClient = {
+  connectedCommerceProduct: {
+    create(args: { data: Record<string, unknown> }): Promise<unknown>;
+    update(args: { where: { id: string }; data: Record<string, unknown> }): Promise<unknown>;
+  };
+};
+
+async function persistDecision(
+  client: ProductWriteClient,
   connectionId: string,
   brandId: string,
   provider: CommerceProvider,
   externalKey: string,
   decision: ProductWriteDecision,
 ): Promise<void> {
-  const prisma = await getPrisma();
-
   if (decision.kind === "CREATE") {
-    await prisma.connectedCommerceProduct.create({
-      data: {
-        connectionId,
-        brandId,
-        provider,
-        externalKey,
-        ...decision.data,
-      },
+    await client.connectedCommerceProduct.create({
+      data: { connectionId, brandId, provider, externalKey, ...decision.data },
     });
     return;
   }
-
   if (decision.kind === "UPDATE") {
-    await prisma.connectedCommerceProduct.update({
+    await client.connectedCommerceProduct.update({
       where: { id: decision.existingId },
       data: decision.data,
     });
     return;
   }
-
-  await prisma.connectedCommerceProduct.update({
+  await client.connectedCommerceProduct.update({
     where: { id: decision.existingId },
     data: {
       lastSeenAt: decision.lastSeenAt,
       lastSyncRunId: decision.lastSyncRunId,
     },
+  });
+}
+
+/**
+ * PHASE 19 REPAIR (P1-1): when `expectedFingerprint` is non-null, the live
+ * config-freshness recheck and the actual product write happen INSIDE ONE
+ * transaction that ALSO row-locks the exact `CommerceConnection` (the same
+ * real lock (`lockCommerceConnectionForTransaction` — see
+ * `./connection-row-lock.ts`) as `defaultClaimProductSyncRun`. This is the
+ * structural fix for P1-1: stale-data safety is now guaranteed BEFORE an
+ * authoritative write can commit, not restored by a separate cleanup step
+ * afterward. A concurrent config-save transaction
+ * (`configureCommerce7Storefront`) naturally participates in the SAME lock
+ * — its own `CommerceConnection` UPDATE takes an equivalent Postgres
+ * row-level lock for the duration of ITS transaction, so the two either
+ * fully serialize with the stale write committing first (safe: the
+ * subsequent config-save's own invalidation still cleans it up) or the
+ * config-save commits first (safe: this transaction's live re-read then
+ * observes the NEW fingerprint and sanitizes before ever persisting).
+ *
+ * `expectedFingerprint === null` means the caller's baseline was already
+ * untrustworthy (see `applyProductWrite`'s doc comment on `ProductSyncDeps`
+ * for why no locking transaction is opened in that case). A connectionId
+ * that no longer exists makes the locking `update()` throw — caught by
+ * `runProductSync`'s existing per-product try/catch (a write failure for
+ * ONE product already increments `stats.failedCount` and continues, never
+ * strands the run), so a deleted connection safely results in "this
+ * product was not written this run," never a stale write.
+ */
+async function defaultApplyProductWrite(
+  connectionId: string,
+  brandId: string,
+  provider: CommerceProvider,
+  externalKey: string,
+  decision: ProductWriteDecision,
+  expectedFingerprint: string | null,
+): Promise<{ trustworthy: boolean }> {
+  const prisma = await getPrisma();
+
+  if (expectedFingerprint === null) {
+    await persistDecision(prisma, connectionId, brandId, provider, externalKey, decision);
+    return { trustworthy: false };
+  }
+
+  return prisma.$transaction(async (tx) => {
+    // Real row lock FIRST — see ./connection-row-lock.ts. Held until this
+    // transaction commits, so a concurrent config-save (or another
+    // per-write lock attempt for the SAME connection) genuinely waits here.
+    await lockCommerceConnectionForTransaction(tx, connectionId);
+
+    // Read the live config AFTER acquiring the lock, inside the SAME
+    // transaction — this sees either (a) the pre-existing config, if no
+    // concurrent config-save is contending for the lock, or (b) whatever a
+    // concurrent config-save committed before releasing the lock this
+    // transaction just waited on.
+    const row = await tx.commerceConnection.findUnique({
+      where: { id: connectionId },
+      select: { provider: true, storefrontUrl: true, providerMetadata: true },
+    });
+    const liveFingerprint = row ? deriveProductConfigurationFingerprint(row) : null;
+    const trustworthy = liveFingerprint !== null && liveFingerprint === expectedFingerprint;
+    const finalDecision = trustworthy ? decision : sanitizeDecisionForUntrustedConfig(decision);
+
+    await persistDecision(tx, connectionId, brandId, provider, externalKey, finalDecision);
+    return { trustworthy };
   });
 }
 
@@ -475,10 +770,13 @@ const DEFAULT_PRODUCT_SYNC_DEPS: ProductSyncDeps = {
   getActiveConnection: defaultGetActiveConnection,
   getAdapter: defaultGetAdapter,
   findExistingProducts: defaultFindExistingProducts,
-  createSyncRun: defaultCreateSyncRun,
+  claimProductSyncRun: defaultClaimProductSyncRun,
   finalizeSyncRun: defaultFinalizeSyncRun,
   applyProductWrite: defaultApplyProductWrite,
   markUnavailableExcept: defaultMarkUnavailableExcept,
+  getConnectionFingerprint: defaultGetConnectionFingerprint,
+  getConnectionConfigSnapshot: defaultGetConnectionConfigSnapshot,
+  invalidateStaleConfigDerivedFields: defaultInvalidateStaleConfigDerivedFields,
 };
 
 function resolveDeps(deps: Partial<ProductSyncDeps>): ProductSyncDeps {
@@ -728,6 +1026,34 @@ export function decideProductWrite(
     kind: "UPDATE",
     existingId: existing.id,
     data: toWriteData(computed, now, runId, existing.unavailableSince),
+  };
+}
+
+/**
+ * PHASE 19 REPAIR (P1-1): pure — given a decision computed OPTIMISTICALLY
+ * (assuming the config baseline is still trustworthy), returns an
+ * equivalent decision with every config-derived field forced to its safe
+ * fail-closed value. `TOUCH` is returned unchanged: it never carries
+ * money/public-destination fields to begin with (see `decideProductWrite`
+ * — a TOUCH only ever writes `lastSeenAt`/`lastSyncRunId`), so there is
+ * nothing to sanitize.
+ */
+export function sanitizeDecisionForUntrustedConfig(
+  decision: ProductWriteDecision,
+): ProductWriteDecision {
+  if (decision.kind === "TOUCH") {
+    return decision;
+  }
+  return {
+    ...decision,
+    data: {
+      ...decision.data,
+      currencyCode: null,
+      priceMinMinor: null,
+      priceMaxMinor: null,
+      priceMinorUnitExponent: null,
+      hasPublicStorefrontUrl: false,
+    },
   };
 }
 
@@ -1116,15 +1442,7 @@ export async function syncBrandCommerceProducts(
     throw new UnsupportedCapabilityError(provider, "products.sync");
   }
 
-  return runProductSync(
-    brandId,
-    provider,
-    connectionId,
-    summary.currencyCode,
-    adapter,
-    options,
-    resolvedDeps,
-  );
+  return runProductSync(brandId, provider, connectionId, adapter, options, resolvedDeps);
 }
 
 export type SyncCommerceConnectionByIdInput = {
@@ -1203,15 +1521,7 @@ export async function syncCommerceConnectionById(
     throw new UnsupportedCapabilityError(input.provider, "products.sync");
   }
 
-  return runProductSync(
-    input.brandId,
-    input.provider,
-    summary.id,
-    summary.currencyCode,
-    adapter,
-    options,
-    resolvedDeps,
-  );
+  return runProductSync(input.brandId, input.provider, summary.id, adapter, options, resolvedDeps);
 }
 
 async function defaultGetConnectionById(
@@ -1220,21 +1530,140 @@ async function defaultGetConnectionById(
   return getCommerceConnectionById(connectionId);
 }
 
+/**
+ * PHASE 18 REPAIR (P1-1): a dedicated sentinel for "the fingerprint read
+ * itself failed," distinct from BOTH a real fingerprint string and `null`
+ * ("the connection row is genuinely gone" — itself a meaningful, valid
+ * result). The prior repair's defect was collapsing a read FAILURE into the
+ * same `null` a genuinely-missing connection produces, which then compared
+ * as "unchanged" and let stale data through. This type makes that collapse
+ * a compile error: `FINGERPRINT_UNKNOWN` can never equal a fingerprint
+ * string or `null` in the comparisons below.
+ */
+const FINGERPRINT_UNKNOWN = Symbol("commerce-product-sync-fingerprint-unknown");
+type FingerprintReadResult = string | null | typeof FINGERPRINT_UNKNOWN;
+type ConfigSnapshotReadResult =
+  | { fingerprint: string; currencyCode: string | null }
+  | null
+  | typeof FINGERPRINT_UNKNOWN;
+
+async function readConnectionFingerprint(
+  deps: ProductSyncDeps,
+  connectionId: string,
+): Promise<FingerprintReadResult> {
+  try {
+    return await deps.getConnectionFingerprint(connectionId);
+  } catch {
+    return FINGERPRINT_UNKNOWN;
+  }
+}
+
+async function readConnectionConfigSnapshot(
+  deps: ProductSyncDeps,
+  connectionId: string,
+): Promise<ConfigSnapshotReadResult> {
+  try {
+    return await deps.getConnectionConfigSnapshot(connectionId);
+  } catch {
+    return FINGERPRINT_UNKNOWN;
+  }
+}
+
+/**
+ * PHASE 20 REPAIR (stale-run lease repair, P1): PHASE 19 introduced a
+ * 5-minute `RUNNING_RUN_STALE_AFTER_MS` age cutoff so a `RUNNING` row from
+ * a crashed process would not permanently block new syncs. That cutoff was
+ * UNSAFE and has been removed. The trace that proves why:
+ *
+ *   - `maxDurationMs` (see `collectCatalog`, default 45s, caller-clampable
+ *     up to 10 minutes) bounds ONLY the provider fetch/pagination phase.
+ *     It is enforced by an `AbortController` local to `collectCatalog` and
+ *     is never checked, propagated, or re-armed anywhere else.
+ *   - Everything after `collectCatalog` returns — the per-product
+ *     create/update/touch write loop (up to `maxProducts`, default 10,000,
+ *     caller-clampable to 1,000,000), `markUnavailableExcept` absence
+ *     reconciliation, `adapter.completeProductSync`, and
+ *     `finalizeSyncRun` — has ZERO time bound. A grep of this function's
+ *     entire body (claim through finalize) turns up exactly one
+ *     time-related statement: the (now-removed) `notBefore` computation.
+ *   - Therefore `maxDurationMs` is NOT a hard wall-clock bound on total
+ *     run execution, and a legitimate run (large catalog, slow DB/network)
+ *     can genuinely still be doing real work well past the old 5-minute
+ *     mark.
+ *
+ * `CommerceProductSyncRun` (see prisma/schema.prisma) has no renewable
+ * heartbeat/lease field (`startedAt` is set once at creation, `finishedAt`
+ * only at completion — neither can be safely repurposed as a heartbeat
+ * without corrupting its own meaning), so there is no schema-change-free
+ * way to distinguish "still legitimately running" from "abandoned" by age
+ * alone. Adding such a field is a schema change and is explicitly out of
+ * scope for this round.
+ *
+ * The chosen design is therefore: a `RUNNING` row is authoritative and
+ * unconditionally blocks a new claim for its connection until
+ * `finalizeSyncRun` closes it — no automatic age-based reclaim at all (see
+ * `claimProductSyncRun`'s doc comment). This trades away automatic
+ * crash recovery (a crashed process can leave a stuck `RUNNING` row,
+ * requiring explicit operator intervention — e.g. a manual finalize
+ * action, or a future schema addition for a real heartbeat/lease) in
+ * exchange for making concurrent-writer catalog corruption structurally
+ * impossible. Correctness over unattended recovery.
+ */
 async function runProductSync(
   brandId: string,
   provider: CommerceProvider,
   connectionId: string,
-  currencyCode: string | null,
   adapter: CommerceAdapter,
   options: SyncBrandCommerceProductsOptions,
   deps: ProductSyncDeps,
 ): Promise<ProductSyncOutcome> {
-  const run = await deps.createSyncRun({
+  // PHASE 19 REPAIR (P1-2): ONE atomic transaction decides "is there
+  // already a fresh RUNNING run for this exact connection" AND, if not,
+  // creates the new RUNNING row — see `claimProductSyncRun`'s doc comment.
+  // The connection has ALREADY been resolved to this exact `connectionId`
+  // by the caller (`syncBrandCommerceProducts` / `syncCommerceConnectionById`,
+  // both BEFORE calling this function) — so the legacy bodyless path gets
+  // the identical per-connection atomicity as the exact-connectionId path,
+  // with no separate brand-wide race for it (Part 4C).
+  const claim = await deps.claimProductSyncRun({
     connectionId,
     brandId,
     provider,
     triggeredBy: options.triggeredBy ?? null,
   });
+  if (claim.status === "ALREADY_RUNNING") {
+    // No run was created THIS call — nothing to finalize. The existing
+    // RUNNING row belongs to whichever process claimed it; its own
+    // eventual finalize is unaffected by this early return.
+    return {
+      status: "ALREADY_RUNNING",
+      brandId,
+      provider,
+      connectionId,
+      runningRun: claim.runningRun,
+    };
+  }
+  const run = claim.run;
+
+  // PHASE 16-18 REPAIR (P1-1): a ONE-TIME baseline captured BEFORE any
+  // fetch/write work starts, from a SINGLE row read that yields BOTH the
+  // config-only fingerprint AND the currency code used for this run's
+  // product computations — see `ProductSyncDeps.getConnectionConfigSnapshot`'s
+  // doc comment for why the currency must come from this same read rather
+  // than an earlier-resolved `CommerceConnectionSummary.currencyCode`.
+  // FAIL-CLOSED, not fail-open: a READ FAILURE here (`FINGERPRINT_UNKNOWN`,
+  // never conflated with `null` — a genuinely-gone connection, a real,
+  // meaningful, distinct result) means there is no trustworthy baseline at
+  // all, so this entire run withholds config-derived authority from the
+  // start (see `configTrustworthyAtStart` below).
+  const configSnapshotBeforeFetch = await readConnectionConfigSnapshot(deps, connectionId);
+  const configTrustworthyAtStart = configSnapshotBeforeFetch !== FINGERPRINT_UNKNOWN;
+  const fingerprintBeforeFetch: string | null = configTrustworthyAtStart
+    ? (configSnapshotBeforeFetch?.fingerprint ?? null)
+    : null;
+  const currencyCodeAtStart: string | null = configTrustworthyAtStart
+    ? (configSnapshotBeforeFetch?.currencyCode ?? null)
+    : null;
 
   let catalog: CollectedCatalog;
   try {
@@ -1287,7 +1716,24 @@ async function runProductSync(
     );
 
     for (const product of catalog.products) {
-      const computed = computeProductFields(product, currencyCode);
+      // PHASE 19 REPAIR (P1-1): `computed`/`decision` are still built
+      // OPTIMISTICALLY (assuming the baseline captured at the top of this
+      // function remains trustworthy) — but unlike the prior round, this
+      // is no longer the value that gets persisted unconditionally.
+      // `deps.applyProductWrite` performs its OWN atomic, row-locked live
+      // recheck immediately before persisting (see that dep's doc
+      // comment) and silently substitutes a sanitized decision if the
+      // config changed since `fingerprintBeforeFetch` was captured — the
+      // structural guarantee this repair round requires: stale-data
+      // safety holds BEFORE the write commits, not only after a
+      // best-effort cleanup step later.
+      const computed = {
+        ...computeProductFields(
+          product,
+          configTrustworthyAtStart ? currencyCodeAtStart : null,
+        ),
+        ...(configTrustworthyAtStart ? {} : { hasPublicStorefrontUrl: false }),
+      };
       const existing = existingByKey.get(computed.externalKey) ?? null;
       const decision = decideProductWrite(existing, computed, now, run.id);
 
@@ -1303,6 +1749,7 @@ async function runProductSync(
           provider,
           computed.externalKey,
           decision,
+          configTrustworthyAtStart ? fingerprintBeforeFetch : null,
         );
       } catch {
         stats.failedCount += 1;
@@ -1393,6 +1840,71 @@ async function runProductSync(
       stats.createdCount + stats.updatedCount + stats.unchangedCount;
     finalStatus = succeededCount > 0 ? "PARTIAL" : "FAILED";
   } finally {
+    // PHASE 19 REPAIR — DEFENSE IN DEPTH ONLY, NOT THE PRIMARY SAFETY
+    // MECHANISM. Every product write above already guarantees stale-data
+    // safety BEFORE it commits (see `applyProductWrite`'s doc comment on
+    // `ProductSyncDeps` — the row-locked transactional recheck): an
+    // authoritative A-derived (stale) write can structurally never commit
+    // once a config change is visible to that write's own transaction.
+    // What THIS block still exists to catch is narrower: `markUnavailableExcept`
+    // and `completeProductSync` run OUTSIDE the per-product locking
+    // transaction, and a config change could in principle land in the
+    // small window between the last per-product write and this check.
+    // Re-reads the fingerprint one more time and compares it to the
+    // PRE-fetch value; if they don't both exist and match, this connection's
+    // product rows are invalidated as a defense-in-depth cleanup, in ONE
+    // atomic write (see 4A / `invalidateStaleConfigDerivedFields`'s doc
+    // comment) scoped to this EXACT connection only.
+    //
+    // Its failure is never merely logged and absorbed — it still downgrades
+    // `finalStatus` to FAILED before `finalizeSyncRun` is ever called (P1-2
+    // of the prior round), so observability stays accurate even though (per
+    // Part 2 of THIS round) that failure can no longer leave stale data
+    // authoritative — the per-write transactional fence already prevented
+    // that. This can still never throw INTO the outer function (a `finally`
+    // throwing would replace whatever status/error was already decided
+    // above) — the failure is caught, logged LOUDLY, and turned into a
+    // status change instead of a propagated exception.
+    const fingerprintAfterWrites = await readConnectionFingerprint(deps, connectionId);
+    const configStillTrustworthy =
+      configTrustworthyAtStart &&
+      fingerprintAfterWrites !== FINGERPRINT_UNKNOWN &&
+      fingerprintAfterWrites === fingerprintBeforeFetch;
+
+    if (!configStillTrustworthy) {
+      console.log(
+        JSON.stringify({
+          event: "commerce_product_sync_config_untrustworthy",
+          connectionId,
+          provider,
+          runId: run.id,
+        }),
+      );
+      try {
+        await deps.invalidateStaleConfigDerivedFields(connectionId);
+      } catch (error) {
+        console.error(
+          JSON.stringify({
+            event: "commerce_product_sync_invalidation_failed",
+            connectionId,
+            provider,
+            runId: run.id,
+            message: classifySyncFailure(error).message,
+          }),
+        );
+        // P1-2: a REQUIRED safety write failed — never let the run report
+        // SUCCEEDED while the cleanup it depends on could not be proven to
+        // have happened. FAILED (not PARTIAL): this is more severe than an
+        // ordinary incomplete catalog fetch — some already-written product
+        // data in THIS run may still be stale and unverifiable.
+        finalStatus = "FAILED";
+        failureSummary = formatFailureSummary(
+          "REQUIRED_INVALIDATION_FAILED",
+          "Configuration changed during this sync and the required stale-data cleanup failed; some product data written by this run may be stale. Re-run the sync.",
+        );
+      }
+    }
+
     // Reached on EVERY exit path out of the try block above — normal
     // completion, a per-product write failure loop that ran to the end, or
     // an unexpected throw caught just above. A `CommerceProductSyncRun` row

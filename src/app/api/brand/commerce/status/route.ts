@@ -66,6 +66,13 @@ export async function commerceStatusGetImpl(
               externalAccountId: connection.externalAccountId,
               isConnected: connection.status === "CONNECTED",
               lastProductSyncAt: connection.lastProductSyncAt,
+              // PHASE 16 BIG ROUND / SUBPHASE 1 — no secrets: storefrontUrl,
+              // currencyCode, and productRoute are merchant-facing
+              // configuration values, not credentials, and are needed to
+              // pre-fill the Commerce7 storefront-configuration form.
+              storefrontUrl: connection.storefrontUrl,
+              currencyCode: connection.currencyCode,
+              productRoute: connection.productRoute ?? null,
             }
           : null,
       },

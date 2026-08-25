@@ -20,10 +20,13 @@
  * CREDENTIALS: app-global, from backend environment configuration only. This
  * adapter never reads or writes `CommerceConnectionSecret`.
  *
- * DELIBERATELY NOT IMPLEMENTED: rewards/discounts, orders, carts, attribution,
- * and public storefront destinations. `getCapabilities()` reports exactly what
- * is real, so the neutral layer refuses anything else rather than discovering
- * it at runtime.
+ * DELIBERATELY NOT IMPLEMENTED: rewards/discounts, orders, carts, attribution.
+ * `getCapabilities()` reports exactly what is real, so the neutral layer
+ * refuses anything else rather than discovering it at runtime. Public
+ * storefront destinations (PHASE 16 BIG ROUND / SUBPHASE 2) ARE implemented,
+ * but only produce a real URL for a connection a Brand Admin has explicitly
+ * configured (see `toStorefrontConfig` below) — see
+ * `./commerce7-storefront-configuration.ts` and `./commerce7-products.ts`.
  */
 
 import {
@@ -44,11 +47,15 @@ import type {
   ProductSyncPageResult,
   ProductSyncResult,
 } from "../types";
-import { extractCurrencyCodeFromProviderMetadata } from "../connection-resolver";
+import {
+  extractCurrencyCodeFromProviderMetadata,
+  extractProductRouteFromProviderMetadata,
+} from "../connection-resolver";
 import {
   fetchAllCommerce7Products,
   fetchCommerce7ProductPage,
   type Commerce7Fetch,
+  type Commerce7StorefrontConfig,
 } from "./commerce7-products";
 
 export type Commerce7CommerceConnectionRow = {
@@ -150,6 +157,22 @@ function toCommerceConnectionSummary(
 /** Commerce7 cursor pagination has no caller-selectable page size. */
 const COMMERCE7_REPORTED_PAGE_LIMIT = 50;
 
+/**
+ * PHASE 16 BIG ROUND / SUBPHASE 2 — derives the per-connection storefront
+ * config `commerce7-products.ts` needs to compute a public product
+ * destination, straight from the ALREADY-LOADED connection row (no extra
+ * query). `row.storefrontUrl` and the `productRoute` key inside
+ * `row.providerMetadata` are exactly what `configureCommerce7Storefront`
+ * (`./commerce7-storefront-configuration.ts`) persists — this is a read of
+ * that same canonical storage, never a second config source.
+ */
+function toStorefrontConfig(row: Commerce7CommerceConnectionRow): Commerce7StorefrontConfig {
+  return {
+    storefrontUrl: row.storefrontUrl,
+    productRoute: extractProductRouteFromProviderMetadata(row.providerMetadata),
+  };
+}
+
 export class Commerce7CommerceAdapter implements CommerceAdapter {
   readonly provider = CommerceProvider.COMMERCE7;
 
@@ -160,17 +183,20 @@ export class Commerce7CommerceAdapter implements CommerceAdapter {
   }
 
   /**
-   * Phase 16C1 reality: catalog reads only.
-   *
-   * `products.publicDestinations` is FALSE because no verified Commerce7
-   * storefront base URL exists yet — see the fail-closed note in
-   * `commerce7-products.ts`. Every reward capability is false because none is
-   * implemented; claiming one would let the neutral reward path attempt a
-   * provider call that does not exist.
+   * `products.publicDestinations` is TRUE as of PHASE 16 BIG ROUND / SUBPHASE
+   * 2: `syncProducts`/`fetchProductPage` below now pass this connection's
+   * merchant-confirmed storefront config into `commerce7-products.ts`, which
+   * computes a real, host-pinned `productUrl` for a product that passes the
+   * full public-eligibility gate (see `computeCommerce7ProductDestination`).
+   * An unconfigured connection still safely yields `productUrl: ""` for
+   * every product — this flag reports genuine CAPABILITY, not "every product
+   * currently has a destination." Every reward capability stays false
+   * because none is implemented; claiming one would let the neutral reward
+   * path attempt a provider call that does not exist.
    */
   getCapabilities(): CommerceCapabilities {
     return {
-      products: { sync: true, publicDestinations: false },
+      products: { sync: true, publicDestinations: true },
       rewards: {
         create: false,
         lookup: false,
@@ -236,7 +262,7 @@ export class Commerce7CommerceAdapter implements CommerceAdapter {
     this.requireConnected(row);
 
     const products = await fetchAllCommerce7Products(
-      { tenant: row.externalAccountId },
+      { tenant: row.externalAccountId, storefrontConfig: toStorefrontConfig(row) },
       { fetchImpl: this.deps.fetchImpl },
     );
 
@@ -260,8 +286,10 @@ export class Commerce7CommerceAdapter implements CommerceAdapter {
    * repeated-cursor / max-page / elapsed-time guards on top of this.
    *
    * No `prepareProductSync` is implemented: Shopify needs one to gather
-   * publication evidence, whereas Commerce7 publication is unconditionally
-   * false in this phase, so there is nothing to prepare.
+   * publication evidence via a separate catalog-wide scan, whereas
+   * Commerce7's publication evidence (storefront config) is already fully
+   * available on the already-loaded connection `row` below — there is
+   * nothing to prepare ahead of time.
    */
   async fetchProductPage(
     connectionId: string,
@@ -278,6 +306,7 @@ export class Commerce7CommerceAdapter implements CommerceAdapter {
       {
         tenant: row.externalAccountId,
         cursor: request.cursor ?? null,
+        storefrontConfig: toStorefrontConfig(row),
         ...(request.signal ? { signal: request.signal } : {}),
       },
       { fetchImpl: this.deps.fetchImpl },

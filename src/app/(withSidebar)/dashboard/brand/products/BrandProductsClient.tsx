@@ -71,25 +71,35 @@ type ProductsListMeta = {
   lastSyncRun: LastSyncRunSummary;
 };
 
-type SyncRunRow = {
-  id: string;
+type LiveConnection = {
   connectionId: string;
   provider: string;
   status: string;
-  startedAt: string;
-  finishedAt: string | null;
+  displayName: string;
+  externalAccountId: string;
+  isConnected: boolean;
+  lastProductSyncAt: string | null;
 };
 
+type BrandCommerceConnectionsResponse = {
+  connections: LiveConnection[];
+  complete: boolean;
+  autoSelectConnectionId: string | null;
+} | null;
+
+/**
+ * PHASE 18 REPAIR (P2-4A): tracks the connections-LIST fetch as its own
+ * state machine, separate from the (possibly stale, single-preferred)
+ * `/api/brand/commerce/status` read. `"ready"` is the ONLY state in which
+ * an operational action (sync) may be enabled — `"loading"`/`"error"`/
+ * `"incomplete"` (the server itself could not verify every provider) all
+ * mean "we do not yet definitively know the brand's connection list," and
+ * must never be silently treated as "proceed with whatever status said."
+ */
+type ConnectionsListStatus = "loading" | "ready" | "incomplete" | "error";
+
 type BrandCommerceStatus = {
-  connection: {
-    connectionId: string;
-    provider: string;
-    status: string;
-    displayName: string;
-    externalAccountId: string;
-    isConnected: boolean;
-    lastProductSyncAt: string | null;
-  } | null;
+  connection: LiveConnection | null;
 } | null;
 
 type AvailabilityFilter = "available" | "unavailable" | "all";
@@ -137,12 +147,118 @@ function formatDateTime(value: string | null): string {
   }).format(date);
 }
 
+type SyncRunRow = {
+  id: string;
+  connectionId: string;
+  provider: string;
+  status: string;
+  startedAt: string;
+  finishedAt: string | null;
+  fetchedCount: number;
+  createdCount: number;
+  updatedCount: number;
+  unchangedCount: number;
+  markedUnavailableCount: number;
+  failedCount: number;
+  hasNextPage: boolean;
+  failureSummary: string | null;
+};
+
+const SYNC_RUN_STATUS_LABELS: Record<string, string> = {
+  SUCCEEDED: "Succeeded",
+  PARTIAL: "Partial",
+  FAILED: "Failed",
+  RUNNING: "Running",
+};
+
+function syncRunStatusToneClass(status: string): string {
+  if (status === "SUCCEEDED") return "border-emerald-400/25 bg-emerald-400/10 text-emerald-200/90";
+  if (status === "PARTIAL") return "border-amber-400/25 bg-amber-400/10 text-amber-200/90";
+  if (status === "FAILED") return "border-red-400/25 bg-red-400/10 text-red-200/90";
+  return "border-white/15 bg-white/5 text-white/70";
+}
+
+/**
+ * PHASE 19 — PART 13/14: persisted sync-run history for the connection
+ * CURRENTLY BEING VIEWED (`displayConnection`) — reads the existing
+ * `GET /api/brand/products/sync-runs?connectionId=...` route (already
+ * connection-scoped, sanitized — never a raw exception/credential/payload,
+ * see that route's own doc comment). Re-keyed by `connectionId` so
+ * switching stores never shows a stale list from a previously-viewed
+ * connection while the new one's data is still loading.
+ */
+function SyncRunHistory({ connectionId }: { connectionId: string }) {
+  const [runs, setRuns] = useState<SyncRunRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    setRuns([]);
+
+    (async () => {
+      try {
+        const data = await fetchJson<{ data: SyncRunRow[] }>(
+          `/api/brand/products/sync-runs?connectionId=${encodeURIComponent(connectionId)}&limit=10`,
+        );
+        if (!cancelled) setRuns(data.data);
+      } catch (loadError) {
+        if (!cancelled) setError(getErrorMessage(loadError, "Failed to load sync history."));
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionId]);
+
+  return (
+    <PageCard>
+      <p className="text-sm font-semibold text-white/85">Sync history</p>
+      {loading ? (
+        <p className="mt-3 text-sm text-white/65">Loading sync history...</p>
+      ) : error ? (
+        <p className="mt-3 text-sm text-red-300">{error}</p>
+      ) : runs.length === 0 ? (
+        <p className="mt-3 text-sm text-white/65">No sync runs recorded yet for this store.</p>
+      ) : (
+        <div className="mt-3 space-y-2">
+          {runs.map((run) => (
+            <div key={run.id} className="rounded-xl border border-white/10 bg-black/20 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-xs text-white/60">{formatDateTime(run.startedAt)}</p>
+                <span className={`rounded-full border px-3 py-1 text-xs ${syncRunStatusToneClass(run.status)}`}>
+                  {SYNC_RUN_STATUS_LABELS[run.status] ?? run.status}
+                </span>
+              </div>
+              <p className="mt-2 text-xs text-white/50">
+                Fetched {run.fetchedCount}, created {run.createdCount}, updated {run.updatedCount}, unchanged{" "}
+                {run.unchangedCount}, unavailable {run.markedUnavailableCount}
+                {run.failedCount > 0 ? `, failed ${run.failedCount}` : ""}
+                {run.hasNextPage ? " — truncated" : ""}
+              </p>
+              {run.failureSummary ? (
+                <p className="mt-1 text-xs text-amber-200/80">{run.failureSummary}</p>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </PageCard>
+  );
+}
+
 const PAGE_LIMIT = 50;
 
 export function BrandProductsClient() {
   const [brandStatus, setBrandStatus] = useState<BrandCommerceStatus>(null);
-  const [connections, setConnections] = useState<SyncRunRow[]>([]);
+  const [connections, setConnections] = useState<LiveConnection[]>([]);
   const [connectionId, setConnectionId] = useState<string>("");
+  const [connectionsListStatus, setConnectionsListStatus] = useState<ConnectionsListStatus>("loading");
 
   const [products, setProducts] = useState<ProductRow[]>([]);
   const [meta, setMeta] = useState<ProductsListMeta | null>(null);
@@ -233,24 +349,40 @@ export function BrandProductsClient() {
     [q, availability, connectionId],
   );
 
+  /**
+   * PHASE 16 BIG ROUND / SUBPHASE 3: sourced from
+   * `/api/brand/commerce/connections` — the FULL live list of the brand's
+   * connections across every provider, including one that has never been
+   * synced (a prior version derived this list from sync-run HISTORY only,
+   * so a freshly-connected, never-synced account could never appear or be
+   * selected). Auto-selects the connection the moment exactly one usable
+   * (CONNECTED) one exists; otherwise leaves the choice to the Brand Admin
+   * via the "Store" selector below, and `runSync` refuses to fire an
+   * ambiguous request.
+   */
   const loadConnections = useCallback(async () => {
+    setConnectionsListStatus("loading");
     try {
-      const response = await fetch("/api/brand/products/sync-runs?limit=50", {
-        credentials: "include",
-      });
-      const json = await response.json().catch(() => null);
-      if (!response.ok) return;
-      const runs: SyncRunRow[] = json?.data ?? [];
-
-      const seen = new Map<string, SyncRunRow>();
-      for (const run of runs) {
-        if (!seen.has(run.connectionId)) {
-          seen.set(run.connectionId, run);
+      const data = await fetchJson<BrandCommerceConnectionsResponse>(
+        "/api/brand/commerce/connections",
+      );
+      const list = data?.connections ?? [];
+      setConnections(list);
+      setConnectionId((current) => {
+        if (current && list.some((connection) => connection.connectionId === current)) {
+          return current;
         }
-      }
-      setConnections(Array.from(seen.values()));
+        // PHASE 18 REPAIR (P2-4A): only auto-select when the server itself
+        // confirms the read was complete — an incomplete read might be
+        // hiding a second connection on a provider whose query failed.
+        if (data?.complete && data?.autoSelectConnectionId) {
+          return data.autoSelectConnectionId;
+        }
+        return "";
+      });
+      setConnectionsListStatus(data?.complete ? "ready" : "incomplete");
     } catch {
-      // Non-fatal — the store filter simply stays hidden.
+      setConnectionsListStatus("error");
     }
   }, []);
 
@@ -282,14 +414,39 @@ export function BrandProductsClient() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [q, availability, connectionId]);
 
-  const activeConnection = brandStatus?.connection ?? null;
+  // PHASE 18 REPAIR (P2-4A): TWO distinct notions of "the active
+  // connection," never conflated:
+  //   `displayConnection` — for PASSIVE display only (the summary cards,
+  //   provider label, empty-state copy). Falls back to
+  //   `/api/brand/commerce/status`'s single "preferred" connection while
+  //   the live list is still loading, so the page doesn't flash an empty
+  //   state during the brief initial-load window.
+  //   `syncTargetConnection` — the ONLY value `runSync` and the sync
+  //   button's `disabled` condition may use. It is `null` unless
+  //   `connectionsListStatus === "ready"` (the live list loaded
+  //   successfully AND every provider was confirmed read) — it NEVER falls
+  //   back to the status-preferred connection, so a sync can never fire
+  //   against a guessed/stale target while the definitive list is still
+  //   loading, failed, or came back incomplete.
+  const selectedConnection =
+    connections.find((connection) => connection.connectionId === connectionId) ?? null;
+  const displayConnection = selectedConnection ?? brandStatus?.connection ?? null;
+  const syncTargetConnection =
+    connectionsListStatus === "ready" ? selectedConnection : null;
+  // Explicit choice required: more than one connection exists and none is
+  // selected yet. Only meaningful once the list is definitively ready.
+  const selectionRequired =
+    connectionsListStatus === "ready" && connections.length > 1 && !selectedConnection;
   const providerLabel =
-    activeConnection?.provider === "SHOPIFY"
+    displayConnection?.provider === "SHOPIFY"
       ? "Shopify"
-      : activeConnection?.provider === "COMMERCE7"
+      : displayConnection?.provider === "COMMERCE7"
         ? "Commerce7"
-        : activeConnection?.provider || "";
-  const isConnected = activeConnection?.isConnected === true;
+        : displayConnection?.provider || "";
+  // Passive display only — the empty-state / summary-card gate. Sync's OWN
+  // gate is `syncTargetConnection?.isConnected`, computed separately below.
+  const isConnected = displayConnection?.isConnected === true;
+  const canSync = syncTargetConnection?.isConnected === true && !selectionRequired;
 
   const lastSyncLabel = useMemo(() => {
     const run = meta?.lastSyncRun;
@@ -306,7 +463,14 @@ export function BrandProductsClient() {
     // guard is repeated here so no POST can ever be emitted for a
     // non-CONNECTED (or absent) connection — belt and braces, not merely a
     // UI affordance.
-    if (!isConnected) {
+    //
+    // PHASE 18 REPAIR (P2-4A): `canSync` (derived from `syncTargetConnection`
+    // — see its own doc comment above) is `false` whenever the connections
+    // list is not definitively `"ready"`, so a sync can never fire against
+    // whatever `/api/brand/commerce/status` happened to report while the
+    // authoritative list was still loading, failed, or came back
+    // incomplete — never a silently-defaulted or ambiguous target.
+    if (!canSync || !syncTargetConnection) {
       return;
     }
 
@@ -316,21 +480,15 @@ export function BrandProductsClient() {
     try {
       // PHASE 16C2: send the EXACT connection identity the brand is actually
       // using — never rely on the backend's "missing provider => Shopify"
-      // default, which exists only for legacy callers. When no connection is
-      // known yet, the body is empty and the backend reports NO_CONNECTION,
-      // same as before this phase.
+      // default, which exists only for legacy callers.
       const response = await fetch("/api/brand/products/sync", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(
-          activeConnection
-            ? {
-                provider: activeConnection.provider,
-                connectionId: activeConnection.connectionId,
-              }
-            : {},
-        ),
+        body: JSON.stringify({
+          provider: syncTargetConnection.provider,
+          connectionId: syncTargetConnection.connectionId,
+        }),
       });
       const json = await response.json().catch(() => null);
 
@@ -514,11 +672,19 @@ export function BrandProductsClient() {
         <Button
           type="button"
           onClick={() => void runSync()}
-          disabled={syncing || !isConnected}
+          disabled={syncing || !canSync}
           title={
-            !isConnected
-              ? "Connect a commerce store, or reconnect the one that needs it, before syncing products."
-              : undefined
+            connectionsListStatus === "loading"
+              ? "Loading store connections…"
+              : connectionsListStatus === "error"
+                ? "Could not load store connections. Try refreshing the page."
+                : connectionsListStatus === "incomplete"
+                  ? "Could not confirm every connected store. Try refreshing the page."
+                  : selectionRequired
+                    ? "Select which store to sync below."
+                    : !canSync
+                      ? "Connect a commerce store, or reconnect the one that needs it, before syncing products."
+                      : undefined
           }
           className="rounded-full border border-white bg-white text-black hover:bg-white/90"
         >
@@ -533,9 +699,9 @@ export function BrandProductsClient() {
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
               <p className="text-sm text-white/55">Connected store</p>
               <p className="mt-2 text-sm text-white/80">
-                {activeConnection?.externalAccountId || "Not connected"}
+                {displayConnection?.externalAccountId || "Not connected"}
               </p>
-              {activeConnection ? (
+              {displayConnection ? (
                 <span className="mt-2 inline-flex rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs text-white/70">
                   {providerLabel}
                 </span>
@@ -546,9 +712,9 @@ export function BrandProductsClient() {
               <p className="mt-2 text-2xl font-semibold">
                 {isConnected
                   ? "Connected"
-                  : activeConnection?.status === "UNINSTALLED"
+                  : displayConnection?.status === "UNINSTALLED"
                     ? "Uninstalled"
-                    : activeConnection?.status === "REQUIRES_RECONNECT"
+                    : displayConnection?.status === "REQUIRES_RECONNECT"
                       ? "Needs reconnect"
                       : "Not connected"}
               </p>
@@ -570,6 +736,8 @@ export function BrandProductsClient() {
           </p>
         </div>
       </PageCard>
+
+      {displayConnection ? <SyncRunHistory connectionId={displayConnection.connectionId} /> : null}
 
       <PageCard>
         <div className="flex flex-col gap-4 md:flex-row md:flex-wrap md:items-end">
@@ -596,16 +764,22 @@ export function BrandProductsClient() {
           </label>
           {connections.length > 1 ? (
             <label className="space-y-2 text-sm text-white/70">
-              <span>Store</span>
+              <span>Store{selectionRequired ? " (select one to sync)" : ""}</span>
               <select
                 value={connectionId}
                 onChange={(event) => setConnectionId(event.target.value)}
                 className="h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
               >
-                <option value="">All stores</option>
+                <option value="">All stores (browse only)</option>
                 {connections.map((connection) => (
                   <option key={connection.connectionId} value={connection.connectionId}>
-                    {connection.provider} ({connection.connectionId.slice(0, 8)})
+                    {connection.provider === "SHOPIFY"
+                      ? "Shopify"
+                      : connection.provider === "COMMERCE7"
+                        ? "Commerce7"
+                        : connection.provider}
+                    {" — "}
+                    {connection.displayName || connection.externalAccountId}
                   </option>
                 ))}
               </select>

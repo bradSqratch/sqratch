@@ -937,8 +937,12 @@ describe("ShopifyCommerceAdapter", () => {
     assert.equal(commerce7Adapter.provider, CommerceProvider.COMMERCE7);
     assert.ok(!(commerce7Adapter instanceof ShopifyCommerceAdapter));
     assert.notEqual(commerce7Adapter, shopifyAdapter);
+    // PHASE 16 BIG ROUND / SUBPHASE 2: publicDestinations is now true — a
+    // merchant-configured connection can produce a real, host-pinned
+    // public product destination. See
+    // tests/commerce7-storefront-public-destinations.test.ts.
     assert.deepEqual(commerce7Adapter.getCapabilities(), {
-      products: { sync: true, publicDestinations: false },
+      products: { sync: true, publicDestinations: true },
       rewards: {
         create: false,
         lookup: false,

@@ -274,6 +274,57 @@ export async function getActiveCommerceConnectionAnyProvider(
 }
 
 /**
+ * PHASE 16 BIG ROUND / SUBPHASE 3: resolves EVERY `CommerceConnection` row
+ * for a brand, across every provider — unlike
+ * `getActiveCommerceConnectionAnyProvider`, which picks the single
+ * preferred row, this is the full list a multi-provider/multi-account
+ * selector UI needs to let a Brand Admin choose explicitly. Reuses the exact
+ * same `findConnectionRows` dep and `mapCommerceConnectionToSummary`
+ * mapping as every other lookup in this file — no second query path. A
+ * per-provider read failure is treated as "no rows for that provider" so one
+ * provider's outage never hides another's working connections.
+ */
+/**
+ * PHASE 18 REPAIR (P2-4B): the prior shape silently converted a per-provider
+ * query FAILURE into "this provider simply has zero connections" — a caller
+ * had no way to tell "Commerce7 genuinely has no connection" apart from
+ * "Commerce7's query blew up and we don't actually know." That distinction
+ * matters: an operational UI that auto-selects when exactly one connection
+ * is visible could auto-select a Shopify connection while silently hiding a
+ * real, live Commerce7 one whose read merely failed.
+ */
+export type CommerceConnectionListResult = {
+  connections: CommerceConnectionSummary[];
+  /** `false` whenever ANY provider's read failed — the list may be incomplete. */
+  complete: boolean;
+  /** Which provider(s) failed to read, if any — for diagnostics, never swallowed silently. */
+  failedProviders: CommerceProvider[];
+};
+
+export async function getAllCommerceConnectionsForBrand(
+  brandId: string,
+  deps: Partial<CommerceConnectionServiceDeps> = {},
+): Promise<CommerceConnectionListResult> {
+  const resolvedDeps = resolveServiceDeps(deps);
+  const failedProviders: CommerceProvider[] = [];
+  const results = await Promise.all(
+    Object.values(CommerceProvider).map(async (provider) => {
+      try {
+        return await resolvedDeps.findConnectionRows(brandId, provider);
+      } catch {
+        failedProviders.push(provider);
+        return [];
+      }
+    }),
+  );
+  return {
+    connections: results.flat().map(mapCommerceConnectionToSummary),
+    complete: failedProviders.length === 0,
+    failedProviders,
+  };
+}
+
+/**
  * Resolves one historical provider account to its exact current canonical
  * connection. This is deliberately not the preferred/primary lookup: reward
  * reconciliation must never pair an X redemption with a Y credential after a

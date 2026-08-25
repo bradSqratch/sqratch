@@ -149,10 +149,10 @@ function makeDeps(
         (row) => row as unknown as ExistingConnectedProductRow,
       );
     },
-    async createSyncRun(input) {
+    async claimProductSyncRun(input) {
       const id = `run-${catalog.nextId++}`;
       catalog.runs.set(id, { id, ...input, status: "RUNNING" });
-      return { id };
+      return { status: "CLAIMED" as const, run: { id } };
     },
     async finalizeSyncRun(runId, input) {
       catalog.runs.set(runId, { ...(catalog.runs.get(runId) ?? {}), ...input });
@@ -168,12 +168,12 @@ function makeDeps(
           externalKey,
           ...decision.data,
         } as Row);
-        return;
+        return { trustworthy: true };
       }
       if (decision.kind === "UPDATE") {
         const existing = catalog.rows.get(decision.existingId)!;
         catalog.rows.set(decision.existingId, { ...existing, ...decision.data } as Row);
-        return;
+        return { trustworthy: true };
       }
       const existing = catalog.rows.get(decision.existingId)!;
       catalog.rows.set(decision.existingId, {
@@ -181,6 +181,7 @@ function makeDeps(
         lastSeenAt: decision.lastSeenAt,
         lastSyncRunId: decision.lastSyncRunId,
       } as Row);
+      return { trustworthy: true };
     },
     async markUnavailableExcept(connectionId, seenExternalKeys, now, runId) {
       let count = 0;
@@ -198,6 +199,16 @@ function makeDeps(
       }
       return { count };
     },
+    async getConnectionFingerprint() {
+      // Stable by default: this test suite doesn't exercise the
+      // configuration-vs-sync race — see commerce-product-sync.test.ts's
+      // FakeStore for the version that does.
+      return "unchanged";
+    },
+    async getConnectionConfigSnapshot() {
+      return { fingerprint: "unchanged", currencyCode: connectionSummary.currencyCode };
+    },
+    async invalidateStaleConfigDerivedFields() {},
   };
 }
 

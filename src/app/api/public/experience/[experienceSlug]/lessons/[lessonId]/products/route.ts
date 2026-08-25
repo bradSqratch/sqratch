@@ -72,10 +72,15 @@ function eligibleCampaignIdsFor(access: ExperienceAccessContext): string[] {
  * BOTH conditions, always. `isAvailable` is provider lifecycle status;
  * `hasPublicStorefrontUrl` is provider-confirmed Online Store publication.
  * Neither substitutes for the other.
+ *
+ * PHASE 18 REPAIR (P1-3): ALSO requires the owning `CommerceConnection` to
+ * be `CONNECTED` — see the identical gate/rationale in
+ * `../../../products/route.ts` and `../../../../../../lib/commerce/click-attribution.ts`.
  */
 const PUBLICLY_LISTABLE_CONNECTED_PRODUCT = {
   isAvailable: true,
   hasPublicStorefrontUrl: true,
+  connection: { is: { status: "CONNECTED" as const } },
 } as const;
 
 export async function GET(

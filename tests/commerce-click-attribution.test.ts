@@ -168,6 +168,10 @@ function resolvedLink(overrides: Partial<Record<string, unknown>> = {}) {
     provider: "SHOPIFY" as const,
     connectionStorefrontUrl: "https://acme.test",
     hasProviderSuppliedStorefrontUrl: false,
+    // PHASE 18 REPAIR (P1-3): every existing fixture represents an
+    // otherwise-clickable product, so CONNECTED is the correct default —
+    // a test exercising the new lifecycle gate overrides this explicitly.
+    connectionStatus: "CONNECTED" as const,
     ...overrides,
   };
 }
@@ -223,6 +227,75 @@ const LESSON_SURFACE: CommerceClickSurface = {
   lessonId: "lesson-1",
   campaignLessonProductId: "clp-1",
 };
+
+// ---------------------------------------------------------------------------
+// PHASE 18 REPAIR (P1-3): connection lifecycle gate at click time.
+// ---------------------------------------------------------------------------
+describe("connection lifecycle gate: a non-CONNECTED connection never mints attribution or redirects", () => {
+  for (const status of ["UNINSTALLED", "DISCONNECTED", "REQUIRES_RECONNECT", "PENDING", "ERROR"] as const) {
+    test(`${status} -> generic 404, no attribution, no redirect`, async () => {
+      let attributionRecorded = false;
+      const response = await click(SHOP_SURFACE, {
+        findBrandStorefrontProduct: async () =>
+          resolvedLink({ connectionStatus: status }),
+        recordAttribution: async () => {
+          attributionRecorded = true;
+        },
+      });
+      assert.equal(response.status, 404);
+      assert.equal(attributionRecorded, false);
+    });
+  }
+
+  test("CONNECTED -> still redirects and mints attribution when otherwise eligible (no regression)", async () => {
+    let attributionRecorded = false;
+    const response = await click(SHOP_SURFACE, {
+      findBrandStorefrontProduct: async () =>
+        resolvedLink({ connectionStatus: "CONNECTED" }),
+      recordAttribution: async () => {
+        attributionRecorded = true;
+      },
+    });
+    assert.equal(response.status, 302);
+    assert.equal(attributionRecorded, true);
+  });
+
+  test("the SAME gate applies to the CAMPAIGN_PRODUCT and LESSON surfaces, not just BRAND_STOREFRONT", async () => {
+    const campaignResponse = await click(
+      { kind: "CAMPAIGN_PRODUCT", campaignAssignmentId: "assignment-1" },
+      {
+        findCampaignProduct: async () =>
+          resolvedLink({ scope: { campaignId: "campaign-A", isActive: true }, connectionStatus: "UNINSTALLED" }),
+      },
+    );
+    assert.equal(campaignResponse.status, 404);
+
+    const lessonResponse = await click(LESSON_SURFACE, {
+      getAccess: async () =>
+        access({ entryContext: { kind: "CAMPAIGN", campaignId: "campaign-A" } }),
+      findCampaignLessonProduct: async () =>
+        lessonLink({ connectionStatus: "DISCONNECTED" }),
+    });
+    assert.equal(lessonResponse.status, 404);
+  });
+
+  test("status changes between LIST and CLICK: the click-time query is the one that matters, and it fails closed", async () => {
+    // Simulates a store that was CONNECTED when the product was listed to the
+    // visitor, but has since been disconnected — the click-time resolver
+    // (this test's `findBrandStorefrontProduct`) is a FRESH read, and must
+    // reflect the connection's CURRENT state, never a cached/stale one.
+    let attributionRecorded = false;
+    const response = await click(SHOP_SURFACE, {
+      findBrandStorefrontProduct: async () =>
+        resolvedLink({ connectionStatus: "DISCONNECTED" }),
+      recordAttribution: async () => {
+        attributionRecorded = true;
+      },
+    });
+    assert.equal(response.status, 404);
+    assert.equal(attributionRecorded, false);
+  });
+});
 
 describe("cross-brand and cross-campaign integrity", () => {
   test("resolved brandId always comes from the looked-up link row, never a poisoned dependency's echo of client input", async () => {
@@ -802,6 +875,61 @@ describe("redirect target and PII", () => {
 
     assert.equal(response.status, 404);
     assert.equal(mintCalled, false);
+  });
+
+  // -----------------------------------------------------------------------
+  // PHASE 18 REPAIR — P2-4F: exact ORIGIN pinning (host AND port), not
+  // hostname alone.
+  // -----------------------------------------------------------------------
+  test("28. a productUrl on a DIFFERENT PORT than the configured storefront origin is rejected, even though the hostname matches", async () => {
+    let mintCalled = false;
+    const response = await click(SHOP_SURFACE, {
+      findBrandStorefrontProduct: async () =>
+        resolvedLink({
+          productUrl: "https://winery.example:8443/products/widget",
+          connectionStorefrontUrl: "https://winery.example",
+          hasProviderSuppliedStorefrontUrl: false,
+        }),
+      recordAttribution: async () => {
+        mintCalled = true;
+      },
+    });
+    assert.equal(response.status, 404, "same hostname, different port must not be treated as the same origin");
+    assert.equal(mintCalled, false);
+  });
+
+  test("28b. a productUrl whose port EXACTLY matches the configured storefront origin's non-default port is accepted", async () => {
+    let mintCalled = false;
+    const response = await click(SHOP_SURFACE, {
+      findBrandStorefrontProduct: async () =>
+        resolvedLink({
+          productUrl: "https://winery.example:8443/products/widget",
+          connectionStorefrontUrl: "https://winery.example:8443",
+          hasProviderSuppliedStorefrontUrl: false,
+        }),
+      recordAttribution: async () => {
+        mintCalled = true;
+      },
+    });
+    assert.equal(response.status, 302, "an exact origin match (including a matching non-default port) must still redirect");
+    assert.equal(mintCalled, true);
+  });
+
+  test("28c. an implicit default port (443) and an explicit ':443' compare as the SAME origin — no spurious rejection", async () => {
+    let mintCalled = false;
+    const response = await click(SHOP_SURFACE, {
+      findBrandStorefrontProduct: async () =>
+        resolvedLink({
+          productUrl: "https://winery.example:443/products/widget",
+          connectionStorefrontUrl: "https://winery.example",
+          hasProviderSuppliedStorefrontUrl: false,
+        }),
+      recordAttribution: async () => {
+        mintCalled = true;
+      },
+    });
+    assert.equal(response.status, 302);
+    assert.equal(mintCalled, true);
   });
 
   test("the redirect Location carries only the opaque namespaced token, never an email or raw internal id", async () => {

@@ -17,7 +17,11 @@
  * "this split is not a null-check" are properties of the code, not of any one
  * fixture.
  */
-process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
+import "./env-setup";
+
+// PHASE 16/17 REPAIR: see the identical note in commerce7-lifecycle-gate.test.ts —
+// `env-setup` must be the FIRST import so DATABASE_URL is set before any
+// transitively-imported module reads it at import time.
 process.env.DIRECT_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
 process.env.NEXTAUTH_SECRET = "test-nextauth-secret";
 process.env.APP_ENCRYPTION_KEY = "dummy-encryption-key-at-least-32-chars-long";

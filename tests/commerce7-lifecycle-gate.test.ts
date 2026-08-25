@@ -12,7 +12,15 @@
  * injected dependencies. No real DB, no real network.
  */
 
-process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
+import "./env-setup";
+
+// PHASE 16/17 REPAIR: `env-setup` (imported first, so it runs before ANY
+// other import — ESM hoists imports ahead of ordinary top-level code, so a
+// raw `process.env.DATABASE_URL = ...` statement placed merely earlier in
+// this file's TEXT would still run too late) covers DATABASE_URL. The
+// remaining variables below are read lazily, at call time inside a test
+// body, never synchronously at another module's import time, so plain
+// assignment here is sufficient for them.
 process.env.DIRECT_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
 process.env.APP_ENCRYPTION_KEY = "dummy-encryption-key-at-least-32-chars-long";
 process.env.COMMERCE7_APP_ID = "test-app-id";
@@ -73,10 +81,20 @@ function makeSummary(
 function makeSyncDeps(overrides: Partial<ProductSyncDeps> = {}): Partial<ProductSyncDeps> {
   return {
     findExistingProducts: async (): Promise<ExistingConnectedProductRow[]> => [],
-    createSyncRun: async () => ({ id: "run-1" }),
+    claimProductSyncRun: async () => ({ status: "CLAIMED", run: { id: "run-1" } }),
     finalizeSyncRun: async () => {},
-    applyProductWrite: async () => {},
+    applyProductWrite: async () => ({ trustworthy: true }),
     markUnavailableExcept: async () => ({ count: 0 }),
+    // PHASE 16-18 REPAIR (P1-1/P1-2): this file tests LIFECYCLE GATING
+    // (connection status checks before adapter/provider I/O), not the
+    // configuration-fingerprint fence — stable, no-op fingerprint/
+    // invalidation deps so a real sync run in these tests doesn't fall
+    // through to the real DB-backed defaults (unreachable in this test
+    // environment) and get incorrectly reported FAILED by the P1-2
+    // fail-closed invalidation check.
+    getConnectionFingerprint: async () => "stable",
+    getConnectionConfigSnapshot: async () => ({ fingerprint: "stable", currencyCode: null }),
+    invalidateStaleConfigDerivedFields: async () => {},
     ...overrides,
   };
 }
@@ -120,9 +138,9 @@ describe("A/B. syncCommerceConnectionById enforces the CONNECTED invariant", () 
       let runCreated = false;
       let adapterConstructed = false;
       const deps = makeSyncDeps({
-        createSyncRun: async () => {
+        claimProductSyncRun: async () => {
           runCreated = true;
-          return { id: "run-1" };
+          return { status: "CLAIMED", run: { id: "run-1" } };
         },
         getAdapter: () => {
           adapterConstructed = true;
@@ -465,7 +483,6 @@ describe("6. API route — 409 for owned-but-not-connected, 404 unaffected for f
     const res = await productsSyncImpl(
       {
         getContext: async () => makeContext(),
-        findRunningRun: async () => null,
         runSync: async () => {
           throw new CommerceConnectionNotReadyError(
             "conn-1",
@@ -486,7 +503,6 @@ describe("6. API route — 409 for owned-but-not-connected, 404 unaffected for f
     const res = await productsSyncImpl(
       {
         getContext: async () => makeContext(),
-        findRunningRun: async () => null,
         runSync: async () => {
           throw new CommerceConnectionNotFoundError("conn-does-not-exist");
         },
@@ -501,7 +517,6 @@ describe("6. API route — 409 for owned-but-not-connected, 404 unaffected for f
     const res = await productsSyncImpl(
       {
         getContext: async () => makeContext(),
-        findRunningRun: async () => null,
         runSync: async (brandId, provider) => ({
           status: "SKIPPED",
           reason: "NOT_CONNECTED",
@@ -585,6 +600,7 @@ describe("H. cheap P2: negative Commerce7 price canonical-persistence regression
         if (decision.kind === "CREATE") {
           Catalog.rows.push(decision.data as unknown as Record<string, unknown>);
         }
+        return { trustworthy: true };
       },
     });
 

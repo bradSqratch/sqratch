@@ -433,10 +433,13 @@ describe("public lesson-products route wiring (source inspection)", () => {
     );
   });
 
-  test("public lesson rendering requires BOTH isAvailable and hasPublicStorefrontUrl", () => {
+  test("public lesson rendering requires isAvailable, hasPublicStorefrontUrl, AND a CONNECTED connection", () => {
+    // PHASE 18 REPAIR (P1-3): the connection-status clause was added
+    // alongside the original pair — see the constant's doc comment in the
+    // route source.
     assert.match(
       lessonProductsRouteSource,
-      /const PUBLICLY_LISTABLE_CONNECTED_PRODUCT = \{\s*isAvailable: true,\s*hasPublicStorefrontUrl: true,\s*\} as const;/,
+      /const PUBLICLY_LISTABLE_CONNECTED_PRODUCT = \{\s*isAvailable: true,\s*hasPublicStorefrontUrl: true,\s*connection: \{ is: \{ status: "CONNECTED" as const \} \},\s*\} as const;/,
     );
     assert.match(
       lessonProductsRouteSource,
@@ -444,14 +447,14 @@ describe("public lesson-products route wiring (source inspection)", () => {
     );
   });
 
-  test("the click path applies the same pair, so a hidden card is never redirectable", () => {
+  test("the click path applies the same triple, so a hidden or disconnected card is never redirectable", () => {
     const clickSource = readFileSync(
       join(root, "src/lib/commerce/click-attribution.ts"),
       "utf8",
     );
     assert.match(
       clickSource,
-      /const PUBLICLY_CLICKABLE_CONNECTED_PRODUCT = \{\s*isAvailable: true,\s*hasPublicStorefrontUrl: true,\s*\} as const;/,
+      /isAvailable: true,\s*hasPublicStorefrontUrl: true,\s*connection: \{ is: \{ status: "CONNECTED" as const \} \},\s*\} as const;/,
     );
     // Every finder query in the module applies it.
     const usages = clickSource.match(

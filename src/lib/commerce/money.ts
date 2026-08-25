@@ -321,3 +321,123 @@ export function providerPriceStringToMinorUnits(
     currencyExponentDefaulted: defaulted,
   };
 }
+
+// ---------------------------------------------------------------------------
+// EXACT MINOR-UNIT DISPLAY FORMATTING (PHASE 19 REPAIR — P1-3)
+// ---------------------------------------------------------------------------
+//
+// `formatMinorUnitPriceRange` above is deliberately scoped to the PRODUCT
+// CATALOG (`ConnectedCommerceProduct.priceMinMinor`/`priceMaxMinor`, both
+// Postgres `Int` columns — 32-bit, always well within `Number.isSafeInteger`
+// range) and intentionally uses `Number()` + `Intl.NumberFormat` for a
+// symbol-prefixed, locale-formatted string. That is safe for its bounded
+// domain and must not be changed.
+//
+// Order money (`CommerceOrder.totalMinor` etc.) is different: those columns
+// are `BigInt`, with no upper bound this codebase enforces, and a "1234.56"
+// UI that did `Number(minor) / 100` would (a) silently corrupt any value
+// past `Number.MAX_SAFE_INTEGER`, (b) divide by a HARDCODED 100 regardless
+// of the persisted `minorUnitExponent`, single-handedly making JPY (exponent
+// 0) read 100x too small and KWD-style 3-decimal currencies read 10x too
+// large. The functions below exist specifically to never do either — see
+// `formatExactMinorAmount`'s own doc comment for the string/BigInt-only
+// algorithm.
+
+/** Digit-string sanity check — the ONLY shape `formatExactMinorAmount` accepts as `minor`. */
+const INTEGER_STRING_PATTERN = /^-?\d+$/;
+
+/**
+ * Converts an INTEGER number of minor units (as a decimal string or
+ * `bigint` — e.g. `"123456"` cents, never a float) plus its
+ * `minorUnitExponent` into an exact decimal STRING (`"1234.56"`), using
+ * ONLY string manipulation and `BigInt`-safe integer digit operations —
+ * never `Number()`, `parseFloat`, or floating-point division. Correct for
+ * any magnitude, including values far beyond `Number.MAX_SAFE_INTEGER`
+ * (verified in `tests/money-display.test.ts` with values larger than
+ * `9007199254740991`), and for every documented exponent (0, 2, 3, ...).
+ *
+ * Examples: `("123456", 2) -> "1234.56"`, `("5000", 0) -> "5000"`,
+ * `("12345", 3) -> "12.345"`, `("-500", 2) -> "-5.00"`.
+ *
+ * Throws for a malformed `minor` string or a negative/non-integer
+ * `exponent` — this is a pure, total-over-VALID-input formatter; callers
+ * displaying possibly-absent data should use `formatMoneyDisplay` below,
+ * which handles `null` and formatting failure by returning an explicit
+ * "unknown" marker instead of ever fabricating a number.
+ */
+export function formatExactMinorAmount(minor: string | bigint, exponent: number): string {
+  if (!Number.isInteger(exponent) || exponent < 0) {
+    throw new Error(`formatExactMinorAmount: invalid minorUnitExponent ${exponent}`);
+  }
+  const raw = typeof minor === "bigint" ? minor.toString() : minor;
+  if (!INTEGER_STRING_PATTERN.test(raw)) {
+    throw new Error(`formatExactMinorAmount: invalid minor-unit amount ${JSON.stringify(raw)}`);
+  }
+
+  const negative = raw.startsWith("-");
+  const unsignedDigits = (negative ? raw.slice(1) : raw).replace(/^0+(?=\d)/, "");
+
+  if (exponent === 0) {
+    return (negative ? "-" : "") + unsignedDigits;
+  }
+
+  const padded = unsignedDigits.padStart(exponent + 1, "0");
+  const integerPart = padded.slice(0, padded.length - exponent);
+  const fractionPart = padded.slice(padded.length - exponent);
+  const isZero = integerPart === "0" && /^0*$/.test(fractionPart);
+  return `${negative && !isZero ? "-" : ""}${integerPart}.${fractionPart}`;
+}
+
+/** Inserts thousands-separator commas into an unsigned integer digit string — pure string manipulation, no numeric conversion. */
+function groupIntegerDigits(digits: string): string {
+  let grouped = "";
+  for (let i = 0; i < digits.length; i += 1) {
+    const fromEnd = digits.length - i;
+    grouped += digits[i];
+    if (fromEnd > 1 && fromEnd % 3 === 1) {
+      grouped += ",";
+    }
+  }
+  return grouped;
+}
+
+/**
+ * The safe, exact, provider-neutral order-money display formatter (PHASE 19
+ * — Parts 9/10/11). Combines the ISO currency CODE (never a symbol — see
+ * Part 9A: correctness over symbol prettiness, since a symbol would require
+ * `Intl`, which requires a `Number()` conversion this module refuses to do
+ * for potentially-huge `BigInt` order amounts) with a comma-grouped exact
+ * amount from `formatExactMinorAmount`.
+ *
+ * "Unknown must display as unknown, never as zero" (Part 10/11): returns
+ * `"—"` whenever `minor`, `currencyCode`, or `exponent` is `null`, or when
+ * `minor`/`exponent` fail `formatExactMinorAmount`'s validation — NEVER a
+ * fabricated `"0.00"` or a value computed against a guessed exponent.
+ *
+ * Examples: `("123456", "USD", 2) -> "USD 1,234.56"`,
+ * `("5000", "JPY", 0) -> "JPY 5,000"`,
+ * `("12345", "KWD", 3) -> "KWD 12.345"`.
+ */
+export function formatMoneyDisplay(
+  minor: string | bigint | null,
+  currencyCode: string | null,
+  exponent: number | null,
+): string {
+  if (minor === null || currencyCode === null || exponent === null) {
+    return "—";
+  }
+  let exact: string;
+  try {
+    exact = formatExactMinorAmount(minor, exponent);
+  } catch {
+    return "—";
+  }
+  const negative = exact.startsWith("-");
+  const unsigned = negative ? exact.slice(1) : exact;
+  const dotIndex = unsigned.indexOf(".");
+  const integerPart = dotIndex === -1 ? unsigned : unsigned.slice(0, dotIndex);
+  const fractionPart = dotIndex === -1 ? null : unsigned.slice(dotIndex + 1);
+  const groupedInteger = groupIntegerDigits(integerPart);
+  const groupedAmount = fractionPart !== null ? `${groupedInteger}.${fractionPart}` : groupedInteger;
+  return `${currencyCode} ${negative ? "-" : ""}${groupedAmount}`;
+}

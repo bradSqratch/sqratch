@@ -150,10 +150,21 @@ export type CuratedCampaignProduct = {
 
 /**
  * BOTH conditions, always, in every listing predicate in this file.
+ *
+ * PHASE 18 REPAIR (P1-3): ALSO requires the owning `CommerceConnection` to
+ * be `CONNECTED` — an UNINSTALLED/DISCONNECTED/REQUIRES_RECONNECT store's
+ * products must never remain publicly LISTED merely because the last sync
+ * left `isAvailable`/`hasPublicStorefrontUrl` true. Mirrors the identical
+ * gate added to `PUBLICLY_CLICKABLE_CONNECTED_PRODUCT` in
+ * `../../../../../../lib/commerce/click-attribution.ts` — a product that is
+ * never listed can never be clicked, and a product that somehow is listed
+ * (e.g. cached) still cannot be clicked, since the click path re-checks
+ * independently.
  */
 const PUBLICLY_LISTABLE_CONNECTED_PRODUCT = {
   isAvailable: true,
   hasPublicStorefrontUrl: true,
+  connection: { is: { status: "CONNECTED" as const } },
 } as const;
 
 export type PublicExperienceProductsDeps = {

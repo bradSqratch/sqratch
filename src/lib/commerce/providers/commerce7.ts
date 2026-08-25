@@ -86,6 +86,29 @@ export function getCommerce7CallbackConfig(): Commerce7CallbackConfig | null {
 }
 
 /**
+ * PHASE 16 BIG ROUND / SUBPHASE 4 — backend-only credentials for the Basic
+ * auth Commerce7 presents on the ORDER WEBHOOK subscription. Deliberately a
+ * SEPARATE credential from `getCommerce7CallbackConfig` (install/uninstall):
+ * Commerce7's App Dev Center configures webhook-subscription Basic Auth
+ * (an OPTIONAL "Advanced" setting, per `app-apis-webhooks.md`) on a
+ * different screen from the install/uninstall callback credential, and an
+ * operator may reasonably want to rotate one without the other. Returns
+ * null (never throws, never logs) when unset, so the webhook route can fail
+ * closed with a fixed sanitized 500 rather than accepting unauthenticated
+ * requests.
+ */
+export function getCommerce7OrderWebhookConfig(): Commerce7CallbackConfig | null {
+  const username = process.env.COMMERCE7_ORDER_WEBHOOK_USERNAME;
+  const password = process.env.COMMERCE7_ORDER_WEBHOOK_PASSWORD;
+
+  if (!username || !password) {
+    return null;
+  }
+
+  return { username, password };
+}
+
+/**
  * Basic auth header for outbound Commerce7 app API calls:
  * username = App ID, password = App Secret (verified against the real sandbox).
  */

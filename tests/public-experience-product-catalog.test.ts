@@ -225,11 +225,13 @@ describe("public experience product catalog cutover", () => {
       ),
       "utf8",
     );
-    // Both conditions, together, in the shared predicate object used by every
-    // listing query in this route.
+    // All three conditions, together, in the shared predicate object used by
+    // every listing query in this route. PHASE 18 REPAIR (P1-3): the
+    // connection-status clause was added to the same predicate object — see
+    // that constant's doc comment in the route source.
     assert.match(
       routeSource,
-      /const PUBLICLY_LISTABLE_CONNECTED_PRODUCT = \{\s*isAvailable: true,\s*hasPublicStorefrontUrl: true,\s*\} as const;/,
+      /const PUBLICLY_LISTABLE_CONNECTED_PRODUCT = \{\s*isAvailable: true,\s*hasPublicStorefrontUrl: true,\s*connection: \{ is: \{ status: "CONNECTED" as const \} \},\s*\} as const;/,
     );
     const usages = routeSource.match(
       /\.\.\.PUBLICLY_LISTABLE_CONNECTED_PRODUCT/g,

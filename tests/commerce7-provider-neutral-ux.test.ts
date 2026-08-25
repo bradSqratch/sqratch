@@ -7,7 +7,13 @@
  * network anywhere in this file.
  */
 
-process.env.DATABASE_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
+import "./env-setup";
+
+// PHASE 16/17 REPAIR: see the identical note in commerce7-lifecycle-gate.test.ts —
+// `env-setup` must be the FIRST import so DATABASE_URL is set before any
+// transitively-imported module (e.g. brand-auth -> options -> prisma) reads
+// it at import time; a raw assignment placed merely earlier in this file's
+// text still runs after ESM's import hoisting.
 process.env.DIRECT_URL = "postgresql://blocked:blocked@127.0.0.1:1/sqratch_blocked";
 process.env.APP_ENCRYPTION_KEY = "dummy-encryption-key-at-least-32-chars-long";
 process.env.COMMERCE7_APP_ID = "test-app-id";
@@ -235,10 +241,13 @@ describe("3/4. syncCommerceConnectionById — exact-connection selection", () =>
   function makeSyncDeps(overrides: Partial<ProductSyncDeps> = {}): Partial<ProductSyncDeps> {
     return {
       findExistingProducts: async (): Promise<ExistingConnectedProductRow[]> => [],
-      createSyncRun: async () => ({ id: "run-1" }),
+      claimProductSyncRun: async () => ({ status: "CLAIMED", run: { id: "run-1" } }),
       finalizeSyncRun: async () => {},
-      applyProductWrite: async () => {},
+      applyProductWrite: async () => ({ trustworthy: true }),
       markUnavailableExcept: async () => ({ count: 0 }),
+      getConnectionFingerprint: async () => "stable",
+      getConnectionConfigSnapshot: async () => ({ fingerprint: "stable", currencyCode: null }),
+      invalidateStaleConfigDerivedFields: async () => {},
       ...overrides,
     };
   }
@@ -435,9 +444,9 @@ describe("3/4. syncCommerceConnectionById — exact-connection selection", () =>
     };
     let runCreated = false;
     const deps = makeSyncDeps({
-      createSyncRun: async () => {
+      claimProductSyncRun: async () => {
         runCreated = true;
-        return { id: "run-1" };
+        return { status: "CLAIMED", run: { id: "run-1" } };
       },
       getAdapter: () =>
         ({
@@ -501,7 +510,6 @@ describe("ROUTE: POST /api/brand/products/sync — provider/connection selection
     const res = await productsSyncImpl(
       {
         getContext: async () => makeContext(),
-        findRunningRun: async () => null,
         runSync: async (brandId, provider, connectionId) => {
           seenProvider = provider;
           seenConnectionId = connectionId;
@@ -521,7 +529,6 @@ describe("ROUTE: POST /api/brand/products/sync — provider/connection selection
     const res = await productsSyncImpl(
       {
         getContext: async () => makeContext(),
-        findRunningRun: async () => null,
         runSync: async (brandId, provider, connectionId) => {
           seenArgs = [brandId, provider, connectionId];
           return {
@@ -554,7 +561,6 @@ describe("ROUTE: POST /api/brand/products/sync — provider/connection selection
     const res = await productsSyncImpl(
       {
         getContext: async () => makeContext(),
-        findRunningRun: async () => null,
         runSync: async () => {
           throw new CommerceConnectionMismatchError(
             "conn-1",
@@ -573,7 +579,6 @@ describe("ROUTE: POST /api/brand/products/sync — provider/connection selection
     const res = await productsSyncImpl(
       {
         getContext: async () => makeContext(),
-        findRunningRun: async () => null,
         runSync: async () => {
           throw new CommerceConnectionNotFoundError("conn-nope");
         },
@@ -589,7 +594,6 @@ describe("ROUTE: POST /api/brand/products/sync — provider/connection selection
     const res = await productsSyncImpl(
       {
         getContext: async () => makeContext(),
-        findRunningRun: async () => null,
         runSync: async () => {
           called = true;
           throw new Error("must not be called");
@@ -607,7 +611,6 @@ describe("ROUTE: POST /api/brand/products/sync — provider/connection selection
     await productsSyncImpl(
       {
         getContext: async () => makeContext(),
-        findRunningRun: async () => null,
         runSync: async (brandId, provider, connectionId) => {
           seenConnectionId = connectionId;
           return { status: "SKIPPED", reason: "NO_CONNECTION", brandId, provider };

@@ -74,6 +74,16 @@ export type CommerceConnectionSummary = {
    * read it only from this neutral connection summary.
    */
   currencyCode: string | null;
+  /**
+   * PHASE 16 BIG ROUND / SUBPHASE 1 — the merchant-confirmed Commerce7
+   * product-page route from `CommerceConnection.providerMetadata.productRoute`
+   * (see `commerce7-storefront-configuration.ts`). Optional (rather than
+   * `string | null`) so the many pre-existing literal
+   * `CommerceConnectionSummary` fixtures across the test suite, written
+   * before this field existed, remain valid without modification. Always
+   * `null`/absent for SHOPIFY, which has no merchant-configured route.
+   */
+  productRoute?: string | null;
 };
 
 /**
