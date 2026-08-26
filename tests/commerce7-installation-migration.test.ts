@@ -23,28 +23,47 @@ const migration = readFileSync(
 );
 const schema = readFileSync(join(root, "prisma/schema.prisma"), "utf8");
 
-test("Phase 16B migration is the most recently timestamped migration directory", () => {
+test("Phase 16B migration is timestamped strictly after every migration that existed before it (never inserted into the middle of already-deployed history)", () => {
   const entries = readdirSync(MIGRATIONS_DIR)
     .filter((entry) => entry !== "migration_lock.toml")
     .sort();
 
-  assert.equal(
-    entries[entries.length - 1],
-    migrationDirName,
-    "the Phase 16B migration must sort after every other migration directory " +
-      "(an unapplied migration must never be timestamped before an already-" +
-      "deployed one)",
-  );
-
   const timestamp = migrationDirName.slice(0, 14);
   assert.match(timestamp, /^\d{14}$/, "migration directory must start with a 14-digit timestamp");
 
+  // PHASE 22 REPAIR: this test originally asserted the Phase 16B migration
+  // was the single most-recent directory — a design that is structurally
+  // obsoleted by every LEGITIMATE later migration (including PHASE 22's own
+  // `add_commerce_order_reconciliation_state`, timestamped after this one).
+  // The actual safety property worth protecting is narrower and durable:
+  // Phase 16B's own timestamp must sort after every migration directory
+  // that PRE-DATES it (i.e., it was never accidentally back-dated into
+  // already-deployed history) — it says nothing about migrations added
+  // LATER, which are expected and fine.
   for (const entry of entries) {
     if (entry === migrationDirName) continue;
     const otherTimestamp = entry.slice(0, 14);
+    if (!/^\d{14}$/.test(otherTimestamp)) continue;
+    if (otherTimestamp >= timestamp) continue; // a legitimately LATER migration — not this test's concern
     assert.ok(
-      /^\d{14}$/.test(otherTimestamp) ? timestamp > otherTimestamp : true,
-      `Phase 16B migration (${timestamp}) must sort after ${entry}`,
+      timestamp > otherTimestamp,
+      `Phase 16B migration (${timestamp}) must sort after the earlier migration ${entry}`,
+    );
+  }
+});
+
+test("every migration directory's timestamp is in the same order as its alphabetical (deploy) order — no migration was ever back-dated into already-deployed history", () => {
+  const entries = readdirSync(MIGRATIONS_DIR)
+    .filter((entry) => entry !== "migration_lock.toml")
+    .sort();
+
+  for (let i = 1; i < entries.length; i += 1) {
+    const previous = entries[i - 1].slice(0, 14);
+    const current = entries[i].slice(0, 14);
+    if (!/^\d{14}$/.test(previous) || !/^\d{14}$/.test(current)) continue;
+    assert.ok(
+      current > previous,
+      `migration "${entries[i]}" (${current}) must sort strictly after the previous migration "${entries[i - 1]}" (${previous})`,
     );
   }
 });

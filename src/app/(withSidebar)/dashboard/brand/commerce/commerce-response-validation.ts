@@ -162,6 +162,12 @@ export function parseOrderOperationsSummary(data: unknown): BrandOrderOperations
 // "Cannot read properties of undefined (reading 'hasNextPage')").
 // ---------------------------------------------------------------------------
 
+export type CommerceOrderFulfillmentStatus =
+  | "UNFULFILLED"
+  | "PARTIALLY_FULFILLED"
+  | "FULFILLED"
+  | "RESTOCKED";
+
 export type OrderListRow = {
   id: string;
   connectionId: string;
@@ -169,6 +175,16 @@ export type OrderListRow = {
   orderNumber: string | null;
   orderDate: string;
   financialStatus: CommerceOrderFinancialStatus | null;
+  /**
+   * PHASE 22 (Commerce7 order reconciliation hardening, Part 5) — surfaced
+   * separately from `financialStatus`, never merged: a PAID order can be
+   * UNFULFILLED, and a FULFILLED order can be REFUNDED — collapsing the two
+   * into one field would silently hide one axis whenever they disagree.
+   * Already selected/returned by `GET /api/brand/commerce/orders` (see
+   * `BrandCommerceOrderListRow` in that route) — this was purely a missing
+   * client-side field before this fix.
+   */
+  fulfillmentStatus: CommerceOrderFulfillmentStatus | null;
   currencyCode: string | null;
   minorUnitExponent: number | null;
   totalMinor: string | null;
@@ -194,4 +210,140 @@ export function parseOrderListEnvelope(json: unknown): OrderListEnvelope | null 
       nextCursor: typeof meta.nextCursor === "string" ? meta.nextCursor : null,
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// PHASE 21 (live QA hotfix, Issue 1) — the readiness-checklist refresh-key
+// transition. `Commerce7ReadinessChecklist`'s diagnostics `useEffect`
+// previously depended ONLY on `connectionId`, so a successful settings
+// sync/disconnect/reconnect (none of which change `connectionId`) never
+// re-triggered a diagnostics re-fetch — the checklist stayed stale until a
+// full page reload. The fix threads a `refreshKey` into that effect's
+// dependency array (`[connectionId, refreshKey]`) and bumps it here.
+//
+// Extracted as a pure function (rather than an inline `k => k + 1` in the
+// component) so the exact intended behavior — bump on every event that
+// actually changed server state, do NOT bump on a failed sync (nothing
+// changed, so re-fetching would be wasted and could even race a stale
+// response) — is directly unit-testable without a DOM (this repo has no
+// React testing library).
+// ---------------------------------------------------------------------------
+
+export type DiagnosticsRefreshEvent =
+  | { type: "SETTINGS_SYNC_SUCCEEDED" }
+  | { type: "SETTINGS_SYNC_FAILED" }
+  | { type: "CONNECTION_DISCONNECTED" }
+  | { type: "CONNECTION_RECONNECTED" };
+
+/** Never throws, never skips unpredictably — a switch over the exhaustive event union. */
+export function nextDiagnosticsRefreshKey(
+  currentKey: number,
+  event: DiagnosticsRefreshEvent,
+): number {
+  switch (event.type) {
+    case "SETTINGS_SYNC_SUCCEEDED":
+    case "CONNECTION_DISCONNECTED":
+    case "CONNECTION_RECONNECTED":
+      return currentKey + 1;
+    case "SETTINGS_SYNC_FAILED":
+      // Nothing changed server-side — re-fetching would be wasted, and
+      // could even race a stale response into looking like confirmation of
+      // a change that never actually happened.
+      return currentKey;
+    default: {
+      const exhaustive: never = event;
+      return exhaustive;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// PHASE 22 (Commerce7 order reconciliation hardening) — the three new
+// reconciliation endpoints:
+//   GET  /api/brand/commerce/connections/[connectionId]/orders/reconciliation-state
+//   POST /api/brand/commerce/connections/[connectionId]/orders/catch-up
+//   POST /api/brand/commerce/connections/[connectionId]/orders/reconcile-range
+// All three return `{ data: T }` (no `meta`) — `fetchJson` unwraps to `T`
+// directly, same idiom as every other validator in this file.
+// ---------------------------------------------------------------------------
+
+export type ReconciliationStateView = {
+  reconciledThrough: string | null;
+  targetThrough: string | null;
+  lastAttemptedAt: string | null;
+  lastRunOutcome: string | null;
+  lastRunError: string | null;
+  customRangeFrom: string | null;
+  customRangeTo: string | null;
+  customRangeCursor: string | null;
+};
+
+const RECONCILIATION_STATE_STRING_OR_NULL_FIELDS = [
+  "reconciledThrough",
+  "targetThrough",
+  "lastAttemptedAt",
+  "lastRunOutcome",
+  "lastRunError",
+  "customRangeFrom",
+  "customRangeTo",
+  "customRangeCursor",
+] as const;
+
+export function parseReconciliationState(data: unknown): ReconciliationStateView | null {
+  if (!data || typeof data !== "object") return null;
+  const record = data as Record<string, unknown>;
+  const allValid = RECONCILIATION_STATE_STRING_OR_NULL_FIELDS.every(
+    (field) => record[field] === null || typeof record[field] === "string",
+  );
+  if (!allValid) return null;
+  return data as ReconciliationStateView;
+}
+
+export type ReconciliationStepStatus = "UP_TO_DATE" | "PROGRESS" | "FAILED";
+
+function isValidStepStatus(value: unknown): value is ReconciliationStepStatus {
+  return value === "UP_TO_DATE" || value === "PROGRESS" || value === "FAILED";
+}
+
+export type CatchUpStepResult = {
+  status: ReconciliationStepStatus;
+  reconciledThrough: string | null;
+  target: string;
+  reachedTarget: boolean;
+  chunk: { from: string; to: string } | null;
+  ordersFetched: number;
+  ordersProcessed: number;
+  error: string | null;
+};
+
+export function parseCatchUpStepResult(data: unknown): CatchUpStepResult | null {
+  if (!data || typeof data !== "object") return null;
+  const r = data as Record<string, unknown>;
+  if (!isValidStepStatus(r.status)) return null;
+  if (typeof r.target !== "string" || typeof r.reachedTarget !== "boolean") return null;
+  if (typeof r.ordersFetched !== "number" || typeof r.ordersProcessed !== "number") return null;
+  return data as CatchUpStepResult;
+}
+
+export type CustomRangeStepResult = {
+  status: ReconciliationStepStatus;
+  cursor: string | null;
+  from: string;
+  to: string;
+  reachedTarget: boolean;
+  chunk: { from: string; to: string } | null;
+  ordersFetched: number;
+  ordersProcessed: number;
+  error: string | null;
+};
+
+export function parseCustomRangeStepResult(data: unknown): CustomRangeStepResult | null {
+  if (!data || typeof data !== "object") return null;
+  const r = data as Record<string, unknown>;
+  if (!isValidStepStatus(r.status)) return null;
+  if (typeof r.from !== "string" || typeof r.to !== "string" || typeof r.reachedTarget !== "boolean") {
+    return null;
+  }
+  if (typeof r.ordersFetched !== "number" || typeof r.ordersProcessed !== "number") return null;
+  return data as CustomRangeStepResult;
 }

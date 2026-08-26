@@ -12,6 +12,37 @@ scope changes.
 | **Order: Read**   | Order ingestion/backfill (`commerce7-orders.ts`, `commerce7-order-backfill.ts`) — read-only, no mutation capability anywhere in this codebase. |
 | **Setting: Read** | Store settings sync (`commerce7-settings.ts`) — see below. Added in the settings-sync round; replaces the prior manually-authored storefront configuration. |
 
+## Verification status (PHASE 21 — read this before calling it "confirmed")
+
+> Empirically verified with the SQRATCH Commerce7 sandbox using
+> `Setting: Read`; general partner-app availability pending explicit
+> Commerce7 confirmation.
+
+Specifically:
+
+- `GET /v1/setting` (the collection endpoint, no id) works today against the
+  `sqratch-inc` sandbox tenant with App ID/App Secret Basic Auth + an exact
+  `tenant` header, when `Setting: Read` is enabled on the app.
+- Commerce7 staff separately indicated in Partner Slack that they were **not
+  certain** Setting data is generally accessible through partner app
+  credentials for every installed merchant tenant. SQRATCH has asked
+  Commerce7 to clarify:
+  1. whether `GET /v1/setting` (collection) is supported the same way
+     `GET /v1/setting/:id` (single record) is, for partner apps generally;
+  2. whether that holds for every installed tenant, not just this sandbox.
+- Until Commerce7 confirms, do **not** treat a successful sandbox call as
+  proof this works for all merchants. Do **not** restore manual
+  storefront/currency/route editing in response to that uncertainty — the
+  integration already fails closed (a 401/403 or any non-2xx Setting
+  response is a normal, controlled `SETTINGS_SYNC_FAILED` outcome, never an
+  unhandled exception, never surfaced to a merchant as an alarming error —
+  see `commerce7-connection-lifecycle.ts` / `commerce7-settings-sync.ts`).
+  If Commerce7 eventually confirms the collection endpoint is NOT reliably
+  available for all tenants, the operational fallback is a real product
+  decision for a future round (e.g. `GET /v1/setting/:id` if an id becomes
+  discoverable, or reintroducing a merchant-confirmed fallback for tenants
+  where Setting access is unavailable) — not something to guess at now.
+
 ## `Setting: Read` — exact scope of use
 
 SQRATCH calls `GET /v1/setting` for exactly one reason: to read the tenant's

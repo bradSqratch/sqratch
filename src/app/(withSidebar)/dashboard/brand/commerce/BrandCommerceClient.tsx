@@ -6,7 +6,12 @@ import { BrandPageShell } from "@/components/brand/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
-import { parseCommerce7Diagnostics, type Commerce7Diagnostics } from "./commerce-response-validation";
+import {
+  nextDiagnosticsRefreshKey,
+  parseCommerce7Diagnostics,
+  type Commerce7Diagnostics,
+  type DiagnosticsRefreshEvent,
+} from "./commerce-response-validation";
 
 type CommerceConnectionSummary = {
   connectionId: string;
@@ -205,8 +210,22 @@ function ChecklistRow({ ok, label, detail }: { ok: boolean | null; label: string
  * claims Commerce7's own webhook subscription is verified — SQRATCH cannot
  * observe that fact, so that line is always static, unconditional guidance
  * to check Commerce7 directly, never a computed checkmark.
+ *
+ * PHASE 21 (live QA hotfix, Issue 1): `refreshKey` is bumped by the parent
+ * after a successful settings sync/disconnect/reconnect (see
+ * `nextDiagnosticsRefreshKey` in `./commerce-response-validation.ts`) — none
+ * of which change `connectionId`, so it alone was never enough to trigger a
+ * re-fetch. No full page or route reload of any kind: this effect re-fetches
+ * ONLY the diagnostics endpoint, and only when `connectionId` or
+ * `refreshKey` actually changes.
  */
-function Commerce7ReadinessChecklist({ connectionId }: { connectionId: string }) {
+function Commerce7ReadinessChecklist({
+  connectionId,
+  refreshKey,
+}: {
+  connectionId: string;
+  refreshKey: number;
+}) {
   const [diagnostics, setDiagnostics] = useState<Commerce7Diagnostics | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -239,7 +258,7 @@ function Commerce7ReadinessChecklist({ connectionId }: { connectionId: string })
     return () => {
       cancelled = true;
     };
-  }, [connectionId]);
+  }, [connectionId, refreshKey]);
 
   return (
     <div className="rounded-2xl border border-white/10 bg-black/20 p-4 space-y-3">
@@ -293,7 +312,7 @@ function Commerce7ConnectionLifecycleControl({
   onChanged,
 }: {
   connection: NonNullable<CommerceConnectionSummary>;
-  onChanged(): void;
+  onChanged(action: "DISCONNECTED" | "RECONNECTED"): void;
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -314,7 +333,7 @@ function Commerce7ConnectionLifecycleControl({
         `/api/brand/commerce/connections/${connection.connectionId}/disconnect`,
         { method: "POST" },
       );
-      onChanged();
+      onChanged("DISCONNECTED");
     } catch (disconnectError) {
       setError(getErrorMessage(disconnectError, "Failed to disconnect Commerce7."));
     } finally {
@@ -342,7 +361,7 @@ function Commerce7ConnectionLifecycleControl({
         }
         throw new Error(json?.error || "Failed to reconnect Commerce7.");
       }
-      onChanged();
+      onChanged("RECONNECTED");
     } catch (reconnectError) {
       setError(getErrorMessage(reconnectError, "Failed to reconnect Commerce7."));
     } finally {
@@ -412,6 +431,15 @@ export function BrandCommerceClient() {
   const [status, setStatus] = useState<BrandCommerceStatusResponse>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // PHASE 21 (live QA hotfix, Issue 1): bumped via `nextDiagnosticsRefreshKey`
+  // after a successful settings sync/disconnect/reconnect — see
+  // `Commerce7ReadinessChecklist`'s own doc comment for why `connectionId`
+  // alone was never enough to trigger a diagnostics re-fetch.
+  const [diagnosticsRefreshKey, setDiagnosticsRefreshKey] = useState(0);
+
+  const bumpDiagnosticsRefresh = useCallback((event: DiagnosticsRefreshEvent) => {
+    setDiagnosticsRefreshKey((key) => nextDiagnosticsRefreshKey(key, event));
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -431,6 +459,20 @@ export function BrandCommerceClient() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // PHASE 21: disconnect/reconnect must refresh BOTH the connection status
+  // (so the page's own status/settings cards reflect the new state) AND the
+  // readiness diagnostics (same connectionId, but status/settings changed
+  // underneath it) — no page reload, two targeted re-fetches instead.
+  const handleConnectionChanged = useCallback(
+    (action: "DISCONNECTED" | "RECONNECTED") => {
+      void load();
+      bumpDiagnosticsRefresh({
+        type: action === "DISCONNECTED" ? "CONNECTION_DISCONNECTED" : "CONNECTION_RECONNECTED",
+      });
+    },
+    [load, bumpDiagnosticsRefresh],
+  );
 
   const connection = status?.connection ?? null;
 
@@ -480,7 +522,7 @@ export function BrandCommerceClient() {
               <>
                 <Commerce7StoreSettingsCard
                   connection={connection}
-                  onSynced={(next) =>
+                  onSynced={(next) => {
                     setStatus((prev) =>
                       prev?.connection
                         ? {
@@ -493,11 +535,15 @@ export function BrandCommerceClient() {
                             },
                           }
                         : prev,
-                    )
-                  }
+                    );
+                    bumpDiagnosticsRefresh({ type: "SETTINGS_SYNC_SUCCEEDED" });
+                  }}
                 />
-                <Commerce7ReadinessChecklist connectionId={connection.connectionId} />
-                <Commerce7ConnectionLifecycleControl connection={connection} onChanged={load} />
+                <Commerce7ReadinessChecklist
+                  connectionId={connection.connectionId}
+                  refreshKey={diagnosticsRefreshKey}
+                />
+                <Commerce7ConnectionLifecycleControl connection={connection} onChanged={handleConnectionChanged} />
               </>
             ) : null}
 

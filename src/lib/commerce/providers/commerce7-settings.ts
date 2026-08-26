@@ -2,9 +2,33 @@
  * src/lib/commerce/providers/commerce7-settings.ts
  *
  * PHASE 20 (settings sync round) — Commerce7 READ-ONLY Setting API client:
- * `GET /v1/setting`. This is the AUTHORITATIVE, provider-confirmed source
- * for a tenant's storefront URL, currency, and product-page base route —
- * replacing the prior manual Brand-Admin-authored configuration.
+ * `GET /v1/setting`. This is SQRATCH's chosen source for a tenant's
+ * storefront URL, currency, and product-page base route — replacing the
+ * prior manual Brand-Admin-authored configuration.
+ *
+ * ===========================================================================
+ * PHASE 21 — DOCUMENTATION ACCURACY, NOT A BEHAVIOR CHANGE
+ * ===========================================================================
+ * Empirically verified working against the SQRATCH Commerce7 sandbox
+ * (`sqratch-inc`) with `Setting: Read` enabled, using App ID/App Secret
+ * Basic Auth and an exact `tenant` header — see
+ * `docs/commerce/commerce7-required-permissions.md`. Commerce7 staff have
+ * separately indicated in Partner Slack that they were not certain Setting
+ * data is generally accessible through partner app credentials, and SQRATCH
+ * is awaiting Commerce7's explicit confirmation on whether the collection
+ * endpoint (`/v1/setting`) is supported the same way for every installed
+ * merchant tenant, as distinct from a per-id lookup (`/v1/setting/:id`).
+ * This is a documentation-accuracy correction only — no API behavior below
+ * has changed: `fetchCommerce7StoreSettings` already fails closed on ANY
+ * non-2xx response (401/403 included — see the status checks further down),
+ * and every caller already treats that as a normal, controlled
+ * settings-sync failure (`commerce7-connection-lifecycle.ts` /
+ * `commerce7-settings-sync.ts`), never surfaced to a merchant as an alarming
+ * error. Manual editing was NOT restored, and is not planned regardless of
+ * how Commerce7 answers — see
+ * `docs/commerce/commerce7-required-permissions.md` for the operational
+ * plan if the collection endpoint turns out to be unavailable for some
+ * tenants.
  *
  * ===========================================================================
  * SECURITY BOUNDARY — READ THIS BEFORE TOUCHING THIS FILE

@@ -161,3 +161,37 @@ describe("5. Admin Extension contract re-confirmation", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// PHASE 21 (live QA hotfix, Issue 2) — Commerce7 product images
+// (`https://images.commerce7.com/...`) were not rendering: next/image
+// refuses to load a remote image whose host is not explicitly allow-listed
+// in `next.config.ts`'s `images.remotePatterns`, and that list previously
+// covered Shopify/Supabase/SQRATCH only.
+// ---------------------------------------------------------------------------
+describe("6. next/image remote patterns — Commerce7 product images", () => {
+  const remotePatternsBlock = nextConfig.match(/function getRemotePatterns\(\)[\s\S]*?\n}/)?.[0] ?? "";
+  assert.ok(remotePatternsBlock.length > 0, "getRemotePatterns() function not found in next.config.ts");
+
+  test("the EXACT hostname images.commerce7.com is allow-listed over https", () => {
+    assert.match(
+      remotePatternsBlock,
+      /\{\s*protocol:\s*"https",\s*hostname:\s*"images\.commerce7\.com",?\s*\}/,
+      "next.config.ts must allow-list images.commerce7.com exactly",
+    );
+  });
+
+  test("no broad *.commerce7.com (or wider) wildcard was introduced for images", () => {
+    assert.doesNotMatch(
+      remotePatternsBlock,
+      /hostname:\s*"\*\*?\.commerce7\.com"/,
+      "only the exact images.commerce7.com host is permitted — not a wildcard across all of commerce7.com",
+    );
+  });
+
+  test("the pre-existing Shopify/Supabase/SQRATCH remote patterns are unchanged", () => {
+    assert.match(remotePatternsBlock, /hostname:\s*"cdn\.shopify\.com"/);
+    assert.match(remotePatternsBlock, /hostname:\s*"\*\*\.supabase\.co"/);
+    assert.match(remotePatternsBlock, /hostname:\s*"sqratch\.com"/);
+  });
+});

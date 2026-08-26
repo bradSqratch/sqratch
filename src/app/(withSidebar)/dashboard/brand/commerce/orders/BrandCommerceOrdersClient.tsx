@@ -1,22 +1,28 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BrandPageShell } from "@/components/brand/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { formatMoneyDisplay } from "@/lib/commerce/money";
 import {
+  parseCatchUpStepResult,
+  parseCustomRangeStepResult,
   parseOrderListEnvelope,
   parseOrderOperationsSummary,
-  parseReconcileResult,
+  parseReconciliationState,
   type BrandOrderOperationsSummary,
+  type CatchUpStepResult,
   type CommerceConnectionStatus,
   type CommerceOrderFinancialStatus,
+  type CommerceOrderFulfillmentStatus,
   type CommerceProvider,
   type ConnectionOrderOperationsSummary,
+  type CustomRangeStepResult,
   type OrderListRow,
-  type ReconcileResult,
+  type ReconciliationStateView,
 } from "../commerce-response-validation";
 
 const PROVIDER_LABELS: Record<CommerceProvider, string> = {
@@ -43,6 +49,21 @@ const FINANCIAL_STATUS_ORDER: CommerceOrderFinancialStatus[] = [
   "REFUNDED",
   "VOIDED",
 ];
+
+/** PHASE 22, Part 5 — the canonical fulfillment statuses this codebase currently produces (`CommerceOrderFulfillmentStatus`). */
+const FULFILLMENT_STATUS_LABELS: Record<CommerceOrderFulfillmentStatus, string> = {
+  UNFULFILLED: "Unfulfilled",
+  PARTIALLY_FULFILLED: "Partially fulfilled",
+  FULFILLED: "Fulfilled",
+  RESTOCKED: "Restocked",
+};
+
+function fulfillmentToneClass(status: CommerceOrderFulfillmentStatus | null): string {
+  if (status === "FULFILLED") return "border-emerald-400/25 bg-emerald-400/10 text-emerald-200/90";
+  if (status === "PARTIALLY_FULFILLED") return "border-amber-400/25 bg-amber-400/10 text-amber-200/90";
+  if (status === "RESTOCKED") return "border-white/15 bg-white/5 text-white/50";
+  return "border-white/10 bg-white/5 text-white/55";
+}
 
 function statusLabel(status: CommerceConnectionStatus): string {
   switch (status) {
@@ -75,14 +96,23 @@ function formatDateTime(value: string | null): string {
 }
 
 /**
- * PHASE 18 — PART 9 UI entry point: a bounded, explicit, one-click
- * reconciliation of the last 24 hours only. Deliberately not configurable
- * from this card (a wider window is available directly against the API for
- * an operator who needs it) — this keeps the common "did today's orders
- * come through" action a single click without exposing the raw
- * `from`/`to` bounds this route enforces server-side.
+ * PHASE 22 — replaces the fixed "reconcile last 24 hours" button with a
+ * durable-checkpoint-driven "Catch up orders" control. See
+ * `@/lib/commerce/providers/commerce7-order-reconciliation` for the full
+ * checkpoint/resumability/concurrency design this thin UI drives.
+ *
+ * Each click (or each automatic continuation, see below) calls the
+ * `catch-up` endpoint ONCE — the server processes ONE bounded chunk and
+ * returns immediately, never one long-lived request. While the returned
+ * `reachedTarget` is `false`, this component automatically calls again
+ * (bounded — a large backlog completes across several fast round trips
+ * without extra clicks) for as long as it stays mounted; navigating away
+ * simply stops the loop, and the durable checkpoint already committed by
+ * every completed chunk is untouched — clicking "Catch up orders" again
+ * later resumes exactly where it left off. Failure stops the loop and
+ * surfaces a sanitized error rather than retrying blindly.
  */
-function ReconcileButton({
+function CatchUpOrdersControl({
   connectionId,
   disabled,
   onSuccess,
@@ -91,61 +121,281 @@ function ReconcileButton({
   disabled: boolean;
   onSuccess: () => void;
 }) {
+  const [state, setState] = useState<ReconciliationStateView | null>(null);
+  const [loadingState, setLoadingState] = useState(true);
   const [running, setRunning] = useState(false);
-  const [result, setResult] = useState<ReconcileResult | null>(null);
+  const [lastChunk, setLastChunk] = useState<CatchUpStepResult | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Guards the auto-continuation loop below against setting state (or
+  // firing another chunk request) after this component has unmounted —
+  // e.g. the admin navigates away from the page mid-Catch-Up. Every chunk
+  // already committed by the time that happens stays exactly as committed;
+  // this ref only stops the CLIENT from continuing to drive further chunks.
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
-  async function handleReconcile() {
-    setRunning(true);
-    setError(null);
-    setResult(null);
+  const loadState = useCallback(async () => {
+    setLoadingState(true);
     try {
-      const to = new Date();
-      const from = new Date(to.getTime() - 24 * 60 * 60 * 1000);
-      // `fetchJson` already unwraps this route's `{ data }` envelope (no
-      // `meta`) — the resolved value IS the reconcile result.
       const data = await fetchJson<unknown>(
-        `/api/brand/commerce/connections/${connectionId}/orders/reconcile`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ from: from.toISOString(), to: to.toISOString() }),
-        },
+        `/api/brand/commerce/connections/${connectionId}/orders/reconciliation-state`,
       );
-      const parsed = parseReconcileResult(data);
-      if (!parsed) {
-        setError("Reconcile result came back in an unexpected format.");
-        return;
-      }
-      setResult(parsed);
-      // PHASE 19 — PART 16: refresh the summary/order list on success so a
-      // just-reconciled order is immediately visible, not only after a
-      // manual page reload.
-      onSuccess();
-    } catch (reconcileError) {
-      setError(getErrorMessage(reconcileError, "Failed to reconcile orders."));
+      const parsed = parseReconciliationState(data);
+      if (parsed) setState(parsed);
+    } catch {
+      // Non-fatal — the checkpoint line just stays blank; the Catch Up
+      // button itself still works independently of this read.
     } finally {
-      setRunning(false);
+      setLoadingState(false);
+    }
+  }, [connectionId]);
+
+  useEffect(() => {
+    void loadState();
+  }, [loadState]);
+
+  async function runOneChunk(): Promise<CatchUpStepResult | null> {
+    try {
+      const data = await fetchJson<unknown>(
+        `/api/brand/commerce/connections/${connectionId}/orders/catch-up`,
+        { method: "POST" },
+      );
+      const parsed = parseCatchUpStepResult(data);
+      if (!parsed) {
+        setError("Catch up result came back in an unexpected format.");
+        return null;
+      }
+      return parsed;
+    } catch (catchUpError) {
+      setError(getErrorMessage(catchUpError, "Failed to run order catch-up."));
+      return null;
     }
   }
 
+  async function handleCatchUp() {
+    setRunning(true);
+    setError(null);
+    setLastChunk(null);
+
+    // Bounded auto-continuation: each iteration is one real chunk request.
+    // A chunk failure or a parse error stops the loop immediately (never
+    // retries blindly); reaching the target stops it too; an unmount
+    // (`mountedRef`) stops it without touching state on a gone component —
+    // whatever chunks already committed server-side stay committed either way.
+    let reachedTarget = false;
+    while (!reachedTarget && mountedRef.current) {
+      const chunk = await runOneChunk();
+      if (!mountedRef.current) return;
+      if (!chunk) break;
+      setLastChunk(chunk);
+      reachedTarget = chunk.reachedTarget;
+      if (chunk.status === "FAILED") break;
+    }
+
+    await loadState();
+    if (!mountedRef.current) return;
+    setRunning(false);
+    onSuccess();
+  }
+
+  const reconciledThroughLabel = state?.reconciledThrough
+    ? formatDateTime(state.reconciledThrough)
+    : "Never reconciled yet";
+
   return (
     <div className="space-y-2">
+      <p className="text-xs text-white/50">Order reconciliation</p>
+      <p className="text-sm text-white/80">
+        Last successfully reconciled through:{" "}
+        <span className="text-white/60">{loadingState ? "Loading..." : reconciledThroughLabel}</span>
+      </p>
       <Button
-        onClick={handleReconcile}
+        onClick={() => void handleCatchUp()}
         disabled={disabled || running}
         variant="outline"
         className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
       >
-        {running ? "Reconciling..." : "Reconcile last 24 hours"}
+        {running ? "Catching up..." : "Catch up orders"}
       </Button>
+      {running ? (
+        <p className="text-[11px] leading-4 text-white/40">
+          Reconciliation in progress. You can leave this page safely; progress already completed will
+          be preserved and Catch Up can resume later.
+        </p>
+      ) : null}
       {error ? <p className="text-xs text-red-300">{error}</p> : null}
-      {result ? (
+      {lastChunk ? (
         <p className="text-xs text-white/60">
-          Fetched {result.fetchedCount}, created {result.createdCount}, updated {result.updatedCount},
-          unchanged {result.unchangedCount}
-          {result.failedCount > 0 ? `, failed ${result.failedCount}` : ""}
-          {result.truncated ? " — truncated: not all matching orders could be fetched." : "."}
+          {lastChunk.status === "FAILED"
+            ? `Stopped: ${lastChunk.error ?? "an error occurred"}`
+            : lastChunk.reachedTarget
+              ? `Caught up. Fetched ${lastChunk.ordersFetched}, processed ${lastChunk.ordersProcessed}.`
+              : `In progress — fetched ${lastChunk.ordersFetched}, processed ${lastChunk.ordersProcessed} so far.`}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * PHASE 22, Part 4 — "Reconcile custom range." Uses the SAME canonical
+ * chunk processor as Catch Up (`runCustomRangeStep`) but for an EXPLICIT,
+ * admin-chosen historical window that never advances the primary
+ * contiguous checkpoint — see that service's own header for why.
+ */
+function ReconcileCustomRangeControl({
+  connectionId,
+  disabled,
+  onSuccess,
+}: {
+  connectionId: string;
+  disabled: boolean;
+  onSuccess: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [fromValue, setFromValue] = useState("");
+  const [toValue, setToValue] = useState("");
+  const [running, setRunning] = useState(false);
+  const [lastChunk, setLastChunk] = useState<CustomRangeStepResult | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  async function runOneChunk(from: string, to: string): Promise<CustomRangeStepResult | null> {
+    try {
+      const data = await fetchJson<unknown>(
+        `/api/brand/commerce/connections/${connectionId}/orders/reconcile-range`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ from, to }),
+        },
+      );
+      const parsed = parseCustomRangeStepResult(data);
+      if (!parsed) {
+        setError("Reconcile result came back in an unexpected format.");
+        return null;
+      }
+      return parsed;
+    } catch (rangeError) {
+      setError(getErrorMessage(rangeError, "Failed to reconcile the custom range."));
+      return null;
+    }
+  }
+
+  async function handleReconcileRange() {
+    const fromDate = new Date(fromValue);
+    const toDate = new Date(toValue);
+    if (!fromValue || !toValue || Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+      setError("Choose a valid From and To date/time.");
+      return;
+    }
+    if (fromDate.getTime() >= toDate.getTime()) {
+      setError('"From" must be strictly before "To".');
+      return;
+    }
+
+    setRunning(true);
+    setError(null);
+    setLastChunk(null);
+
+    const fromIso = fromDate.toISOString();
+    const toIso = toDate.toISOString();
+    let reachedTarget = false;
+    while (!reachedTarget && mountedRef.current) {
+      const chunk = await runOneChunk(fromIso, toIso);
+      if (!mountedRef.current) return;
+      if (!chunk) break;
+      setLastChunk(chunk);
+      reachedTarget = chunk.reachedTarget;
+      if (chunk.status === "FAILED") break;
+    }
+
+    setRunning(false);
+    onSuccess();
+  }
+
+  if (!expanded) {
+    return (
+      <Button
+        onClick={() => setExpanded(true)}
+        disabled={disabled}
+        variant="outline"
+        className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+      >
+        Reconcile custom range
+      </Button>
+    );
+  }
+
+  return (
+    <div className="space-y-3 rounded-xl border border-white/10 bg-black/20 p-3">
+      <p className="text-xs text-white/50">Reconcile a specific historical date/time range</p>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <label className="space-y-1 text-xs text-white/55">
+          <span>From</span>
+          <Input
+            type="datetime-local"
+            value={fromValue}
+            onChange={(e) => setFromValue(e.target.value)}
+            disabled={disabled || running}
+            className="border-white/10 bg-black/20 text-white"
+          />
+        </label>
+        <label className="space-y-1 text-xs text-white/55">
+          <span>To</span>
+          <Input
+            type="datetime-local"
+            value={toValue}
+            onChange={(e) => setToValue(e.target.value)}
+            disabled={disabled || running}
+            className="border-white/10 bg-black/20 text-white"
+          />
+        </label>
+      </div>
+      <p className="text-[11px] leading-4 text-white/40">
+        This repairs a specific historical window and does not change the main reconciliation checkpoint
+        above.
+      </p>
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          onClick={() => void handleReconcileRange()}
+          disabled={disabled || running}
+          className="rounded-full border border-white bg-white text-black hover:bg-white/90"
+        >
+          {running ? "Reconciling..." : "Reconcile selected range"}
+        </Button>
+        <Button
+          onClick={() => {
+            setExpanded(false);
+            setError(null);
+            setLastChunk(null);
+          }}
+          disabled={running}
+          variant="outline"
+          className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+        >
+          Cancel
+        </Button>
+      </div>
+      {error ? <p className="text-xs text-red-300">{error}</p> : null}
+      {lastChunk ? (
+        <p className="text-xs text-white/60">
+          {lastChunk.status === "FAILED"
+            ? `Stopped: ${lastChunk.error ?? "an error occurred"}`
+            : lastChunk.reachedTarget
+              ? `Done. Fetched ${lastChunk.ordersFetched}, processed ${lastChunk.ordersProcessed}.`
+              : `In progress — fetched ${lastChunk.ordersFetched}, processed ${lastChunk.ordersProcessed} so far.`}
         </p>
       ) : null}
     </div>
@@ -233,7 +483,12 @@ function ConnectionOrderOperationsCard({
               subscription state is not observable from here.
             </p>
           </div>
-          <ReconcileButton
+          <CatchUpOrdersControl
+            connectionId={summary.connectionId}
+            disabled={summary.status !== "CONNECTED"}
+            onSuccess={onReconciled}
+          />
+          <ReconcileCustomRangeControl
             connectionId={summary.connectionId}
             disabled={summary.status !== "CONNECTED"}
             onSuccess={onReconciled}
@@ -347,9 +602,19 @@ function RecentOrdersList({ refreshToken }: { refreshToken: number }) {
                   {row.attributed ? "Attributed" : "Unattributed"}
                 </p>
               </div>
-              <p className="text-sm text-white/80">
-                {formatMoneyDisplay(row.totalMinor, row.currencyCode, row.minorUnitExponent)}
-              </p>
+              <div className="flex flex-col items-end gap-1">
+                <p className="text-sm text-white/80">
+                  {formatMoneyDisplay(row.totalMinor, row.currencyCode, row.minorUnitExponent)}
+                </p>
+                {/* PHASE 22, Part 5 — fulfillment is a SEPARATE badge, never
+                    merged into the financial-status text above: a PAID order
+                    can be UNFULFILLED and vice versa. */}
+                <span
+                  className={`rounded-full border px-2.5 py-0.5 text-[11px] ${fulfillmentToneClass(row.fulfillmentStatus)}`}
+                >
+                  {row.fulfillmentStatus ? FULFILLMENT_STATUS_LABELS[row.fulfillmentStatus] : "Unknown"}
+                </span>
+              </div>
             </a>
           ))}
           {hasNextPage ? (

@@ -14,6 +14,10 @@ function getRemotePatterns() {
       protocol: "https",
       hostname: "sqratch.com",
     },
+    {
+      protocol: "https",
+      hostname: "images.commerce7.com",
+    },
   ];
 
   const candidates = [

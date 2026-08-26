@@ -85,30 +85,31 @@ model CreatorProfile {
 }
 
 model Brand {
-  id                        String                     @id @default(cuid())
-  name                      String                     @unique
-  slug                      String                     @unique
-  bio                       String?
-  websiteUrl                String?
-  logoUrl                   String?
-  isActive                  Boolean                    @default(true)
-  createdAt                 DateTime                   @default(now())
-  updatedAt                 DateTime                   @updatedAt
-  coverImageUrl             String?
-  analyticsEvents           AnalyticsEvent[]
-  members                   BrandMember[]
-  campaigns                 Campaign[]
-  rewardOffers              BrandRewardOffer[]
-  commerceRewardRedemptions CommerceRewardRedemption[]
-  commerceConnectionEvents  CommerceConnectionEvent[]
-  commerceConnections       CommerceConnection[]
-  connectedCommerceProducts ConnectedCommerceProduct[]
-  commerceProductSyncRuns   CommerceProductSyncRun[]
-  brandCommerceProducts     BrandCommerceProduct[]
-  campaignCommerceProducts  CampaignCommerceProduct[]
-  campaignLessonProducts    CampaignLessonProduct[]
-  commerceOrders            CommerceOrder[]
-  commerceOrderEvents       CommerceOrderEvent[]
+  id                                String                             @id @default(cuid())
+  name                              String                             @unique
+  slug                              String                             @unique
+  bio                               String?
+  websiteUrl                        String?
+  logoUrl                           String?
+  isActive                          Boolean                            @default(true)
+  createdAt                         DateTime                           @default(now())
+  updatedAt                         DateTime                           @updatedAt
+  coverImageUrl                     String?
+  analyticsEvents                   AnalyticsEvent[]
+  members                           BrandMember[]
+  campaigns                         Campaign[]
+  rewardOffers                      BrandRewardOffer[]
+  commerceRewardRedemptions         CommerceRewardRedemption[]
+  commerceConnectionEvents          CommerceConnectionEvent[]
+  commerceConnections               CommerceConnection[]
+  connectedCommerceProducts         ConnectedCommerceProduct[]
+  commerceProductSyncRuns           CommerceProductSyncRun[]
+  brandCommerceProducts             BrandCommerceProduct[]
+  campaignCommerceProducts          CampaignCommerceProduct[]
+  campaignLessonProducts            CampaignLessonProduct[]
+  commerceOrders                    CommerceOrder[]
+  commerceOrderEvents               CommerceOrderEvent[]
+  commerceOrderReconciliationStates CommerceOrderReconciliationState[]
 }
 
 model BrandMember {
@@ -469,29 +470,30 @@ model CommerceConnectionEvent {
 }
 
 model CommerceConnection {
-  id                        String                     @id @default(cuid())
+  id                        String                            @id @default(cuid())
   brandId                   String
   provider                  CommerceProvider
-  status                    CommerceConnectionStatus   @default(DISCONNECTED)
+  status                    CommerceConnectionStatus          @default(DISCONNECTED)
   displayName               String
   externalAccountId         String
   storefrontUrl             String?
   providerClientId          String?
-  isPrimary                 Boolean                    @default(false)
+  isPrimary                 Boolean                           @default(false)
   grantedScopes             Json?
   providerMetadata          Json?
   installedAt               DateTime?
   uninstalledAt             DateTime?
   lastProductSyncAt         DateTime?
-  createdAt                 DateTime                   @default(now())
-  updatedAt                 DateTime                   @updatedAt
-  brand                     Brand                      @relation(fields: [brandId], references: [id], onDelete: Cascade)
+  createdAt                 DateTime                          @default(now())
+  updatedAt                 DateTime                          @updatedAt
+  brand                     Brand                             @relation(fields: [brandId], references: [id], onDelete: Cascade)
   secret                    CommerceConnectionSecret?
   connectedProducts         ConnectedCommerceProduct[]
   productSyncRuns           CommerceProductSyncRun[]
   commerceClickAttributions CommerceClickAttribution[]
   commerceOrders            CommerceOrder[]
   commerceOrderEvents       CommerceOrderEvent[]
+  orderReconciliationState  CommerceOrderReconciliationState?
 
   @@unique([provider, externalAccountId])
   @@index([brandId])
@@ -1209,6 +1211,74 @@ model CommerceOrderEvent {
   @@index([externalOrderRef, providerUpdatedAt])
   @@index([status, receivedAt])
   @@index([orderId])
+}
+
+/// PHASE 22 — durable, resumable Commerce7 order reconciliation checkpoint.
+/// One row per `CommerceConnection` (created lazily on first use), never in
+/// React state or process memory — must survive process termination, page
+/// reload, and deployment (see `src/lib/commerce/providers/commerce7-order-reconciliation.ts`
+/// for the full state-machine semantics this row backs).
+///
+/// TWO INDEPENDENT CONCERNS ON ONE ROW, deliberately never conflated:
+///   1. `reconciledThrough`/`targetThrough` — the CONTIGUOUS "Catch Up"
+///      checkpoint. Everything at or before `reconciledThrough` is proven
+///      successfully fetched and idempotently ingested at least once. This
+///      is the ONLY field the primary "Catch Up orders" action ever
+///      advances, and it only ever advances FORWARD (enforced by a
+///      conditional/GREATEST-style update, never a blind overwrite) so a
+///      concurrent or out-of-order chunk completion can never move it
+///      backwards.
+///   2. `customRangeFrom`/`customRangeTo`/`customRangeCursor` — an
+///      independent, resumable cursor for an EXPLICIT, admin-requested
+///      historical range repair. A custom-range reconciliation NEVER writes
+///      `reconciledThrough`/`targetThrough` — reconciling an arbitrary
+///      historical window must not be misread as proof the CONTIGUOUS range
+///      up to that window is also complete (see the reconciliation
+///      service's own header for the exact Aug-5-checkpoint /
+///      Aug-20-Aug-21-custom-range example this guards against).
+///
+/// NO "in progress" boolean flag is stored here on purpose: an age-based
+/// "assume abandoned after N minutes" recovery is explicitly forbidden (see
+/// the reconciliation service header), and a boolean that could get stuck
+/// `true` forever after an interrupted request would invite exactly that
+/// temptation. Whether Catch Up still has work to do is always DERIVED by
+/// comparing `reconciledThrough` against a freshly-computed target, never
+/// read off a persisted "is running" flag — so there is no stuck-flag state
+/// to invent unsafe recovery logic for.
+model CommerceOrderReconciliationState {
+  id           String @id @default(cuid())
+  connectionId String @unique
+  brandId      String
+
+  /// The durable "reconciled through" watermark. Null means this connection
+  /// has never had a successful Catch Up checkpoint established.
+  reconciledThrough DateTime?
+  /// The upper bound the current (or most recently attempted) Catch Up
+  /// sequence is trying to reach. Purely a resumability/UX aid — read again
+  /// on page reload so an in-flight Catch Up shows real progress instead of
+  /// restarting toward a new "now" on every click. Never itself the
+  /// authority for whether a checkpoint advance is safe; only a chunk's own
+  /// proven-complete provider result is.
+  targetThrough     DateTime?
+
+  lastAttemptedAt DateTime?
+  /// "SUCCEEDED" | "PARTIAL" | "FAILED" — informational only, never gates a
+  /// decision (mirrors `CommerceProductSyncRun.failureSummary`'s discipline).
+  lastRunOutcome  String?
+  lastRunError    String?
+
+  /// Independent custom-range repair cursor — see the model doc comment.
+  customRangeFrom   DateTime?
+  customRangeTo     DateTime?
+  customRangeCursor DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  connection CommerceConnection @relation(fields: [connectionId], references: [id], onDelete: Cascade)
+  brand      Brand              @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@index([brandId])
 }
 
 model CommerceRewardRedemption {

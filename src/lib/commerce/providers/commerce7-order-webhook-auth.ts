@@ -26,6 +26,38 @@
  * from "wrong username" from "wrong password", and neither the supplied nor
  * the expected credential is ever logged or echoed. Comparison is
  * constant-time via `timingSafeEqualString`.
+ *
+ * ===========================================================================
+ * PHASE 22 (live webhook 401 diagnosis) — SAFE, NON-SECRET FAILURE LOGGING
+ * ===========================================================================
+ * A live Commerce7-originated request has been observed returning 401 while
+ * a manual `curl` using the believed-same credentials against the exact
+ * same URL returns 200. Code inspection (this round) found the auth logic
+ * itself correct and behavior-identical to the working install/uninstall
+ * callback auth, and confirmed `src/middleware.ts`'s matcher does not even
+ * include `/api/commerce7/*` (so middleware cannot be involved), and
+ * `next.config.ts` defines no redirects/rewrites. The remaining plausible
+ * causes (a Vercel-account-level domain redirect stripping `Authorization`
+ * on a cross-host hop before axios's `follow-redirects` re-sends it, or a
+ * credential value mismatch introduced when the operator entered the
+ * password into Commerce7's own Dev Center field) cannot be distinguished
+ * from source alone.
+ *
+ * `logOrderWebhookAuthFailure` below is called ONLY on a failed
+ * authentication attempt (never on success — a success is already visible
+ * via the normal webhook outcome log downstream) and logs ONLY boolean
+ * facts plus non-secret request metadata:
+ *   authorizationHeaderPresent, authorizationSchemeIsBasic,
+ *   decodedBasicCredentialsValidShape, usernameMatchesConfiguredUsername,
+ *   passwordMatchesConfiguredPassword, configuredUsernamePresent,
+ *   configuredPasswordPresent, host, pathname, userAgent, environment.
+ *
+ * NEVER logged, under any circumstance: the raw `Authorization` header, the
+ * base64 payload, the decoded username/password pair, the actual configured
+ * password, any password prefix/suffix/length, or the Commerce7 App Secret.
+ * Every boolean below is computed via `timingSafeEqualString` exactly as the
+ * real auth decision is — the log can never reveal MORE than "matched" or
+ * "did not match" for each half.
  */
 
 import { NextResponse } from "next/server";
@@ -36,8 +68,114 @@ export type Commerce7OrderWebhookAuthResult =
   | { ok: true }
   | { ok: false; response: NextResponse };
 
+/**
+ * Minimal structural request shape this module needs: header lookup plus
+ * `url` (present on both the Fetch API `Request` tests construct and the
+ * real `NextRequest` a route handler receives) so `host`/`pathname` can be
+ * derived identically in both contexts without requiring a full `NextRequest`.
+ */
+export type Commerce7OrderWebhookAuthRequest = {
+  headers: { get(name: string): string | null };
+  url: string;
+};
+
+/** ONLY non-secret booleans and request metadata — see this file's header for the hard boundary. */
+export type Commerce7OrderWebhookAuthDiagnostics = {
+  authorizationHeaderPresent: boolean;
+  authorizationSchemeIsBasic: boolean;
+  decodedBasicCredentialsValidShape: boolean;
+  usernameMatchesConfiguredUsername: boolean;
+  passwordMatchesConfiguredPassword: boolean;
+  configuredUsernamePresent: boolean;
+  configuredPasswordPresent: boolean;
+  host: string | null;
+  pathname: string | null;
+  userAgent: string | null;
+  environment: string | null;
+};
+
 function unauthorized(): NextResponse {
   return new NextResponse(null, { status: 401 });
+}
+
+function readRequestMetadata(
+  request: Commerce7OrderWebhookAuthRequest,
+): { host: string | null; pathname: string | null } {
+  try {
+    const parsed = new URL(request.url);
+    return { host: parsed.host, pathname: parsed.pathname };
+  } catch {
+    return { host: null, pathname: null };
+  }
+}
+
+/**
+ * Computes the full sanitized diagnostics for ONE request, independent of
+ * whether the overall auth decision would already be known to fail —
+ * every field is derived on its own so a single log line is maximally
+ * informative regardless of WHERE the request diverges from a valid one.
+ * Pure/no I/O beyond reading `process.env` — never throws.
+ */
+export function computeCommerce7OrderWebhookAuthDiagnostics(
+  request: Commerce7OrderWebhookAuthRequest,
+): Commerce7OrderWebhookAuthDiagnostics {
+  const config = getCommerce7OrderWebhookConfig();
+  const { host, pathname } = readRequestMetadata(request);
+
+  const header = request.headers.get("authorization");
+  const authorizationHeaderPresent = header !== null && header !== "";
+  const authorizationSchemeIsBasic =
+    authorizationHeaderPresent && header!.toLowerCase().startsWith("basic ");
+
+  let decodedBasicCredentialsValidShape = false;
+  let username: string | null = null;
+  let password: string | null = null;
+  if (authorizationSchemeIsBasic) {
+    try {
+      const decoded = Buffer.from(header!.slice(6).trim(), "base64").toString("utf8");
+      const separator = decoded.indexOf(":");
+      if (separator >= 0) {
+        decodedBasicCredentialsValidShape = true;
+        username = decoded.slice(0, separator);
+        password = decoded.slice(separator + 1);
+      }
+    } catch {
+      decodedBasicCredentialsValidShape = false;
+    }
+  }
+
+  return {
+    authorizationHeaderPresent,
+    authorizationSchemeIsBasic,
+    decodedBasicCredentialsValidShape,
+    // Both comparisons always run against a real (possibly empty) string —
+    // never short-circuited on the header being absent/malformed — so the
+    // comparison itself is always constant-time and never throws.
+    usernameMatchesConfiguredUsername: config
+      ? timingSafeEqualString(username ?? "", config.username)
+      : false,
+    passwordMatchesConfiguredPassword: config
+      ? timingSafeEqualString(password ?? "", config.password)
+      : false,
+    configuredUsernamePresent: config !== null,
+    configuredPasswordPresent: config !== null,
+    host,
+    pathname,
+    userAgent: request.headers.get("user-agent"),
+    environment: process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? null,
+  };
+}
+
+/** Logs the diagnostics computed above — call ONLY on a failed authentication attempt. */
+export function logOrderWebhookAuthFailure(
+  diagnostics: Commerce7OrderWebhookAuthDiagnostics,
+): void {
+  console.warn(
+    JSON.stringify({
+      event: "commerce7_order_webhook_auth_failed",
+      ...diagnostics,
+    }),
+  );
 }
 
 /**
@@ -49,46 +187,33 @@ function unauthorized(): NextResponse {
  * a 500, exactly like `verifyCommerce7CallbackAuth`. The order webhook route
  * stays fail-closed until an operator has actually configured this
  * credential pair in both SQRATCH's environment and Commerce7's Dev Center.
+ *
+ * On ANY failure (missing config, missing/malformed header, wrong
+ * username, wrong password) this logs sanitized diagnostics via
+ * `logOrderWebhookAuthFailure` before returning — see this file's header.
  */
 export function verifyCommerce7OrderWebhookAuth(
-  request: { headers: { get(name: string): string | null } },
+  request: Commerce7OrderWebhookAuthRequest,
 ): Commerce7OrderWebhookAuthResult {
-  const config = getCommerce7OrderWebhookConfig();
+  const diagnostics = computeCommerce7OrderWebhookAuthDiagnostics(request);
 
-  if (!config) {
-    return {
-      ok: false,
-      response: new NextResponse(null, { status: 500 }),
-    };
-  }
+  const ok =
+    diagnostics.configuredUsernamePresent &&
+    diagnostics.configuredPasswordPresent &&
+    diagnostics.authorizationHeaderPresent &&
+    diagnostics.authorizationSchemeIsBasic &&
+    diagnostics.decodedBasicCredentialsValidShape &&
+    diagnostics.usernameMatchesConfiguredUsername &&
+    diagnostics.passwordMatchesConfiguredPassword;
 
-  const header = request.headers.get("authorization");
-
-  if (!header || !header.toLowerCase().startsWith("basic ")) {
-    return { ok: false, response: unauthorized() };
-  }
-
-  let decoded: string;
-  try {
-    decoded = Buffer.from(header.slice(6).trim(), "base64").toString("utf8");
-  } catch {
-    return { ok: false, response: unauthorized() };
-  }
-
-  const separator = decoded.indexOf(":");
-  if (separator < 0) {
-    return { ok: false, response: unauthorized() };
-  }
-
-  const username = decoded.slice(0, separator);
-  const password = decoded.slice(separator + 1);
-
-  // Both comparisons always run — no short-circuit on the username — so the
-  // response time does not reveal which half matched.
-  const usernameOk = timingSafeEqualString(username, config.username);
-  const passwordOk = timingSafeEqualString(password, config.password);
-
-  if (!usernameOk || !passwordOk) {
+  if (!ok) {
+    logOrderWebhookAuthFailure(diagnostics);
+    // A missing configuration is the one failure mode that must answer 500
+    // (fail closed, not "unauthenticated is fine") — every other failure
+    // answers the same generic 401 regardless of which check tripped.
+    if (!diagnostics.configuredUsernamePresent || !diagnostics.configuredPasswordPresent) {
+      return { ok: false, response: new NextResponse(null, { status: 500 }) };
+    }
     return { ok: false, response: unauthorized() };
   }
 
