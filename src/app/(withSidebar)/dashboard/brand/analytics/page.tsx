@@ -1,9 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { BrandPageShell } from "@/components/brand/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
+import { Button } from "@/components/ui/button";
+import {
+  formatMoneyRows,
+  parseBrandConversionAnalytics,
+  providerLabel,
+  type BrandConversionAnalytics,
+  type MoneyRow,
+  type NamedBreakdownRow,
+  type ProviderBreakdownRow,
+} from "@/lib/commerce/conversion-analytics-client";
 
 type BoundedCount = { value: number; truncated: boolean };
 
@@ -126,6 +137,18 @@ export default function BrandAnalyticsPage() {
   const [commerce, setCommerce] = useState<CommerceAnalyticsResponse | null>(null);
   const [commerceError, setCommerceError] = useState<string | null>(null);
 
+  // PHASE 24 — the conversion/revenue panel is its OWN loading/error/data
+  // state, isolated from engagement and click analytics above: a failure
+  // here must never blank scans/unlocks/lesson data or click analytics, and
+  // vice versa (see PART 19 of the task brief).
+  const [conversion, setConversion] = useState<BrandConversionAnalytics | null>(null);
+  const [conversionError, setConversionError] = useState<string | null>(null);
+  const [conversionLoading, setConversionLoading] = useState(true);
+  // Guards against a slow, superseded request landing after a newer one when
+  // the date filters change quickly — same pattern as
+  // `BrandProductsClient.tsx`'s `requestSeq`.
+  const conversionRequestSeq = useRef(0);
+
   useEffect(() => {
     async function load() {
       setError(null);
@@ -181,6 +204,51 @@ export default function BrandAnalyticsPage() {
     }
 
     void loadCommerce();
+  }, [filters.dateFrom, filters.dateTo]);
+
+  /**
+   * Attributed conversions & revenue — a THIRD, independent endpoint and
+   * effect. Like product clicks above, this is whole-brand and keyed only on
+   * the date range: the campaign dropdown does not apply (see PART 7 of the
+   * task brief and the section's own copy below), so it is deliberately
+   * absent from this effect's dependency array.
+   */
+  useEffect(() => {
+    const seq = ++conversionRequestSeq.current;
+
+    async function loadConversion() {
+      setConversionLoading(true);
+      setConversionError(null);
+
+      try {
+        const query = new URLSearchParams();
+        if (filters.dateFrom) query.set("dateFrom", filters.dateFrom);
+        if (filters.dateTo) query.set("dateTo", filters.dateTo);
+
+        const result = await fetchJson<unknown>(
+          `/api/brand/analytics/conversions?${query.toString()}`,
+        );
+        if (seq !== conversionRequestSeq.current) return; // superseded by a newer request
+
+        const parsed = parseBrandConversionAnalytics(result);
+        if (!parsed) {
+          setConversion(null);
+          setConversionError("Conversion analytics came back in an unexpected format.");
+          return;
+        }
+        setConversion(parsed);
+      } catch (loadError) {
+        if (seq !== conversionRequestSeq.current) return;
+        setConversion(null);
+        setConversionError(
+          getErrorMessage(loadError, "Failed to load conversion and revenue analytics."),
+        );
+      } finally {
+        if (seq === conversionRequestSeq.current) setConversionLoading(false);
+      }
+    }
+
+    void loadConversion();
   }, [filters.dateFrom, filters.dateTo]);
 
   return (
@@ -295,6 +363,12 @@ export default function BrandAnalyticsPage() {
       )}
 
       <CommerceClickSection data={commerce} error={commerceError} />
+
+      <ConversionAnalyticsSection
+        data={conversion}
+        error={conversionError}
+        loading={conversionLoading}
+      />
     </BrandPageShell>
   );
 }
@@ -348,8 +422,10 @@ function CommerceClickSection({
           your whole brand, so the campaign filter above does not apply here.
         </p>
         <p className="mt-2 text-xs text-white/45">
-          Commerce analytics currently measures outbound product clicks. Order and
-          revenue attribution are not enabled.
+          Product clicks record outbound traffic separately from attributed
+          conversions. Orders and revenue are counted only when SQRATCH has
+          exact attribution evidence from the commerce integration — see
+          &quot;Attributed conversions &amp; revenue&quot; below.
         </p>
       </PageCard>
 
@@ -553,6 +629,361 @@ function CommerceClickSection({
         </>
       )}
     </>
+  );
+}
+
+/**
+ * Attributed conversions & revenue — PHASE 24.
+ *
+ * A separate measurement from product clicks above: a click is evidence a
+ * visitor was sent to a merchant page, while everything below requires a
+ * persisted `CommerceOrder` with EXACT SQRATCH attribution (the established
+ * token mechanism — see `order-analytics.ts`). This section deliberately
+ * never divides one by the other: click analytics are scoped by CLICK time
+ * and conversion analytics are scoped by ORDER time, so an order can land in
+ * a different date window than the click that produced it. A naive
+ * "attributed orders / clicks" percentage would therefore be analytically
+ * invalid, not merely imprecise, so no conversion-rate figure is computed or
+ * shown anywhere in this file.
+ *
+ * Whole-brand and date-scoped only, exactly like the click section above:
+ * the campaign dropdown does not apply here (this endpoint has no campaign
+ * filter parameter), which the section says explicitly rather than leaving a
+ * filter control that silently does nothing.
+ */
+const CONVERSION_COUNT_CARDS: Array<{
+  key:
+    | "totalIngestedOrders"
+    | "attributedOrders"
+    | "currentlyNetPositivePaidOrders"
+    | "pendingOrAuthorizedOrders"
+    | "partiallyRefundedOrders"
+    | "fullyRefundedOrders";
+  label: string;
+  subtext: string;
+}> = [
+  {
+    key: "totalIngestedOrders",
+    label: "Orders ingested",
+    subtext:
+      "Orders SQRATCH received for this brand in the selected period, whether attributed or not.",
+  },
+  {
+    key: "attributedOrders",
+    label: "Attributed orders",
+    subtext: "Orders matched to an exact SQRATCH commerce click.",
+  },
+  {
+    key: "currentlyNetPositivePaidOrders",
+    label: "Current paid conversions",
+    subtext:
+      "Attributed orders that currently retain positive net revenue. Evidence of attribution, not a claim that SQRATCH caused the sale.",
+  },
+  {
+    key: "pendingOrAuthorizedOrders",
+    label: "Pending / authorized",
+    subtext: "Attributed orders whose payment has not yet settled.",
+  },
+  {
+    key: "partiallyRefundedOrders",
+    label: "Partially refunded",
+    subtext: "Attributed orders with a partial refund on record.",
+  },
+  {
+    key: "fullyRefundedOrders",
+    label: "Fully refunded",
+    subtext:
+      "Attributed orders refunded in full — never counted as a current paid conversion above.",
+  },
+];
+
+function ConversionAnalyticsSection({
+  data,
+  error,
+  loading,
+}: {
+  data: BrandConversionAnalytics | null;
+  error: string | null;
+  loading: boolean;
+}) {
+  if (error) {
+    return (
+      <PageCard>
+        <h2 className="text-xl font-semibold">Attributed conversions &amp; revenue</h2>
+        <p className="mt-3 text-sm text-red-300">{error}</p>
+      </PageCard>
+    );
+  }
+
+  if (loading || !data) {
+    return (
+      <PageCard>
+        <h2 className="text-xl font-semibold">Attributed conversions &amp; revenue</h2>
+        <p className="mt-3 text-sm text-white/65">Loading conversion analytics...</p>
+      </PageCard>
+    );
+  }
+
+  const noOrders = data.totalIngestedOrders === 0;
+  const noAttributionYet = !noOrders && data.attributedOrders === 0;
+
+  return (
+    <>
+      <PageCard>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-semibold">Attributed conversions &amp; revenue</h2>
+            <p className="mt-2 text-sm text-white/65">
+              Orders and revenue for {formatDay(data.range.start)} to{" "}
+              {formatDay(data.range.end)}, counted only when SQRATCH has exact
+              attribution evidence from the commerce integration. Counted for your
+              whole brand, so the campaign filter above does not apply here.
+            </p>
+          </div>
+          <Button
+            asChild
+            variant="outline"
+            className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+          >
+            <Link href="/dashboard/brand/commerce/orders">View order operations</Link>
+          </Button>
+        </div>
+      </PageCard>
+
+      {noOrders ? (
+        <PageCard>
+          <p className="text-sm text-white/65">
+            No commerce orders were recorded in this date range.
+          </p>
+        </PageCard>
+      ) : (
+        <>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {CONVERSION_COUNT_CARDS.map((card) => (
+              <ConversionMetricCard
+                key={card.key}
+                label={card.label}
+                subtext={card.subtext}
+                value={data[card.key]}
+              />
+            ))}
+          </div>
+
+          {noAttributionYet && (
+            <PageCard>
+              <p className="text-sm text-white/65">
+                Orders have been ingested, but none in this range have exact SQRATCH
+                attribution yet.
+              </p>
+            </PageCard>
+          )}
+
+          <div className="grid gap-4 lg:grid-cols-3">
+            <MoneyRowsCard title="Gross attributed revenue" rows={data.grossAttributedRevenueByCurrency} />
+            <MoneyRowsCard title="Refunded attributed revenue" rows={data.refundedRevenueByCurrency} />
+            <MoneyRowsCard title="Net attributed revenue" rows={data.netAttributedRevenueByCurrency} />
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <PageCard>
+              <h3 className="text-lg font-semibold">By provider</h3>
+              <ProviderBreakdownTable
+                rows={data.attributedOrdersByProvider}
+                emptyLabel="No attributed orders in this range."
+              />
+            </PageCard>
+
+            <PageCard>
+              <h3 className="text-lg font-semibold">By Experience</h3>
+              <NamedBreakdownTable
+                columnLabel="Experience"
+                rows={data.attributedOrdersByExperience}
+                emptyLabel="No attributed orders in this range."
+              />
+            </PageCard>
+          </div>
+
+          <div className="grid gap-4 lg:grid-cols-2">
+            <PageCard>
+              <h3 className="text-lg font-semibold">By entry campaign</h3>
+              <p className="mt-1 text-xs text-white/45">
+                Acquisition context — how the visitor arrived. Shows only campaigns
+                your brand owns; an order attributed through another brand&apos;s
+                acquisition campaign still counts above but has nothing to name
+                here.
+              </p>
+              <NamedBreakdownTable
+                columnLabel="Entry campaign"
+                rows={data.attributedOrdersByEntryCampaign}
+                emptyLabel="No attributed orders in this range."
+              />
+            </PageCard>
+
+            <PageCard>
+              <h3 className="text-lg font-semibold">By product campaign</h3>
+              <p className="mt-1 text-xs text-white/45">
+                Product-authorization context — which campaign authorized the
+                purchased product. Separate from entry campaign above: one order
+                can appear in both, so the two are never added together.
+              </p>
+              <NamedBreakdownTable
+                columnLabel="Product campaign"
+                rows={data.attributedOrdersByProductCampaign}
+                emptyLabel="No attributed orders in this range."
+              />
+            </PageCard>
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-3">
+            <PageCard>
+              <h3 className="text-lg font-semibold">By Creator</h3>
+              <NamedBreakdownTable
+                columnLabel="Creator"
+                rows={data.attributedOrdersByCreator}
+                emptyLabel="No attributed orders in this range."
+              />
+            </PageCard>
+
+            <PageCard>
+              <h3 className="text-lg font-semibold">By Lesson</h3>
+              <NamedBreakdownTable
+                columnLabel="Lesson"
+                rows={data.attributedOrdersByLesson}
+                emptyLabel="No attributed orders in this range."
+              />
+            </PageCard>
+
+            <PageCard>
+              <h3 className="text-lg font-semibold">By Product</h3>
+              <NamedBreakdownTable
+                columnLabel="Product"
+                rows={data.attributedOrdersByProduct}
+                emptyLabel="No attributed orders in this range."
+              />
+            </PageCard>
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
+function ConversionMetricCard({
+  label,
+  subtext,
+  value,
+}: {
+  label: string;
+  subtext: string;
+  value: number;
+}) {
+  return (
+    <PageCard>
+      <p className="text-sm text-white/55">{label}</p>
+      <p className="mt-2 text-4xl font-semibold">{value}</p>
+      <p className="mt-2 text-xs text-white/45">{subtext}</p>
+    </PageCard>
+  );
+}
+
+/**
+ * Renders a `MoneyRow[]` as one independently-labelled line per currency —
+ * see `formatMoneyRows`'s own header for why these are never summed. An
+ * empty array renders an explicit "no revenue" sentence rather than a
+ * fabricated `$0.00`, since an empty array is not evidence of a known
+ * currency at zero.
+ */
+function MoneyRowsCard({ title, rows }: { title: string; rows: MoneyRow[] }) {
+  const lines = formatMoneyRows(rows);
+  return (
+    <PageCard>
+      <h3 className="text-lg font-semibold">{title}</h3>
+      {lines.length === 0 ? (
+        <p className="mt-3 text-sm text-white/65">No attributed revenue in this range.</p>
+      ) : (
+        <ul className="mt-3 space-y-1 text-sm">
+          {lines.map((line) => (
+            <li key={line} className="tabular-nums text-white/85">
+              {line}
+            </li>
+          ))}
+        </ul>
+      )}
+    </PageCard>
+  );
+}
+
+function ProviderBreakdownTable({
+  rows,
+  emptyLabel,
+}: {
+  rows: ProviderBreakdownRow[];
+  emptyLabel: string;
+}) {
+  if (rows.length === 0) {
+    return <p className="mt-4 text-sm text-white/55">{emptyLabel}</p>;
+  }
+  return (
+    <div className="mt-4 overflow-x-auto">
+      <table className="w-full text-left text-sm">
+        <thead className="text-white/55">
+          <tr>
+            <th className="pb-3">Platform</th>
+            <th className="pb-3 text-right">Orders</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-white/10">
+          {rows.map((row) => (
+            <tr key={row.id}>
+              <td className="py-2 pr-4">{providerLabel(row.id)}</td>
+              <td className="py-2 text-right tabular-nums">{row.orders}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/** Reasonable footprint for a breakdown that could otherwise grow unbounded. */
+const CONVERSION_BREAKDOWN_DISPLAY_LIMIT = 10;
+
+function NamedBreakdownTable({
+  columnLabel,
+  rows,
+  emptyLabel,
+}: {
+  columnLabel: string;
+  rows: NamedBreakdownRow[];
+  emptyLabel: string;
+}) {
+  if (rows.length === 0) {
+    return <p className="mt-4 text-sm text-white/55">{emptyLabel}</p>;
+  }
+  const visible = rows.slice(0, CONVERSION_BREAKDOWN_DISPLAY_LIMIT);
+  const hiddenCount = rows.length - visible.length;
+  return (
+    <div className="mt-4 overflow-x-auto">
+      <table className="w-full text-left text-sm">
+        <thead className="text-white/55">
+          <tr>
+            <th className="pb-3">{columnLabel}</th>
+            <th className="pb-3 text-right">Orders</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-white/10">
+          {visible.map((row) => (
+            <tr key={row.id}>
+              <td className="py-2 pr-4">{row.name ?? "Unavailable"}</td>
+              <td className="py-2 text-right tabular-nums">{row.orders}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {hiddenCount > 0 && (
+        <p className="mt-2 text-xs text-white/45">+{hiddenCount} more not shown.</p>
+      )}
+    </div>
   );
 }
 

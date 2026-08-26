@@ -943,16 +943,37 @@ describe("response boundary tripwires", () => {
     }
   });
 
-  test("the brand dashboard shows the click-only note and no outcome metric", () => {
+  test("the brand dashboard's CLICK ANALYTICS SECTION carries no outcome metric of its own", () => {
+    // PHASE 24 REPAIR: this test originally scanned the ENTIRE page source
+    // for outcome vocabulary outside one mandated disclaimer sentence — a
+    // valid check back when the click-only section WAS the whole page. Phase
+    // 24 added a second, legitimate section further down the same file
+    // ("Attributed conversions & revenue") that necessarily uses this exact
+    // vocabulary (revenue, orders, conversions...) for its own real metrics.
+    // The safety property worth keeping is narrower and still real: the
+    // CLICK ANALYTICS SECTION specifically must still claim only clicks, and
+    // must still point the reader at the conversion section rather than
+    // silently fabricating a click-derived outcome number of its own. So this
+    // test now scopes its scan to that one section's own source slice.
+    const sectionStart = pageSource.indexOf("function CommerceClickSection(");
+    const sectionEnd = pageSource.indexOf("/**\n * Attributed conversions & revenue");
+    assert.ok(sectionStart > -1, "CommerceClickSection not found");
+    assert.ok(sectionEnd > sectionStart, "end-of-click-section marker not found");
+    const clickSectionSource = pageSource.slice(sectionStart, sectionEnd);
+
     assert.match(
-      pageSource,
-      /Commerce analytics currently measures outbound product clicks\. Order and\s*\n?\s*revenue attribution are not enabled\./,
+      clickSectionSource,
+      /Product clicks record outbound traffic separately from attributed\s*\n?\s*conversions\./,
     );
 
-    // Everything except that one mandated sentence must be free of outcome
-    // vocabulary, so the disclaimer is the ONLY place those words can appear.
-    const withoutNote = pageSource.replace(
-      /Commerce analytics currently measures outbound product clicks\.[\s\S]{0,80}?not enabled\./,
+    // Everything in the click section except that one disclaimer paragraph
+    // must remain free of outcome vocabulary — it is a click-only panel and
+    // must never render its own revenue/order/conversion figure. The
+    // disclaimer paragraph itself legitimately names "Orders", "revenue" and
+    // "conversions" (it exists to point the reader at the section that
+    // measures them), so it — and only it — is stripped before the scan.
+    const withoutNote = clickSectionSource.replace(
+      /Product clicks record outbound traffic separately from attributed[\s\S]*?below\.\s*<\/p>/,
       "",
     );
     for (const forbidden of [
@@ -964,8 +985,13 @@ describe("response boundary tripwires", () => {
       /\bcommissions?\b/i,
       /\border(s| value)\b/i,
     ]) {
-      assert.doesNotMatch(withoutNote, forbidden, `${PAGE_PATH} matched ${forbidden}`);
+      assert.doesNotMatch(withoutNote, forbidden, `CommerceClickSection matched ${forbidden}`);
     }
+  });
+
+  test("the brand dashboard's ATTRIBUTED CONVERSIONS section exists and is where outcome vocabulary now legitimately lives", () => {
+    assert.match(pageSource, /Attributed conversions &amp; revenue/);
+    assert.match(pageSource, /function ConversionAnalyticsSection\(/);
   });
 
   test("the dashboard labels entry and product campaigns distinctly", () => {
