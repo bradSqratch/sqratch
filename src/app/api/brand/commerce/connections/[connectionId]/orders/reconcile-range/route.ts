@@ -95,10 +95,27 @@ export async function brandCommerceReconcileRangePostImpl(
     if (from.getTime() >= to.getTime()) {
       return NextResponse.json({ error: '"from" must be strictly before "to".' }, { status: 400 });
     }
-    const now = Date.now();
+    // PHASE 26 — this rejection is now MACHINE-READABLE. It was previously a
+    // bare message, so a client could not distinguish "you picked a future
+    // range" from any other 400 and fell back to a generic "Failed to
+    // reconcile the custom range." The UI additionally pre-validates the
+    // same condition against the browser clock, but THIS check remains the
+    // authoritative one: it is evaluated against the SERVER's clock, which a
+    // client cannot influence (a skewed or deliberately-altered browser
+    // clock can pass the client check and must still be refused here).
+    //
+    // `serverNow` is returned purely so an operator can see the clock the
+    // rejection was made against — it is a plain timestamp, never internal
+    // state.
+    const nowDate = new Date();
+    const now = nowDate.getTime();
     if (from.getTime() > now || to.getTime() > now) {
       return NextResponse.json(
-        { error: "The reconciliation range cannot extend into the future." },
+        {
+          error: "The reconciliation range cannot extend past the current time.",
+          code: "RANGE_IN_FUTURE",
+          serverNow: nowDate.toISOString(),
+        },
         { status: 400 },
       );
     }

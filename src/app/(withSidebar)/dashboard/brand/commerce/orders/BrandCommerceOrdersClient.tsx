@@ -11,8 +11,10 @@ import {
   parseCatchUpStepResult,
   parseCustomRangeStepResult,
   parseOrderListEnvelope,
+  formatDateTimeLocalMax,
   parseOrderOperationsSummary,
   parseReconciliationState,
+  validateCustomRangeSelection,
   type BrandOrderOperationsSummary,
   type CatchUpStepResult,
   type CommerceConnectionStatus,
@@ -271,6 +273,32 @@ function ReconcileCustomRangeControl({
     };
   }, []);
 
+  /**
+   * PHASE 26 — the latest LOCAL date/time the pickers may offer.
+   *
+   * The server rejects any range extending past its own clock, so a picker
+   * that happily accepts "tomorrow" lets the operator build a request that
+   * can only ever 400 — which is exactly what happened in production. This
+   * caps both controls at "now".
+   *
+   * Recomputed when the panel OPENS and every 30s while it stays open, so a
+   * long-lived panel never freezes the ceiling at an obsolete minute and
+   * starts refusing the genuine current time. The interval is created only
+   * while `expanded` is true and is cleared by the effect's own cleanup on
+   * collapse AND on unmount, so no timer can outlive the component.
+   */
+  const [maxDateTimeLocal, setMaxDateTimeLocal] = useState(() =>
+    formatDateTimeLocalMax(new Date()),
+  );
+  useEffect(() => {
+    if (!expanded) return;
+    setMaxDateTimeLocal(formatDateTimeLocalMax(new Date()));
+    const handle = setInterval(() => {
+      setMaxDateTimeLocal(formatDateTimeLocalMax(new Date()));
+    }, 30_000);
+    return () => clearInterval(handle);
+  }, [expanded]);
+
   async function runOneChunk(from: string, to: string): Promise<CustomRangeStepResult | null> {
     try {
       const data = await fetchJson<unknown>(
@@ -294,14 +322,18 @@ function ReconcileCustomRangeControl({
   }
 
   async function handleReconcileRange() {
-    const fromDate = new Date(fromValue);
-    const toDate = new Date(toValue);
-    if (!fromValue || !toValue || Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
-      setError("Choose a valid From and To date/time.");
-      return;
-    }
-    if (fromDate.getTime() >= toDate.getTime()) {
-      setError('"From" must be strictly before "To".');
+    // PHASE 26 — pure, shared pre-flight validation (see
+    // `validateCustomRangeSelection`). Rejects a future range BEFORE any
+    // POST, so the operator gets the specific message rather than a generic
+    // failure after a round trip. The server re-validates all of this
+    // against its OWN clock regardless — this never replaces that.
+    const selection = validateCustomRangeSelection({
+      fromValue,
+      toValue,
+      now: new Date(),
+    });
+    if (!selection.ok) {
+      setError(selection.message);
       return;
     }
 
@@ -309,8 +341,7 @@ function ReconcileCustomRangeControl({
     setError(null);
     setLastChunk(null);
 
-    const fromIso = fromDate.toISOString();
-    const toIso = toDate.toISOString();
+    const { fromIso, toIso } = selection;
     let reachedTarget = false;
     while (!reachedTarget && mountedRef.current) {
       const chunk = await runOneChunk(fromIso, toIso);
@@ -347,6 +378,7 @@ function ReconcileCustomRangeControl({
           <Input
             type="datetime-local"
             value={fromValue}
+            max={maxDateTimeLocal}
             onChange={(e) => setFromValue(e.target.value)}
             disabled={disabled || running}
             className="border-white/10 bg-black/20 text-white"
@@ -357,6 +389,7 @@ function ReconcileCustomRangeControl({
           <Input
             type="datetime-local"
             value={toValue}
+            max={maxDateTimeLocal}
             onChange={(e) => setToValue(e.target.value)}
             disabled={disabled || running}
             className="border-white/10 bg-black/20 text-white"

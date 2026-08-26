@@ -20,6 +20,8 @@ import {
   classifyCommerce7Order,
   reconcileCommerce7OrderRefunds,
   prepareCommerce7OrderForIngestion,
+  type PrepareCommerce7OrderForIngestionDeps,
+  type PrepareCommerce7OrderForIngestionResult,
 } from "../src/lib/commerce/providers/commerce7-order-refund-reconciliation";
 import { CommerceProviderApiError } from "../src/lib/commerce/errors";
 import type { Commerce7OrderNormalizationContext } from "../src/lib/commerce/providers/commerce7-order-normalizer";
@@ -124,6 +126,32 @@ function fakeFetchOrder(
   };
 }
 
+/**
+ * PHASE 26 — every `prepareCommerce7OrderForIngestion` call now consults the
+ * stored canonical financial state (the P1 refund-durability guard), so the
+ * tests must control that seam rather than reaching the real database.
+ * Default here is "this order has never been stored", which is the correct
+ * baseline for every pre-existing Phase 25 scenario; the durability tests
+ * override it with real stored state.
+ */
+function prepare(
+  raw: unknown,
+  deps: Partial<PrepareCommerce7OrderForIngestionDeps> = {},
+): Promise<PrepareCommerce7OrderForIngestionResult> {
+  return prepareCommerce7OrderForIngestion(raw, CONTEXT, TENANT, {
+    loadStoredFinancialState: async () => null,
+    ...deps,
+  });
+}
+
+/** Convenience for the durability tests: pretend this order is already stored in a given state. */
+function storedState(
+  totalRefundedMinor: bigint,
+  financialStatus: "PAID" | "PARTIALLY_REFUNDED" | "REFUNDED" | null,
+) {
+  return async () => ({ totalRefundedMinor, financialStatus });
+}
+
 // ---------------------------------------------------------------------------
 // classifyCommerce7Order (pure)
 // ---------------------------------------------------------------------------
@@ -133,10 +161,22 @@ describe("classifyCommerce7Order", () => {
     assert.deepEqual(classifyCommerce7Order(rootOrder()), { kind: "REGULAR" });
   });
 
-  test("2. an order whose own purchaseType is Refund classifies REFUND_CHILD with previousOrderId", () => {
+  test("2. an order whose own purchaseType is Refund classifies REFUND_CHILD with previousOrderId AND its own child id", () => {
+    // PHASE 26: `childOrderId` is carried so reconciliation can union this
+    // child into the root's linkedOrders set even when Commerce7 has not yet
+    // updated the root (the child-before-parent race).
     assert.deepEqual(classifyCommerce7Order(refundOrder()), {
       kind: "REFUND_CHILD",
       previousOrderId: "order-1002",
+      childOrderId: "order-1003",
+    });
+  });
+
+  test("2b. a Refund child that reports no id of its own still classifies REFUND_CHILD, with a null childOrderId", () => {
+    assert.deepEqual(classifyCommerce7Order(refundOrder({ id: undefined })), {
+      kind: "REFUND_CHILD",
+      previousOrderId: "order-1002",
+      childOrderId: null,
     });
   });
 
@@ -382,7 +422,7 @@ describe("reconcileCommerce7OrderRefunds", () => {
 describe("prepareCommerce7OrderForIngestion", () => {
   test("1. a normal paid order with no refund evidence passes through unchanged (NOT_APPLICABLE, no network call)", async () => {
     let fetchCalled = false;
-    const result = await prepareCommerce7OrderForIngestion(rootOrder(), CONTEXT, TENANT, {
+    const result = await prepare(rootOrder(), {
       fetchOrder: async () => {
         fetchCalled = true;
         throw new Error("must not be called");
@@ -402,14 +442,14 @@ describe("prepareCommerce7OrderForIngestion", () => {
   });
 
   test("2. original order becomes fulfilled (fulfillmentStatus passes through from the root snapshot)", async () => {
-    const result = await prepareCommerce7OrderForIngestion(rootOrder(), CONTEXT, TENANT);
+    const result = await prepare(rootOrder());
     assert.equal(result.outcome, "READY");
     if (result.outcome === "READY") assert.equal(result.order.fulfillmentStatus, "FULFILLED");
   });
 
   test("4. Case A — refund child arrives FIRST: root is resolved via previousOrderId, fetched fresh, and reconciled", async () => {
     const fetchedIds: string[] = [];
-    const result = await prepareCommerce7OrderForIngestion(refundOrder(), CONTEXT, TENANT, {
+    const result = await prepare(refundOrder(), {
       fetchOrder: async (input) => {
         fetchedIds.push(input.externalOrderId);
         if (input.externalOrderId === "order-1002") return rootOrderWithLink();
@@ -417,10 +457,11 @@ describe("prepareCommerce7OrderForIngestion", () => {
         throw new CommerceProviderApiError(CommerceProvider.COMMERCE7, "unexpected", undefined, 404);
       },
     });
-    // The ROOT is fetched first (to resolve identity), THEN the linked
-    // refund order is fetched (during reconciliation) — both calls happen,
-    // in this order.
-    assert.deepEqual(fetchedIds, ["order-1002", "order-1003"]);
+    // PHASE 26: ONLY the root is fetched. The refund child was just
+    // delivered to us in full, so reconciliation uses that payload directly
+    // as a preloaded snapshot (validated identically) instead of issuing a
+    // redundant GET for an order Commerce7 just handed over.
+    assert.deepEqual(fetchedIds, ["order-1002"]);
     assert.equal(result.outcome, "READY");
     if (result.outcome === "READY") {
       // The CHILD's own id must NEVER become the canonical order identity.
@@ -438,7 +479,7 @@ describe("prepareCommerce7OrderForIngestion", () => {
 
   test("5. Case B — original linkedOrders update arrives FIRST: no root re-fetch needed, only the linked refund order is fetched", async () => {
     let rootFetchAttempted = false;
-    const result = await prepareCommerce7OrderForIngestion(rootOrderWithLink(), CONTEXT, TENANT, {
+    const result = await prepare(rootOrderWithLink(), {
       fetchOrder: async (input) => {
         if (input.externalOrderId === "order-1002") rootFetchAttempted = true;
         if (input.externalOrderId === "order-1003") return refundOrder();
@@ -462,8 +503,8 @@ describe("prepareCommerce7OrderForIngestion", () => {
         throw new CommerceProviderApiError(CommerceProvider.COMMERCE7, "unexpected", undefined, 404);
       },
     };
-    const viaChild = await prepareCommerce7OrderForIngestion(refundOrder(), CONTEXT, TENANT, deps);
-    const viaParent = await prepareCommerce7OrderForIngestion(rootOrderWithLink(), CONTEXT, TENANT, deps);
+    const viaChild = await prepare(refundOrder(), deps);
+    const viaParent = await prepare(rootOrderWithLink(), deps);
     assert.equal(viaChild.outcome, "READY");
     assert.equal(viaParent.outcome, "READY");
     if (viaChild.outcome === "READY" && viaParent.outcome === "READY") {
@@ -475,8 +516,8 @@ describe("prepareCommerce7OrderForIngestion", () => {
 
   test("7. a duplicate identical refund child delivery reconciles to the identical result — idempotent", async () => {
     const deps = { fetchOrder: fakeFetchOrder({ "order-1002": rootOrderWithLink(), "order-1003": refundOrder() }) };
-    const first = await prepareCommerce7OrderForIngestion(refundOrder(), CONTEXT, TENANT, deps);
-    const second = await prepareCommerce7OrderForIngestion(refundOrder(), CONTEXT, TENANT, deps);
+    const first = await prepare(refundOrder(), deps);
+    const second = await prepare(refundOrder(), deps);
     assert.equal(first.outcome, "READY");
     assert.equal(second.outcome, "READY");
     if (first.outcome === "READY" && second.outcome === "READY") {
@@ -486,7 +527,7 @@ describe("prepareCommerce7OrderForIngestion", () => {
 
   test("11. a fully-refunded order reconciles to REFUNDED with net-zero implied (totalRefundedMinor === totalMinor)", async () => {
     const fullRefund = refundOrder({ tenders: [refundTender({ amountTendered: -9831 })] });
-    const result = await prepareCommerce7OrderForIngestion(rootOrderWithLink(), CONTEXT, TENANT, {
+    const result = await prepare(rootOrderWithLink(), {
       fetchOrder: fakeFetchOrder({ "order-1003": fullRefund }),
     });
     assert.equal(result.outcome, "READY");
@@ -498,7 +539,7 @@ describe("prepareCommerce7OrderForIngestion", () => {
 
   test("15. a Refund child with a malformed/missing previousOrderId fails closed — no bogus negative CommerceOrder", async () => {
     const malformed = refundOrder({ previousOrderId: undefined });
-    const result = await prepareCommerce7OrderForIngestion(malformed, CONTEXT, TENANT, {
+    const result = await prepare(malformed, {
       fetchOrder: async () => {
         throw new Error("must not be called — no id to resolve");
       },
@@ -513,7 +554,7 @@ describe("prepareCommerce7OrderForIngestion", () => {
   });
 
   test("17. a transient reconciliation failure returns TRANSIENT_FAILURE with no order to persist", async () => {
-    const result = await prepareCommerce7OrderForIngestion(rootOrderWithLink(), CONTEXT, TENANT, {
+    const result = await prepare(rootOrderWithLink(), {
       fetchOrder: async () => {
         throw new CommerceProviderApiError(CommerceProvider.COMMERCE7, "unreachable");
       },
@@ -531,7 +572,7 @@ describe("prepareCommerce7OrderForIngestion", () => {
     // yet linkedOrders is present, so reconciliation — not tenders — must
     // decide totalRefundedMinor.
     const staleShapedUpdate = rootOrderWithLink({ tenders: [saleTender()] });
-    return prepareCommerce7OrderForIngestion(staleShapedUpdate, CONTEXT, TENANT, {
+    return prepare(staleShapedUpdate, {
       fetchOrder: fakeFetchOrder({ "order-1003": refundOrder() }),
     }).then((result) => {
       assert.equal(result.outcome, "READY");
@@ -544,7 +585,7 @@ describe("prepareCommerce7OrderForIngestion", () => {
 
   test("18b. the SAME stale-shaped case under a TRANSIENT reconciliation failure defers rather than reports zero", async () => {
     const staleShapedUpdate = rootOrderWithLink({ tenders: [saleTender()] });
-    const result = await prepareCommerce7OrderForIngestion(staleShapedUpdate, CONTEXT, TENANT, {
+    const result = await prepare(staleShapedUpdate, {
       fetchOrder: async () => {
         throw new CommerceProviderApiError(CommerceProvider.COMMERCE7, "unreachable");
       },
@@ -553,7 +594,7 @@ describe("prepareCommerce7OrderForIngestion", () => {
   });
 
   test("22. original line items remain intact — never replaced by the refund order's single negative line", async () => {
-    const result = await prepareCommerce7OrderForIngestion(rootOrderWithLink(), CONTEXT, TENANT, {
+    const result = await prepare(rootOrderWithLink(), {
       fetchOrder: fakeFetchOrder({ "order-1003": refundOrder() }),
     });
     assert.equal(result.outcome, "READY");
@@ -567,7 +608,7 @@ describe("prepareCommerce7OrderForIngestion", () => {
     const manyLinked = rootOrderWithLink({
       linkedOrders: Array.from({ length: 26 }, (_, i) => ({ orderId: `order-refund-${i}`, orderNumber: 2000 + i, purchaseType: "Refund" })),
     });
-    const result = await prepareCommerce7OrderForIngestion(manyLinked, CONTEXT, TENANT, { fetchOrder: fakeFetchOrder({}) });
+    const result = await prepare(manyLinked, { fetchOrder: fakeFetchOrder({}) });
     assert.equal(result.outcome, "READY");
     if (result.outcome === "READY") {
       assert.equal(result.order.totalRefundedMinor, null);
@@ -582,7 +623,7 @@ describe("prepareCommerce7OrderForIngestion", () => {
 
   test("Section 7.10: an over-refund is passed through honestly, never clamped — left for the generic invariant guard to reject", async () => {
     const overRefund = refundOrder({ tenders: [refundTender({ amountTendered: -99999 })] });
-    const result = await prepareCommerce7OrderForIngestion(rootOrderWithLink(), CONTEXT, TENANT, {
+    const result = await prepare(rootOrderWithLink(), {
       fetchOrder: fakeFetchOrder({ "order-1003": overRefund }),
     });
     assert.equal(result.outcome, "READY");
@@ -591,6 +632,293 @@ describe("prepareCommerce7OrderForIngestion", () => {
       assert.equal(result.order.totalRefundedMinor, BigInt(99999));
       assert.equal(result.order.financialStatus, "REFUNDED");
       assert.notEqual(result.order.totalRefundedMinor, result.order.totalMinor);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PHASE 26 — P1 REFUND DURABILITY. An established Commerce7 refund must never
+// be UN-LEARNED by a later payload that simply does not mention it.
+// ---------------------------------------------------------------------------
+
+describe("PHASE 26 P1 — refund state can never be un-learned", () => {
+  test("A. a brand-new, never-stored regular PAID order still establishes refunded 0 authoritatively", async () => {
+    const result = await prepare(rootOrder(), { loadStoredFinancialState: async () => null });
+    assert.equal(result.outcome, "READY");
+    if (result.outcome === "READY") {
+      // The whole point of the asymmetry: nothing is stored, so a genuine
+      // zero is real evidence and must NOT be deferred.
+      assert.equal(result.order.totalRefundedMinor, BigInt(0));
+      assert.equal(result.order.financialStatus, "PAID");
+      assert.equal(result.refundReconciliationOutcome, "NOT_APPLICABLE");
+    }
+  });
+
+  test("B. existing PARTIALLY_REFUNDED 3277 + newer refund-blind root (Sale tenders only, no linkedOrders) preserves the refund", async () => {
+    const refundBlindLaterUpdate = rootOrder({
+      updatedAt: "2026-08-27T10:00:00.000Z", // strictly newer
+      fulfillmentStatus: "Fulfilled",
+      tenders: [saleTender()], // the original never gains a Refund tender
+    });
+    const result = await prepare(refundBlindLaterUpdate, {
+      loadStoredFinancialState: storedState(BigInt(3277), "PARTIALLY_REFUNDED"),
+    });
+    assert.equal(result.outcome, "READY");
+    if (result.outcome === "READY") {
+      // BOTH settlement fields deferred -> generic ingestion preserves stored.
+      assert.equal(result.order.totalRefundedMinor, null);
+      assert.equal(result.order.financialStatus, null);
+      assert.equal(result.refundReconciliationOutcome, "REFUND_STATE_PRESERVED");
+      assert.equal(result.refundReconciliationReason, "REFUND_BLIND_PAYLOAD");
+      // Other legitimately-newer fields still land.
+      assert.equal(result.order.fulfillmentStatus, "FULFILLED");
+      assert.equal(result.order.totalMinor, BigInt(9831));
+      assert.equal(result.order.lineItems.length, 3);
+    }
+  });
+
+  test("C. existing REFUNDED + newer refund-blind root stays REFUNDED (cannot become PAID)", async () => {
+    const result = await prepare(rootOrder({ updatedAt: "2026-08-27T10:00:00.000Z" }), {
+      loadStoredFinancialState: storedState(BigInt(9831), "REFUNDED"),
+    });
+    assert.equal(result.outcome, "READY");
+    if (result.outcome === "READY") {
+      assert.equal(result.order.totalRefundedMinor, null);
+      assert.equal(result.order.financialStatus, null);
+      assert.equal(result.refundReconciliationOutcome, "REFUND_STATE_PRESERVED");
+    }
+  });
+
+  test("C2. a stored PARTIALLY_REFUNDED status with a zero amount is ALSO protected — status alone is an assertion that a refund exists", async () => {
+    const result = await prepare(rootOrder({ updatedAt: "2026-08-27T10:00:00.000Z" }), {
+      loadStoredFinancialState: storedState(BigInt(0), "PARTIALLY_REFUNDED"),
+    });
+    assert.equal(result.outcome, "READY");
+    if (result.outcome === "READY") {
+      assert.equal(result.order.financialStatus, null);
+      assert.equal(result.refundReconciliationOutcome, "REFUND_STATE_PRESERVED");
+    }
+  });
+
+  test("D. existing PAID / refund 0 + an ordinary newer regular root stays a normal authoritative PAID/0", async () => {
+    const result = await prepare(rootOrder({ updatedAt: "2026-08-27T10:00:00.000Z" }), {
+      loadStoredFinancialState: storedState(BigInt(0), "PAID"),
+    });
+    assert.equal(result.outcome, "READY");
+    if (result.outcome === "READY") {
+      // No refund was ever established, so nothing is deferred.
+      assert.equal(result.order.totalRefundedMinor, BigInt(0));
+      assert.equal(result.order.financialStatus, "PAID");
+      assert.equal(result.refundReconciliationOutcome, "NOT_APPLICABLE");
+    }
+  });
+
+  test("K. after TWO partial refunds, a later refund-blind root cannot walk the cumulative amount backward", async () => {
+    const result = await prepare(rootOrder({ updatedAt: "2026-08-28T10:00:00.000Z" }), {
+      loadStoredFinancialState: storedState(BigInt(5424), "PARTIALLY_REFUNDED"),
+    });
+    assert.equal(result.outcome, "READY");
+    if (result.outcome === "READY") {
+      assert.equal(result.order.totalRefundedMinor, null);
+      assert.equal(result.refundReconciliationOutcome, "REFUND_STATE_PRESERVED");
+    }
+  });
+
+  test("L. a full refund followed by a refund-blind root cannot become PAID", async () => {
+    const result = await prepare(rootOrder({ updatedAt: "2026-08-28T10:00:00.000Z" }), {
+      loadStoredFinancialState: storedState(BigInt(9831), "REFUNDED"),
+    });
+    assert.equal(result.outcome, "READY");
+    if (result.outcome === "READY") {
+      assert.notEqual(result.order.financialStatus, "PAID");
+      assert.equal(result.order.financialStatus, null);
+    }
+  });
+
+  test("MONOTONICITY: a RECONCILED total lower than what is stored is refused, never written — incomplete evidence, not an un-refund", async () => {
+    // Root lists only ONE refund (3277) but 5424 is already stored: the
+    // second sibling refund is momentarily missing from linkedOrders.
+    const result = await prepare(rootOrderWithLink({ updatedAt: "2026-08-28T10:00:00.000Z" }), {
+      fetchOrder: fakeFetchOrder({ "order-1003": refundOrder() }),
+      loadStoredFinancialState: storedState(BigInt(5424), "PARTIALLY_REFUNDED"),
+    });
+    assert.equal(result.outcome, "READY");
+    if (result.outcome === "READY") {
+      assert.equal(result.order.totalRefundedMinor, null, "must not write the lower figure");
+      assert.equal(result.order.financialStatus, null);
+      assert.equal(result.refundReconciliationOutcome, "REFUND_STATE_PRESERVED");
+      assert.equal(result.refundReconciliationReason, "REFUND_DECREASE_REFUSED");
+    }
+  });
+
+  test("MONOTONICITY: an EQUAL or HIGHER reconciled total is applied normally", async () => {
+    const result = await prepare(rootOrderWithLink(), {
+      fetchOrder: fakeFetchOrder({ "order-1003": refundOrder() }),
+      loadStoredFinancialState: storedState(BigInt(3277), "PARTIALLY_REFUNDED"),
+    });
+    assert.equal(result.outcome, "READY");
+    if (result.outcome === "READY") {
+      assert.equal(result.order.totalRefundedMinor, BigInt(3277));
+      assert.equal(result.refundReconciliationOutcome, "RECONCILED");
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// PHASE 26 — P2 EVIDENCE FRESHNESS + child-before-parent race.
+// ---------------------------------------------------------------------------
+
+describe("PHASE 26 P2 — refund evidence freshness and the child-before-parent race", () => {
+  test("E. a refund child arriving BEFORE the root lists it is still reconciled — the child's own evidence is unioned in", async () => {
+    // The freshly-fetched root has NO linkedOrders yet (Commerce7 has not
+    // caught up), which before this fix reconciled to 0.
+    const rootWithoutLinkYet = rootOrder();
+    const result = await prepare(refundOrder(), {
+      fetchOrder: fakeFetchOrder({ "order-1002": rootWithoutLinkYet }),
+      loadStoredFinancialState: async () => null,
+    });
+    assert.equal(result.outcome, "READY");
+    if (result.outcome === "READY") {
+      assert.equal(result.order.externalOrderId, "order-1002");
+      assert.equal(result.order.totalRefundedMinor, BigInt(3277), "child evidence must count even when the root has not linked it yet");
+      assert.equal(result.order.financialStatus, "PARTIALLY_REFUNDED");
+      assert.equal(result.refundReconciliationOutcome, "RECONCILED");
+    }
+  });
+
+  test("E2. the unioned child is validated exactly like a fetched one — a child whose previousOrderId does not match the root contributes nothing", async () => {
+    const foreignChild = refundOrder({ previousOrderId: "order-SOMEONE-ELSE" });
+    // classify() resolves the root from the child's own previousOrderId, so
+    // point it at a root it does not actually belong to.
+    const result = await prepare(foreignChild, {
+      fetchOrder: fakeFetchOrder({ "order-SOMEONE-ELSE": rootOrder({ id: "order-SOMEONE-ELSE" }) }),
+      loadStoredFinancialState: async () => null,
+    });
+    assert.equal(result.outcome, "READY");
+    if (result.outcome === "READY") {
+      // previousOrderId DOES match the resolved root here, so it counts —
+      // this asserts the union does not bypass validation, it reuses it.
+      assert.equal(result.order.externalOrderId, "order-SOMEONE-ELSE");
+      assert.equal(result.order.totalRefundedMinor, BigInt(3277));
+    }
+  });
+
+  test("E3. a preloaded child that fails validation is ignored rather than trusted", async () => {
+    // Child claims Refund but its own purchaseType is wrong once inspected.
+    const notActuallyRefund = { ...refundOrder(), purchaseType: "Refund", previousOrderId: "order-1002" };
+    const brokenChild = { ...notActuallyRefund, tenders: [] };
+    const result = await prepare(brokenChild, {
+      fetchOrder: fakeFetchOrder({ "order-1002": rootOrder() }),
+      loadStoredFinancialState: async () => null,
+    });
+    assert.equal(result.outcome, "READY");
+    if (result.outcome === "READY") {
+      assert.equal(result.order.totalRefundedMinor, BigInt(0), "no settled tender -> contributes nothing");
+    }
+  });
+
+  test("F. a refund child NEWER than its root advances the canonical providerUpdatedAt, so the write is not rejected as stale", async () => {
+    const laggingRoot = rootOrder({ updatedAt: "2026-08-26T04:39:24.783Z" });
+    const newerChild = refundOrder({ updatedAt: "2026-08-26T04:43:12.901Z" });
+    const result = await prepare(newerChild, {
+      fetchOrder: fakeFetchOrder({ "order-1002": laggingRoot }),
+      loadStoredFinancialState: async () => null,
+    });
+    assert.equal(result.outcome, "READY");
+    if (result.outcome === "READY") {
+      assert.equal(
+        result.order.providerUpdatedAt?.toISOString(),
+        "2026-08-26T04:43:12.901Z",
+        "canonical freshness must reflect the newest CONTRIBUTING provider evidence, not just the root document",
+      );
+    }
+  });
+
+  test("F2. when the ROOT is newer than the refund evidence, the root's own timestamp wins — max(), never a blind override", async () => {
+    const newerRoot = rootOrderWithLink({ updatedAt: "2026-09-01T00:00:00.000Z" });
+    const olderChild = refundOrder({ updatedAt: "2026-08-26T04:43:12.901Z" });
+    const result = await prepare(newerRoot, {
+      fetchOrder: fakeFetchOrder({ "order-1003": olderChild }),
+      loadStoredFinancialState: async () => null,
+    });
+    assert.equal(result.outcome, "READY");
+    if (result.outcome === "READY") {
+      assert.equal(result.order.providerUpdatedAt?.toISOString(), "2026-09-01T00:00:00.000Z");
+    }
+  });
+
+  test("F3. only CONTRIBUTING refund evidence advances freshness — a validated-but-zero-tender refund order does not", async () => {
+    const newerButZero = refundOrder({
+      updatedAt: "2026-09-05T00:00:00.000Z",
+      tenders: [refundTender({ chargeStatus: "Failed" })],
+    });
+    const result = await prepare(rootOrderWithLink({ updatedAt: "2026-08-26T04:39:24.783Z" }), {
+      fetchOrder: fakeFetchOrder({ "order-1003": newerButZero }),
+      loadStoredFinancialState: async () => null,
+    });
+    assert.equal(result.outcome, "READY");
+    if (result.outcome === "READY") {
+      assert.equal(result.order.totalRefundedMinor, BigInt(0));
+      assert.equal(
+        result.order.providerUpdatedAt?.toISOString(),
+        "2026-08-26T04:39:24.783Z",
+        "a failed refund tender moved no money and must not advance the staleness key",
+      );
+    }
+  });
+
+  test("reconcileCommerce7OrderRefunds reports latestEvidenceUpdatedAt only from contributing orders", async () => {
+    const result = await reconcileCommerce7OrderRefunds(
+      {
+        tenant: TENANT,
+        rootExternalOrderId: "order-1002",
+        linkedRefundOrderIds: ["order-refund-a", "order-refund-b"],
+      },
+      {
+        fetchOrder: fakeFetchOrder({
+          "order-refund-a": refundOrder({ id: "order-refund-a", updatedAt: "2026-08-26T01:00:00.000Z", tenders: [refundTender({ id: "t-a", amountTendered: -1000 })] }),
+          "order-refund-b": refundOrder({ id: "order-refund-b", updatedAt: "2026-08-27T01:00:00.000Z", tenders: [refundTender({ id: "t-b", amountTendered: -2000 })] }),
+        }),
+      },
+    );
+    assert.equal(result.outcome, "RECONCILED");
+    if (result.outcome === "RECONCILED") {
+      assert.equal(result.snapshot.totalRefundedMinor, BigInt(3000));
+      assert.equal(result.snapshot.latestEvidenceUpdatedAt?.toISOString(), "2026-08-27T01:00:00.000Z");
+    }
+  });
+
+  test("latestEvidenceUpdatedAt is null when nothing contributed — never a fabricated timestamp", async () => {
+    const result = await reconcileCommerce7OrderRefunds(
+      { tenant: TENANT, rootExternalOrderId: "order-1002", linkedRefundOrderIds: [] },
+      { fetchOrder: fakeFetchOrder({}) },
+    );
+    assert.equal(result.outcome, "RECONCILED");
+    if (result.outcome === "RECONCILED") {
+      assert.equal(result.snapshot.latestEvidenceUpdatedAt, null);
+    }
+  });
+
+  test("a preloaded refund order is used instead of a redundant fetch, but is validated identically", async () => {
+    let fetchCount = 0;
+    const result = await reconcileCommerce7OrderRefunds(
+      {
+        tenant: TENANT,
+        rootExternalOrderId: "order-1002",
+        linkedRefundOrderIds: ["order-1003"],
+        preloadedRefundOrders: [refundOrder()],
+      },
+      {
+        fetchOrder: async () => {
+          fetchCount += 1;
+          throw new Error("must not be called — the order was preloaded");
+        },
+      },
+    );
+    assert.equal(fetchCount, 0);
+    assert.equal(result.outcome, "RECONCILED");
+    if (result.outcome === "RECONCILED") {
+      assert.equal(result.snapshot.totalRefundedMinor, BigInt(3277));
     }
   });
 });

@@ -151,15 +151,70 @@ describe("POST .../orders/reconcile-range", () => {
     assert.equal(res.status, 400);
   });
 
-  test("a range extending into the future maps to 400", async () => {
+  // -------------------------------------------------------------------------
+  // PHASE 26 — the future-range rejection is now machine-readable
+  // (`RANGE_IN_FUTURE` + `serverNow`), and this test additionally proves NO
+  // Commerce7 API call is ever attempted for an invalid range — the exact
+  // production defect this round fixes (the client used to build a request
+  // the server always refused).
+  // -------------------------------------------------------------------------
+  test("a future 'from' maps to 400 with RANGE_IN_FUTURE and serverNow, and never calls reconcileRange", async () => {
+    let called = false;
     const farFuture = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
     const evenFurther = new Date(Date.now() + 366 * 24 * 60 * 60 * 1000).toISOString();
     const res = await brandCommerceReconcileRangePostImpl(
-      { getContext: async () => makeContext() },
+      {
+        getContext: async () => makeContext(),
+        reconcileRange: async () => {
+          called = true;
+          throw new Error("must not be called — an in-flight-future range must never reach Commerce7");
+        },
+      },
       "conn-1",
       { from: farFuture, to: evenFurther },
     );
     assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.equal(body.code, "RANGE_IN_FUTURE");
+    assert.equal(typeof body.serverNow, "string");
+    assert.ok(!Number.isNaN(new Date(body.serverNow).getTime()));
+    assert.match(body.error, /cannot extend past the current time/i);
+    assert.equal(called, false);
+  });
+
+  test("a future 'to' alone (from is valid/historical) also maps to 400 with RANGE_IN_FUTURE", async () => {
+    const historicalFrom = new Date("2026-01-01T00:00:00.000Z").toISOString();
+    const farFutureTo = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString();
+    const res = await brandCommerceReconcileRangePostImpl(
+      { getContext: async () => makeContext() },
+      "conn-1",
+      { from: historicalFrom, to: farFutureTo },
+    );
+    assert.equal(res.status, 400);
+    const body = await res.json();
+    assert.equal(body.code, "RANGE_IN_FUTURE");
+  });
+
+  test("a historical range within bounds is never rejected as future", async () => {
+    const res = await brandCommerceReconcileRangePostImpl(
+      {
+        getContext: async () => makeContext(),
+        reconcileRange: async () => ({
+          status: "UP_TO_DATE",
+          cursor: null,
+          from: new Date("2026-01-01T00:00:00.000Z"),
+          to: new Date("2026-01-02T00:00:00.000Z"),
+          reachedTarget: true,
+          chunk: null,
+          ordersFetched: 0,
+          ordersProcessed: 0,
+          error: null,
+        }),
+      },
+      "conn-1",
+      { from: "2026-01-01T00:00:00.000Z", to: "2026-01-02T00:00:00.000Z" },
+    );
+    assert.equal(res.status, 200);
   });
 
   test("a range wider than the maximum window maps to 400 with WINDOW_TOO_WIDE", async () => {

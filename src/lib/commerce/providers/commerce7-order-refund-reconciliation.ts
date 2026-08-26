@@ -101,6 +101,7 @@
  * Never throws.
  */
 
+import type { CommerceOrderFinancialStatus } from "@prisma/client";
 import { CommerceProviderApiError } from "../errors";
 import {
   centsToBigIntMinorUnits,
@@ -116,13 +117,40 @@ function readTrimmed(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
+/**
+ * Parses a PROVIDER-REPORTED timestamp string. Returns `null` for anything
+ * unparseable — this module never substitutes `Date.now()`, a receipt time,
+ * or any other fabricated value for a missing provider timestamp.
+ */
+function readProviderDate(value: unknown): Date | null {
+  const raw = readTrimmed(value);
+  if (!raw) {
+    return null;
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 // ---------------------------------------------------------------------------
 // Classification (pure)
 // ---------------------------------------------------------------------------
 
 export type Commerce7OrderClassification =
   | { kind: "REGULAR" }
-  | { kind: "REFUND_CHILD"; previousOrderId: string }
+  | {
+      kind: "REFUND_CHILD";
+      previousOrderId: string;
+      /**
+       * PHASE 26 — this refund order's OWN id, when it reports one. Carried
+       * so reconciliation can UNION it into the root's `linkedOrders` set:
+       * a refund child payload is itself direct provider evidence linking
+       * this refund to the root (`purchaseType` + `previousOrderId`), so it
+       * must still be counted when Commerce7 has not yet updated the root's
+       * `linkedOrders` — see `prepareCommerce7OrderForIngestion`'s
+       * child-before-parent race handling.
+       */
+      childOrderId: string | null;
+    }
   /** `purchaseType === "Refund"` but `previousOrderId` is missing/blank — cannot resolve a root. */
   | { kind: "REFUND_CHILD_UNRESOLVABLE" }
   | { kind: "ROOT_WITH_LINKED_REFUNDS"; linkedRefundOrderIds: string[] };
@@ -175,7 +203,7 @@ export function classifyCommerce7Order(raw: unknown): Commerce7OrderClassificati
   if (readTrimmed(record.purchaseType) === "Refund") {
     const previousOrderId = readTrimmed(record.previousOrderId);
     return previousOrderId
-      ? { kind: "REFUND_CHILD", previousOrderId }
+      ? { kind: "REFUND_CHILD", previousOrderId, childOrderId: readTrimmed(record.id) }
       : { kind: "REFUND_CHILD_UNRESOLVABLE" };
   }
 
@@ -204,6 +232,27 @@ const MAX_LINKED_REFUND_ORDERS = 25;
 export type Commerce7RefundReconciliationSnapshot = {
   /** Cumulative, non-negative sum of every settled linked refund tender's magnitude. */
   totalRefundedMinor: bigint;
+  /**
+   * PHASE 26 — the NEWEST provider-reported `updatedAt` among the refund
+   * orders that ACTUALLY CONTRIBUTED to `totalRefundedMinor` (passed
+   * validation and carried at least one settled Refund tender). `null` when
+   * nothing contributed.
+   *
+   * Exists to fix a real staleness hole: the canonical order's
+   * `providerUpdatedAt` is normalized from the ROOT order, but a refund
+   * child can legitimately be NEWER than the root — Commerce7 may not have
+   * bumped the root's own `updatedAt` yet when the refund webhook arrives.
+   * Generic ingestion's out-of-order guard would then classify a genuinely
+   * newer financial snapshot as STALE and drop the refund entirely. The
+   * caller therefore advances the canonical `providerUpdatedAt` to
+   * `max(root.updatedAt, latestEvidenceUpdatedAt)`.
+   *
+   * ONLY provider-reported timestamps ever reach this field — never
+   * `Date.now()`, never webhook receipt time, never a fabricated value. If
+   * a contributing refund order reports no parseable `updatedAt`, it simply
+   * contributes nothing here (its money still counts).
+   */
+  latestEvidenceUpdatedAt: Date | null;
 };
 
 export type ReconcileCommerce7OrderRefundsResult =
@@ -264,6 +313,16 @@ export async function reconcileCommerce7OrderRefunds(
     tenant: string;
     rootExternalOrderId: string;
     linkedRefundOrderIds: readonly string[];
+    /**
+     * PHASE 26 — raw refund-order payloads ALREADY IN HAND (the webhook
+     * delivery that triggered this reconciliation), keyed into by their own
+     * `id`. Used instead of re-fetching an order Commerce7 just delivered
+     * to us. NOT a trust shortcut: a preloaded payload goes through the
+     * byte-for-byte SAME validation as a fetched one (`purchaseType`,
+     * `previousOrderId` match, settled-tender gate) — it only skips the
+     * redundant network round-trip.
+     */
+    preloadedRefundOrders?: readonly Record<string, unknown>[];
   },
   deps: Partial<ReconcileCommerce7OrderRefundsDeps> = {},
 ): Promise<ReconcileCommerce7OrderRefundsResult> {
@@ -274,27 +333,45 @@ export async function reconcileCommerce7OrderRefunds(
     return { outcome: "NOT_ELIGIBLE", reason: "LINKED_REFUND_ORDER_LIMIT_EXCEEDED" };
   }
 
+  const preloadedById = new Map<string, Record<string, unknown>>();
+  for (const entry of params.preloadedRefundOrders ?? []) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      continue;
+    }
+    const id = readTrimmed((entry as Record<string, unknown>).id);
+    if (id) {
+      preloadedById.set(id, entry as Record<string, unknown>);
+    }
+  }
+
   let totalRefundedMinor = BigInt(0);
+  let latestEvidenceUpdatedAt: Date | null = null;
 
   for (const linkedOrderId of distinctLinkedIds) {
     let linkedRaw: Record<string, unknown>;
-    try {
-      linkedRaw = await fetchOrder({ tenant: params.tenant, externalOrderId: linkedOrderId });
-    } catch (error) {
-      const classification = classifyFetchFailure(error);
-      if (classification === "TRANSIENT") {
-        return { outcome: "TRANSIENT_FAILURE" };
+    const preloaded = preloadedById.get(linkedOrderId);
+    if (preloaded) {
+      linkedRaw = preloaded;
+    } else {
+      try {
+        linkedRaw = await fetchOrder({ tenant: params.tenant, externalOrderId: linkedOrderId });
+      } catch (error) {
+        const classification = classifyFetchFailure(error);
+        if (classification === "TRANSIENT") {
+          return { outcome: "TRANSIENT_FAILURE" };
+        }
+        // NOT_FOUND or NO_CREDENTIAL for one linked order means completeness
+        // of the sum cannot be proven — fail the WHOLE reconciliation closed
+        // rather than silently under-count by skipping just this one.
+        return {
+          outcome: "NOT_ELIGIBLE",
+          reason: classification === "NOT_FOUND" ? "LINKED_ORDER_NOT_FOUND" : "NO_CREDENTIAL",
+        };
       }
-      // NOT_FOUND or NO_CREDENTIAL for one linked order means completeness
-      // of the sum cannot be proven — fail the WHOLE reconciliation closed
-      // rather than silently under-count by skipping just this one.
-      return {
-        outcome: "NOT_ELIGIBLE",
-        reason: classification === "NOT_FOUND" ? "LINKED_ORDER_NOT_FOUND" : "NO_CREDENTIAL",
-      };
     }
 
     // Per-linked-order validation — see this function's own doc comment.
+    // Applied IDENTICALLY to preloaded and freshly-fetched payloads.
     if (
       readTrimmed(linkedRaw.purchaseType) !== "Refund" ||
       readTrimmed(linkedRaw.previousOrderId) !== params.rootExternalOrderId
@@ -308,6 +385,7 @@ export async function reconcileCommerce7OrderRefunds(
     }
 
     const seenTenderIds = new Set<string>();
+    let contributedFromThisOrder = false;
     for (const entry of tenders) {
       if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
         continue;
@@ -331,10 +409,21 @@ export async function reconcileCommerce7OrderRefunds(
         continue;
       }
       totalRefundedMinor += amount < BigInt(0) ? -amount : amount;
+      contributedFromThisOrder = true;
+    }
+
+    // Freshness is only ever taken from an order that ACTUALLY contributed
+    // money — a validated-but-zero-tender linked order must not advance the
+    // canonical staleness key on its own.
+    if (contributedFromThisOrder) {
+      const updatedAt = readProviderDate(linkedRaw.updatedAt);
+      if (updatedAt && (!latestEvidenceUpdatedAt || updatedAt > latestEvidenceUpdatedAt)) {
+        latestEvidenceUpdatedAt = updatedAt;
+      }
     }
   }
 
-  return { outcome: "RECONCILED", snapshot: { totalRefundedMinor } };
+  return { outcome: "RECONCILED", snapshot: { totalRefundedMinor, latestEvidenceUpdatedAt } };
 }
 
 // ---------------------------------------------------------------------------
@@ -347,20 +436,170 @@ export type PrepareCommerce7OrderForIngestionResult =
       order: NormalizedOrderInput;
       warnings: string[];
       /** Classified diagnostic ONLY — never a payload excerpt, id, or monetary value beyond what the caller already logs for a normal order. */
-      refundReconciliationOutcome: "NOT_APPLICABLE" | "RECONCILED" | "DEFERRED" | "UNRESOLVABLE_REFUND_CHILD";
+      refundReconciliationOutcome:
+        | "NOT_APPLICABLE"
+        | "RECONCILED"
+        | "DEFERRED"
+        | "UNRESOLVABLE_REFUND_CHILD"
+        /** PHASE 26 — the P1 durability guard fired: a refund-blind payload was prevented from un-learning established refund state. */
+        | "REFUND_STATE_PRESERVED";
       refundReconciliationReason: string | null;
     }
   | { outcome: "TRANSIENT_FAILURE" };
 
+/**
+ * PHASE 26 — the canonical financial state ALREADY STORED for this exact
+ * `(connectionId, externalOrderId)`, read before a refund-blind snapshot is
+ * allowed to overwrite it. See `applyRefundDurabilityGuard`.
+ */
+export type Commerce7StoredOrderFinancialState = {
+  totalRefundedMinor: bigint;
+  financialStatus: CommerceOrderFinancialStatus | null;
+};
+
 export type PrepareCommerce7OrderForIngestionDeps = {
   fetchOrder: typeof fetchCommerce7Order;
   reconcileRefunds: typeof reconcileCommerce7OrderRefunds;
+  /**
+   * Reads the stored canonical financial state for one order, or `null` when
+   * the order has never been seen. Injected (rather than importing Prisma
+   * here) so this whole module stays unit-testable with no database, matching
+   * the DI discipline every other module in this directory already uses.
+   */
+  loadStoredFinancialState(input: {
+    connectionId: string;
+    externalOrderId: string;
+  }): Promise<Commerce7StoredOrderFinancialState | null>;
 };
+
+async function defaultLoadStoredFinancialState(input: {
+  connectionId: string;
+  externalOrderId: string;
+}): Promise<Commerce7StoredOrderFinancialState | null> {
+  const { default: prisma } = await import("@/lib/prisma");
+  const row = await prisma.commerceOrder.findUnique({
+    where: {
+      connectionId_externalOrderId: {
+        connectionId: input.connectionId,
+        externalOrderId: input.externalOrderId,
+      },
+    },
+    // Financial state ONLY — no customer field exists on this model at all
+    // (see order-ingestion.ts's NO PII header), and nothing else is read.
+    select: { totalRefundedMinor: true, financialStatus: true },
+  });
+  return row
+    ? { totalRefundedMinor: row.totalRefundedMinor, financialStatus: row.financialStatus }
+    : null;
+}
 
 const DEFAULT_PREPARE_DEPS: PrepareCommerce7OrderForIngestionDeps = {
   fetchOrder: fetchCommerce7Order,
   reconcileRefunds: reconcileCommerce7OrderRefunds,
+  loadStoredFinancialState: defaultLoadStoredFinancialState,
 };
+
+/**
+ * PURE. Whether `applyRefundDurabilityGuard` could possibly fire for this
+ * order — i.e. whether reading stored state is worth a database round-trip
+ * at all.
+ *
+ * Only a payload that asserts a REFUND-BLIND ZERO can un-learn refund state.
+ * A `null` `totalRefundedMinor` (Commerce7 sent no `tenders` array) already
+ * preserves stored state through generic ingestion's own null-preservation,
+ * and a positive figure is affirmative evidence. Both skip the read
+ * entirely, so the overwhelmingly common case costs nothing extra.
+ */
+export function refundDurabilityGuardNeedsStoredState(order: NormalizedOrderInput): boolean {
+  return Boolean(order.externalOrderId) && order.totalRefundedMinor === BigInt(0);
+}
+
+/**
+ * PURE. Whether stored canonical state already establishes that money was
+ * refunded against this order.
+ *
+ * Both signals are checked, not just the amount: a stored
+ * `PARTIALLY_REFUNDED`/`REFUNDED` status is itself an assertion that a refund
+ * exists, and an implementation that only compared amounts would let a
+ * status-only row be silently downgraded to `PAID`.
+ */
+export function storedStateEstablishesRefund(
+  stored: Commerce7StoredOrderFinancialState | null,
+): boolean {
+  if (!stored) {
+    return false;
+  }
+  return (
+    stored.totalRefundedMinor > BigInt(0) ||
+    stored.financialStatus === "PARTIALLY_REFUNDED" ||
+    stored.financialStatus === "REFUNDED"
+  );
+}
+
+/**
+ * PHASE 26 — THE P1 DURABILITY GUARD. Commerce7 refund state must never be
+ * UN-LEARNED by a payload that simply does not mention the refund.
+ *
+ * WHY THIS IS NEEDED. A Commerce7 refund lives on a SEPARATE order document
+ * (see this file's header). The original order's own `tenders[]` therefore
+ * never gains a Refund tender and its own `total` never changes — so a later
+ * root payload that omits `linkedOrders` normalizes to a perfectly ordinary
+ * "PAID, nothing refunded" snapshot. `computeCommerce7RefundedMinor` returns
+ * a REAL `0n` (not `null`) for it, because a present-but-refund-free tender
+ * array genuinely is complete evidence of no refund *on that document* —
+ * and generic ingestion's null-preservation contract, correctly, does not
+ * treat `0n` as "no information". The established refund would be silently
+ * reverted (3277 -> 0, PARTIALLY_REFUNDED -> PAID) with no later signal to
+ * repair it.
+ *
+ * WHY THE FIX LIVES HERE AND NOT IN GENERIC INGESTION. "A zero refund figure
+ * may be untrustworthy" is a COMMERCE7-SPECIFIC fact about how that provider
+ * represents refunds. Shopify's `0` is genuinely authoritative (its refunds
+ * live on the order itself), so teaching the provider-neutral layer to
+ * distrust zero would be wrong for Shopify and would leak provider semantics
+ * across the boundary. The guard is therefore applied at the Commerce7
+ * adapter boundary, and hands generic ingestion the value its EXISTING
+ * contract already understands: `null` = "this event says nothing about
+ * refunds, preserve what is stored."
+ *
+ * FAIL-CLOSED, AND WHY THAT IS THE RIGHT DIRECTION. Commerce7 documents no
+ * "undo refund" semantic, so the absence of refund metadata in one payload is
+ * NOT affirmative evidence that a settled refund ceased to exist. Preserving
+ * a stale-but-real refund is recoverable (the next payload carrying real
+ * evidence corrects it); silently zeroing a real refund overstates revenue
+ * and self-heals never.
+ *
+ * NOTE THE ASYMMETRY THIS DELIBERATELY PRESERVES: a genuinely NEW,
+ * never-refunded Commerce7 order still establishes `PAID` / refunded `0`
+ * normally, because nothing is stored for it yet. Only an order whose stored
+ * state ALREADY establishes a refund is protected.
+ */
+export function applyRefundDurabilityGuard(
+  order: NormalizedOrderInput,
+  stored: Commerce7StoredOrderFinancialState | null,
+): { order: NormalizedOrderInput; preserved: boolean } {
+  // This payload asserts nothing about refunds already — nothing to guard.
+  if (order.totalRefundedMinor === null) {
+    return { order, preserved: false };
+  }
+  // This payload asserts a REAL refund amount. That is affirmative evidence,
+  // not a refund-blind zero, so it is allowed through (the monotonicity
+  // check in the reconciled path handles a decrease separately).
+  if (order.totalRefundedMinor > BigInt(0)) {
+    return { order, preserved: false };
+  }
+  if (!storedStateEstablishesRefund(stored)) {
+    return { order, preserved: false };
+  }
+  // Refund-blind zero vs. established refund state -> defer BOTH settlement
+  // fields together, exactly as the NOT_ELIGIBLE path does. They must travel
+  // as a pair: a snapshot that knows one but not the other is precisely the
+  // contradictory state the generic invariant guard rejects.
+  return {
+    order: { ...order, totalRefundedMinor: null, financialStatus: null },
+    preserved: true,
+  };
+}
 
 /**
  * Turns one raw Commerce7 order into a `NormalizedOrderInput` that is always
@@ -390,12 +629,26 @@ export async function prepareCommerce7OrderForIngestion(
 
   if (classification.kind === "REGULAR") {
     const { order, warnings } = normalizeCommerce7Order(raw, context);
+    // PHASE 26 (P1). A "regular" Commerce7 order is exactly the shape a
+    // refund-blind later payload takes — see `applyRefundDurabilityGuard`.
+    // The stored-state read happens ONLY when that guard could actually
+    // fire, so an ordinary order costs no extra query.
+    const stored =
+      refundDurabilityGuardNeedsStoredState(order) && order.externalOrderId
+        ? await resolved.loadStoredFinancialState({
+            connectionId: context.connectionId,
+            externalOrderId: order.externalOrderId,
+          })
+        : null;
+    const guarded = applyRefundDurabilityGuard(order, stored);
     return {
       outcome: "READY",
-      order,
+      order: guarded.order,
       warnings,
-      refundReconciliationOutcome: "NOT_APPLICABLE",
-      refundReconciliationReason: null,
+      refundReconciliationOutcome: guarded.preserved
+        ? "REFUND_STATE_PRESERVED"
+        : "NOT_APPLICABLE",
+      refundReconciliationReason: guarded.preserved ? "REFUND_BLIND_PAYLOAD" : null,
     };
   }
 
@@ -420,6 +673,7 @@ export async function prepareCommerce7OrderForIngestion(
   let rootRaw: Record<string, unknown>;
   let rootExternalOrderId: string;
   let linkedRefundOrderIds: string[];
+  let preloadedRefundOrders: Record<string, unknown>[] = [];
 
   if (classification.kind === "REFUND_CHILD") {
     // This delivery IS a refund order. Its own fields must never be
@@ -452,7 +706,24 @@ export async function prepareCommerce7OrderForIngestion(
     // refunds is fully reconciled regardless of which single refund
     // delivery triggered this call (Case C: out-of-order/concurrent
     // delivery of several refunds converges on the same total either way).
-    linkedRefundOrderIds = readLinkedRefundOrderIds(rootRaw.linkedOrders);
+    //
+    // PHASE 26 (P2, child-before-parent race): UNIONED with THIS child's own
+    // id. The child payload in hand already carries direct provider evidence
+    // linking itself to the root (`purchaseType: "Refund"` +
+    // `previousOrderId`), so when Commerce7 has not yet updated the root's
+    // `linkedOrders`, the child must still be counted — otherwise this
+    // delivery would reconcile to 0 and (before the P1 guard) actively
+    // overwrite good state with it. The union is over STABLE provider ids,
+    // so a child already listed by the root is not double-counted.
+    linkedRefundOrderIds = [
+      ...new Set([
+        ...readLinkedRefundOrderIds(rootRaw.linkedOrders),
+        ...(classification.childOrderId ? [classification.childOrderId] : []),
+      ]),
+    ];
+    // The child was just delivered to us in full — reconciliation validates
+    // it identically to a fetched order but skips the redundant GET.
+    preloadedRefundOrders = [raw as Record<string, unknown>];
   } else {
     // ROOT_WITH_LINKED_REFUNDS: `raw` IS the authoritative root snapshot
     // already — a Commerce7 order webhook/backfill payload is always a
@@ -476,8 +747,16 @@ export async function prepareCommerce7OrderForIngestion(
     };
   }
 
+  // Stored canonical state, read once and used for BOTH refund-durability
+  // decisions below (the NOT_ELIGIBLE defer already preserves by nulling;
+  // this additionally powers the monotonicity check on a RECONCILED result).
+  const stored = await resolved.loadStoredFinancialState({
+    connectionId: context.connectionId,
+    externalOrderId: baseOrder.externalOrderId,
+  });
+
   const reconciled = await resolved.reconcileRefunds(
-    { tenant, rootExternalOrderId, linkedRefundOrderIds },
+    { tenant, rootExternalOrderId, linkedRefundOrderIds, preloadedRefundOrders },
     // Thread the SAME injected `fetchOrder` through, so a test/caller that
     // overrides only `fetchOrder` (not `reconcileRefunds` itself) still
     // reaches the real `reconcileCommerce7OrderRefunds`'s OWN `fetchOrder`
@@ -518,10 +797,40 @@ export async function prepareCommerce7OrderForIngestion(
   // rejects that contradictory combination, exactly as it does today for
   // any other internally-inconsistent snapshot. This module fabricates
   // nothing and clamps nothing.
+  //
+  // PHASE 26 (P1, monotonicity). Commerce7 documents no "undo refund"
+  // semantic, so a reconciled total that is LOWER than what is already
+  // stored is evidence of INCOMPLETE input (e.g. the root's `linkedOrders`
+  // momentarily missing a sibling refund), never of money being un-refunded.
+  // Refuse to write it and defer instead — preserving stored state rather
+  // than fabricating a corrected number. This closes the last path by which
+  // an established cumulative refund could move backwards.
+  if (stored && reconciled.snapshot.totalRefundedMinor < stored.totalRefundedMinor) {
+    return {
+      outcome: "READY",
+      order: { ...baseOrder, totalRefundedMinor: null, financialStatus: null },
+      warnings,
+      refundReconciliationOutcome: "REFUND_STATE_PRESERVED",
+      refundReconciliationReason: "REFUND_DECREASE_REFUSED",
+    };
+  }
+
   const financialStatus = refineFinancialStatusForRefunds(
     baseOrder.financialStatus,
     baseOrder.totalMinor,
     reconciled.snapshot.totalRefundedMinor,
+  );
+
+  // PHASE 26 (P2, evidence freshness). The canonical staleness key must
+  // reflect the freshest PROVIDER evidence behind this financial snapshot,
+  // not just the root document's own `updatedAt` — otherwise a refund child
+  // that is genuinely newer than its (not-yet-rebumped) root is rejected as
+  // STALE and the refund is silently dropped. Only provider-reported
+  // timestamps participate; `null` on either side simply defers to the
+  // other.
+  const providerUpdatedAt = maxDate(
+    baseOrder.providerUpdatedAt,
+    reconciled.snapshot.latestEvidenceUpdatedAt,
   );
 
   return {
@@ -530,9 +839,17 @@ export async function prepareCommerce7OrderForIngestion(
       ...baseOrder,
       totalRefundedMinor: reconciled.snapshot.totalRefundedMinor,
       financialStatus,
+      providerUpdatedAt,
     },
     warnings,
     refundReconciliationOutcome: "RECONCILED",
     refundReconciliationReason: null,
   };
+}
+
+/** PURE. The later of two possibly-null provider timestamps. */
+export function maxDate(a: Date | null, b: Date | null): Date | null {
+  if (!a) return b;
+  if (!b) return a;
+  return a.getTime() >= b.getTime() ? a : b;
 }

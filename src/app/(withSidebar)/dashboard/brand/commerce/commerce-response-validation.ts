@@ -347,3 +347,86 @@ export function parseCustomRangeStepResult(data: unknown): CustomRangeStepResult
   if (typeof r.ordersFetched !== "number" || typeof r.ordersProcessed !== "number") return null;
   return data as CustomRangeStepResult;
 }
+
+// ---------------------------------------------------------------------------
+// PHASE 26 — custom-range date/time selection.
+//
+// `<input type="datetime-local">` emits (and accepts) a `YYYY-MM-DDTHH:mm`
+// string with NO timezone designator, which both the HTML spec and
+// `Date`'s parser interpret as the USER'S LOCAL time. That local-time
+// meaning is exactly what the operator intends when they pick "the
+// afternoon the refund happened", so it is preserved end-to-end:
+//
+//   local "2026-08-26T04:39"  ->  new Date(...)  ->  .toISOString()
+//
+// `new Date("2026-08-26T04:39")` is already local-time parsing, so the
+// conversion to a UTC instant is correct as-is. What must NEVER happen is
+// appending a literal "Z" to the raw control value — that would silently
+// reinterpret the operator's local wall-clock time as UTC and shift the
+// window by their whole offset.
+//
+// The helpers below exist as pure functions (no DOM, no React) so this
+// behavior is unit-testable and timezone-independent: every one of them
+// derives local components with the same `Date` accessors the browser would.
+// ---------------------------------------------------------------------------
+
+/**
+ * Formats a `Date` as the `YYYY-MM-DDTHH:mm` LOCAL-time string that
+ * `<input type="datetime-local">`'s `max` attribute requires. Seconds and
+ * milliseconds are deliberately dropped: the control's default step is one
+ * minute, and a `max` carrying seconds can make the browser reject the
+ * whole current minute.
+ */
+export function formatDateTimeLocalMax(date: Date): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `T${pad(date.getHours())}:${pad(date.getMinutes())}`
+  );
+}
+
+export type CustomRangeSelectionResult =
+  | { ok: true; fromIso: string; toIso: string }
+  | { ok: false; message: string };
+
+/**
+ * The exact message the operator sees when they pick a future range. Kept as
+ * a shared constant so the client-side pre-flight check and any server-driven
+ * rendering of the same condition can never drift into two different wordings.
+ */
+export const CUSTOM_RANGE_FUTURE_MESSAGE =
+  "The reconciliation range cannot extend past the current time.";
+
+/**
+ * PURE client-side pre-flight validation for the custom-range controls.
+ *
+ * `now` is injected rather than read from the clock so this is fully
+ * deterministic under test. This validation is a UX affordance ONLY — it
+ * exists so the operator gets a specific, actionable message instead of a
+ * round-trip 400, and it deliberately does NOT replace the server's own
+ * authoritative checks (see the reconcile-range route, which re-validates
+ * every one of these conditions against the SERVER's clock).
+ */
+export function validateCustomRangeSelection(input: {
+  fromValue: string;
+  toValue: string;
+  now: Date;
+}): CustomRangeSelectionResult {
+  const { fromValue, toValue, now } = input;
+  if (!fromValue || !toValue) {
+    return { ok: false, message: "Choose a valid From and To date/time." };
+  }
+  // Local-time parsing — see this section's header for why no "Z" is added.
+  const fromDate = new Date(fromValue);
+  const toDate = new Date(toValue);
+  if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) {
+    return { ok: false, message: "Choose a valid From and To date/time." };
+  }
+  if (fromDate.getTime() >= toDate.getTime()) {
+    return { ok: false, message: '"From" must be strictly before "To".' };
+  }
+  if (fromDate.getTime() > now.getTime() || toDate.getTime() > now.getTime()) {
+    return { ok: false, message: CUSTOM_RANGE_FUTURE_MESSAGE };
+  }
+  return { ok: true, fromIso: fromDate.toISOString(), toIso: toDate.toISOString() };
+}
