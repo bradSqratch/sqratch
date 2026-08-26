@@ -6,53 +6,18 @@ import { fetchJson, getErrorMessage } from "@/components/experience/client-utils
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { formatMoneyDisplay } from "@/lib/commerce/money";
-
-type CommerceProvider = "SHOPIFY" | "COMMERCE7";
-type CommerceConnectionStatus =
-  | "PENDING"
-  | "CONNECTED"
-  | "REQUIRES_RECONNECT"
-  | "DISCONNECTED"
-  | "UNINSTALLED"
-  | "ERROR";
-type CommerceOrderFinancialStatus =
-  | "PENDING"
-  | "AUTHORIZED"
-  | "PARTIALLY_PAID"
-  | "PAID"
-  | "PARTIALLY_REFUNDED"
-  | "REFUNDED"
-  | "VOIDED";
-
-type ConnectionOrderOperationsSummary = {
-  connectionId: string;
-  provider: CommerceProvider;
-  displayName: string;
-  externalAccountId: string;
-  status: CommerceConnectionStatus;
-  latestOrderIngestedAt: string | null;
-  latestWebhookProcessedAt: string | null;
-  orderCountsByFinancialStatus: Partial<Record<CommerceOrderFinancialStatus, number>>;
-  unknownFinancialStatusCount: number;
-  attributedOrderCount: number;
-  unattributedOrderCount: number;
-  orderReceiverConfigured: boolean | null;
-};
-
-type BrandOrderOperationsSummary = {
-  connections: ConnectionOrderOperationsSummary[];
-  complete: boolean;
-};
-
-type ReconcileResult = {
-  status: "SUCCEEDED" | "PARTIAL";
-  fetchedCount: number;
-  createdCount: number;
-  updatedCount: number;
-  unchangedCount: number;
-  failedCount: number;
-  truncated: boolean;
-};
+import {
+  parseOrderListEnvelope,
+  parseOrderOperationsSummary,
+  parseReconcileResult,
+  type BrandOrderOperationsSummary,
+  type CommerceConnectionStatus,
+  type CommerceOrderFinancialStatus,
+  type CommerceProvider,
+  type ConnectionOrderOperationsSummary,
+  type OrderListRow,
+  type ReconcileResult,
+} from "../commerce-response-validation";
 
 const PROVIDER_LABELS: Record<CommerceProvider, string> = {
   SHOPIFY: "Shopify",
@@ -137,7 +102,9 @@ function ReconcileButton({
     try {
       const to = new Date();
       const from = new Date(to.getTime() - 24 * 60 * 60 * 1000);
-      const data = await fetchJson<{ data: ReconcileResult }>(
+      // `fetchJson` already unwraps this route's `{ data }` envelope (no
+      // `meta`) — the resolved value IS the reconcile result.
+      const data = await fetchJson<unknown>(
         `/api/brand/commerce/connections/${connectionId}/orders/reconcile`,
         {
           method: "POST",
@@ -145,7 +112,12 @@ function ReconcileButton({
           body: JSON.stringify({ from: from.toISOString(), to: to.toISOString() }),
         },
       );
-      setResult(data.data);
+      const parsed = parseReconcileResult(data);
+      if (!parsed) {
+        setError("Reconcile result came back in an unexpected format.");
+        return;
+      }
+      setResult(parsed);
       // PHASE 19 — PART 16: refresh the summary/order list on success so a
       // just-reconciled order is immediately visible, not only after a
       // manual page reload.
@@ -272,25 +244,6 @@ function ConnectionOrderOperationsCard({
   );
 }
 
-type OrderListRow = {
-  id: string;
-  connectionId: string;
-  provider: CommerceProvider;
-  orderNumber: string | null;
-  orderDate: string;
-  financialStatus: CommerceOrderFinancialStatus | null;
-  currencyCode: string | null;
-  /**
-   * PHASE 19 REPAIR (P1-3): the EXACT persisted exponent — the UI must
-   * use this, never assume 2 decimal places or derive one from
-   * `currencyCode`. See `formatMoneyDisplay` in `@/lib/commerce/money`.
-   */
-  minorUnitExponent: number | null;
-  totalMinor: string | null;
-  netRevenueMinor: string | null;
-  attributed: boolean;
-};
-
 /**
  * PHASE 19 — PART 12: a compact, paginated recent-orders list backing the
  * "make an order navigable to detail" requirement — reads the existing
@@ -305,14 +258,30 @@ function RecentOrdersList({ refreshToken }: { refreshToken: number }) {
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  /**
+   * This endpoint's response is genuinely needed in full — both `data` AND
+   * `meta.hasNextPage`/`meta.nextCursor` — so it deliberately does NOT use
+   * the unwrapping `fetchJson` helper (which would silently discard
+   * `meta`). Raw `fetch()` + explicit envelope validation instead: a
+   * malformed/missing `data` or `meta` throws a normal `Error` (caught by
+   * every caller below), never a raw `TypeError` from reading a property
+   * off `undefined`.
+   */
   async function loadPage(afterCursor: string | null) {
     const params = new URLSearchParams({ limit: "20" });
     if (afterCursor) params.set("cursor", afterCursor);
-    const data = await fetchJson<{
-      data: OrderListRow[];
-      meta: { hasNextPage: boolean; nextCursor: string | null };
-    }>(`/api/brand/commerce/orders?${params.toString()}`);
-    return data;
+    const response = await fetch(`/api/brand/commerce/orders?${params.toString()}`, {
+      credentials: "include",
+    });
+    const json = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(json?.error || "Failed to load orders.");
+    }
+    const parsed = parseOrderListEnvelope(json);
+    if (!parsed) {
+      throw new Error("Orders response came back in an unexpected format.");
+    }
+    return parsed;
   }
 
   useEffect(() => {
@@ -422,10 +391,22 @@ export function BrandCommerceOrdersClient() {
       setLoading(true);
       setError(null);
       try {
-        const data = await fetchJson<{ data: BrandOrderOperationsSummary }>(
+        // `fetchJson` already unwraps this route's `{ data }` envelope (no
+        // `meta`) — the resolved value IS the summary object. A malformed
+        // shape must surface as a controlled error, never as an empty
+        // `connections: []` — that would read as "no commerce connections
+        // yet" and could mask a real, existing connection.
+        const data = await fetchJson<unknown>(
           "/api/brand/commerce/orders/summary",
         );
-        if (!cancelled) setSummary(data.data);
+        if (!cancelled) {
+          const parsed = parseOrderOperationsSummary(data);
+          if (!parsed) {
+            setError("Order operations summary came back in an unexpected format.");
+            return;
+          }
+          setSummary(parsed);
+        }
       } catch (loadError) {
         if (!cancelled) {
           setError(getErrorMessage(loadError, "Failed to load order operations."));

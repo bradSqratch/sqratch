@@ -186,6 +186,21 @@ async function defaultRunInTransaction<T>(
   return prisma.$transaction((tx) => fn(buildTransactionClient(tx)));
 }
 
+/**
+ * PHASE 20 (settings sync round): exposes the exact SAME transaction-client
+ * builder this file's own `defaultRunInTransaction` uses, so a caller that
+ * already holds an open `Prisma.TransactionClient` for OTHER reasons (e.g.
+ * `reconnectCommerce7Connection` in `./commerce7-connection-lifecycle.ts`,
+ * which must apply settings AND transition connection status atomically in
+ * ONE transaction) can compose against this module's write/invalidate
+ * primitives without opening a second, independent transaction.
+ */
+export function buildCommerce7ConfigTransactionClient(
+  tx: Prisma.TransactionClient,
+): Commerce7ConfigTransactionClient {
+  return buildTransactionClient(tx);
+}
+
 const DEFAULT_DEPS: Commerce7StorefrontConfigurationDeps = {
   runInTransaction: defaultRunInTransaction,
 };
@@ -194,6 +209,61 @@ function readExistingMetadata(raw: unknown): Record<string, unknown> {
   return raw && typeof raw === "object" && !Array.isArray(raw)
     ? (raw as Record<string, unknown>)
     : {};
+}
+
+export type Commerce7ConfigurationValues = {
+  storefrontUrl: string;
+  productRoute: string;
+  currencyCode: string;
+};
+
+/**
+ * PHASE 20 (settings sync round): the extracted, reusable core of
+ * `configureCommerce7Storefront` below — diff-against-existing, write, and
+ * conditionally invalidate — factored out so callers that have ALREADY
+ * validated their three values (this function does NOT re-validate; see
+ * `configureCommerce7Storefront` for the validated entry point) and already
+ * hold an open transaction/connection row can reuse the EXACT SAME
+ * persistence logic instead of duplicating it. Both
+ * `configureCommerce7Storefront` (manual, now settings-sync-triggered save)
+ * and `reconnectCommerce7Connection`'s settings-then-reconnect transaction
+ * (`./commerce7-connection-lifecycle.ts`) call this.
+ */
+export async function applyCommerce7ConfigurationValues(
+  client: Commerce7ConfigTransactionClient,
+  connection: Pick<Commerce7ConnectionConfigRow, "storefrontUrl" | "providerMetadata">,
+  values: Commerce7ConfigurationValues,
+  connectionId: string,
+): Promise<{ requiresProductSync: boolean }> {
+  const existingMetadata = readExistingMetadata(connection.providerMetadata);
+  const existingProductRoute =
+    typeof existingMetadata.productRoute === "string" ? existingMetadata.productRoute : null;
+  const existingCurrencyCode =
+    typeof existingMetadata.currencyCode === "string" ? existingMetadata.currencyCode : null;
+
+  const currencyChanged = existingCurrencyCode !== values.currencyCode;
+  const storefrontChanged = (connection.storefrontUrl ?? null) !== values.storefrontUrl;
+  const routeChanged = existingProductRoute !== values.productRoute;
+
+  const nextMetadata: Record<string, unknown> = {
+    ...existingMetadata,
+    currencyCode: values.currencyCode,
+    productRoute: values.productRoute,
+  };
+
+  await client.updateConnectionConfiguration(connectionId, {
+    storefrontUrl: values.storefrontUrl,
+    providerMetadata: nextMetadata,
+  });
+
+  if (currencyChanged) {
+    await client.invalidateCurrencyDerivedProductData(connectionId);
+  }
+  if (storefrontChanged || routeChanged) {
+    await client.invalidatePublicDestinationDerivedProductData(connectionId);
+  }
+
+  return { requiresProductSync: currencyChanged || storefrontChanged || routeChanged };
 }
 
 /**
@@ -256,40 +326,23 @@ export async function configureCommerce7Storefront(
       );
     }
 
-    const existingMetadata = readExistingMetadata(connection.providerMetadata);
-    const existingProductRoute =
-      typeof existingMetadata.productRoute === "string" ? existingMetadata.productRoute : null;
-    const existingCurrencyCode =
-      typeof existingMetadata.currencyCode === "string" ? existingMetadata.currencyCode : null;
-
-    const currencyChanged = existingCurrencyCode !== currencyResult.value;
-    const storefrontChanged = (connection.storefrontUrl ?? null) !== storefrontResult.value;
-    const routeChanged = existingProductRoute !== routeResult.value;
-
-    const nextMetadata: Record<string, unknown> = {
-      ...existingMetadata,
-      currencyCode: currencyResult.value,
-      productRoute: routeResult.value,
-    };
-
-    await client.updateConnectionConfiguration(input.connectionId, {
-      storefrontUrl: storefrontResult.value,
-      providerMetadata: nextMetadata,
-    });
-
-    if (currencyChanged) {
-      await client.invalidateCurrencyDerivedProductData(input.connectionId);
-    }
-    if (storefrontChanged || routeChanged) {
-      await client.invalidatePublicDestinationDerivedProductData(input.connectionId);
-    }
+    const { requiresProductSync } = await applyCommerce7ConfigurationValues(
+      client,
+      connection,
+      {
+        storefrontUrl: storefrontResult.value,
+        productRoute: routeResult.value,
+        currencyCode: currencyResult.value,
+      },
+      input.connectionId,
+    );
 
     return {
       ok: true,
       storefrontUrl: storefrontResult.value,
       productRoute: routeResult.value,
       currencyCode: currencyResult.value,
-      requiresProductSync: currencyChanged || storefrontChanged || routeChanged,
+      requiresProductSync,
     };
   });
 }

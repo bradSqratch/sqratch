@@ -207,6 +207,28 @@ function compareConnectionRowsByPreference(
   a: CommerceConnectionRow,
   b: CommerceConnectionRow,
 ): number {
+  // PHASE 20 (one-active-Commerce7-store round, Part 16): a CONNECTED row
+  // is ALWAYS preferred over any other status, before isPrimary/recency —
+  // this is the fix for a real bug the disconnect/reconnect lifecycle
+  // (`./providers/commerce7-connection-lifecycle.ts`) makes newly possible:
+  // a Brand can now hold multiple historical Commerce7 rows (e.g. tenant X
+  // disconnected, tenant Y later connected), and neither `isPrimary` nor
+  // `installedAt` is guaranteed to favor the CURRENTLY live one — `installedAt`
+  // in particular is set once at each row's OWN original link time and never
+  // touched by disconnect/reconnect, so an OLDER, since-reconnected row can
+  // easily have an EARLIER `installedAt` than a newer row that is now
+  // DISCONNECTED. Without this check, the Store page (and anything else
+  // that calls `resolveCommerceConnectionForBrand`) could show a stale
+  // DISCONNECTED connection as if it were the Brand's active one. Product
+  // sync authority itself was never affected by this ordering bug — it is
+  // always exact-connectionId-based (`syncCommerceConnectionById`) — this
+  // fixes DISPLAY/status resolution only.
+  const aConnected = a.status === "CONNECTED";
+  const bConnected = b.status === "CONNECTED";
+  if (aConnected !== bConnected) {
+    return aConnected ? -1 : 1;
+  }
+
   if (a.isPrimary !== b.isPrimary) {
     return a.isPrimary ? -1 : 1;
   }

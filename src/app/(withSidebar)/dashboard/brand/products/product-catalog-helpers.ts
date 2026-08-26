@@ -305,3 +305,35 @@ export function validateDisplayOrder(value: string): string | null {
 
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// PHASE 20 HOTFIX (Part 10) — GET /api/brand/products/sync-runs response
+// validation. `fetchJson` (see @/components/experience/client-utils) already
+// unwraps that route's `{ data, meta }` envelope, so the value this helper
+// receives IS the sync-run array itself (never a re-wrapped `{ data }`
+// object — that mismatch was exactly commit 6e718f3's live crash). Extracted
+// as a pure function (rather than inlined in `SyncRunHistory`) so it is
+// directly unit-testable without a DOM/React runtime.
+// ---------------------------------------------------------------------------
+
+export type SyncRunRow = {
+  id: string;
+  connectionId: string;
+  provider: string;
+  status: string;
+  startedAt: string;
+  finishedAt: string | null;
+  fetchedCount: number;
+  createdCount: number;
+  updatedCount: number;
+  unchangedCount: number;
+  markedUnavailableCount: number;
+  failedCount: number;
+  hasNextPage: boolean;
+  failureSummary: string | null;
+};
+
+/** Returns the validated array, or `null` for anything that is not genuinely an array — never throws, never silently substitutes `[]` for a malformed (as opposed to genuinely empty) response. */
+export function parseSyncRunRows(data: unknown): SyncRunRow[] | null {
+  return Array.isArray(data) ? (data as SyncRunRow[]) : null;
+}

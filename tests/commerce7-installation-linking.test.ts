@@ -48,6 +48,10 @@ import { linkProviderInstallationToBrand } from "../src/lib/commerce/link-connec
 type Row = Record<string, unknown>;
 
 const db = {
+  // PHASE 20 (one-active-Commerce7-store round): `linkProviderInstallationToBrand`
+  // now real-locks the Brand row first (see `../src/lib/commerce/brand-row-lock.ts`),
+  // so every Brand id these tests reference must exist here.
+  brands: [] as Row[],
   installations: [] as Row[],
   intents: [] as Row[],
   connections: [] as Row[],
@@ -69,6 +73,7 @@ function matchWhere(row: Row, where: Row): boolean {
       if ("gt" in cond) return (row[key] as Date) > (cond.gt as Date);
       if ("not" in cond) return row[key] !== cond.not;
       if ("in" in cond) return (cond.in as unknown[]).includes(row[key]);
+      if ("notIn" in cond) return !(cond.notIn as unknown[]).includes(row[key]);
     }
     return row[key] === value;
   });
@@ -139,6 +144,8 @@ let installPOST: (req: NextRequest) => Promise<Response>;
 let uninstallPOST: (req: NextRequest) => Promise<Response>;
 
 function resetDb() {
+  db.brands.length = 0;
+  db.brands.push({ id: "brand-a" }, { id: "brand-b" }, { id: "brand-shopify" });
   db.installations.length = 0;
   db.intents.length = 0;
   db.connections.length = 0;
@@ -152,6 +159,7 @@ before(async () => {
   prismaModule = (await import("../src/lib/prisma"))
     .default as unknown as Record<string, unknown>;
 
+  prismaModule.brand = makeDelegate(db.brands);
   prismaModule.commerceProviderInstallation = makeDelegate(db.installations, {
     composite: true,
   });
@@ -918,6 +926,98 @@ describe("Brand linking", () => {
     assert.equal(db.connections.length, 1);
     assert.equal(db.connections[0].status, "CONNECTED");
     assert.equal(db.events[0].eventType, "RECONNECTED");
+  });
+
+  // -------------------------------------------------------------------
+  // PHASE 20 (one-active-Commerce7-store round, Part 21): a Brand may have
+  // MANY historical DISCONNECTED/UNINSTALLED Commerce7 connections but at
+  // most ONE ACTIVE one at a time.
+  // -------------------------------------------------------------------
+
+  async function seedTenantYIntent() {
+    const installation = {
+      id: "inst-y",
+      provider: "COMMERCE7",
+      externalAccountId: "tenant-y",
+      status: "INSTALLED",
+    };
+    db.installations.push(installation);
+    await createLinkIntent(prismaModule as never, { installationId: "inst-y" });
+    const intentRow = db.intents.find((i) => i.installationId === "inst-y")!;
+    return { installation, intentId: intentRow.id as string };
+  }
+
+  test("Part 21: Brand A + tenant X CONNECTED -> linking a DIFFERENT tenant Y to Brand A is rejected with COMMERCE7_STORE_ALREADY_CONNECTED, X untouched", async () => {
+    seedConnection({ brandId: "brand-a", externalAccountId: "sqratch-inc", status: "CONNECTED" });
+    const { intentId } = await seedTenantYIntent();
+
+    const result = await linkProviderInstallationToBrand(prismaModule as never, {
+      intentId,
+      installationId: "inst-y",
+      provider: "COMMERCE7",
+      externalAccountId: "tenant-y",
+      brandId: "brand-a",
+      displayName: "tenant-y",
+    });
+
+    assert.deepEqual(result, { ok: false, reason: "COMMERCE7_STORE_ALREADY_CONNECTED" });
+    assert.equal(db.connections.length, 1, "no connection created for Y");
+    assert.equal(db.connections[0].externalAccountId, "sqratch-inc", "X remains the only connection");
+    assert.equal(db.connections[0].status, "CONNECTED", "X's status is untouched");
+  });
+
+  test("Part 21: Brand A + tenant X DISCONNECTED -> linking tenant Y succeeds", async () => {
+    seedConnection({ brandId: "brand-a", externalAccountId: "sqratch-inc", status: "DISCONNECTED" });
+    const { intentId } = await seedTenantYIntent();
+
+    const result = await linkProviderInstallationToBrand(prismaModule as never, {
+      intentId,
+      installationId: "inst-y",
+      provider: "COMMERCE7",
+      externalAccountId: "tenant-y",
+      brandId: "brand-a",
+      displayName: "tenant-y",
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(db.connections.length, 2, "X's historical row is preserved AND Y is created");
+    const y = db.connections.find((c) => c.externalAccountId === "tenant-y")!;
+    assert.equal(y.status, "CONNECTED");
+    const x = db.connections.find((c) => c.externalAccountId === "sqratch-inc")!;
+    assert.equal(x.status, "DISCONNECTED", "X is untouched, still preserved as history");
+  });
+
+  test("Part 21: Brand A + tenant X UNINSTALLED -> linking tenant Y succeeds", async () => {
+    seedConnection({ brandId: "brand-a", externalAccountId: "sqratch-inc", status: "UNINSTALLED" });
+    const { intentId } = await seedTenantYIntent();
+
+    const result = await linkProviderInstallationToBrand(prismaModule as never, {
+      intentId,
+      installationId: "inst-y",
+      provider: "COMMERCE7",
+      externalAccountId: "tenant-y",
+      brandId: "brand-a",
+      displayName: "tenant-y",
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(db.connections.length, 2);
+  });
+
+  test("Part 21: a Shopify connection for Brand A does NOT count as a Commerce7 active-store conflict", async () => {
+    seedConnection({ brandId: "brand-a", provider: "SHOPIFY", externalAccountId: "sqratch-inc.myshopify.com", status: "CONNECTED" });
+    const { intentId } = await seedTenantYIntent();
+
+    const result = await linkProviderInstallationToBrand(prismaModule as never, {
+      intentId,
+      installationId: "inst-y",
+      provider: "COMMERCE7",
+      externalAccountId: "tenant-y",
+      brandId: "brand-a",
+      displayName: "tenant-y",
+    });
+
+    assert.equal(result.ok, true, "a CONNECTED Shopify connection must never block a Commerce7 link");
   });
 
   test("linking is refused once the tenant is uninstalled, and the intent is still burned", async () => {

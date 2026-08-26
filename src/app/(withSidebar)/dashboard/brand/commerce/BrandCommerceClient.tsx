@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { BrandPageShell } from "@/components/brand/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { parseCommerce7Diagnostics, type Commerce7Diagnostics } from "./commerce-response-validation";
 
 type CommerceConnectionSummary = {
   connectionId: string;
@@ -40,6 +40,8 @@ function statusLabel(status: string): string {
   switch (status) {
     case "CONNECTED":
       return "Connected";
+    case "DISCONNECTED":
+      return "Disconnected";
     case "REQUIRES_RECONNECT":
       return "Needs reconnect";
     case "UNINSTALLED":
@@ -66,144 +68,113 @@ function formatDateTime(value: string | null): string {
   }).format(date);
 }
 
-type Commerce7ConfigurationResponse = {
+type Commerce7SettingsSyncResponse = {
   storefrontUrl: string;
-  productRoute: string;
   currencyCode: string;
+  productRoute: string;
   requiresProductSync: boolean;
 };
 
 /**
- * PHASE 16 BIG ROUND / SUBPHASE 1 — the Commerce7-only storefront
- * configuration form. Never rendered for a SHOPIFY connection (Shopify's
- * storefront URL is provider-derived, not merchant-configured — see
- * `deriveShopifyStorefrontUrl` in `connection-service.ts`). Disabled
- * (fields + Save) whenever the connection is not CONNECTED, since the write
- * path (`configureCommerce7Storefront`) rejects a non-CONNECTED connection
- * regardless.
+ * PHASE 20 (settings sync round, Parts 5/6) — read-only Commerce7 store
+ * settings, sourced ONLY from Commerce7's own Setting API
+ * (`POST /api/brand/commerce/connections/[connectionId]/settings/sync`,
+ * see `@/lib/commerce/providers/commerce7-settings-sync`). REPLACES the
+ * prior manually-authored storefront form: a Brand Admin can no longer type
+ * a Website URL/Currency/Product Route directly — Commerce7 is now the sole
+ * source of truth for these three fields, matching what the merchant
+ * actually has configured on their own Commerce7 account.
+ *
+ * Disabled (sync button) whenever the connection is not CONNECTED, since the
+ * sync path requires it regardless.
  */
-function Commerce7StorefrontConfigForm({
+function Commerce7StoreSettingsCard({
   connection,
-  onSaved,
+  onSynced,
 }: {
   connection: NonNullable<CommerceConnectionSummary>;
-  onSaved(next: Commerce7ConfigurationResponse): void;
+  onSynced(next: Commerce7SettingsSyncResponse): void;
 }) {
-  const [storefrontUrl, setStorefrontUrl] = useState(connection.storefrontUrl ?? "");
-  const [productRoute, setProductRoute] = useState(connection.productRoute ?? "");
-  const [currencyCode, setCurrencyCode] = useState(connection.currencyCode ?? "");
-  const [saving, setSaving] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [savedMessage, setSavedMessage] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [message, setMessage] = useState<string | null>(null);
 
   const disabled = connection.status !== "CONNECTED";
+  const hasSettings = Boolean(connection.storefrontUrl && connection.currencyCode && connection.productRoute);
 
-  async function handleSave() {
-    setSaving(true);
-    setFormError(null);
-    setSavedMessage(null);
+  async function handleSync() {
+    setSyncing(true);
+    setError(null);
+    setMessage(null);
     try {
-      const result = await fetchJson<Commerce7ConfigurationResponse>(
-        `/api/brand/commerce/connections/${connection.connectionId}/configuration`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ storefrontUrl, productRoute, currencyCode }),
-        },
+      const result = await fetchJson<Commerce7SettingsSyncResponse>(
+        `/api/brand/commerce/connections/${connection.connectionId}/settings/sync`,
+        { method: "POST" },
       );
-      setStorefrontUrl(result.storefrontUrl);
-      setProductRoute(result.productRoute);
-      setCurrencyCode(result.currencyCode);
-      setSavedMessage(
+      setMessage(
         result.requiresProductSync
-          ? "Saved. Run a product sync to apply the new configuration to your catalog."
-          : "Saved.",
+          ? "Store settings changed. Sync products to refresh prices and product links."
+          : "Commerce7 settings synchronized.",
       );
-      onSaved(result);
-    } catch (saveError) {
-      setFormError(getErrorMessage(saveError, "Failed to save storefront configuration."));
+      onSynced(result);
+    } catch (syncError) {
+      // The route already returns a sanitized message — never the raw
+      // Commerce7 Setting response/body.
+      setError(getErrorMessage(syncError, "Could not synchronize settings from Commerce7."));
     } finally {
-      setSaving(false);
+      setSyncing(false);
     }
   }
 
   return (
     <div className="rounded-2xl border border-white/10 bg-black/20 p-4 space-y-4">
       <div>
-        <p className="text-sm font-semibold text-white/85">Commerce7 storefront settings</p>
+        <p className="text-sm font-semibold text-white/85">Commerce7 store settings</p>
         <p className="mt-1 text-xs leading-5 text-white/50">
-          SQRATCH cannot automatically detect your Commerce7 storefront address.
-          Enter it exactly as customers see it, along with the URL prefix your
-          site uses for product pages and the currency you sell in. Saving a
-          changed value clears previously-synced prices and public product
-          links for this connection until you sync again.
+          Read directly from your Commerce7 account&apos;s own settings — SQRATCH never guesses or
+          lets these be typed manually.
         </p>
       </div>
 
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="block space-y-1 sm:col-span-2">
-          <span className="text-xs text-white/55">Website URL</span>
-          <Input
-            value={storefrontUrl}
-            onChange={(e) => setStorefrontUrl(e.target.value)}
-            placeholder="https://www.yourwinery.com"
-            disabled={disabled || saving}
-          />
-        </label>
-        <label className="block space-y-1">
-          <span className="text-xs text-white/55">Product page route</span>
-          <Input
-            value={productRoute}
-            onChange={(e) => setProductRoute(e.target.value)}
-            placeholder="/product"
-            disabled={disabled || saving}
-          />
-        </label>
-        <label className="block space-y-1">
-          <span className="text-xs text-white/55">Currency</span>
-          <Input
-            value={currencyCode}
-            onChange={(e) => setCurrencyCode(e.target.value.toUpperCase())}
-            placeholder="USD"
-            maxLength={3}
-            disabled={disabled || saving}
-          />
-        </label>
-      </div>
+      {hasSettings ? (
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="block space-y-1 sm:col-span-2">
+            <span className="text-xs text-white/55">Website URL</span>
+            <p className="text-sm text-white/85">{connection.storefrontUrl}</p>
+            <span className="block text-[11px] leading-4 text-white/40">Synced from Commerce7</span>
+          </div>
+          <div className="block space-y-1">
+            <span className="text-xs text-white/55">Currency</span>
+            <p className="text-sm text-white/85">{connection.currencyCode}</p>
+            <span className="block text-[11px] leading-4 text-white/40">Synced from Commerce7</span>
+          </div>
+          <div className="block space-y-1">
+            <span className="text-xs text-white/55">Product Page Route</span>
+            <p className="text-sm text-white/85">{connection.productRoute}</p>
+            <span className="block text-[11px] leading-4 text-white/40">Synced from Commerce7</span>
+          </div>
+        </div>
+      ) : (
+        <p className="text-sm text-white/55">Not synchronized yet.</p>
+      )}
 
       {disabled ? (
-        <p className="text-xs text-amber-300/80">
-          Reconnect this Commerce7 account before configuring storefront settings.
-        </p>
+        <p className="text-xs text-amber-300/80">Reconnect this Commerce7 account before syncing settings.</p>
       ) : null}
-      {formError ? <p className="text-xs text-red-300">{formError}</p> : null}
-      {savedMessage ? <p className="text-xs text-emerald-300/90">{savedMessage}</p> : null}
+      {error ? <p className="text-xs text-red-300">{error}</p> : null}
+      {message ? <p className="text-xs text-emerald-300/90">{message}</p> : null}
 
       <Button
-        onClick={handleSave}
-        disabled={disabled || saving}
-        className="rounded-full border border-white bg-white text-black hover:bg-white/90"
+        onClick={() => void handleSync()}
+        disabled={disabled || syncing}
+        variant="outline"
+        className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
       >
-        {saving ? "Saving..." : "Save"}
+        {syncing ? "Syncing..." : "Sync settings from Commerce7"}
       </Button>
     </div>
   );
 }
-
-type Commerce7Diagnostics = {
-  connectionId: string;
-  connected: boolean;
-  storefrontUrlConfigured: boolean;
-  productRouteConfigured: boolean;
-  currencyConfigured: boolean;
-  productsSynced: boolean;
-  lastProductSyncAt: string | null;
-  orderReceiverConfigured: boolean;
-  latestOrderIngestedAt: string | null;
-  latestWebhookProcessedAt: string | null;
-  latestFailedWebhookEvent: { receivedAt: string; failureSummary: string | null } | null;
-  orderReadOperational: boolean;
-};
 
 function ChecklistRow({ ok, label, detail }: { ok: boolean | null; label: string; detail?: string }) {
   return (
@@ -246,10 +217,19 @@ function Commerce7ReadinessChecklist({ connectionId }: { connectionId: string })
       setLoading(true);
       setError(null);
       try {
-        const data = await fetchJson<{ data: Commerce7Diagnostics }>(
+        // `fetchJson` already unwraps this route's `{ data }` envelope
+        // (no `meta`) — the resolved value IS the diagnostics object.
+        const data = await fetchJson<unknown>(
           `/api/brand/commerce/connections/${connectionId}/diagnostics`,
         );
-        if (!cancelled) setDiagnostics(data.data);
+        if (!cancelled) {
+          const parsed = parseCommerce7Diagnostics(data);
+          if (!parsed) {
+            setError("Readiness diagnostics came back in an unexpected format.");
+            return;
+          }
+          setDiagnostics(parsed);
+        }
       } catch (loadError) {
         if (!cancelled) setError(getErrorMessage(loadError, "Failed to load readiness checklist."));
       } finally {
@@ -300,6 +280,125 @@ function Commerce7ReadinessChecklist({ connectionId }: { connectionId: string })
   );
 }
 
+type Commerce7DisconnectResponse = { status: "DISCONNECTED" | "ALREADY_DISCONNECTED"; connectionId: string };
+
+/**
+ * PHASE 20 HOTFIX (Parts 5/6/8) — the Brand-admin-controlled Commerce7
+ * disconnect/reconnect surface. Shown only for a COMMERCE7 connection;
+ * Shopify's connect/disconnect lifecycle stays entirely on
+ * `/dashboard/brand/shopify` and never routes through here.
+ */
+function Commerce7ConnectionLifecycleControl({
+  connection,
+  onChanged,
+}: {
+  connection: NonNullable<CommerceConnectionSummary>;
+  onChanged(): void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [appNotInstalled, setAppNotInstalled] = useState(false);
+
+  async function handleDisconnect() {
+    const confirmed = window.confirm(
+      "Disconnect this Commerce7 store from SQRATCH?\n\n" +
+        "Historical products, orders, and analytics will be preserved. " +
+        "New syncs, public product links, and order ingestion will stop until you reconnect.",
+    );
+    if (!confirmed) return;
+
+    setBusy(true);
+    setError(null);
+    try {
+      await fetchJson<Commerce7DisconnectResponse>(
+        `/api/brand/commerce/connections/${connection.connectionId}/disconnect`,
+        { method: "POST" },
+      );
+      onChanged();
+    } catch (disconnectError) {
+      setError(getErrorMessage(disconnectError, "Failed to disconnect Commerce7."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleReconnect() {
+    setBusy(true);
+    setError(null);
+    setAppNotInstalled(false);
+    try {
+      // Raw fetch (not the unwrapping `fetchJson`) — the 409 APP_NOT_INSTALLED
+      // response carries a `code` this handler needs to branch on directly,
+      // which `fetchJson`'s throw-on-error path does not preserve.
+      const response = await fetch(
+        `/api/brand/commerce/connections/${connection.connectionId}/reconnect`,
+        { method: "POST", credentials: "include" },
+      );
+      const json = await response.json().catch(() => null);
+      if (!response.ok) {
+        if (response.status === 409 && json?.code === "APP_NOT_INSTALLED") {
+          setAppNotInstalled(true);
+          return;
+        }
+        throw new Error(json?.error || "Failed to reconnect Commerce7.");
+      }
+      onChanged();
+    } catch (reconnectError) {
+      setError(getErrorMessage(reconnectError, "Failed to reconnect Commerce7."));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (connection.status === "CONNECTED") {
+    return (
+      <div className="space-y-2">
+        <Button
+          onClick={() => void handleDisconnect()}
+          disabled={busy}
+          variant="outline"
+          className="rounded-full border-red-400/30 bg-transparent text-red-200 hover:bg-red-400/10"
+        >
+          {busy ? "Disconnecting..." : "Disconnect Commerce7"}
+        </Button>
+        {error ? <p className="text-xs text-red-300">{error}</p> : null}
+        <p className="text-[11px] leading-4 text-white/40">
+          To connect a different Commerce7 store, disconnect this store first, then open/install
+          SQRATCH from the other Commerce7 account and link it to this Brand.
+        </p>
+      </div>
+    );
+  }
+
+  if (connection.status === "DISCONNECTED") {
+    return (
+      <div className="space-y-2">
+        <Button
+          onClick={() => void handleReconnect()}
+          disabled={busy}
+          className="rounded-full border border-white bg-white text-black hover:bg-white/90"
+        >
+          {busy ? "Reconnecting..." : "Reconnect"}
+        </Button>
+        {appNotInstalled ? (
+          <p className="text-xs text-amber-300/80">
+            SQRATCH is no longer installed in this Commerce7 account. Reinstall it from Commerce7
+            Apps &amp; Extensions.
+          </p>
+        ) : error ? (
+          <p className="text-xs text-red-300">{error}</p>
+        ) : null}
+        <p className="text-[11px] leading-4 text-white/40">
+          You can also connect a different Commerce7 store by opening SQRATCH from that Commerce7
+          account.
+        </p>
+      </div>
+    );
+  }
+
+  return null;
+}
+
 /**
  * PHASE 16C2 — provider-neutral "Store" landing page. Reads
  * `/api/brand/commerce/status` (whichever provider the brand actually uses)
@@ -314,31 +413,24 @@ export function BrandCommerceClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
-      setLoading(true);
-      setError(null);
-      try {
-        const data = await fetchJson<BrandCommerceStatusResponse>(
-          "/api/brand/commerce/status",
-        );
-        if (!cancelled) setStatus(data);
-      } catch (loadError) {
-        if (!cancelled) {
-          setError(getErrorMessage(loadError, "Failed to load commerce status."));
-        }
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const data = await fetchJson<BrandCommerceStatusResponse>(
+        "/api/brand/commerce/status",
+      );
+      setStatus(data);
+    } catch (loadError) {
+      setError(getErrorMessage(loadError, "Failed to load commerce status."));
+    } finally {
+      setLoading(false);
     }
-
-    void load();
-    return () => {
-      cancelled = true;
-    };
   }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
 
   const connection = status?.connection ?? null;
 
@@ -386,9 +478,9 @@ export function BrandCommerceClient() {
 
             {connection?.provider === "COMMERCE7" ? (
               <>
-                <Commerce7StorefrontConfigForm
+                <Commerce7StoreSettingsCard
                   connection={connection}
-                  onSaved={(next) =>
+                  onSynced={(next) =>
                     setStatus((prev) =>
                       prev?.connection
                         ? {
@@ -405,6 +497,7 @@ export function BrandCommerceClient() {
                   }
                 />
                 <Commerce7ReadinessChecklist connectionId={connection.connectionId} />
+                <Commerce7ConnectionLifecycleControl connection={connection} onChanged={load} />
               </>
             ) : null}
 

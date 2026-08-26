@@ -16,12 +16,14 @@ import {
   DISPLAY_ORDER_MIN,
   describeSyncOutcome,
   formatPriceDisplay,
+  parseSyncRunRows,
   SHORT_DESCRIPTION_OVERRIDE_MAX_LENGTH,
   TITLE_OVERRIDE_MAX_LENGTH,
   validateDisplayOrder,
   validateShortDescriptionOverride,
   validateTitleOverride,
   type SyncOutcomeNotice,
+  type SyncRunRow,
 } from "./product-catalog-helpers";
 
 // ---------------------------------------------------------------------------
@@ -147,23 +149,6 @@ function formatDateTime(value: string | null): string {
   }).format(date);
 }
 
-type SyncRunRow = {
-  id: string;
-  connectionId: string;
-  provider: string;
-  status: string;
-  startedAt: string;
-  finishedAt: string | null;
-  fetchedCount: number;
-  createdCount: number;
-  updatedCount: number;
-  unchangedCount: number;
-  markedUnavailableCount: number;
-  failedCount: number;
-  hasNextPage: boolean;
-  failureSummary: string | null;
-};
-
 const SYNC_RUN_STATUS_LABELS: Record<string, string> = {
   SUCCEEDED: "Succeeded",
   PARTIAL: "Partial",
@@ -200,10 +185,21 @@ function SyncRunHistory({ connectionId }: { connectionId: string }) {
 
     (async () => {
       try {
-        const data = await fetchJson<{ data: SyncRunRow[] }>(
+        // `fetchJson` already unwraps the `{ data, meta }` envelope this
+        // route returns — the array itself is the resolved value. `meta`
+        // (pagination) is not needed here (this view only ever shows the
+        // most recent 10 runs), so the unwrapping helper is the right tool.
+        const data = await fetchJson<unknown>(
           `/api/brand/products/sync-runs?connectionId=${encodeURIComponent(connectionId)}&limit=10`,
         );
-        if (!cancelled) setRuns(data.data);
+        if (!cancelled) {
+          const parsed = parseSyncRunRows(data);
+          if (!parsed) {
+            setError("Sync history came back in an unexpected format.");
+            return;
+          }
+          setRuns(parsed);
+        }
       } catch (loadError) {
         if (!cancelled) setError(getErrorMessage(loadError, "Failed to load sync history."));
       } finally {

@@ -644,6 +644,35 @@ describe("pickPreferredConnectionRow tiebreak", () => {
   test("4d. empty input returns null", () => {
     assert.equal(pickPreferredConnectionRow([]), null);
   });
+
+  test("Part 16: a CONNECTED row wins over a DISCONNECTED row even when the DISCONNECTED row is isPrimary and has a NEWER installedAt — this is the exact live-vs-stale-history bug the disconnect/reconnect lifecycle makes possible", () => {
+    // Tenant X linked first, was isPrimary, then was disconnected —
+    // installedAt/isPrimary are both untouched by disconnect.
+    const disconnectedButOlderFieldsWin = makeConnectionRow({
+      id: "conn-x-disconnected",
+      status: "DISCONNECTED",
+      isPrimary: true,
+      installedAt: new Date("2026-06-01T00:00:00Z"),
+    });
+    // Tenant Y linked LATER, is the Brand's genuinely live connection right
+    // now, but never became isPrimary and has an OLDER installedAt than X.
+    const connectedButNominallyLosingFields = makeConnectionRow({
+      id: "conn-y-connected",
+      status: "CONNECTED",
+      isPrimary: false,
+      installedAt: new Date("2026-01-01T00:00:00Z"),
+    });
+
+    const picked = pickPreferredConnectionRow([
+      disconnectedButOlderFieldsWin,
+      connectedButNominallyLosingFields,
+    ]);
+    assert.equal(
+      picked?.id,
+      "conn-y-connected",
+      "the CONNECTED row must always win, regardless of isPrimary/installedAt on a historical row",
+    );
+  });
 });
 
 // ---------------------------------------------------------------------------
