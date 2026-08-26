@@ -823,13 +823,24 @@ export function BrandProductsClient() {
                       className="shrink-0"
                     >
                       {product.imageUrl ? (
-                        <Image
-                          src={product.imageUrl}
-                          alt={product.title}
-                          width={128}
-                          height={128}
-                          className="h-28 w-28 rounded-xl border border-white/10 object-cover"
-                        />
+                        <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-white/5">
+                          {/* PHASE 23 — PART 1: provider product images (e.g.
+                              Commerce7 wine bottle shots) legitimately vary in
+                              aspect ratio and are not guaranteed square.
+                              `object-contain` inside a fixed canvas shows the
+                              entire source image with no cropping/stretching,
+                              while every row keeps the same thumbnail
+                              footprint. Source-image whitespace is the
+                              provider/merchant's responsibility, not ours to
+                              trim. */}
+                          <Image
+                            src={product.imageUrl}
+                            alt={product.title}
+                            fill
+                            sizes="112px"
+                            className="object-contain p-2"
+                          />
+                        </div>
                       ) : (
                         <div className="flex h-28 w-28 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white/35">
                           <Package className="h-6 w-6" />

@@ -394,4 +394,57 @@ describe("static source assertions", () => {
   test("never labels a non-connected state as \"Shopify disconnected\" — copy is provider-neutral", () => {
     assert.doesNotMatch(clientSource, /Shopify disconnected/i);
   });
+
+  // -------------------------------------------------------------------------
+  // PHASE 23 — PART 1: catalog thumbnails must show the whole source image
+  // (contain), never crop it (cover). Provider product images — Commerce7
+  // wine bottle shots especially — legitimately vary in aspect ratio.
+  // -------------------------------------------------------------------------
+
+  test("catalog thumbnail uses object-contain inside a fixed canvas, never object-cover", () => {
+    assert.match(clientSource, /object-contain/);
+    assert.doesNotMatch(clientSource, /object-cover/);
+  });
+
+  test("the thumbnail Image renders with `fill` and a `sizes` prop, not a fixed width/height crop", () => {
+    const imgStart = clientSource.indexOf("<Image");
+    assert.ok(imgStart > -1, "no <Image> usage found");
+    const imgBlock = clientSource.slice(imgStart, clientSource.indexOf("/>", imgStart));
+    assert.match(imgBlock, /\bfill\b/);
+    assert.match(imgBlock, /sizes=/);
+    assert.doesNotMatch(imgBlock, /width=\{128\}|height=\{128\}/);
+  });
+
+  test("the image canvas keeps a consistent thumbnail footprint and the rounded border", () => {
+    const canvasStart = clientSource.indexOf('className="relative h-28 w-28');
+    assert.ok(canvasStart > -1, "expected a fixed-size relative canvas wrapping the thumbnail Image");
+    const canvasBlock = clientSource.slice(canvasStart, canvasStart + 200);
+    assert.match(canvasBlock, /rounded-xl/);
+    assert.match(canvasBlock, /border border-white\/10/);
+    assert.match(canvasBlock, /overflow-hidden/);
+  });
+
+  test("no-image fallback is preserved unchanged (Package icon in a matching h-28 w-28 box)", () => {
+    assert.match(
+      clientSource,
+      /flex h-28 w-28 items-center justify-center rounded-xl border border-white\/10 bg-white\/5 text-white\/35/,
+    );
+    assert.match(clientSource, /<Package className="h-6 w-6" \/>/);
+  });
+
+  test("thumbnail rendering is provider-neutral — no Commerce7/Shopify-specific conditional near the image", () => {
+    const canvasStart = clientSource.indexOf('className="relative h-28 w-28');
+    const fallbackEnd = clientSource.indexOf(")}", canvasStart);
+    const imageRegion = clientSource.slice(canvasStart, fallbackEnd > -1 ? fallbackEnd : canvasStart + 800);
+    // Looks for an actual branching condition keyed on provider identity —
+    // not merely explanatory prose (this file's own doc comment mentions
+    // "Commerce7" by name as a motivating example, which is fine).
+    assert.doesNotMatch(imageRegion, /provider\s*===\s*["'](COMMERCE7|SHOPIFY)["']/);
+    assert.doesNotMatch(imageRegion, /\.(includes|endsWith)\(["']commerce7\.com["']\)/i);
+    assert.doesNotMatch(imageRegion, /myshopify\.com/i);
+  });
+
+  test("does not rewrite/transform the provider image URL — passes product.imageUrl straight through", () => {
+    assert.match(clientSource, /src=\{product\.imageUrl\}/);
+  });
 });

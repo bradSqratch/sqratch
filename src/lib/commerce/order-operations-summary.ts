@@ -72,8 +72,57 @@ export type OrderOperationsSummaryDeps = {
   countAttributedOrders(connectionId: string): Promise<number>;
   countUnattributedOrders(connectionId: string): Promise<number>;
   findLatestOrderIngestedAt(connectionId: string): Promise<Date | null>;
-  findLatestWebhookProcessedAt(connectionId: string): Promise<Date | null>;
+  findLatestWebhookProcessedAt(connectionId: string, provider: CommerceProvider): Promise<Date | null>;
 };
+
+/**
+ * PHASE 23 — PART 2: the closed, explicit set of `CommerceOrderEvent.topic`
+ * values that represent a GENUINE provider order webhook delivery, per
+ * provider. This is deliberately an allow-list, not "anything except
+ * backfill" — a future non-webhook producer (another reconciliation mode, a
+ * migration/import tool, etc.) must never silently start counting as
+ * "webhook processed" just because it isn't named "backfill."
+ *
+ * Commerce7: written only by `commerce7-order-webhook.ts`, which authenticates
+ * every request via Basic Auth (`commerce7-order-webhook-auth.ts`) before
+ * ingestion — see that file for the live 401 investigation. Reconciliation/
+ * catch-up/custom-range all funnel through `backfillCommerce7Orders`, which
+ * writes the distinct `commerce7:order:backfill` topic and must NEVER be
+ * mistaken for a webhook delivery.
+ *
+ * Shopify: written only by the four HMAC-verified routes under
+ * `src/app/api/shopify/webhooks/{orders/create,orders/updated,
+ * order_transactions/create,refunds/create}` (topic bound to the route path,
+ * never the spoofable `x-shopify-topic` header — see
+ * `shopify-order-webhook.ts`'s header comment). Shopify has no
+ * reconciliation/backfill producer of `CommerceOrderEvent` today, so this
+ * list does not change Shopify's current observed behavior — it only makes
+ * the definition explicit and future-proof.
+ */
+const COMMERCE7_ORDER_WEBHOOK_TOPICS: readonly string[] = [
+  "commerce7:order:Create",
+  "commerce7:order:Update",
+];
+
+const SHOPIFY_ORDER_WEBHOOK_TOPICS: readonly string[] = [
+  "orders/create",
+  "orders/updated",
+  "order_transactions/create",
+  "refunds/create",
+];
+
+/** Provider-aware, closed-list membership test — see the topic lists' doc comment above. */
+export function isOrderWebhookEventTopic(provider: CommerceProvider, topic: string): boolean {
+  if (provider === CommerceProvider.COMMERCE7) return COMMERCE7_ORDER_WEBHOOK_TOPICS.includes(topic);
+  if (provider === CommerceProvider.SHOPIFY) return SHOPIFY_ORDER_WEBHOOK_TOPICS.includes(topic);
+  return false;
+}
+
+function orderWebhookTopicsForProvider(provider: CommerceProvider): string[] {
+  if (provider === CommerceProvider.COMMERCE7) return [...COMMERCE7_ORDER_WEBHOOK_TOPICS];
+  if (provider === CommerceProvider.SHOPIFY) return [...SHOPIFY_ORDER_WEBHOOK_TOPICS];
+  return [];
+}
 
 async function getPrisma() {
   const { default: prisma } = await import("@/lib/prisma");
@@ -119,10 +168,15 @@ async function defaultFindLatestOrderIngestedAt(connectionId: string): Promise<D
   return row?.createdAt ?? null;
 }
 
-async function defaultFindLatestWebhookProcessedAt(connectionId: string): Promise<Date | null> {
+async function defaultFindLatestWebhookProcessedAt(
+  connectionId: string,
+  provider: CommerceProvider,
+): Promise<Date | null> {
+  const topics = orderWebhookTopicsForProvider(provider);
+  if (topics.length === 0) return null;
   const prisma = await getPrisma();
   const row = await prisma.commerceOrderEvent.findFirst({
-    where: { connectionId, status: "PROCESSED" },
+    where: { connectionId, status: "PROCESSED", topic: { in: topics } },
     orderBy: { receivedAt: "desc" },
     select: { processedAt: true, receivedAt: true },
   });
@@ -148,7 +202,7 @@ async function summarizeConnection(
       deps.countAttributedOrders(connection.id),
       deps.countUnattributedOrders(connection.id),
       deps.findLatestOrderIngestedAt(connection.id),
-      deps.findLatestWebhookProcessedAt(connection.id),
+      deps.findLatestWebhookProcessedAt(connection.id, connection.provider),
     ]);
 
   const orderCountsByFinancialStatus: Partial<Record<CommerceOrderFinancialStatus, number>> = {};
