@@ -59,10 +59,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { CommerceProvider, type CommerceConnectionStatus } from "@prisma/client";
 import { normalizeCommerce7Tenant } from "./commerce7";
 import { verifyCommerce7OrderWebhookAuth } from "./commerce7-order-webhook-auth";
+import type { Commerce7OrderNormalizationContext } from "./commerce7-order-normalizer";
 import {
-  normalizeCommerce7Order,
-  type Commerce7OrderNormalizationContext,
-} from "./commerce7-order-normalizer";
+  prepareCommerce7OrderForIngestion,
+  type PrepareCommerce7OrderForIngestionResult,
+} from "./commerce7-order-refund-reconciliation";
 import {
   ingestNormalizedOrder,
   isRetryableOrderIngestionOutcome,
@@ -104,6 +105,17 @@ export type Commerce7OrderWebhookDeps = {
   ingest: typeof ingestNormalizedOrder;
   /** Forwarded to the ingestion service so tests can inject a DB-free stack. */
   ingestionDeps: Partial<OrderIngestionDeps>;
+  /**
+   * PHASE 25 — classifies the raw order and, when it carries Commerce7
+   * refund evidence, resolves + reconciles it against the ORIGINAL order
+   * before ingestion ever sees it — see
+   * `./commerce7-order-refund-reconciliation.ts`. The SAME function
+   * `./commerce7-order-backfill.ts` uses, so live webhook and manual
+   * Catch-Up/Custom-Range repair can never drift onto different refund
+   * semantics. Defaults to the real, network-calling implementation; tests
+   * inject a DB/network-free stand-in.
+   */
+  prepareOrder: typeof prepareCommerce7OrderForIngestion;
 };
 
 async function defaultFindConnectionByTenant(
@@ -134,6 +146,7 @@ const DEFAULT_WEBHOOK_DEPS: Commerce7OrderWebhookDeps = {
   findConnectionByTenant: defaultFindConnectionByTenant,
   ingest: ingestNormalizedOrder,
   ingestionDeps: {},
+  prepareOrder: prepareCommerce7OrderForIngestion,
 };
 
 /** SHA-256 hex digest of the raw request body — the PRIMARY dedup key, see file header. */
@@ -242,15 +255,33 @@ async function runCommerce7OrderWebhook(
     return new NextResponse(null, { status: 200 });
   }
 
-  // 4. Normalize (pure). Currency comes ONLY from the resolved connection —
-  // never from the payload, which documents no currency field.
+  // 4. PREPARE (classify + refund-aware normalize). Currency comes ONLY
+  // from the resolved connection — never from the payload, which documents
+  // no currency field. See `./commerce7-order-refund-reconciliation.ts` for
+  // the classify -> reconcile -> overlay pipeline this now runs through
+  // instead of a bare `normalizeCommerce7Order` call.
   const context: Commerce7OrderNormalizationContext = {
     connectionId: connection.id,
     brandId: connection.brandId,
     provider: CommerceProvider.COMMERCE7,
     currencyCode: connection.currencyCode,
   };
-  const { order, warnings } = normalizeCommerce7Order(body.payload, context);
+  const prepared: PrepareCommerce7OrderForIngestionResult = await resolved.prepareOrder(
+    body.payload,
+    context,
+    tenant,
+  );
+
+  // 4b. TRANSIENT refund-reconciliation failure. Mirrors
+  // `handleShopifyOrderWebhook`'s TRANSIENT_FAILURE handling exactly: NO
+  // claim is taken (ingest is never called), so Commerce7's redelivery of
+  // this exact webhook starts completely fresh, and the existing stored
+  // order state (if any) is left untouched — never overwritten with a
+  // refund-blind guess.
+  if (prepared.outcome === "TRANSIENT_FAILURE") {
+    logWebhook(tenant, "REFUND_RECONCILIATION_TRANSIENT_FAILURE", null);
+    return new NextResponse(null, { status: 500 });
+  }
 
   // 5. Ingest (idempotent). No `expandProductKeyCandidates` override —
   // Commerce7's catalog and order APIs both report the same UUID product-id
@@ -264,7 +295,7 @@ async function runCommerce7OrderWebhook(
       brandId: connection.brandId,
       provider: CommerceProvider.COMMERCE7,
     },
-    order,
+    prepared.order,
     resolved.ingestionDeps,
   );
 
@@ -272,7 +303,9 @@ async function runCommerce7OrderWebhook(
     reason: outcome.reason,
     lineItemCount: outcome.lineItemCount,
     attributionLinked: outcome.attributionLinked,
-    warnings,
+    warnings: prepared.warnings,
+    refundReconciliationOutcome: prepared.refundReconciliationOutcome,
+    refundReconciliationReason: prepared.refundReconciliationReason,
   });
 
   return new NextResponse(null, {

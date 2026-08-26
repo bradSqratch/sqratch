@@ -20,10 +20,23 @@
  * that fact lives entirely in Commerce7's own App Dev Center and is not
  * observable from here. The two are deliberately never conflated in this
  * module's field names or documentation.
+ *
+ * PHASE 25 — PART 16 REPAIR: `latestWebhookProcessedAt` and
+ * `latestFailedWebhookEvent` previously queried `CommerceOrderEvent` by
+ * `status` alone (`PROCESSED`/`FAILED`), with no `topic` restriction — so a
+ * `commerce7:order:backfill` event (reconciliation/Catch-Up, never a
+ * webhook) could populate either field, exactly the bug
+ * `src/lib/commerce/order-operations-summary.ts` was already fixed for on
+ * the Order Operations dashboard. Both queries now reuse that SAME
+ * `orderWebhookTopicsForProvider` allow-list (imported, not duplicated) so
+ * a failed backfill can never be misrepresented as a failed WEBHOOK, and a
+ * successful backfill can never be misrepresented as proof the live
+ * webhook path is working.
  */
 
 import { CommerceProvider, type CommerceConnectionStatus } from "@prisma/client";
 import { getCommerce7AppConfig, getCommerce7OrderWebhookConfig } from "./commerce7";
+import { orderWebhookTopicsForProvider } from "../order-operations-summary";
 
 function readTrimmed(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
@@ -110,7 +123,11 @@ async function defaultFindLatestOrderIngestedAt(connectionId: string): Promise<D
 async function defaultFindLatestProcessedWebhookAt(connectionId: string): Promise<Date | null> {
   const prisma = await getPrisma();
   const row = await prisma.commerceOrderEvent.findFirst({
-    where: { connectionId, status: "PROCESSED" },
+    where: {
+      connectionId,
+      status: "PROCESSED",
+      topic: { in: orderWebhookTopicsForProvider(CommerceProvider.COMMERCE7) },
+    },
     orderBy: { receivedAt: "desc" },
     select: { processedAt: true, receivedAt: true },
   });
@@ -122,7 +139,11 @@ async function defaultFindLatestFailedWebhookEvent(
 ): Promise<{ receivedAt: Date; failureSummary: string | null } | null> {
   const prisma = await getPrisma();
   const row = await prisma.commerceOrderEvent.findFirst({
-    where: { connectionId, status: "FAILED" },
+    where: {
+      connectionId,
+      status: "FAILED",
+      topic: { in: orderWebhookTopicsForProvider(CommerceProvider.COMMERCE7) },
+    },
     orderBy: { receivedAt: "desc" },
     select: { receivedAt: true, failureSummary: true },
   });

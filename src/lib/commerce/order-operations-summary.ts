@@ -118,7 +118,13 @@ export function isOrderWebhookEventTopic(provider: CommerceProvider, topic: stri
   return false;
 }
 
-function orderWebhookTopicsForProvider(provider: CommerceProvider): string[] {
+/**
+ * PHASE 25 — PART 16: exported so `./providers/commerce7-diagnostics.ts` can
+ * scope its own "latest webhook processed" / "latest failed webhook event"
+ * queries to genuine webhook topics too, rather than maintaining a second,
+ * independently-drifting copy of this allow-list.
+ */
+export function orderWebhookTopicsForProvider(provider: CommerceProvider): string[] {
   if (provider === CommerceProvider.COMMERCE7) return [...COMMERCE7_ORDER_WEBHOOK_TOPICS];
   if (provider === CommerceProvider.SHOPIFY) return [...SHOPIFY_ORDER_WEBHOOK_TOPICS];
   return [];

@@ -45,18 +45,38 @@
  *     from two directly-documented fields (`price * quantity`) — this is
  *     not a guess about undocumented provider semantics, just multiplying
  *     numbers Commerce7 already gave us.
- *   - `previousOrderId` / `previousOrderNumber` / `linkedOrders` exist on
- *     the Order object but Commerce7's documentation gives NO semantic
- *     explanation of what creates them or what relationship they encode
- *     (re-verified directly against developer.commerce7.com/docs/orders.md
- *     during the PHASE 16/17 REPAIR round — confirmed undocumented, not
- *     merely unread). This file therefore NEVER reads them and NEVER
- *     merges/links separate Commerce7 order ids into one canonical order —
- *     each Commerce7 order id maps to exactly one independent `CommerceOrder`
- *     row, preserving provider order identity per this round's explicit
- *     instruction. `purchaseType` (with values including "Refund"/
- *     "Exchange") was re-verified to exist on Commerce7's CART object, NOT
- *     the Order object — it is not read here for the same reason.
+ *   - `previousOrderId` / `previousOrderNumber` / `linkedOrders` /
+ *     `purchaseType` — PHASE 25 CORRECTION. This file previously stated (and
+ *     a prior round's re-verification repeated) that these fields were
+ *     confirmed absent from Commerce7's documented Order object and were
+ *     therefore never read, on the theory that every Commerce7 order id maps
+ *     to one independent canonical order. Real sandbox behavior has since
+ *     DISPROVEN that theory for refunds: a partial/full refund created in
+ *     Commerce7 for order N does not mutate N's own `tenders[]` at all — it
+ *     creates a SEPARATE Commerce7 order M carrying `purchaseType: "Refund"`,
+ *     `previousOrderId: N`, a negative `total`/`subTotal`/`taxTotal`, and its
+ *     own settled `Refund`/`Success` tender; order N is then updated to carry
+ *     `linkedOrders: [{ orderId: M, orderNumber, purchaseType: "Refund" }]`
+ *     permanently. This is stated honestly as OBSERVED SANDBOX BEHAVIOR
+ *     (tenant `sqratch-inc`, order #1002/#1003, 2026-08-26), not as a
+ *     documented Commerce7 contract — developer.commerce7.com/docs/orders.md
+ *     still does not document these fields' semantics.
+ *
+ *     This file (the pure, per-order normalizer) still NEVER reads
+ *     `previousOrderId`/`linkedOrders`/`purchaseType` itself and still
+ *     normalizes every raw Commerce7 order object as an independent
+ *     snapshot — that discipline is unchanged and is exactly right for a
+ *     PURE function with no I/O. What changed is that this normalizer is no
+ *     longer the only thing standing between a raw Commerce7 order and
+ *     ingestion: `./commerce7-order-refund-reconciliation.ts` inspects those
+ *     three fields BEFORE this function is invoked, resolves a refund order
+ *     to its ORIGINAL order's canonical identity, and fetches/reconciles the
+ *     cumulative refund total from the full set of linked refund orders —
+ *     never persisting a refund order as its own, independent,
+ *     negative-revenue `CommerceOrder` row. See that module's header for the
+ *     full model and `commerce7-order-webhook.ts` / `commerce7-order-backfill.ts`
+ *     for how both the live webhook and manual backfill/Catch-Up paths route
+ *     through it identically.
  *
  * REFUND EVIDENCE — PHASE 16/17 REPAIR (was incorrectly documented as
  * absent in the original Big Round; corrected here after an independent
@@ -133,8 +153,13 @@ function readDate(value: unknown): Date | null {
  * convention (`decimalStringToBigIntMinorUnits` in `../money.ts`) — a
  * legitimate negative line (e.g. a price override reducing revenue) must
  * not be coerced to zero or rejected outright.
+ *
+ * Exported for reuse by `./commerce7-order-refund-reconciliation.ts`, which
+ * needs the identical cents-to-BigInt conversion for a linked refund order's
+ * own `tenders[].amountTendered` — kept as ONE implementation rather than a
+ * second copy that could silently drift from this one.
  */
-function centsToBigIntMinorUnits(value: unknown): bigint | null {
+export function centsToBigIntMinorUnits(value: unknown): bigint | null {
   if (typeof value !== "number" || !Number.isSafeInteger(value)) {
     return null;
   }
@@ -240,8 +265,15 @@ function computeCommerce7RefundedMinor(
  * base status (AUTHORIZED, VOIDED, or an unrecognized/null status) passes
  * through unchanged, since no documented, well-understood refund-on-that-
  * state path exists to reason about safely (see file header).
+ *
+ * Exported for reuse by `./commerce7-order-refund-reconciliation.ts`, which
+ * applies this IDENTICAL refinement rule to a cumulative refund total
+ * sourced from linked refund orders rather than this order's own
+ * (refund-blind) `tenders[]` — see that module's header for why an order's
+ * `totalRefundedMinor` is always resolved from exactly one of the two
+ * sources, never both.
  */
-function refineFinancialStatusForRefunds(
+export function refineFinancialStatusForRefunds(
   baseStatus: CommerceOrderFinancialStatus | null,
   totalMinor: bigint | null,
   totalRefundedMinor: bigint | null,
@@ -406,7 +438,14 @@ export function normalizeCommerce7Order(
   return { order, warnings };
 }
 
-function emptyOrder(context: Commerce7OrderNormalizationContext): NormalizedOrderInput {
+/**
+ * Exported for reuse by `./commerce7-order-refund-reconciliation.ts`, which
+ * returns this exact shape (externalOrderId null, everything else empty) for
+ * a refund order whose `previousOrderId` cannot be resolved — routing it
+ * through the SAME existing `MISSING_EXTERNAL_ORDER_ID` rejection path
+ * `ingestNormalizedOrder` already has, rather than inventing a second one.
+ */
+export function emptyOrder(context: Commerce7OrderNormalizationContext): NormalizedOrderInput {
   return {
     connectionId: context.connectionId,
     brandId: context.brandId,

@@ -54,7 +54,10 @@ import {
   COMMERCE7_BACKFILL_MAX_RESULTS,
   type Commerce7Fetch,
 } from "./commerce7-orders";
-import { normalizeCommerce7Order } from "./commerce7-order-normalizer";
+import {
+  prepareCommerce7OrderForIngestion,
+  type PrepareCommerce7OrderForIngestionResult,
+} from "./commerce7-order-refund-reconciliation";
 
 export type Commerce7BackfillConnectionRow = {
   id: string;
@@ -86,6 +89,16 @@ export type Commerce7OrderBackfillDeps = {
   fetchOrders: typeof fetchCommerce7OrdersByDateRange;
   ingest: typeof ingestNormalizedOrder;
   ingestionDeps: Partial<OrderIngestionDeps>;
+  /**
+   * PHASE 25 — the SAME refund-aware preparation
+   * `./commerce7-order-webhook.ts` uses (see
+   * `./commerce7-order-refund-reconciliation.ts`), so a missed refund
+   * webhook is fully repairable by re-running Catch Up / a Custom Range
+   * covering the refund's `updatedAt` — this round's explicit requirement
+   * that live webhook and manual backfill never drift onto different
+   * refund semantics.
+   */
+  prepareOrder: typeof prepareCommerce7OrderForIngestion;
   fetchImpl?: Commerce7Fetch;
 };
 
@@ -111,6 +124,7 @@ const DEFAULT_DEPS: Commerce7OrderBackfillDeps = {
   fetchOrders: fetchCommerce7OrdersByDateRange,
   ingest: ingestNormalizedOrder,
   ingestionDeps: {},
+  prepareOrder: prepareCommerce7OrderForIngestion,
 };
 
 /** Deterministic backfill dedup key — see file header. */
@@ -177,18 +191,54 @@ export async function backfillCommerce7Orders(
   const ordersToProcess = page.orders.slice(0, COMMERCE7_BACKFILL_MAX_RESULTS);
 
   const outcomes: OrderIngestionOutcome[] = [];
+  // A backfill window can legitimately contain BOTH a root order and one or
+  // more of its own linked refund orders — the realistic repair case this
+  // round exists for (see the round's brief, Part 20). Each such entry
+  // independently resolves to the SAME root and reconciles the SAME
+  // linked-order set via `prepareOrder`, so memoizing by root id within
+  // this ONE pass avoids redundantly re-fetching and re-summing every
+  // linked refund order once per raw entry that points at it. Purely an
+  // in-memory, single-call optimization — never persisted, never shared
+  // across separate backfill/Catch-Up invocations — and scoped ONLY to
+  // orders that actually went through refund reconciliation, so an ordinary
+  // (never-refunded) order's behavior is completely unaffected.
+  const reconciledRootIds = new Set<string>();
+
   for (const raw of ordersToProcess) {
-    const { order } = normalizeCommerce7Order(raw, {
-      connectionId: connection.id,
-      brandId: connection.brandId,
-      provider: CommerceProvider.COMMERCE7,
-      currencyCode,
-    });
+    const prepared: PrepareCommerce7OrderForIngestionResult = await resolved.prepareOrder(
+      raw,
+      {
+        connectionId: connection.id,
+        brandId: connection.brandId,
+        provider: CommerceProvider.COMMERCE7,
+        currencyCode,
+      },
+      connection.externalAccountId,
+    );
+
+    if (prepared.outcome === "TRANSIENT_FAILURE") {
+      // Skip this one order for this pass rather than persist a
+      // refund-blind guess. A later Catch Up / Custom Range run retries
+      // it — the same self-healing property the rest of this backfill
+      // entrypoint already relies on.
+      continue;
+    }
+
+    const { order } = prepared;
 
     if (!order.externalOrderId || !order.providerUpdatedAt) {
       // Cannot form a stable dedup key without both — skip rather than
       // guess at an event id (see file header's IDEMPOTENCY section).
       continue;
+    }
+
+    if (prepared.refundReconciliationOutcome !== "NOT_APPLICABLE") {
+      if (reconciledRootIds.has(order.externalOrderId)) {
+        // Already reconciled and written this SAME root id from an earlier
+        // entry in this same page — see the memoization note above.
+        continue;
+      }
+      reconciledRootIds.add(order.externalOrderId);
     }
 
     const providerEventId = backfillProviderEventId(

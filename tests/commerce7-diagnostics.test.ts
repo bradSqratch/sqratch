@@ -6,6 +6,8 @@ import "./env-setup";
 
 import { test, describe } from "node:test";
 import { strict as assert } from "node:assert";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { CommerceProvider } from "@prisma/client";
 
 import {
@@ -186,6 +188,51 @@ describe("39-42. getCommerce7ConnectionDiagnostics", () => {
     assert.equal(withoutData?.latestOrderIngestedAt, null);
     assert.equal(withoutData?.latestWebhookProcessedAt, null);
     assert.equal(withoutData?.latestFailedWebhookEvent, null);
+  });
+
+  // ---------------------------------------------------------------------
+  // PHASE 25 — PART 16: `latestWebhookProcessedAt` / `latestFailedWebhookEvent`
+  // must be scoped to genuine webhook topics, never a `commerce7:order:backfill`
+  // event. The DEFAULT query implementations are not DI-injectable data
+  // sources (they ARE the thing under test), so this is proven by source
+  // inspection against the real Prisma query text — same idiom already used
+  // for the equivalent Order Operations fix in
+  // tests/order-analytics.test.ts / tests/commerce-order-webhook-metric.test.ts.
+  // ---------------------------------------------------------------------
+  test("43. the default latest-processed-webhook query is scoped to the genuine webhook topic allow-list, not status alone", () => {
+    const source = readFileSync(
+      join(process.cwd(), "src/lib/commerce/providers/commerce7-diagnostics.ts"),
+      "utf8",
+    );
+    const fnBody = source.slice(
+      source.indexOf("async function defaultFindLatestProcessedWebhookAt"),
+      source.indexOf("async function defaultFindLatestFailedWebhookEvent"),
+    );
+    assert.match(fnBody, /status:\s*"PROCESSED"/);
+    assert.match(fnBody, /topic:\s*{\s*in:\s*orderWebhookTopicsForProvider\(CommerceProvider\.COMMERCE7\)\s*}/);
+  });
+
+  test("44. the default latest-failed-webhook-event query is ALSO scoped to the genuine webhook topic allow-list — a failed backfill must never read as a failed webhook", () => {
+    const source = readFileSync(
+      join(process.cwd(), "src/lib/commerce/providers/commerce7-diagnostics.ts"),
+      "utf8",
+    );
+    const fnBody = source.slice(
+      source.indexOf("async function defaultFindLatestFailedWebhookEvent"),
+      source.indexOf("const DEFAULT_DEPS"),
+    );
+    assert.match(fnBody, /status:\s*"FAILED"/);
+    assert.match(fnBody, /topic:\s*{\s*in:\s*orderWebhookTopicsForProvider\(CommerceProvider\.COMMERCE7\)\s*}/);
+  });
+
+  test("45. the topic allow-list is IMPORTED from order-operations-summary.ts, never re-declared — no duplicate topic list to drift", () => {
+    const source = readFileSync(
+      join(process.cwd(), "src/lib/commerce/providers/commerce7-diagnostics.ts"),
+      "utf8",
+    );
+    assert.match(source, /import\s*{\s*orderWebhookTopicsForProvider\s*}\s*from\s*"\.\.\/order-operations-summary"/);
+    assert.doesNotMatch(source, /"commerce7:order:Create"/);
+    assert.doesNotMatch(source, /"commerce7:order:Update"/);
   });
 
   test("a foreign-brand connectionId resolves to null — indistinguishable from missing", async () => {

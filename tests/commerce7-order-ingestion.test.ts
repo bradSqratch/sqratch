@@ -438,7 +438,17 @@ describe("Part 1F. Commerce7 tender-based financial reconciliation", () => {
     assert.equal(order.financialStatus, "PAID");
   });
 
-  test("10. previousOrderId/linkedOrders/purchaseType are never read — provider order identity is never merged", () => {
+  test("10. the PURE per-order normalizer never reads previousOrderId/linkedOrders/purchaseType and never substitutes identity", () => {
+    // PHASE 25 CLARIFICATION: this test is scoped to `normalizeCommerce7Order`
+    // itself, which is deliberately unchanged — a pure per-order snapshot
+    // function has no business resolving cross-order identity. What DID
+    // change is one layer up: `commerce7-order-refund-reconciliation.ts` now
+    // reads these exact fields BEFORE this function is ever called, and
+    // resolves a genuine Commerce7 refund order to its ORIGINAL order's
+    // canonical identity — see that module's tests
+    // (`commerce7-order-refund-reconciliation.test.ts`) for the real
+    // observed refund relationship this repository now understands. This
+    // test only proves the normalizer itself still has no such behavior.
     const { order } = normalizeCommerce7Order(
       rawOrder({
         id: "order-child",
@@ -464,7 +474,7 @@ describe("Part 1F. Commerce7 tender-based financial reconciliation", () => {
     assert.equal(withExchange.totalRefundedMinor, withoutField.totalRefundedMinor);
   });
 
-  test("12. a linkedOrders array present alongside tenders does not affect the tender-derived refund computation", () => {
+  test("12. (pure normalizer only) a linkedOrders array present alongside tenders does not affect the tender-derived refund computation — see commerce7-order-refund-reconciliation.test.ts for the layer that DOES act on linkedOrders", () => {
     const { order } = normalizeCommerce7Order(
       rawOrder({
         paymentStatus: "Paid",
@@ -943,6 +953,89 @@ describe("51-58. commerce7 order webhook route", () => {
     assert.equal(resolveCommerce7ProviderEventId(digestA), resolveCommerce7ProviderEventId(digestB));
     assert.equal(resolveCommerce7ProviderEventId(digestA), `digest:${digestA}`);
   });
+
+  // -------------------------------------------------------------------------
+  // PHASE 25 — refund-aware preparation orchestration.
+  // -------------------------------------------------------------------------
+
+  test("61. a TRANSIENT_FAILURE from prepareOrder maps to 500 and NEVER calls ingest — no claim taken, redelivery starts fresh", async () => {
+    let ingestCalled = false;
+    const res = await handleCommerce7OrderWebhook(
+      makeRequest(orderWebhookPayload(), basicAuthHeader("hookuser", "hookpass")) as never,
+      {
+        findConnectionByTenant: async () => WEBHOOK_CONNECTION,
+        prepareOrder: async () => ({ outcome: "TRANSIENT_FAILURE" }),
+        ingest: async () => {
+          ingestCalled = true;
+          throw new Error("must not be called");
+        },
+      },
+    );
+    assert.equal(res.status, 500);
+    assert.equal(ingestCalled, false);
+  });
+
+  test("62. prepareOrder is called with the resolved tenant and the raw payload, and its READY order is what reaches ingest verbatim", async () => {
+    let capturedTenant: string | null = null;
+    let capturedIngestOrder: unknown = null;
+    const res = await handleCommerce7OrderWebhook(
+      makeRequest(orderWebhookPayload({ action: "Update" }), basicAuthHeader("hookuser", "hookpass")) as never,
+      {
+        findConnectionByTenant: async () => WEBHOOK_CONNECTION,
+        prepareOrder: async (raw, _context, tenant) => {
+          capturedTenant = tenant;
+          assert.ok(raw && typeof raw === "object");
+          return {
+            outcome: "READY",
+            order: {
+              connectionId: "conn-1",
+              brandId: "brand-a",
+              provider: CommerceProvider.COMMERCE7,
+              completeness: "FULL",
+              externalOrderId: "order-1002",
+              orderNumber: "1002",
+              currencyCode: "USD",
+              minorUnitExponent: 2,
+              subtotalMinor: BigInt(8700),
+              discountsMinor: null,
+              shippingMinor: null,
+              taxMinor: BigInt(1131),
+              totalMinor: BigInt(9831),
+              totalRefundedMinor: BigInt(3277),
+              financialStatus: "PARTIALLY_REFUNDED",
+              fulfillmentStatus: "FULFILLED",
+              cancelledAt: null,
+              cancelReason: null,
+              providerCreatedAt: null,
+              providerUpdatedAt: new Date("2026-08-26T04:39:24.783Z"),
+              lineItems: [],
+              attributionToken: null,
+            },
+            warnings: [],
+            refundReconciliationOutcome: "RECONCILED",
+            refundReconciliationReason: null,
+          };
+        },
+        ingest: async (_event, order) => {
+          capturedIngestOrder = order;
+          return {
+            status: "UPDATED",
+            reason: null,
+            eventId: "evt-1",
+            orderId: "order-row-1",
+            lineItemCount: 0,
+            attributionLinked: false,
+            brandIdOverriddenFromConnection: false,
+          } satisfies OrderIngestionOutcome;
+        },
+      },
+    );
+    assert.equal(res.status, 200);
+    assert.equal(capturedTenant, "acme-tenant");
+    assert.equal((capturedIngestOrder as { externalOrderId: string }).externalOrderId, "order-1002");
+    assert.equal((capturedIngestOrder as { totalRefundedMinor: bigint }).totalRefundedMinor, BigInt(3277));
+    assert.equal((capturedIngestOrder as { financialStatus: string }).financialStatus, "PARTIALLY_REFUNDED");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -1088,5 +1181,232 @@ describe("59-60. backfillCommerce7Orders", () => {
     assert.equal(capturedEventIds.length, 2);
     assert.equal(capturedEventIds[0], capturedEventIds[1]);
     assert.ok(capturedEventIds[0].startsWith("backfill:"));
+  });
+
+  // -------------------------------------------------------------------------
+  // PHASE 25 — Part 11/19/20: backfill uses the SAME refund-aware
+  // preparation the live webhook does, so a missed refund webhook is
+  // repairable by re-running Catch Up / a Custom Range.
+  // -------------------------------------------------------------------------
+
+  test("19a. backfillCommerce7Orders calls prepareOrder (not normalizeCommerce7Order) with the connection's own tenant for every raw order", async () => {
+    const capturedTenants: string[] = [];
+    const capturedOrderIds: string[] = [];
+    await backfillCommerce7Orders(
+      {
+        brandId: "brand-a",
+        connectionId: "conn-1",
+        updatedAtGte: new Date("2026-08-01"),
+        updatedAtLte: new Date("2026-08-31"),
+      },
+      {
+        loadConnection: async () => backfillRow({ externalAccountId: "sqratch-inc" }),
+        fetchOrders: async () => ({ orders: [rawOrder({ id: "order-1002" })], total: 1 }),
+        prepareOrder: async (raw, _context, tenant) => {
+          capturedTenants.push(tenant);
+          capturedOrderIds.push((raw as { id: string }).id);
+          return {
+            outcome: "READY",
+            order: {
+              connectionId: "conn-1",
+              brandId: "brand-a",
+              provider: CommerceProvider.COMMERCE7,
+              completeness: "FULL",
+              externalOrderId: "order-1002",
+              orderNumber: "1002",
+              currencyCode: "USD",
+              minorUnitExponent: 2,
+              subtotalMinor: null,
+              discountsMinor: null,
+              shippingMinor: null,
+              taxMinor: null,
+              totalMinor: BigInt(9831),
+              totalRefundedMinor: null,
+              financialStatus: "PAID",
+              fulfillmentStatus: null,
+              cancelledAt: null,
+              cancelReason: null,
+              providerCreatedAt: null,
+              providerUpdatedAt: new Date("2026-08-26T04:39:24.783Z"),
+              lineItems: [],
+              attributionToken: null,
+            },
+            warnings: [],
+            refundReconciliationOutcome: "NOT_APPLICABLE",
+            refundReconciliationReason: null,
+          };
+        },
+        ingest: async () => ({
+          status: "UPDATED",
+          reason: null,
+          eventId: "evt",
+          orderId: "row",
+          lineItemCount: 0,
+          attributionLinked: false,
+          brandIdOverriddenFromConnection: false,
+        }),
+      },
+    );
+    assert.deepEqual(capturedTenants, ["sqratch-inc"]);
+    assert.deepEqual(capturedOrderIds, ["order-1002"]);
+  });
+
+  test("19b. a TRANSIENT_FAILURE for one order in the page is skipped, never persisted, and never aborts the rest of the page", async () => {
+    const ingestedOrderIds: string[] = [];
+    const outcome = await backfillCommerce7Orders(
+      {
+        brandId: "brand-a",
+        connectionId: "conn-1",
+        updatedAtGte: new Date("2026-08-01"),
+        updatedAtLte: new Date("2026-08-31"),
+      },
+      {
+        loadConnection: async () => backfillRow(),
+        fetchOrders: async () => ({
+          orders: [rawOrder({ id: "order-transient-fail" }), rawOrder({ id: "order-fine" })],
+          total: 2,
+        }),
+        prepareOrder: async (raw) => {
+          const id = (raw as { id: string }).id;
+          if (id === "order-transient-fail") {
+            return { outcome: "TRANSIENT_FAILURE" };
+          }
+          return {
+            outcome: "READY",
+            order: {
+              connectionId: "conn-1",
+              brandId: "brand-a",
+              provider: CommerceProvider.COMMERCE7,
+              completeness: "FULL",
+              externalOrderId: id,
+              orderNumber: "1",
+              currencyCode: "USD",
+              minorUnitExponent: 2,
+              subtotalMinor: null,
+              discountsMinor: null,
+              shippingMinor: null,
+              taxMinor: null,
+              totalMinor: BigInt(100),
+              totalRefundedMinor: null,
+              financialStatus: "PAID",
+              fulfillmentStatus: null,
+              cancelledAt: null,
+              cancelReason: null,
+              providerCreatedAt: null,
+              providerUpdatedAt: new Date("2026-08-26T00:00:00.000Z"),
+              lineItems: [],
+              attributionToken: null,
+            },
+            warnings: [],
+            refundReconciliationOutcome: "NOT_APPLICABLE",
+            refundReconciliationReason: null,
+          };
+        },
+        ingest: async (event, order) => {
+          ingestedOrderIds.push(order.externalOrderId!);
+          return {
+            status: "UPDATED",
+            reason: null,
+            eventId: "evt",
+            orderId: "row",
+            lineItemCount: 0,
+            attributionLinked: false,
+            brandIdOverriddenFromConnection: false,
+          };
+        },
+      },
+    );
+    assert.deepEqual(ingestedOrderIds, ["order-fine"]);
+    assert.equal(outcome.ordersProcessed, 1);
+  });
+
+  test("20/21. one backfill page containing BOTH the root order and its own refund child reconciles to a SINGLE ingest write for the root — the refund child never becomes its own CommerceOrder row, and re-running the same page is idempotent", async () => {
+    const ingestedOrderIds: string[] = [];
+    const rootReadyResult = (refundedMinor: bigint) => ({
+      outcome: "READY" as const,
+      order: {
+        connectionId: "conn-1",
+        brandId: "brand-a",
+        provider: CommerceProvider.COMMERCE7,
+        completeness: "FULL" as const,
+        externalOrderId: "order-1002",
+        orderNumber: "1002",
+        currencyCode: "CAD",
+        minorUnitExponent: 2,
+        subtotalMinor: BigInt(8700),
+        discountsMinor: null,
+        shippingMinor: null,
+        taxMinor: BigInt(1131),
+        totalMinor: BigInt(9831),
+        totalRefundedMinor: refundedMinor,
+        financialStatus: refundedMinor > BigInt(0) ? ("PARTIALLY_REFUNDED" as const) : ("PAID" as const),
+        fulfillmentStatus: "FULFILLED" as const,
+        cancelledAt: null,
+        cancelReason: null,
+        providerCreatedAt: null,
+        providerUpdatedAt: new Date("2026-08-26T04:39:24.783Z"),
+        lineItems: [],
+        attributionToken: null,
+      },
+      warnings: [],
+      refundReconciliationOutcome: "RECONCILED" as const,
+      refundReconciliationReason: null,
+    });
+
+    const deps = {
+      loadConnection: async () => backfillRow(),
+      fetchOrders: async () => ({
+        orders: [rawOrder({ id: "order-1002" }), rawOrder({ id: "order-1003" })],
+        total: 2,
+      }),
+      // Both the root entry and the child entry resolve (via
+      // prepareOrder) to the SAME root order id and the SAME reconciled
+      // refund amount — exactly what the real classify/reconcile pipeline
+      // produces regardless of which raw entry triggered it (see
+      // commerce7-order-refund-reconciliation.test.ts's own "Case C" test
+      // for the unit-level proof of this convergence).
+      prepareOrder: async () => rootReadyResult(BigInt(3277)),
+      ingest: async (_event: unknown, order: { externalOrderId: string | null }) => {
+        ingestedOrderIds.push(order.externalOrderId!);
+        return {
+          status: "UPDATED" as const,
+          reason: null,
+          eventId: "evt",
+          orderId: "row-1002",
+          lineItemCount: 0,
+          attributionLinked: false,
+          brandIdOverriddenFromConnection: false,
+        };
+      },
+    };
+
+    const outcome = await backfillCommerce7Orders(
+      {
+        brandId: "brand-a",
+        connectionId: "conn-1",
+        updatedAtGte: new Date("2026-08-01"),
+        updatedAtLte: new Date("2026-08-31"),
+      },
+      deps,
+    );
+
+    // Exactly ONE ingest write for the root, from a page containing two
+    // raw entries that both resolve to it.
+    assert.deepEqual(ingestedOrderIds, ["order-1002"]);
+    assert.equal(outcome.ordersProcessed, 1);
+
+    // Re-running the identical page is fully idempotent.
+    ingestedOrderIds.length = 0;
+    const secondRun = await backfillCommerce7Orders(
+      {
+        brandId: "brand-a",
+        connectionId: "conn-1",
+        updatedAtGte: new Date("2026-08-01"),
+        updatedAtLte: new Date("2026-08-31"),
+      },
+      deps,
+    );
+    assert.deepEqual(ingestedOrderIds, ["order-1002"]);
+    assert.equal(secondRun.ordersProcessed, 1);
   });
 });
