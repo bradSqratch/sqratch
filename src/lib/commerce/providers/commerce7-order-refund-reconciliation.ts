@@ -840,6 +840,28 @@ export async function prepareCommerce7OrderForIngestion(
       totalRefundedMinor: reconciled.snapshot.totalRefundedMinor,
       financialStatus,
       providerUpdatedAt,
+      // PHASE 27 — authorize the generic layer's narrow EQUAL-version
+      // settlement-repair exception for this delivery only.
+      //
+      // The real production case: Commerce7 root #1002 was stored at provider
+      // version T back when SQRATCH did not understand that a Commerce7
+      // refund is a SEPARATE linked order document. Re-reading that SAME
+      // unchanged version now reconciles to a real cumulative refund — the
+      // provider data did not change, SQRATCH's interpretation did — but it
+      // still carries T, so the ordinary strictly-newer rule would reject the
+      // repair permanently. Fabricating a newer timestamp is not an option
+      // (`providerUpdatedAt` must remain the provider's own truth), so the
+      // repair is authorized explicitly instead.
+      //
+      // This is set ONLY on the RECONCILED path — i.e. only when
+      // reconciliation positively completed against real, validated linked
+      // refund evidence. It is NEVER set for an ordinary Commerce7 order, a
+      // DEFERRED/NOT_ELIGIBLE reconciliation, or a preserved refund-blind
+      // payload. `decideOrderStaleness` additionally refuses to act on it
+      // unless the incoming cumulative refund is strictly greater than the
+      // stored one, so an idempotent replay and any attempted decrease both
+      // remain STALE.
+      sameVersionSettlementRepair: true,
     },
     warnings,
     refundReconciliationOutcome: "RECONCILED",

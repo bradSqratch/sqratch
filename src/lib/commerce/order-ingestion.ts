@@ -293,6 +293,27 @@ export type NormalizedOrderInput = {
    * exact, unexpired, unconsumed `CommerceClickAttribution.tokenHash` match.
    */
   attributionToken: string | null;
+
+  /**
+   * PHASE 27 — OPT-IN, PROVIDER-NEUTRAL settlement-repair intent. Absent or
+   * `false` (the default for every existing normalizer, including every
+   * Shopify one) means this delivery obeys the ordinary strictly-newer
+   * staleness rule with no exception whatsoever.
+   *
+   * Set to `true` ONLY by a provider adapter that positively completed
+   * authoritative settlement reconciliation and therefore knows this
+   * snapshot is more financially correct than what is stored at the SAME
+   * provider version. Even then it only unlocks the equality case, and only
+   * when the incoming cumulative refund is strictly greater than the stored
+   * one — see `OrderSettlementRepairContext` for the full reasoning and why
+   * this is not a blanket `>=`.
+   *
+   * This lives on the input (beside `completeness`, which is the same kind
+   * of "how must this input be merged" intent metadata) rather than being a
+   * provider branch inside this service, so the generic layer stays free of
+   * any provider's semantics.
+   */
+  sameVersionSettlementRepair?: boolean;
 };
 
 /** Identity of the delivery that carried this order. */
@@ -480,7 +501,78 @@ export function isIngestibleConnectionStatus(
 // Staleness
 // ---------------------------------------------------------------------------
 
-export type StalenessDecision = "FIRST_SEEN" | "APPLY" | "STALE" | "UNORDERABLE";
+export type StalenessDecision =
+  | "FIRST_SEEN"
+  | "APPLY"
+  | "STALE"
+  | "UNORDERABLE"
+  /**
+   * PHASE 27 — an EQUAL-version authoritative settlement repair. Distinct
+   * from `APPLY` (which always means "this delivery is strictly newer") so
+   * the narrow exception is visible in logs and cannot be confused with
+   * ordinary forward progress. See `OrderSettlementRepairContext`.
+   */
+  | "REPAIR";
+
+/**
+ * PHASE 27 — the ONLY input that can turn an equal-`providerUpdatedAt`
+ * delivery from `STALE` into `REPAIR`.
+ *
+ * WHY THIS EXISTS. A provider adapter can legitimately learn to interpret an
+ * UNCHANGED provider snapshot more correctly than it did before. The real
+ * case this was built for: SQRATCH stored Commerce7 order #1002 at provider
+ * version `T` back when it did not understand that Commerce7 represents a
+ * refund as a SEPARATE linked order document. The provider data at `T` never
+ * changed — SQRATCH's interpretation of it did. Re-reading that same version
+ * now yields strictly more correct settlement state (a real cumulative
+ * refund instead of zero), but carries the same `T`, so the ordinary
+ * strictly-newer rule would reject the repair forever.
+ *
+ * WHY IT IS NOT A BLANKET `>=`. Relaxing the global rule to accept equal
+ * timestamps would break ordinary idempotency for EVERY provider: two
+ * same-version deliveries could flap the row, and Shopify — whose refunds
+ * live on the order itself and therefore never need same-version repair —
+ * would inherit a weaker guarantee for no benefit. So the exception is
+ * opt-in per delivery, defaults off, and is additionally gated on the repair
+ * being demonstrably MORE financially informative than what is stored.
+ *
+ * The monotonic predicate (`incoming > stored` cumulative refund) is what
+ * makes this safe rather than merely narrow:
+ *   - a replay of an already-correct order is NOT more informative -> STALE,
+ *     so repeated repair runs stay idempotent;
+ *   - a repair that would REDUCE a stored refund is NOT more informative ->
+ *     STALE, so Phase 26's refund monotonicity cannot be circumvented here;
+ *   - unrelated field differences never qualify, because only settlement
+ *     evidence is consulted.
+ */
+export type OrderSettlementRepairContext = {
+  /**
+   * True ONLY when a provider adapter positively completed authoritative
+   * settlement reconciliation for this exact delivery. Never inferred here.
+   */
+  authorized: boolean;
+  /** Cumulative refund this delivery asserts. `null` = it asserts nothing. */
+  incomingTotalRefundedMinor: bigint | null;
+  /** Cumulative refund currently stored. */
+  storedTotalRefundedMinor: bigint | null;
+};
+
+/**
+ * PURE. Whether an equal-version delivery carries strictly more settlement
+ * information than what is stored. See `OrderSettlementRepairContext`.
+ */
+export function isAuthorizedSettlementRepair(
+  repair: OrderSettlementRepairContext | undefined,
+): boolean {
+  if (!repair?.authorized) {
+    return false;
+  }
+  if (repair.incomingTotalRefundedMinor === null) {
+    return false;
+  }
+  const stored = repair.storedTotalRefundedMinor ?? BigInt(0);
+  return repair.incomingTotalRefundedMinor > stored;
+}
 
 /**
  * PURE out-of-order protection. `providerUpdatedAt` is the ordering key.
@@ -491,16 +583,25 @@ export type StalenessDecision = "FIRST_SEEN" | "APPLY" | "STALE" | "UNORDERABLE"
  *   - Stored row, no incoming key-> UNORDERABLE. We cannot prove this delivery
  *                                  is newer, so we refuse to overwrite. Treated
  *                                  as a skip, not a failure.
- *   - incoming <= stored         -> STALE. Note `<=`, not `<`: an equal
- *                                  timestamp carries no evidence of being
- *                                  newer, and rewriting on equality would let
- *                                  two same-timestamp deliveries flap the row.
+ *   - incoming <  stored         -> STALE, ALWAYS. An older snapshot can never
+ *                                  win, and no repair context can override
+ *                                  that — the equality exception below is
+ *                                  strictly for the SAME version.
+ *   - incoming == stored         -> STALE by default (an equal timestamp
+ *                                  carries no evidence of being newer, and
+ *                                  rewriting on equality would let two
+ *                                  same-timestamp deliveries flap the row).
+ *                                  The ONE exception is an authorized,
+ *                                  strictly-more-informative settlement
+ *                                  repair -> REPAIR. See
+ *                                  `OrderSettlementRepairContext`.
  *   - incoming >  stored         -> APPLY.
  */
 export function decideOrderStaleness(
   storedProviderUpdatedAt: Date | null | undefined,
   incomingProviderUpdatedAt: Date | null,
   hasStoredRow: boolean,
+  repair?: OrderSettlementRepairContext,
 ): StalenessDecision {
   if (!hasStoredRow) {
     return "FIRST_SEEN";
@@ -511,9 +612,17 @@ export function decideOrderStaleness(
   if (!incomingProviderUpdatedAt) {
     return "UNORDERABLE";
   }
-  return incomingProviderUpdatedAt.getTime() > storedProviderUpdatedAt.getTime()
-    ? "APPLY"
-    : "STALE";
+  const incoming = incomingProviderUpdatedAt.getTime();
+  const stored = storedProviderUpdatedAt.getTime();
+  if (incoming > stored) {
+    return "APPLY";
+  }
+  // STRICTLY OLDER IS ALWAYS STALE — the repair exception is only ever for an
+  // exactly-equal provider version, never a regression to an older one.
+  if (incoming === stored && isAuthorizedSettlementRepair(repair)) {
+    return "REPAIR";
+  }
+  return "STALE";
 }
 
 // ---------------------------------------------------------------------------
@@ -1354,6 +1463,15 @@ async function runOrderIngestion(
         existing?.providerUpdatedAt ?? null,
         order.providerUpdatedAt,
         existing !== null,
+        // PHASE 27 — the narrow equal-version settlement-repair exception.
+        // `authorized` is whatever the provider adapter asserted on THIS
+        // delivery and is never inferred here; the strictly-more-informative
+        // predicate is applied inside `decideOrderStaleness`.
+        {
+          authorized: order.sameVersionSettlementRepair === true,
+          incomingTotalRefundedMinor: order.totalRefundedMinor,
+          storedTotalRefundedMinor: existing?.totalRefundedMinor ?? null,
+        },
       );
 
       // A refund fragment is not an order snapshot. Creating an otherwise

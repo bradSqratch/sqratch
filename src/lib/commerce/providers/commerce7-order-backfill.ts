@@ -127,16 +127,66 @@ const DEFAULT_DEPS: Commerce7OrderBackfillDeps = {
   prepareOrder: prepareCommerce7OrderForIngestion,
 };
 
-/** Deterministic backfill dedup key — see file header. */
+/**
+ * PHASE 27 — INTERPRETATION-SEMANTICS VERSION for refund-reconciled backfill
+ * events.
+ *
+ * THE PROBLEM THIS SOLVES. `backfillProviderEventId` is deliberately derived
+ * from `(connectionId, externalOrderId, providerUpdatedAt)` so that
+ * re-running an unchanged window is recognized as a duplicate. That is
+ * exactly right while SQRATCH's interpretation of a given provider snapshot
+ * is fixed — but it is NOT right when the interpretation itself changes.
+ *
+ * The real production case: a Custom Range run against Commerce7 root #1002
+ * (before SQRATCH understood Commerce7's separate refund-order model)
+ * recorded a `SKIPPED_STALE` event for that exact snapshot. `SKIPPED_STALE`
+ * is a TERMINAL claim state, so a later, now-correct run against the SAME
+ * unchanged snapshot derives the SAME event id, is classified
+ * `COMPLETED_DUPLICATE`, and never reaches the repair logic at all. The
+ * order would be permanently unrepairable through the normal reconciliation
+ * UI.
+ *
+ * THE FIX, AND WHY IT IS SURGICAL. Refund-reconciled events — and ONLY those
+ * — additionally mix this stable version constant into their id derivation.
+ * The provider data did not change; SQRATCH's interpretation semantics did,
+ * so a distinct interpretation gets a distinct deterministic identity.
+ *
+ * Deliberately NOT applied to every backfill event: versioning all of them
+ * would give every previously-processed order in a Catch Up window a brand
+ * new event id on the very next run, re-processing and re-eventing an entire
+ * order history for no benefit. Ordinary orders keep their existing ids and
+ * keep deduplicating exactly as before.
+ *
+ * The historical `SKIPPED_STALE` row is never mutated or deleted — it stays
+ * as honest audit history of the old interpretation, and the repair lands
+ * beside it as a new `PROCESSED` event.
+ *
+ * Bump this ONLY when Commerce7 refund interpretation genuinely changes in a
+ * way that should re-open already-terminal events for the same snapshot.
+ */
+export const COMMERCE7_REFUND_RECONCILIATION_SEMANTICS_VERSION = "refund-v2";
+
+/**
+ * Deterministic backfill dedup key — see file header.
+ *
+ * `semanticsVersion` is `null` for an ordinary order (preserving the exact
+ * pre-Phase-27 id, so nothing already processed is re-opened) and set only
+ * for a refund-reconciled one — see
+ * `COMMERCE7_REFUND_RECONCILIATION_SEMANTICS_VERSION`. It is a stable
+ * constant, never a timestamp and never random, so repeating the same run
+ * against the same unchanged snapshot still derives the same id and still
+ * deduplicates.
+ */
 function backfillProviderEventId(
   connectionId: string,
   externalOrderId: string,
   providerUpdatedAt: string,
+  semanticsVersion: string | null,
 ): string {
-  const digest = crypto
-    .createHash("sha256")
-    .update(`${connectionId}:${externalOrderId}:${providerUpdatedAt}`, "utf8")
-    .digest("hex");
+  const key = semanticsVersion
+    ? `${connectionId}:${externalOrderId}:${providerUpdatedAt}:${semanticsVersion}`
+    : `${connectionId}:${externalOrderId}:${providerUpdatedAt}`;
+  const digest = crypto.createHash("sha256").update(key, "utf8").digest("hex");
   return `backfill:${digest}`;
 }
 
@@ -245,6 +295,14 @@ export async function backfillCommerce7Orders(
       connection.id,
       order.externalOrderId,
       order.providerUpdatedAt.toISOString(),
+      // PHASE 27 — only a genuinely refund-RECONCILED order gets the
+      // interpretation-semantics version mixed into its identity, so a
+      // previously-terminal event recorded under the OLD interpretation
+      // cannot block the repair. Every ordinary order keeps its exact
+      // pre-Phase-27 id and deduplicates exactly as before.
+      prepared.refundReconciliationOutcome === "RECONCILED"
+        ? COMMERCE7_REFUND_RECONCILIATION_SEMANTICS_VERSION
+        : null,
     );
     const payloadDigest = crypto
       .createHash("sha256")
