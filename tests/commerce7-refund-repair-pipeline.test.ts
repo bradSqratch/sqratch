@@ -32,6 +32,7 @@ process.env.COMMERCE7_APP_SECRET = "test-app-secret";
 
 import { test, describe } from "node:test";
 import { strict as assert } from "node:assert";
+import { createRequire } from "node:module";
 import {
   CommerceProvider,
   type CommerceOrderFinancialStatus,
@@ -49,7 +50,6 @@ import {
   decideOrderStaleness,
   type OrderEventClaim,
   type OrderIngestionConnection,
-  type OrderIngestionOutcome,
 } from "../src/lib/commerce/order-ingestion";
 import { CommerceProviderApiError } from "../src/lib/commerce/errors";
 
@@ -151,6 +151,8 @@ class FakeStore {
   /** providerEventId -> status. Models `CommerceOrderEvent`'s claim column. */
   events = new Map<string, string>();
   claimedEventIds: string[] = [];
+  /** Every finalization the REAL pipeline performed, in order. */
+  finalizedEvents: Array<{ eventId: string; status: string }> = [];
 
   seedOrder(row: Partial<StoredOrder> & { externalOrderId: string }): StoredOrder {
     const id = `order-row-${this.nextId++}`;
@@ -210,25 +212,18 @@ class FakeStore {
   }
 
   /**
-   * Stands in for `finalizeEvent`, which deliberately bypasses the DI object
-   * and always imports the real Prisma client (there is an existing test in
-   * `order-ingestion.test.ts` documenting exactly that). The test therefore
-   * applies the terminal status itself, from the outcome production code
-   * actually returned.
+   * PHASE A — the in-memory implementation of
+   * `OrderIngestionDeps.finalizeEvent`. Production code now calls THIS
+   * (rather than reaching past the DI object to the real Prisma singleton),
+   * so the terminal event status is recorded by the real ingestion pipeline
+   * instead of being reconstructed by the test afterwards.
    */
-  finalizeFromOutcomes(outcomes: readonly OrderIngestionOutcome[]): void {
-    for (const outcome of outcomes) {
-      if (!outcome.eventId) continue;
-      const terminal =
-        outcome.status === "SKIPPED_STALE"
-          ? "SKIPPED_STALE"
-          : outcome.status === "CREATED" || outcome.status === "UPDATED"
-            ? "PROCESSED"
-            : outcome.status === "FAILED"
-              ? "FAILED"
-              : null;
-      if (terminal) this.events.set(outcome.eventId, terminal);
-    }
+  async finalizeEvent(
+    eventId: string,
+    data: { status: string; orderId?: string | null; failureSummary?: string | null },
+  ): Promise<void> {
+    this.finalizedEvents.push({ eventId, status: data.status });
+    this.events.set(eventId, data.status);
   }
 
   tx(): Prisma.TransactionClient {
@@ -345,10 +340,12 @@ async function runBackfill(
         claimEvent: async (input) => store.claim(input.providerEventId),
         loadConnection: async () => CONNECTION,
         runTransaction: async (fn) => fn(store.tx()),
+        // PHASE A — the fourth and previously-missing DB seam. With this
+        // injected, the ingestion pipeline performs ZERO real Prisma calls.
+        finalizeEvent: (eventId, data) => store.finalizeEvent(eventId, data),
       },
     },
   );
-  store.finalizeFromOutcomes(result.outcomes);
   return result;
 }
 
@@ -366,6 +363,83 @@ function seedBrokenCanonicalOrder(store: FakeStore): StoredOrder {
     providerUpdatedAt: new Date(ROOT_UPDATED_AT),
   });
 }
+
+// ---------------------------------------------------------------------------
+// PHASE A — PROOF OF ISOLATION.
+//
+// This whole file claims to exercise the real commerce pipeline over an
+// in-memory seam. That claim is only credible if it is ENFORCED, so the
+// tests below assert it directly rather than trusting it: the real Prisma
+// client is never constructed, and every DB touch lands on the fake.
+// ---------------------------------------------------------------------------
+
+/**
+ * Reaches into Node's module cache to ask whether `@/lib/prisma` was ever
+ * actually loaded. That module throws on import without a `DATABASE_URL` and
+ * constructs a real `PrismaClient` when it succeeds, so its mere PRESENCE in
+ * the cache is proof that some code path fell through to the real database
+ * layer. Resolved through `require.resolve` so a path/alias change fails the
+ * lookup loudly instead of silently passing.
+ */
+function realPrismaModuleWasLoaded(): boolean {
+  const requireFromHere = createRequire(__filename);
+  let resolved: string;
+  try {
+    resolved = requireFromHere.resolve("../src/lib/prisma");
+  } catch {
+    throw new Error("could not resolve src/lib/prisma — update this isolation check");
+  }
+  return Boolean(requireFromHere.cache[resolved]);
+}
+
+describe("PHASE A — the pipeline is genuinely isolated from the database", () => {
+  test("a full repair run performs ZERO real Prisma access — every DB seam is injected", async () => {
+    assert.equal(
+      realPrismaModuleWasLoaded(),
+      false,
+      "the real prisma module must not be loaded before the pipeline runs",
+    );
+
+    const store = new FakeStore();
+    seedBrokenCanonicalOrder(store);
+    await runBackfill(
+      store,
+      [providerRootOrder(), providerRefundOrder()],
+      { [ROOT_ID]: providerRootOrder(), [REFUND_ID]: providerRefundOrder() },
+    );
+
+    // The decisive assertion: running the REAL backfill -> prepare ->
+    // ingestion -> staleness pipeline never caused `@/lib/prisma` to load,
+    // so no connection to the blocked sentinel DATABASE_URL was attempted.
+    assert.equal(
+      realPrismaModuleWasLoaded(),
+      false,
+      "the pipeline fell through to the real Prisma singleton — a DI seam is missing",
+    );
+  });
+
+  test("finalizeEvent is a real injectable dependency, and the pipeline actually used the injected one", async () => {
+    const store = new FakeStore();
+    seedBrokenCanonicalOrder(store);
+    await runBackfill(
+      store,
+      [providerRootOrder(), providerRefundOrder()],
+      { [ROOT_ID]: providerRootOrder(), [REFUND_ID]: providerRefundOrder() },
+    );
+
+    // Production code called OUR finalizeEvent, proving the seam is wired
+    // rather than merely declared.
+    assert.ok(
+      store.finalizedEvents.length > 0,
+      "the injected finalizeEvent was never called — ingestion is still bypassing the deps object",
+    );
+    assert.ok(
+      store.finalizedEvents.some((e) => e.status === "PROCESSED"),
+      "the successful repair should have been finalized as PROCESSED",
+    );
+    assert.equal(realPrismaModuleWasLoaded(), false);
+  });
+});
 
 // ---------------------------------------------------------------------------
 // THE MANDATORY PRODUCTION REGRESSION

@@ -1116,6 +1116,20 @@ model CommerceOrder {
   @@index([brandId, providerCreatedAt])
   @@index([connectionId, providerUpdatedAt])
   @@index([financialStatus])
+  /// PHASE 29 — NOT YET APPLIED to any database; see
+  /// prisma/migrations/20260905000000_add_commerce_order_created_at_index.
+  /// The Order Explorer (`order-list.ts`) deliberately paginates and orders
+  /// by `createdAt` (SQRATCH's own NOT NULL ingestion timestamp) rather than
+  /// `providerCreatedAt` (nullable — a keyset built on it would need
+  /// non-trivial null-bucket handling Prisma cannot express as a simple
+  /// `orderBy`, and a null value there is a real, tested state — see
+  /// `order-list.ts`'s own header). That decision is correct and is being
+  /// kept, not revisited, by this index: every brand-scoped Order Explorer
+  /// page today sorts by `createdAt` with NO supporting composite index —
+  /// only `(brandId, providerCreatedAt)` above exists — so every page is an
+  /// unindexed brand-scoped sort. This index closes exactly that gap without
+  /// changing any query, cursor, or displayed date.
+  @@index([brandId, createdAt])
 }
 
 /// One line of a `CommerceOrder`. Replaced wholesale on a non-stale update:

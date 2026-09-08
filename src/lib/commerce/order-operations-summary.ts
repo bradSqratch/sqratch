@@ -119,6 +119,56 @@ export function isOrderWebhookEventTopic(provider: CommerceProvider, topic: stri
 }
 
 /**
+ * PHASE C — the counterpart allow-list: topics written by SQRATCH's own
+ * RECONCILIATION machinery rather than by a provider pushing to us.
+ *
+ * Deliberately lives HERE, beside the webhook lists, so there is exactly ONE
+ * module that decides what a topic means. Duplicating either list elsewhere
+ * is what produced the original Order-Operations-vs-diagnostics
+ * inconsistency this contract was created to end.
+ *
+ * Commerce7's Catch Up / Custom Range both funnel through
+ * `backfillCommerce7Orders`, which writes `commerce7:order:backfill`.
+ * Shopify has no reconciliation producer of `CommerceOrderEvent` today, so
+ * its list is empty rather than guessed.
+ */
+const COMMERCE7_ORDER_RECONCILIATION_TOPICS: readonly string[] = ["commerce7:order:backfill"];
+const SHOPIFY_ORDER_RECONCILIATION_TOPICS: readonly string[] = [];
+
+export function isOrderReconciliationEventTopic(
+  provider: CommerceProvider,
+  topic: string,
+): boolean {
+  if (provider === CommerceProvider.COMMERCE7) {
+    return COMMERCE7_ORDER_RECONCILIATION_TOPICS.includes(topic);
+  }
+  if (provider === CommerceProvider.SHOPIFY) {
+    return SHOPIFY_ORDER_RECONCILIATION_TOPICS.includes(topic);
+  }
+  return false;
+}
+
+/**
+ * How an operator-facing surface should describe one `CommerceOrderEvent`.
+ *
+ * `OTHER` is the FAIL-CLOSED bucket and is load-bearing: a topic this
+ * module does not recognize is never optimistically called a webhook (which
+ * would corrupt every "is the live webhook working?" signal) and never
+ * called reconciliation either. A future producer must be added to a list
+ * above deliberately before it is described as anything.
+ */
+export type OrderEventCategory = "WEBHOOK" | "RECONCILIATION" | "OTHER";
+
+export function classifyOrderEventTopic(
+  provider: CommerceProvider,
+  topic: string,
+): OrderEventCategory {
+  if (isOrderWebhookEventTopic(provider, topic)) return "WEBHOOK";
+  if (isOrderReconciliationEventTopic(provider, topic)) return "RECONCILIATION";
+  return "OTHER";
+}
+
+/**
  * PHASE 25 — PART 16: exported so `./providers/commerce7-diagnostics.ts` can
  * scope its own "latest webhook processed" / "latest failed webhook event"
  * queries to genuine webhook topics too, rather than maintaining a second,

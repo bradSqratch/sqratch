@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import {
+  MAX_CREATOR_AVAILABLE_PRODUCTS,
   defaultCampaignCurationRepository,
   resolveCampaignCuration,
   toCreatorCatalogProduct,
@@ -92,6 +93,7 @@ export async function creatorAvailableProductsGetImpl(
           candidateBrandCount: access.data.candidateBrands.length,
           connected: true,
           items: [],
+          hasMore: false,
           curation: {
             // Every offered context is a canonical commerce context now, so
             // this is always true.
@@ -112,6 +114,7 @@ export async function creatorAvailableProductsGetImpl(
           candidateBrandCount: access.data.candidateBrands.length,
           connected: false,
           items: [],
+          hasMore: false,
           curation: {
             enabled: false,
             requiresCampaignSelection: false,
@@ -129,6 +132,14 @@ export async function creatorAvailableProductsGetImpl(
     });
     const brand = brandForContext(access.data, resolution.campaign.brandId);
 
+    // PHASE 29 — `listAuthorizedProducts` over-fetches by one row (see
+    // `MAX_CREATOR_AVAILABLE_PRODUCTS`) specifically so this can be
+    // detected: a campaign with more assignments than the ceiling is real
+    // and rare, not a bug, but the response must say so honestly rather
+    // than silently truncating with no signal.
+    const hasMore = products.length > MAX_CREATOR_AVAILABLE_PRODUCTS;
+    const page = hasMore ? products.slice(0, MAX_CREATOR_AVAILABLE_PRODUCTS) : products;
+
     return NextResponse.json({
       data: {
         brand: publicBrand(brand),
@@ -137,7 +148,8 @@ export async function creatorAvailableProductsGetImpl(
         // after a connection is disconnected. `connected` is kept true to
         // preserve the existing UI gate/response contract.
         connected: true,
-        items: products.map(toCreatorCatalogProduct),
+        items: page.map(toCreatorCatalogProduct),
+        hasMore,
         curation: {
           enabled: true,
           campaignId: resolution.campaign.campaignId,

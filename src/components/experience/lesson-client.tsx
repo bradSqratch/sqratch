@@ -16,6 +16,11 @@ import {
 import { ExperienceShell, GatePanel, LoadingView, ErrorView, PageCard } from "@/components/experience/experience-shell";
 import type { ExperienceShellData } from "@/components/experience/types";
 import { Button } from "@/components/ui/button";
+import {
+  isSafeClickPathSegment,
+  parsePublicLessonProducts,
+  type PublicLessonProductCard,
+} from "@/lib/commerce/public-commerce-response";
 
 type LessonYouTubePlayer = {
   getCurrentTime: () => number;
@@ -100,17 +105,12 @@ type LessonProgressResponse = {
   }>;
 };
 
-type LessonProductsResponse = {
-  items: Array<{
-    id: string;
-    productUrl: string;
-    title: string | null;
-    imageUrl: string | null;
-    priceText: string | null;
-    currency: string | null;
-    brandId: string | null;
-  }>;
-};
+/**
+ * Owned by `parsePublicLessonProducts`, which is what actually proves a
+ * payload matches at runtime. Aliased rather than re-declared so the rendered
+ * shape and the validated shape cannot drift.
+ */
+type LessonProductsResponse = { items: PublicLessonProductCard[] };
 
 async function loadYouTubeApi() {
   const lessonWindow = window as LessonWindow;
@@ -242,10 +242,25 @@ export function ExperienceLessonClient({
       setProductsError(null);
 
       try {
-        const result = await fetchJson<LessonProductsResponse>(
-          `/api/public/experience/${experienceSlug}/lessons/${lessonId}/products`,
+        // Validated at RUNTIME, not merely cast. `fetchJson` ends in `as T`,
+        // so a body missing `items` previously left `products` undefined and
+        // the render threw on `products.length === 0`.
+        const parsed = parsePublicLessonProducts(
+          await fetchJson<unknown>(
+            `/api/public/experience/${experienceSlug}/lessons/${lessonId}/products`,
+          ),
         );
-        setProducts(result.items);
+
+        if (!parsed) {
+          // An inaccessible lesson legitimately returns `items: []`, which
+          // parses fine and renders the empty state. Reaching here means the
+          // payload itself was malformed, which is an error, not "no products".
+          setProducts([]);
+          setProductsError("Failed to load lesson products.");
+          return;
+        }
+
+        setProducts(parsed.items);
       } catch (error) {
         setProductsError(
           getErrorMessage(error, "Failed to load lesson products."),
@@ -342,7 +357,6 @@ export function ExperienceLessonClient({
   }, [sendProgress]);
 
   function handleOpenProduct(product: LessonProductsResponse["items"][number]) {
-    setClickingProductId(product.id);
     // Every item here is a `CampaignLessonProduct` (see the GET route this list
     // is fetched from), so `product.id` is always an opaque
     // `CampaignLessonProduct.id` and always routes through the server-side
@@ -350,9 +364,18 @@ export function ExperienceLessonClient({
     // opened directly: that would bypass the public-storefront gate, the
     // campaign-scope check, and attribution.
     //
+    // `id` is interpolated into a URL PATH, so it is re-checked against the
+    // path-safe alphabet at the point of use. `parsePublicLessonProducts`
+    // already rejects an item carrying an unsafe id; this fails closed if a
+    // future caller ever renders an unvalidated item.
+    if (!isSafeClickPathSegment(product.id)) {
+      return;
+    }
+
+    setClickingProductId(product.id);
     // The server-side click hop is the sole commerce click evidence.
     window.open(
-      `/api/public/experience/${experienceSlug}/lessons/${lessonId}/products/click/${product.id}`,
+      `/api/public/experience/${encodeURIComponent(experienceSlug)}/lessons/${encodeURIComponent(lessonId)}/products/click/${product.id}`,
       "_blank",
       "noopener,noreferrer",
     );
@@ -655,7 +678,11 @@ export function ExperienceLessonClient({
                             alt={product.title || "Lesson product"}
                             width={64}
                             height={64}
-                            className="h-16 w-16 rounded-2xl object-cover"
+                            /* `object-contain` inside this fixed 64px canvas:
+                               provider product images vary in aspect ratio and
+                               `object-cover` cropped tall bottle shots. The
+                               thumbnail footprint is unchanged. */
+                            className="h-16 w-16 rounded-2xl bg-white/5 object-contain p-1"
                           />
                         ) : (
                           <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/8 text-xs text-white/45">

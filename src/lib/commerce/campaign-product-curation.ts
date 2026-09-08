@@ -59,7 +59,23 @@ export type AuthorizedCatalogProduct = {
   shortDescriptionOverride: string | null;
 };
 
+/**
+ * PHASE 29 — a defensive ceiling, not a pagination page size. Campaign
+ * assignment is an explicit Brand curation step (see `CampaignCommerceProduct`),
+ * so the realistic count here is far smaller than a Brand's full storefront
+ * catalog (the public shop's genuinely unbounded-catalog problem — see
+ * `public-shop-pagination.ts`). The Creator picker is a searchable modal
+ * list, not a paginated grid; a second cursor-pagination system for a set
+ * this size would be overengineering. This still bounds the query rather
+ * than trusting "campaigns probably won't have that many products" — if a
+ * campaign genuinely exceeds this, `hasMore` on the response says so
+ * honestly instead of the query silently growing without limit.
+ */
+export const MAX_CREATOR_AVAILABLE_PRODUCTS = 200;
+
 export type CampaignCurationRepository = {
+  /** Returns at most `MAX_CREATOR_AVAILABLE_PRODUCTS + 1` rows so the caller
+   * can detect truncation without a separate count query. */
   listAuthorizedProducts(input: {
     campaignId: string;
     brandId: string;
@@ -335,6 +351,10 @@ async function defaultListAuthorizedProducts(input: {
       },
     },
     orderBy: [{ displayOrder: "asc" }, { id: "asc" }],
+    // Over-fetch by one so the caller can tell "exactly at the ceiling" from
+    // "more exist beyond it" without a separate count query. See
+    // `MAX_CREATOR_AVAILABLE_PRODUCTS`'s doc comment.
+    take: MAX_CREATOR_AVAILABLE_PRODUCTS + 1,
     select: {
       displayOrder: true,
       brandCommerceProduct: {

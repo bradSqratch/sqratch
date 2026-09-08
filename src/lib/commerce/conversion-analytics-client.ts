@@ -47,6 +47,91 @@ export type NamedBreakdownRow = { id: string; name: string | null; orders: numbe
 
 export type ProviderBreakdownRow = { id: string; orders: number };
 
+/**
+ * PHASE D — one UTC day of the conversion/revenue trend.
+ *
+ * Money stays PER CURRENCY here exactly as it does in the headline figures.
+ * There is deliberately no combined total on a trend point: summing CAD and
+ * USD yields a number denominated in nothing, and a chart is precisely where
+ * that mistake would look most convincing.
+ */
+export type ConversionDailyPoint = {
+  /** `YYYY-MM-DD`, UTC. */
+  date: string;
+  attributedOrders: number;
+  currentlyNetPositivePaidOrders: number;
+  grossRevenueByCurrency: MoneyRow[];
+  refundedRevenueByCurrency: MoneyRow[];
+  netRevenueByCurrency: MoneyRow[];
+};
+
+function isConversionDailyPoint(value: unknown): value is ConversionDailyPoint {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const point = value as Record<string, unknown>;
+  // A strict `YYYY-MM-DD` bucket key — a malformed one would silently
+  // mis-order the series.
+  if (typeof point.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(point.date)) return false;
+  if (typeof point.attributedOrders !== "number" || !Number.isFinite(point.attributedOrders)) {
+    return false;
+  }
+  if (
+    typeof point.currentlyNetPositivePaidOrders !== "number" ||
+    !Number.isFinite(point.currentlyNetPositivePaidOrders)
+  ) {
+    return false;
+  }
+  return (
+    isMoneyRowArray(point.grossRevenueByCurrency) &&
+    isMoneyRowArray(point.refundedRevenueByCurrency) &&
+    isMoneyRowArray(point.netRevenueByCurrency)
+  );
+}
+
+/**
+ * Validates the optional daily trend.
+ *
+ * Returns `[]` when the field is ABSENT (an older server that does not send
+ * it yet is not an error), but `null` when it is present-and-malformed —
+ * those are different failures and must not be collapsed.
+ */
+export function parseConversionDailyTrend(value: unknown): ConversionDailyPoint[] | null {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) return null;
+  if (!value.every(isConversionDailyPoint)) return null;
+  return value as ConversionDailyPoint[];
+}
+
+/**
+ * PURE. Every distinct currency appearing anywhere in a trend, in a stable
+ * order (`UNKNOWN` last, matching the aggregator's own sort).
+ *
+ * Exists so the UI can render ONE table per currency instead of trying to
+ * put several currencies in one column — which is the shape that invites an
+ * accidental cross-currency total.
+ */
+export function currenciesInTrend(trend: readonly ConversionDailyPoint[]): string[] {
+  const codes = new Set<string>();
+  for (const point of trend) {
+    for (const row of [
+      ...point.grossRevenueByCurrency,
+      ...point.refundedRevenueByCurrency,
+      ...point.netRevenueByCurrency,
+    ]) {
+      codes.add(row.currencyCode);
+    }
+  }
+  return [...codes].sort((a, b) => {
+    if (a === "UNKNOWN") return 1;
+    if (b === "UNKNOWN") return -1;
+    return a.localeCompare(b);
+  });
+}
+
+/** PURE. The minor amount for ONE currency on ONE day, or `null` when that currency had none. */
+export function minorForCurrency(rows: readonly MoneyRow[], currencyCode: string): string | null {
+  return rows.find((row) => row.currencyCode === currencyCode)?.minor ?? null;
+}
+
 const COUNT_FIELDS: readonly (keyof ConversionCounts)[] = [
   "totalIngestedOrders",
   "attributedOrders",
@@ -129,6 +214,8 @@ export type BrandConversionAnalytics = ConversionCounts & {
   attributedOrdersByCreator: NamedBreakdownRow[];
   attributedOrdersByLesson: NamedBreakdownRow[];
   attributedOrdersByProduct: NamedBreakdownRow[];
+  /** PHASE D — UTC daily trend over the same range. `[]` when the server sends none. */
+  dailyTrend: ConversionDailyPoint[];
 };
 
 export function parseBrandConversionAnalytics(data: unknown): BrandConversionAnalytics | null {
@@ -147,7 +234,9 @@ export function parseBrandConversionAnalytics(data: unknown): BrandConversionAna
     "attributedOrdersByProduct",
   ] as const;
   if (!namedFields.every((field) => isNamedBreakdownArray(record[field]))) return null;
-  return data as BrandConversionAnalytics;
+  const dailyTrend = parseConversionDailyTrend(record.dailyTrend);
+  if (dailyTrend === null) return null;
+  return { ...(data as BrandConversionAnalytics), dailyTrend };
 }
 
 // ---------------------------------------------------------------------------
@@ -174,6 +263,8 @@ export type CreatorConversionAnalytics = ConversionCounts & {
   attributedOrdersByExperience: NamedBreakdownRow[];
   attributedOrdersByLesson: NamedBreakdownRow[];
   attributedOrdersByProduct: NamedBreakdownRow[];
+  /** PHASE D — UTC daily trend over the same range. `[]` when the server sends none. */
+  dailyTrend: ConversionDailyPoint[];
   /** Echoes the validated, ownership-checked filter actually applied — never raw request input. */
   filters: { experienceId: string | null };
 };
@@ -193,7 +284,9 @@ export function parseCreatorConversionAnalytics(data: unknown): CreatorConversio
   if (!namedFields.every((field) => isNamedBreakdownArray(record[field]))) return null;
   const filters = record.filters as Record<string, unknown> | undefined;
   if (!filters || (filters.experienceId !== null && typeof filters.experienceId !== "string")) return null;
-  return data as CreatorConversionAnalytics;
+  const dailyTrend = parseConversionDailyTrend(record.dailyTrend);
+  if (dailyTrend === null) return null;
+  return { ...(data as CreatorConversionAnalytics), dailyTrend };
 }
 
 // ---------------------------------------------------------------------------

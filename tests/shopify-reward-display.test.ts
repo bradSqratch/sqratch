@@ -83,7 +83,11 @@ test("experience shop mounts rewards before its zero-product state", () => {
   const rewardCardIndex = source.indexOf(
     "<ShopifyShopRewardCard experienceSlug={experienceSlug} />",
   );
-  const zeroProductIndex = source.indexOf("{productCount === 0 ? (");
+  // PHASE 29 renamed the accumulated-list check from `productCount === 0`
+  // to `products.length === 0` when the client moved to server-side
+  // "Load more" pagination; the reward card's position relative to it is
+  // unchanged.
+  const zeroProductIndex = source.indexOf("{products.length === 0 ? (");
 
   assert.ok(rewardCardIndex >= 0);
   assert.ok(zeroProductIndex > rewardCardIndex);

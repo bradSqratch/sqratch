@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getBrandAdminContext, getBrandContextFailure } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
-import { resolveCommerceClickAnalyticsDateRange } from "@/lib/commerce/commerce-click-analytics";
+import {
+  MAX_ANALYTICS_RANGE_DAYS,
+  resolveCommerceClickAnalyticsDateRange,
+} from "@/lib/commerce/commerce-click-analytics";
 import {
   buildConversionAnalytics,
-  type ConversionAnalyticsOrder,
+  buildConversionDailyTrend,
+  type ConversionTrendOrder,
 } from "@/lib/commerce/order-analytics";
 import {
   attachConversionNames,
@@ -207,6 +211,10 @@ export async function GET(request: NextRequest) {
     },
     select: {
       provider: true, financialStatus: true, currencyCode: true, totalMinor: true, totalRefundedMinor: true, netRevenueMinor: true,
+      // PHASE D — the bucket key for the daily trend. Deliberately the SAME
+      // column this query's own `where` filters the range on, so the daily
+      // series always sums back to the headline totals.
+      createdAt: true,
       attribution: {
         select: {
           experienceId: true,
@@ -223,7 +231,8 @@ export async function GET(request: NextRequest) {
     },
   });
 
-  const scoped: ConversionAnalyticsOrder[] = rows.map((row) => ({
+  const scoped: ConversionTrendOrder[] = rows.map((row) => ({
+    orderDate: row.createdAt,
     provider: row.provider,
     financialStatus: row.financialStatus,
     currencyCode: row.currencyCode,
@@ -244,6 +253,11 @@ export async function GET(request: NextRequest) {
   }));
 
   const conversion = buildConversionAnalytics(scoped);
+  const dailyTrend = buildConversionDailyTrend(
+    scoped,
+    { start: range.range.start, end: range.range.end },
+    MAX_ANALYTICS_RANGE_DAYS,
+  );
 
   const [entryCampaignNames, productCampaignNames, experienceNames, creatorNames, lessonNames, productNames] =
     await Promise.all([
@@ -268,6 +282,7 @@ export async function GET(request: NextRequest) {
     data: {
       range: { start: range.range.start.toISOString(), end: range.range.end.toISOString() },
       ...enriched,
+      dailyTrend,
     },
   });
 }

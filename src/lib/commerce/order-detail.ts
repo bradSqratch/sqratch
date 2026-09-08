@@ -65,6 +65,16 @@ export type BrandCommerceOrderDetail = {
   totalRefundedMinor: string | null;
   netRevenueMinor: string | null;
   attributed: boolean;
+  /**
+   * PHASE B — the PROVIDER's own last-updated timestamp for this order.
+   *
+   * Operationally load-bearing, not decorative: it is the exact ordering key
+   * generic ingestion uses for out-of-order protection (see
+   * `decideOrderStaleness`), so when an operator is diagnosing "why did my
+   * reconciliation not change anything", this is the value that explains it.
+   * `null` when the provider reported none.
+   */
+  providerUpdatedAt: string | null;
   createdAt: string;
   updatedAt: string;
   lineItems: BrandCommerceOrderDetailLineItem[];
@@ -76,6 +86,7 @@ export type OrderDetailRow = {
   provider: CommerceProvider;
   orderNumber: string | null;
   providerCreatedAt: Date | null;
+  providerUpdatedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
   financialStatus: CommerceOrderFinancialStatus | null;
@@ -113,6 +124,7 @@ const ORDER_DETAIL_SELECT = {
   provider: true,
   orderNumber: true,
   providerCreatedAt: true,
+  providerUpdatedAt: true,
   createdAt: true,
   updatedAt: true,
   financialStatus: true,
@@ -191,6 +203,7 @@ export async function getBrandCommerceOrderDetail(
     totalRefundedMinor: minorToString(row.totalRefundedMinor),
     netRevenueMinor: minorToString(row.netRevenueMinor),
     attributed: row.attributionId !== null,
+    providerUpdatedAt: row.providerUpdatedAt?.toISOString() ?? null,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     lineItems: row.lineItems.map((item) => ({

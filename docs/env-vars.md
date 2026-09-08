@@ -83,7 +83,28 @@ The extension writes exactly one Shopify cart attribute, `_sqratch_ref` (single 
 |---|---|---|---|
 | `CRON_SECRET` | Required for scheduled jobs, production-supplied | `src/app/api/internal/email-worker/route.ts`, `src/app/api/internal/reconcile-redemptions/route.ts` | Required in the `x-cron-secret` header for the email and redemption-reconciliation workers. |
 
-Supabase Cron is manually managed outside this repository. It calls `POST /api/internal/email-worker` every five minutes and `POST /api/internal/reconcile-redemptions` every ten minutes, each with `x-cron-secret: <CRON_SECRET>`. Do not add Vercel Cron configuration for either worker.
+Supabase Cron is manually managed outside this repository. It calls `POST /api/internal/email-worker` every five minutes and `POST /api/internal/reconcile-redemptions` every ten minutes, each with `x-cron-secret: <CRON_SECRET>`. Do not add Vercel Cron configuration for either worker — the absence of a `vercel.json` `crons` entry does not mean these workers are unscheduled; it means the scheduler lives in Supabase (`pg_cron` + `pg_net`), not in this repository. A reviewer who concludes "unscheduled" from a missing `vercel.json` alone has not checked the actual production scheduler.
+
+To verify the scheduler's state directly, an operator with Supabase SQL access can run (read-only — these `SELECT`s never alter a job):
+
+```sql
+-- Confirm both jobs exist and are active. `command` will reference the
+-- worker route path and `app.get_secret('cron_secret')` — never a literal
+-- secret value.
+SELECT jobid, jobname, schedule, active, command
+FROM cron.job
+ORDER BY jobid;
+
+-- Recent run history for one job (replace :jobid). "succeeded"/"failed" in
+-- `status`, with `return_message` for the latter.
+SELECT start_time, end_time, status, return_message
+FROM cron.job_run_details
+WHERE jobid = :jobid
+ORDER BY start_time DESC
+LIMIT 20;
+```
+
+Do not use `cron.schedule`/`cron.unschedule`/`cron.alter_job` outside a deliberate, reviewed change to the schedule itself — these `SELECT`-only queries are for confirming the jobs are configured and running, not for modifying them.
 
 The welcome-email worker retries transient delivery failures after 5 minutes, 15 minutes, 1 hour, and 6 hours. Its fifth actual send attempt is terminal `FAILED`; stale `SENDING` claims are recovered after 15 minutes using the same schedule. To inspect terminal jobs, filter `EmailQueue` by `template = 'WELCOME'` and `status = 'FAILED'`. After correcting the underlying delivery issue, an operator may intentionally requeue one reviewed job (never a broad set) with this controlled update; the worker revalidates eligibility before sending:
 

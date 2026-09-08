@@ -122,6 +122,126 @@ type AttributedConversionOrder = ConversionAnalyticsOrder & {
  * product's count. When an order has no line items at all (or the caller
  * withheld them), it falls back to the click's own connected product.
  */
+// ---------------------------------------------------------------------------
+// PHASE D — DAILY CONVERSION / REVENUE TREND
+// ---------------------------------------------------------------------------
+
+/**
+ * A trend row is an ordinary conversion row plus the date it is bucketed on.
+ *
+ * Kept as a SEPARATE type rather than widening `ConversionAnalyticsOrder`
+ * so the existing aggregate's contract (and every test pinned to it) is
+ * untouched, while the trend builder still REQUIRES a date at its own
+ * boundary — a caller cannot silently forget to supply one and get an empty
+ * series.
+ */
+export type ConversionTrendOrder = ConversionAnalyticsOrder & { orderDate: Date };
+
+export type ConversionDailyPoint = {
+  /** `YYYY-MM-DD`, UTC. */
+  date: string;
+  attributedOrders: number;
+  currentlyNetPositivePaidOrders: number;
+  /**
+   * Per-currency money, exactly like the headline figures. There is
+   * deliberately NO combined "total revenue" field on a trend point: adding
+   * CAD to USD produces a number denominated in nothing. `UNKNOWN` stays
+   * `UNKNOWN`.
+   */
+  grossRevenueByCurrency: MinorByCurrencyRow[];
+  refundedRevenueByCurrency: MinorByCurrencyRow[];
+  netRevenueByCurrency: MinorByCurrencyRow[];
+};
+
+export type ConversionTrendRange = { start: Date; end: Date };
+
+/**
+ * PURE. Daily conversion/revenue trend over an inclusive date range.
+ *
+ * BUCKET SEMANTICS — deliberately the SAME convention the existing click
+ * analytics already use (`buildDailyTimeSeries` in
+ * `./commerce-click-analytics.ts`), so the two trend surfaces on the same
+ * dashboard cannot disagree about what "a day" means:
+ *   - buckets are UTC calendar days, keyed `YYYY-MM-DD`;
+ *   - every day in the range is emitted, INCLUDING days with no
+ *     conversions (zeroed) — a skipped day would read as missing data
+ *     rather than as genuine zero activity;
+ *   - the series is capped at `MAX_ANALYTICS_RANGE_DAYS` for operational
+ *     safety, matching the click series' own ceiling.
+ *
+ * WHICH DATE IS BUCKETED. `orderDate` is whatever the CALLING ROUTE also
+ * FILTERED its range on. That agreement is not incidental — it is what makes
+ * the daily series sum back to the headline totals. Bucketing on a different
+ * field than the range filter would produce points outside the requested
+ * window and a trend that silently disagrees with the summary above it.
+ *
+ * Only ATTRIBUTED orders contribute, exactly like the headline figures:
+ * unattributed orders are counted in `totalIngestedOrders` and nowhere else.
+ */
+export function buildConversionDailyTrend(
+  rows: readonly ConversionTrendOrder[],
+  range: ConversionTrendRange,
+  maxDays: number,
+): ConversionDailyPoint[] {
+  const firstBucket = startOfUtcDayMs(range.start);
+  const lastBucket = startOfUtcDayMs(range.end);
+  if (firstBucket === null || lastBucket === null || lastBucket < firstBucket) {
+    return [];
+  }
+
+  const attributed = rows.filter(
+    (row): row is ConversionTrendOrder & AttributedConversionOrder => row.attribution !== null,
+  );
+
+  // Group once, then aggregate per bucket — never a scan of every row per day.
+  const byDay = new Map<string, ConversionTrendOrder[]>();
+  for (const row of attributed) {
+    const at = row.orderDate?.getTime();
+    if (at === undefined || Number.isNaN(at)) continue;
+    if (at < range.start.getTime() || at > range.end.getTime()) continue;
+    const key = toUtcDayKey(row.orderDate);
+    const bucket = byDay.get(key);
+    if (bucket) bucket.push(row);
+    else byDay.set(key, [row]);
+  }
+
+  const series: ConversionDailyPoint[] = [];
+  for (
+    let bucket = firstBucket;
+    bucket <= lastBucket && series.length < maxDays;
+    bucket += MS_PER_DAY
+  ) {
+    const key = toUtcDayKey(new Date(bucket));
+    const dayRows = byDay.get(key) ?? [];
+    series.push({
+      date: key,
+      attributedOrders: dayRows.length,
+      currentlyNetPositivePaidOrders: dayRows.filter(isCurrentNetPositive).length,
+      // The SAME currency-grouping function the headline figures use, so a
+      // trend point can never diverge from the summary's currency semantics.
+      grossRevenueByCurrency: sumMinorByCurrency(dayRows, "totalMinor"),
+      refundedRevenueByCurrency: sumMinorByCurrency(dayRows, "totalRefundedMinor"),
+      netRevenueByCurrency: sumMinorByCurrency(dayRows, "netRevenueMinor", isCurrentNetPositive),
+    });
+  }
+
+  return series;
+}
+
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/** `YYYY-MM-DD` in UTC — the bucket key, matching the click analytics' own. */
+function toUtcDayKey(value: Date): string {
+  return value.toISOString().slice(0, 10);
+}
+
+/** UTC midnight of the day `value` falls in, or `null` for an invalid date. */
+function startOfUtcDayMs(value: Date): number | null {
+  const time = value.getTime();
+  if (Number.isNaN(time)) return null;
+  return Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
+}
+
 export function buildConversionAnalytics(rows: ConversionAnalyticsOrder[]) {
   const attributed = rows.filter(
     (row): row is AttributedConversionOrder => row.attribution !== null,

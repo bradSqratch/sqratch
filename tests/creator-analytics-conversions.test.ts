@@ -18,6 +18,16 @@ const PAGE_PATH = join(
   "src/app/(withSidebar)/dashboard/creator/analytics/page.tsx",
 );
 
+
+/**
+ * Strips comments before a "must NOT contain X" source scan. The modules
+ * under test legitimately explain in prose *why* they avoid a thing, and
+ * matching that prose would be testing the comment rather than the code.
+ */
+function executableSource(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+
 describe("Creator Analytics — attributed conversions & revenue panel", () => {
   const source = readFileSync(PAGE_PATH, "utf8");
 
@@ -36,9 +46,12 @@ describe("Creator Analytics — attributed conversions & revenue panel", () => {
   });
 
   test("3. whole-order line-item/basket vocabulary is never introduced", () => {
-    assert.doesNotMatch(source, /lineItem/i);
-    assert.doesNotMatch(source, /\bbasket\b/i);
-    assert.doesNotMatch(source, /order\s*items?\b/i);
+    // EXECUTABLE code only — the page's own comments legitimately state that
+    // basket/line-item data is deliberately withheld from creators.
+    const executable = executableSource(source);
+    assert.doesNotMatch(executable, /lineItem/i);
+    assert.doesNotMatch(executable, /\bbasket\b/i);
+    assert.doesNotMatch(executable, /order\s*items?\b/i);
   });
 
   test("4. creator attributed revenue renders per currency via the same never-summed helper as the Brand page", () => {

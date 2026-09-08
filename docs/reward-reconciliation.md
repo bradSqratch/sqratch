@@ -1,6 +1,6 @@
 # Reward Reconciliation and Incident Guide
 
-Call `POST /api/internal/reconcile-redemptions` with `x-cron-secret`. The worker is idempotent, selects a bounded batch, claims rows with compare-and-swap locking, and logs counts without codes or tokens. Supabase Cron is manually managed outside this repository and invokes it every 10 minutes.
+Call `POST /api/internal/reconcile-redemptions` with `x-cron-secret`. The worker is idempotent, selects a bounded batch, claims rows with compare-and-swap locking, and logs counts without codes or tokens. Supabase Cron is manually managed outside this repository and invokes it every 10 minutes — see `docs/env-vars.md`'s "Internal cron / workers" section for the read-only SQL to confirm this job's actual scheduled/run state in Supabase (`cron.job` / `cron.job_run_details`); do not conclude "unscheduled" merely from the absence of a `vercel.json` `crons` entry.
 
 Investigate `POINTS_DEBITED` rows older than five minutes and rows marked `needsManualReview`. Confirm Shopify connectivity and discount presence before manual action. Do not directly edit points. If a discount definitely does not exist, use the existing exactly-once refund path.
 

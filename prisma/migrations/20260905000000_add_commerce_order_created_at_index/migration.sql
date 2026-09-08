@@ -1,0 +1,35 @@
+-- PHASE 29 — additive index, source file only. DO NOT APPLY to any shared
+-- database as part of this round. See prisma/schema.prisma's doc comment on
+-- CommerceOrder for the full rationale.
+--
+-- WHAT: supports the Order Explorer's existing, deliberately-unchanged sort
+-- key (`CommerceOrder.createdAt`, brand-scoped), which today has no
+-- composite index at all — only `(brandId, providerCreatedAt)` exists,
+-- indexing a DIFFERENT column than the one every list query actually orders
+-- and keysets by (see `src/lib/commerce/order-list.ts`'s header for why
+-- `createdAt`, not `providerCreatedAt`, is the correct pagination key).
+--
+-- QUERY THIS SUPPORTS: every `GET /api/brand/commerce/orders` call —
+-- `WHERE brandId = $1 [...] ORDER BY createdAt DESC, id DESC` — currently a
+-- brand-scoped sequential scan sorted in memory; with this index, an
+-- index-backed scan in the exact keyset order the cursor already uses.
+--
+-- LOCKING: `CREATE INDEX` (used below, matching this repository's existing
+-- migration convention) takes a lock that blocks concurrent WRITES to
+-- CommerceOrder for the duration of the index build. On the current data
+-- volume this is expected to be sub-second and is the same tradeoff every
+-- other migration in this repository already makes. For a genuinely large
+-- table at production rollout time, an operator may prefer to run
+-- `CREATE INDEX CONCURRENTLY "CommerceOrder_brandId_createdAt_idx" ON
+-- "CommerceOrder"("brandId", "createdAt");` by hand OUTSIDE Prisma's
+-- transaction-wrapped migration flow instead (CONCURRENTLY cannot run
+-- inside a transaction, which is why it is not used in this generated file).
+--
+-- ROLLOUT PLAN: additive only — no column changes, no data backfill, no
+-- application code change required (the query text is unchanged; only its
+-- execution plan improves once this index exists). Safe to apply at any
+-- time; safe to roll back by dropping the index alone
+-- (`DROP INDEX "CommerceOrder_brandId_createdAt_idx"`).
+
+CREATE INDEX "CommerceOrder_brandId_createdAt_idx"
+ON "CommerceOrder"("brandId", "createdAt");

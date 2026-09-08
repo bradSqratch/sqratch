@@ -188,8 +188,18 @@ export type OrderListRow = {
   currencyCode: string | null;
   minorUnitExponent: number | null;
   totalMinor: string | null;
+  /**
+   * PHASE B — CUMULATIVE refunded amount, surfaced separately from
+   * `totalMinor`/`netRevenueMinor` so a partially-refunded order can show
+   * gross / refunded / net independently (the Commerce7 #1002 case). The
+   * server has always returned this; it was simply missing from the client
+   * type, exactly like `fulfillmentStatus` was before Phase 23.
+   */
+  totalRefundedMinor: string | null;
   netRevenueMinor: string | null;
   attributed: boolean;
+  /** When SQRATCH last wrote this row. Distinct from the PROVIDER's own timestamp. */
+  updatedAt: string;
 };
 
 export type OrderListEnvelope = {
@@ -197,18 +207,101 @@ export type OrderListEnvelope = {
   meta: { hasNextPage: boolean; nextCursor: string | null };
 };
 
+const FINANCIAL_STATUSES = new Set<string>([
+  "PENDING",
+  "AUTHORIZED",
+  "PARTIALLY_PAID",
+  "PAID",
+  "PARTIALLY_REFUNDED",
+  "REFUNDED",
+  "VOIDED",
+]);
+
+const FULFILLMENT_STATUSES = new Set<string>([
+  "UNFULFILLED",
+  "PARTIALLY_FULFILLED",
+  "FULFILLED",
+  "RESTOCKED",
+]);
+
+const PROVIDERS = new Set<string>(["SHOPIFY", "COMMERCE7"]);
+
+/** A decimal-integer money string, exactly what the API serializes a BigInt as. Never a float, never `NaN`. */
+function isMoneyString(value: unknown): value is string {
+  return typeof value === "string" && /^-?\d+$/.test(value);
+}
+
+function isNullableMoneyString(value: unknown): boolean {
+  return value === null || isMoneyString(value);
+}
+
+function isIsoTimestamp(value: unknown): value is string {
+  return typeof value === "string" && value !== "" && !Number.isNaN(new Date(value).getTime());
+}
+
+/**
+ * PHASE B — REAL per-row runtime validation.
+ *
+ * This previously validated only that `data` was an array and then
+ * `as OrderListRow[]` cast every element unchecked, which is a TypeScript
+ * assertion rather than a runtime guarantee: a malformed row (a money field
+ * arriving as a float, an unknown enum from a future provider, a missing
+ * timestamp) reached the renderer and produced a blank/NaN cell — or a crash
+ * — instead of a controlled error state.
+ *
+ * Rejecting the WHOLE envelope on a single bad row is deliberate: a
+ * partially-rendered order list is worse than an honest error, because an
+ * operator cannot tell which rows were silently dropped.
+ */
+export function isOrderListRow(value: unknown): value is OrderListRow {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+
+  if (typeof row.id !== "string" || row.id === "") return false;
+  if (typeof row.connectionId !== "string" || row.connectionId === "") return false;
+  if (typeof row.provider !== "string" || !PROVIDERS.has(row.provider)) return false;
+  if (row.orderNumber !== null && typeof row.orderNumber !== "string") return false;
+  if (!isIsoTimestamp(row.orderDate)) return false;
+  if (row.financialStatus !== null && !FINANCIAL_STATUSES.has(String(row.financialStatus))) {
+    return false;
+  }
+  if (row.fulfillmentStatus !== null && !FULFILLMENT_STATUSES.has(String(row.fulfillmentStatus))) {
+    return false;
+  }
+  if (row.currencyCode !== null && typeof row.currencyCode !== "string") return false;
+  // The exponent is load-bearing for money rendering — a non-integer or
+  // out-of-range value must never reach `formatMoneyDisplay`.
+  if (
+    row.minorUnitExponent !== null &&
+    (typeof row.minorUnitExponent !== "number" ||
+      !Number.isInteger(row.minorUnitExponent) ||
+      row.minorUnitExponent < 0 ||
+      row.minorUnitExponent > 6)
+  ) {
+    return false;
+  }
+  if (!isNullableMoneyString(row.totalMinor)) return false;
+  if (!isNullableMoneyString(row.totalRefundedMinor)) return false;
+  if (!isNullableMoneyString(row.netRevenueMinor)) return false;
+  if (typeof row.attributed !== "boolean") return false;
+  if (!isIsoTimestamp(row.updatedAt)) return false;
+  return true;
+}
+
 export function parseOrderListEnvelope(json: unknown): OrderListEnvelope | null {
   if (!json || typeof json !== "object") return null;
   const record = json as Record<string, unknown>;
   if (!Array.isArray(record.data)) return null;
+  if (!record.data.every(isOrderListRow)) return null;
   const meta = record.meta as Record<string, unknown> | undefined;
   if (!meta || typeof meta.hasNextPage !== "boolean") return null;
+  // A cursor is an opaque base64url token — validated as a plain non-empty
+  // string here, never decoded or interpreted client-side.
+  const nextCursor =
+    typeof meta.nextCursor === "string" && meta.nextCursor !== "" ? meta.nextCursor : null;
   return {
     data: record.data as OrderListRow[],
-    meta: {
-      hasNextPage: meta.hasNextPage,
-      nextCursor: typeof meta.nextCursor === "string" ? meta.nextCursor : null,
-    },
+    meta: { hasNextPage: meta.hasNextPage, nextCursor },
   };
 }
 
@@ -297,6 +390,83 @@ export function parseReconciliationState(data: unknown): ReconciliationStateView
   );
   if (!allValid) return null;
   return data as ReconciliationStateView;
+}
+
+// ---------------------------------------------------------------------------
+// PHASE C — GET /api/brand/commerce/connections/[connectionId]/orders/activity
+// Server envelope: { data: BrandCommerceOrderActivityPage } — fetchJson
+// unwraps to the page directly.
+// ---------------------------------------------------------------------------
+
+export type OrderActivityCategory = "WEBHOOK" | "RECONCILIATION" | "OTHER";
+
+export type OrderActivityEntry = {
+  id: string;
+  category: OrderActivityCategory;
+  provider: CommerceProvider;
+  status: string;
+  receivedAt: string;
+  processedAt: string | null;
+  providerUpdatedAt: string | null;
+  externalOrderRef: string | null;
+  failureSummary: string | null;
+  order: { id: string; orderNumber: string | null } | null;
+};
+
+export type OrderActivityPage = {
+  entries: OrderActivityEntry[];
+  hasNextPage: boolean;
+  nextCursor: string | null;
+  limit: number;
+};
+
+const ACTIVITY_CATEGORIES = new Set<string>(["WEBHOOK", "RECONCILIATION", "OTHER"]);
+const ACTIVITY_STATUSES = new Set<string>([
+  "RECEIVED",
+  "PROCESSED",
+  "FAILED",
+  "SKIPPED_STALE",
+  "SKIPPED_DISCONNECTED",
+]);
+
+function isOrderActivityEntry(value: unknown): value is OrderActivityEntry {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const entry = value as Record<string, unknown>;
+  if (typeof entry.id !== "string" || entry.id === "") return false;
+  if (typeof entry.category !== "string" || !ACTIVITY_CATEGORIES.has(entry.category)) return false;
+  if (typeof entry.provider !== "string" || !PROVIDERS.has(entry.provider)) return false;
+  // An unrecognized status is rejected rather than rendered as a blank
+  // badge — an operator must never see an event whose outcome is unlabelled.
+  if (typeof entry.status !== "string" || !ACTIVITY_STATUSES.has(entry.status)) return false;
+  if (!isIsoTimestamp(entry.receivedAt)) return false;
+  if (entry.processedAt !== null && !isIsoTimestamp(entry.processedAt)) return false;
+  if (entry.providerUpdatedAt !== null && !isIsoTimestamp(entry.providerUpdatedAt)) return false;
+  if (entry.externalOrderRef !== null && typeof entry.externalOrderRef !== "string") return false;
+  if (entry.failureSummary !== null && typeof entry.failureSummary !== "string") return false;
+  if (entry.order !== null) {
+    if (!entry.order || typeof entry.order !== "object") return false;
+    const order = entry.order as Record<string, unknown>;
+    if (typeof order.id !== "string" || order.id === "") return false;
+    if (order.orderNumber !== null && typeof order.orderNumber !== "string") return false;
+  }
+  return true;
+}
+
+export function parseOrderActivityPage(data: unknown): OrderActivityPage | null {
+  if (!data || typeof data !== "object") return null;
+  const record = data as Record<string, unknown>;
+  if (!Array.isArray(record.entries)) return null;
+  if (!record.entries.every(isOrderActivityEntry)) return null;
+  if (typeof record.hasNextPage !== "boolean") return null;
+  if (typeof record.limit !== "number" || !Number.isInteger(record.limit)) return null;
+  const nextCursor =
+    typeof record.nextCursor === "string" && record.nextCursor !== "" ? record.nextCursor : null;
+  return {
+    entries: record.entries as OrderActivityEntry[],
+    hasNextPage: record.hasNextPage,
+    nextCursor,
+    limit: record.limit,
+  };
 }
 
 export type ReconciliationStepStatus = "UP_TO_DATE" | "PROGRESS" | "FAILED";
@@ -429,4 +599,119 @@ export function validateCustomRangeSelection(input: {
     return { ok: false, message: CUSTOM_RANGE_FUTURE_MESSAGE };
   }
   return { ok: true, fromIso: fromDate.toISOString(), toIso: toDate.toISOString() };
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/brand/campaigns/[id]/commerce-products
+//
+// THE `meta` TRAP, AGAIN. This route answers
+//   { data: { campaign, products }, meta: { hasNextPage, nextCursor, limit } }
+// with `meta` OUTSIDE `data`. `fetchJson` ends in `(json?.data ?? json)`, so a
+// caller using it receives ONLY the inner `{ campaign, products }` object and
+// `result.meta` is ALWAYS `undefined`.
+//
+// That was not theoretical: the campaign products page did exactly this, so
+// `meta?.hasNextPage` was permanently falsy and the "Load more products"
+// control NEVER rendered. A brand whose catalog exceeded one page (50) could
+// not reach — and therefore could not assign — any product past the first
+// page. The fix is the same as `parseOrderListEnvelope`'s: read the FULL body
+// with a plain `fetch` and validate both halves here.
+// ---------------------------------------------------------------------------
+
+export type CampaignProductRow = {
+  brandCommerceProductId: string;
+  title: string;
+  description: string | null;
+  imageUrl: string | null;
+  productUrl?: string | null;
+  isVisibleInShop: boolean;
+  isCampaignEligible: boolean;
+  isAvailable: boolean;
+  hasPublicStorefrontUrl: boolean;
+  assignment: {
+    id: string;
+    isActive: boolean;
+    displayOrder: number;
+    deactivatedAt?: string | null;
+  } | null;
+};
+
+export type CampaignProductEnvelope = {
+  campaign: { id: string; name: string };
+  products: CampaignProductRow[];
+  meta: { hasNextPage: boolean; nextCursor: string | null; limit: number };
+};
+
+/** Bounded: the route's own MAX_PAGE_SIZE is 100, so anything larger is wrong. */
+const MAX_CAMPAIGN_PRODUCT_ROWS = 100;
+
+function isCampaignProductAssignment(value: unknown): boolean {
+  if (value === null) return true;
+  if (!value || typeof value !== "object") return false;
+  const row = value as Record<string, unknown>;
+  return (
+    typeof row.id === "string" &&
+    row.id !== "" &&
+    typeof row.isActive === "boolean" &&
+    typeof row.displayOrder === "number" &&
+    Number.isFinite(row.displayOrder)
+  );
+}
+
+export function isCampaignProductRow(value: unknown): value is CampaignProductRow {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  if (typeof row.brandCommerceProductId !== "string" || row.brandCommerceProductId === "") {
+    return false;
+  }
+  if (typeof row.title !== "string") return false;
+  for (const key of ["description", "imageUrl"] as const) {
+    if (row[key] !== null && typeof row[key] !== "string") return false;
+  }
+  // Each of these four booleans drives a DIFFERENT eligibility explanation in
+  // the UI. Coercing a missing one would state the wrong reason a product is
+  // or is not publicly purchasable, so all four are required outright.
+  for (const key of [
+    "isVisibleInShop",
+    "isCampaignEligible",
+    "isAvailable",
+    "hasPublicStorefrontUrl",
+  ] as const) {
+    if (typeof row[key] !== "boolean") return false;
+  }
+  return isCampaignProductAssignment(row.assignment);
+}
+
+/** Takes the FULL response body (not a `fetchJson`-unwrapped value). */
+export function parseCampaignProductEnvelope(json: unknown): CampaignProductEnvelope | null {
+  if (!json || typeof json !== "object") return null;
+  const record = json as Record<string, unknown>;
+
+  const data = record.data as Record<string, unknown> | undefined;
+  if (!data || typeof data !== "object") return null;
+
+  const campaign = data.campaign as Record<string, unknown> | undefined;
+  if (!campaign || typeof campaign !== "object") return null;
+  if (typeof campaign.id !== "string" || campaign.id === "") return null;
+  if (typeof campaign.name !== "string") return null;
+
+  if (!Array.isArray(data.products)) return null;
+  if (data.products.length > MAX_CAMPAIGN_PRODUCT_ROWS) return null;
+  if (!data.products.every(isCampaignProductRow)) return null;
+
+  const meta = record.meta as Record<string, unknown> | undefined;
+  if (!meta || typeof meta.hasNextPage !== "boolean") return null;
+  if (typeof meta.limit !== "number" || !Number.isInteger(meta.limit) || meta.limit < 1) {
+    return null;
+  }
+  // An opaque base64url token — validated as a non-empty string, never decoded
+  // or interpreted client-side.
+  const nextCursor =
+    typeof meta.nextCursor === "string" && meta.nextCursor !== "" ? meta.nextCursor : null;
+
+  return {
+    campaign: { id: campaign.id, name: campaign.name },
+    products: data.products as CampaignProductRow[],
+    meta: { hasNextPage: meta.hasNextPage, nextCursor, limit: meta.limit },
+  };
 }

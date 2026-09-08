@@ -707,6 +707,34 @@ export type OrderIngestionDeps = {
   runTransaction<T>(fn: (tx: TxClient) => Promise<T>): Promise<T>;
 
   /**
+   * Writes the TERMINAL status onto this delivery's `CommerceOrderEvent` row.
+   *
+   * PHASE A — this is now an injectable dependency like every other DB touch
+   * in this service. It previously called the real Prisma singleton directly,
+   * bypassing this object entirely, which meant a caller that injected a
+   * complete in-memory stack for `claimEvent`/`loadConnection`/
+   * `runTransaction` STILL reached out to the real database on every
+   * finalization. Under the deliberately-unreachable test `DATABASE_URL`
+   * sentinel that surfaced as `prisma:error ... Can't reach database server at
+   * 127.0.0.1:1` noise in otherwise-isolated tests, and it meant no test could
+   * observe or assert on finalization at all.
+   *
+   * The DEFAULT implementation (`defaultFinalizeEvent`) is byte-for-byte the
+   * previous behavior, INCLUDING its deliberate swallow of its own failure —
+   * see that function's own doc comment for why that swallow is correct and
+   * must stay. Nothing about production behavior changes; only the seam moves.
+   */
+  finalizeEvent(
+    eventId: string,
+    data: {
+      status: CommerceOrderEventStatus;
+      orderId?: string | null;
+      failureSummary?: string | null;
+    },
+    now: Date,
+  ): Promise<void>;
+
+  /**
    * Hashes a raw click token for `CommerceClickAttribution.tokenHash` lookup.
    * Defaults to `hashClickToken`, which THROWS on a malformed token or an
    * unconfigured `COMMERCE_CLICK_TOKEN_PEPPER`; both are caught here and
@@ -958,6 +986,7 @@ const DEFAULT_ORDER_INGESTION_DEPS: OrderIngestionDeps = {
   loadConnection: defaultLoadConnection,
   expandProductKeyCandidates: providerProductKeyCandidates,
   runTransaction: defaultRunTransaction,
+  finalizeEvent: defaultFinalizeEvent,
   hashAttributionToken: hashClickToken,
   now: () => new Date(),
 };
@@ -1007,8 +1036,16 @@ function isUniqueViolation(error: unknown): boolean {
  * `SKIPPED_STALE`). Previously the same swallowed failure meant the next
  * redelivery was answered `ALREADY_PROCESSED`, permanently hiding an order that
  * may never have been written.
+ *
+ * PHASE A — this is the DEFAULT implementation behind
+ * `OrderIngestionDeps.finalizeEvent`. Its body (including the deliberate
+ * swallow above) is unchanged; it is simply reachable through the DI object
+ * now, so an in-memory test stack no longer falls through to the real Prisma
+ * singleton. The swallow is NOT a "catch and ignore" added to hide errors —
+ * it is the pre-existing, documented correctness choice for a best-effort
+ * write that happens AFTER the order transaction has already committed.
  */
-async function finalizeEvent(
+async function defaultFinalizeEvent(
   eventId: string,
   data: {
     status: CommerceOrderEventStatus;
@@ -1388,7 +1425,7 @@ async function runOrderIngestion(
   const connection = await resolved.loadConnection(event.connectionId);
 
   if (!connection) {
-    await finalizeEvent(eventId, { status: "SKIPPED_DISCONNECTED" }, now);
+    await resolved.finalizeEvent(eventId, { status: "SKIPPED_DISCONNECTED" }, now);
     return {
       ...base,
       status: "SKIPPED_DISCONNECTED",
@@ -1398,7 +1435,7 @@ async function runOrderIngestion(
   }
 
   if (!isIngestibleConnectionStatus(connection.status)) {
-    await finalizeEvent(eventId, { status: "SKIPPED_DISCONNECTED" }, now);
+    await resolved.finalizeEvent(eventId, { status: "SKIPPED_DISCONNECTED" }, now);
     return {
       ...base,
       status: "SKIPPED_DISCONNECTED",
@@ -1414,7 +1451,7 @@ async function runOrderIngestion(
   // --- 3. External order id is mandatory for identity ----------------------
   const externalOrderId = order.externalOrderId?.trim() || null;
   if (!externalOrderId) {
-    await finalizeEvent(
+    await resolved.finalizeEvent(
       eventId,
       { status: "FAILED", failureSummary: "MISSING_EXTERNAL_ORDER_ID" },
       now,
@@ -1695,7 +1732,7 @@ async function runOrderIngestion(
           ? "FAILED"
           : "PROCESSED";
 
-    await finalizeEvent(
+    await resolved.finalizeEvent(
       eventId,
       {
         status: eventStatus,
@@ -1719,7 +1756,7 @@ async function runOrderIngestion(
     // embed column values from the payload, which would defeat this module's
     // no-PII guarantee. The classified tag plus the event row's
     // `payloadDigest` are enough to correlate a failure with a delivery.
-    await finalizeEvent(
+    await resolved.finalizeEvent(
       eventId,
       { status: "FAILED", failureSummary: "WRITE_FAILED" },
       now,

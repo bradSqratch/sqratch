@@ -7,27 +7,17 @@ import { useParams } from "next/navigation";
 import CommonNavbar from "@/components/commonNavbar";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import {
+  parsePublicCampaignPayload,
+  type PublicCampaignPayload,
+} from "@/lib/commerce/public-commerce-response";
 
-type ExperienceCard = {
-  slug: string;
-  title: string;
-  coverImageUrl: string | null;
-};
-
-type CampaignPayload = {
-  id: string;
-  name: string;
-  description: string | null;
-  brand: {
-    id: string;
-    name: string;
-    slug: string;
-    logoUrl: string | null;
-  } | null;
-  experiences: ExperienceCard[];
-  isUnlocked: boolean;
-  hasRedeemedQrWarning: boolean;
-};
+/**
+ * Owned by `parsePublicCampaignPayload`, which is what actually proves a
+ * payload matches at runtime. Aliased rather than re-declared so the rendered
+ * shape and the validated shape cannot drift.
+ */
+type CampaignPayload = PublicCampaignPayload;
 
 export default function CampaignPage() {
   const params = useParams();
@@ -40,16 +30,28 @@ export default function CampaignPage() {
   useEffect(() => {
     const load = async () => {
       try {
-        const res = await fetch(`/api/public/campaign/${campaignSlug}`, {
-          credentials: "include",
-        });
-        const json = await res.json();
+        const res = await fetch(
+          `/api/public/campaign/${encodeURIComponent(campaignSlug)}`,
+          { credentials: "include" },
+        );
+        const json = await res.json().catch(() => null);
 
         if (!res.ok) {
           throw new Error(json?.error || "Failed to load campaign.");
         }
 
-        setData(json.data);
+        // Validated at RUNTIME. This previously assigned `json.data`
+        // unchecked, so a malformed body reached the render and threw on
+        // `data.experiences.map(...)`. `isUnlocked` in particular must never
+        // be coerced — a garbled value would misrepresent whether the
+        // campaign is unlocked.
+        const parsed = parsePublicCampaignPayload(json?.data);
+
+        if (!parsed) {
+          throw new Error("Failed to load campaign.");
+        }
+
+        setData(parsed);
       } catch (error) {
         setError(
           error instanceof Error ? error.message : "Failed to load campaign.",

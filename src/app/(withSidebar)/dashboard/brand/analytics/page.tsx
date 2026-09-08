@@ -7,10 +7,13 @@ import { fetchJson, getErrorMessage } from "@/components/experience/client-utils
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import {
+  currenciesInTrend,
   formatMoneyRows,
+  minorForCurrency,
   parseBrandConversionAnalytics,
   providerLabel,
   type BrandConversionAnalytics,
+  type ConversionDailyPoint,
   type MoneyRow,
   type NamedBreakdownRow,
   type ProviderBreakdownRow,
@@ -740,13 +743,30 @@ function ConversionAnalyticsSection({
               whole brand, so the campaign filter above does not apply here.
             </p>
           </div>
-          <Button
-            asChild
-            variant="outline"
-            className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
-          >
-            <Link href="/dashboard/brand/commerce/orders">View order operations</Link>
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            {/* PHASE D7 — deep-links into the Order Explorer already filtered
+                to attributed orders. Analytics stays READ-ONLY: there are
+                deliberately no Catch Up / Reconcile / webhook controls here. */}
+            <Button
+              asChild
+              variant="outline"
+              className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+            >
+              {/* `attributed` — the SAME parameter name the orders API and
+                  the explorer's own toolbar use. A different name here would
+                  render the link inert. */}
+              <Link href="/dashboard/brand/commerce/orders?attributed=attributed">
+                View attributed orders
+              </Link>
+            </Button>
+            <Button
+              asChild
+              variant="outline"
+              className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+            >
+              <Link href="/dashboard/brand/commerce/orders">View order operations</Link>
+            </Button>
+          </div>
         </div>
       </PageCard>
 
@@ -783,6 +803,8 @@ function ConversionAnalyticsSection({
             <MoneyRowsCard title="Refunded attributed revenue" rows={data.refundedRevenueByCurrency} />
             <MoneyRowsCard title="Net attributed revenue" rows={data.netAttributedRevenueByCurrency} />
           </div>
+
+          <ConversionTrendSection data={data} />
 
           <div className="grid gap-4 lg:grid-cols-2">
             <PageCard>
@@ -865,6 +887,164 @@ function ConversionAnalyticsSection({
         </>
       )}
     </>
+  );
+}
+
+/**
+ * PHASE D — the daily conversion/revenue trend.
+ *
+ * BUCKETS are UTC calendar days, the same convention the click-analytics
+ * series already uses, and every day in the range is present including zero
+ * days (a skipped day would read as missing data rather than genuine zero
+ * activity).
+ *
+ * CURRENCY IS NEVER COMBINED. One table per currency, because a single table
+ * with a "revenue" column is exactly the shape that invites adding CAD to
+ * USD. `UNKNOWN` gets its own table too and is rendered through the same
+ * `formatMoneyRows` path, which refuses to fabricate a symbol or exponent
+ * for it.
+ *
+ * NO CHART LIBRARY is introduced for this: a compact table with a
+ * proportional bar reuses the exact idiom the click "Clicks per day" panel
+ * already uses, and keeps the bundle unchanged.
+ */
+function ConversionTrendSection({ data }: { data: BrandConversionAnalytics }) {
+  const trend = data.dailyTrend;
+  if (trend.length === 0) return null;
+
+  const currencies = currenciesInTrend(trend);
+  const peakOrders = trend.reduce((peak, point) => Math.max(peak, point.attributedOrders), 0);
+  const hasAnyActivity = trend.some((point) => point.attributedOrders > 0);
+
+  return (
+    <>
+      <PageCard>
+        <h3 className="text-lg font-semibold">Attributed conversions per day</h3>
+        <p className="mt-1 text-xs text-white/45">
+          UTC days. Every day in the range is shown, including days with no attributed orders.
+        </p>
+        {!hasAnyActivity ? (
+          <p className="mt-4 text-sm text-white/65">
+            No attributed conversions on any day in this range.
+          </p>
+        ) : (
+          <div className="mt-4 max-h-80 overflow-y-auto">
+            <table className="w-full text-left text-sm">
+              <thead className="text-white/55">
+                <tr>
+                  <th scope="col" className="pb-3">Day (UTC)</th>
+                  <th scope="col" className="pb-3 w-full">Attributed orders</th>
+                  <th scope="col" className="pb-3 text-right whitespace-nowrap">Paid now</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/10">
+                {trend.map((point) => (
+                  <tr key={point.date}>
+                    <td className="py-2 whitespace-nowrap pr-4">{point.date}</td>
+                    <td className="py-2">
+                      <div className="flex items-center gap-3">
+                        <div
+                          className="h-2 rounded-full bg-white/45"
+                          style={{
+                            width:
+                              peakOrders > 0
+                                ? `${Math.round((point.attributedOrders / peakOrders) * 100)}%`
+                                : "0%",
+                          }}
+                        />
+                        <span className="tabular-nums text-white/75">{point.attributedOrders}</span>
+                      </div>
+                    </td>
+                    <td className="py-2 text-right tabular-nums text-white/60">
+                      {point.currentlyNetPositivePaidOrders}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </PageCard>
+
+      {currencies.map((currencyCode) => (
+        <ConversionTrendCurrencyTable key={currencyCode} currencyCode={currencyCode} trend={trend} />
+      ))}
+    </>
+  );
+}
+
+/**
+ * Revenue for ONE currency across the range. Amounts are rendered through
+ * `formatMoneyRows`, which resolves each currency's own exponent (so JPY and
+ * 3-decimal currencies are correct) and renders `UNKNOWN` as an explicit
+ * minor-unit count rather than a fabricated formatted amount.
+ *
+ * A day where this currency had no activity shows an em dash, never `0.00` —
+ * "no revenue in this currency" and "zero revenue" are different claims.
+ */
+function ConversionTrendCurrencyTable({
+  currencyCode,
+  trend,
+}: {
+  currencyCode: string;
+  trend: ConversionDailyPoint[];
+}) {
+  const format = (rows: MoneyRow[]) => {
+    const minor = minorForCurrency(rows, currencyCode);
+    if (minor === null) return "—";
+    return formatMoneyRows([{ currencyCode, minor }])[0] ?? "—";
+  };
+
+  const daysWithActivity = trend.filter(
+    (point) =>
+      minorForCurrency(point.grossRevenueByCurrency, currencyCode) !== null ||
+      minorForCurrency(point.refundedRevenueByCurrency, currencyCode) !== null ||
+      minorForCurrency(point.netRevenueByCurrency, currencyCode) !== null,
+  );
+
+  return (
+    <PageCard>
+      <h3 className="text-lg font-semibold">
+        {currencyCode === "UNKNOWN" ? "Revenue per day — unknown currency" : `Revenue per day — ${currencyCode}`}
+      </h3>
+      <p className="mt-1 text-xs text-white/45">
+        Shown separately per currency. Amounts in different currencies are never added together.
+      </p>
+      {daysWithActivity.length === 0 ? (
+        <p className="mt-4 text-sm text-white/65">No revenue in this currency in this range.</p>
+      ) : (
+        // Wide money tables scroll INSIDE their own container so the page
+        // itself never overflows horizontally on mobile.
+        <div className="mt-4 max-h-80 overflow-auto">
+          <table className="w-full min-w-[420px] text-left text-sm">
+            <thead className="text-white/55">
+              <tr>
+                <th scope="col" className="pb-3">Day (UTC)</th>
+                <th scope="col" className="pb-3 text-right">Gross</th>
+                <th scope="col" className="pb-3 text-right">Refunded</th>
+                <th scope="col" className="pb-3 text-right">Net</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/10">
+              {daysWithActivity.map((point) => (
+                <tr key={point.date}>
+                  <td className="py-2 whitespace-nowrap pr-4">{point.date}</td>
+                  <td className="py-2 text-right tabular-nums whitespace-nowrap">
+                    {format(point.grossRevenueByCurrency)}
+                  </td>
+                  <td className="py-2 text-right tabular-nums whitespace-nowrap text-amber-200/80">
+                    {format(point.refundedRevenueByCurrency)}
+                  </td>
+                  <td className="py-2 text-right tabular-nums whitespace-nowrap">
+                    {format(point.netRevenueByCurrency)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </PageCard>
   );
 }
 

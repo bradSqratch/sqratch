@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import {
   ErrorView,
@@ -8,54 +8,25 @@ import {
   LoadingView,
   PageCard,
 } from "@/components/experience/experience-shell";
-import {
-  fetchJson,
-  getErrorMessage,
-} from "@/components/experience/client-utils";
+import { getErrorMessage } from "@/components/experience/client-utils";
 import { useExperience } from "@/components/experience/use-experience";
 import { ShopifyShopRewardCard } from "@/components/rewards/shopify-shop-reward-card";
 import { Button } from "@/components/ui/button";
+import {
+  isSafeClickPathSegment,
+  parsePublicShopEnvelope,
+  type PublicShopResponse,
+} from "@/lib/commerce/public-commerce-response";
 
-const PAGE_SIZE_OPTIONS = [25, 50, 100] as const;
-
-type ShopResponse = {
-  experience: {
-    id: string;
-    slug: string;
-    title: string;
-  };
-  campaign: {
-    id: string;
-    name: string;
-    brand: {
-      id: string;
-      name: string;
-      slug: string;
-    } | null;
-  } | null;
-  products: Array<{
-    id: string;
-    productId: string;
-    productLinkId: string | null;
-    campaignProductId?: string | null;
-    campaignAssignmentId?: string | null;
-    title: string;
-    description?: string | null;
-    imageUrl: string | null;
-    priceText: string | null;
-    productUrl: string;
-    brand: {
-      id: string;
-      name: string;
-      slug: string;
-    } | null;
-    source: "CAMPAIGN_PRODUCT" | "BRAND_STOREFRONT";
-    productCampaign?: {
-      id: string;
-      name: string;
-    } | null;
-  }>;
-};
+/**
+ * The response shape is owned by `parsePublicShopEnvelope`/
+ * `parsePublicShopResponse`, which are what actually prove a payload matches
+ * at runtime. Aliasing rather than re-declaring keeps the rendered shape and
+ * the validated shape from drifting — a re-declared copy would still compile
+ * after the validator tightened.
+ */
+type ShopResponse = PublicShopResponse;
+type ShopProduct = ShopResponse["products"][number];
 
 export function ExperienceShopClient({
   experienceSlug,
@@ -63,48 +34,124 @@ export function ExperienceShopClient({
   experienceSlug: string;
 }) {
   const { data, loading, error } = useExperience(experienceSlug);
-  const [shopData, setShopData] = useState<ShopResponse | null>(null);
+
+  // `experience`/`campaign` are stable across pages (the server returns them
+  // identically on every page); only `products` accumulates.
+  const [shopMeta, setShopMeta] = useState<Pick<ShopResponse, "experience" | "campaign"> | null>(
+    null,
+  );
+  const [products, setProducts] = useState<ShopProduct[]>([]);
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const [nextCursor, setNextCursor] = useState<string | null>(null);
+
   const [shopLoading, setShopLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [shopError, setShopError] = useState<string | null>(null);
   const [clickingId, setClickingId] = useState<string | null>(null);
   const [failedImageIds, setFailedImageIds] = useState<Set<string>>(
     () => new Set(),
   );
-  const [pageSize, setPageSize] =
-    useState<(typeof PAGE_SIZE_OPTIONS)[number]>(25);
-  const [currentPage, setCurrentPage] = useState(1);
 
-  const loadProducts = useCallback(async () => {
-    setShopLoading(true);
-    setShopError(null);
+  // Discards a superseded response — e.g. a slow first-page request that
+  // resolves after a second render already started a fresh load.
+  const requestSeq = useRef(0);
 
-    try {
-      const result = await fetchJson<ShopResponse>(
-        `/api/public/experience/${experienceSlug}/products`,
-      );
-      setShopData(result);
-      setFailedImageIds(new Set());
-      setCurrentPage(1);
-    } catch (loadError) {
-      setShopError(getErrorMessage(loadError, "Failed to load shop products."));
-    } finally {
-      setShopLoading(false);
-    }
-  }, [experienceSlug]);
+  const fetchPage = useCallback(
+    async (cursor: string | null) => {
+      const seq = ++requestSeq.current;
+      const isFirstPage = cursor === null;
+      if (isFirstPage) {
+        setShopLoading(true);
+      } else {
+        setLoadingMore(true);
+      }
+      setShopError(null);
+
+      try {
+        // A PLAIN `fetch`, deliberately NOT `fetchJson`. This endpoint
+        // answers `{ data, meta }` with `meta` OUTSIDE `data`, and
+        // `fetchJson` returns only `json.data` — which would silently drop
+        // `meta` entirely, exactly as it once did for the Brand campaign
+        // products page's "Load more" control. See `parsePublicShopEnvelope`.
+        const response = await fetch(
+          `/api/public/experience/${encodeURIComponent(experienceSlug)}/products${
+            cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""
+          }`,
+          { credentials: "include" },
+        );
+        const body: unknown = await response.json().catch(() => null);
+
+        if (!response.ok) {
+          const message = (body as { error?: string } | null)?.error;
+          throw new Error(message || "Failed to load shop products.");
+        }
+
+        // Validated at RUNTIME, not merely cast. `fetchJson`'s final
+        // statement is `as T` — a compile-time claim only — and a body
+        // missing `products` previously reached the render and threw on
+        // `shopData?.products.length`, a white screen for a public shopper.
+        const parsed = parsePublicShopEnvelope(body);
+
+        if (seq !== requestSeq.current) {
+          return; // superseded by a newer request
+        }
+
+        if (!parsed) {
+          // Deliberately NOT an empty catalog: a genuinely empty shop parses
+          // to `products: []` and renders the empty state below. `null`
+          // means the payload itself was malformed, which is an error.
+          if (isFirstPage) {
+            setShopMeta(null);
+            setProducts([]);
+          }
+          setShopError("Failed to load shop products.");
+          return;
+        }
+
+        setShopMeta({ experience: parsed.data.experience, campaign: parsed.data.campaign });
+        setProducts((current) =>
+          isFirstPage ? parsed.data.products : [...current, ...parsed.data.products],
+        );
+        setHasNextPage(parsed.meta.hasNextPage);
+        setNextCursor(parsed.meta.nextCursor);
+        if (isFirstPage) {
+          setFailedImageIds(new Set());
+        }
+      } catch (loadError) {
+        if (seq !== requestSeq.current) {
+          return; // superseded
+        }
+        setShopError(getErrorMessage(loadError, "Failed to load shop products."));
+      } finally {
+        if (seq === requestSeq.current) {
+          setShopLoading(false);
+          setLoadingMore(false);
+        }
+      }
+    },
+    [experienceSlug],
+  );
 
   useEffect(() => {
     if (!data) {
       return;
     }
 
-    void loadProducts();
-  }, [data, loadProducts]);
+    void fetchPage(null);
+    // Only the FIRST page should reload when the Experience context changes;
+    // `fetchPage`'s own identity is stable across renders (memoized on
+    // `experienceSlug` alone), so this does not re-fire on every keystroke
+    // or state update.
+  }, [data, fetchPage]);
 
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [pageSize]);
+  function handleLoadMore() {
+    if (!hasNextPage || !nextCursor || loadingMore) {
+      return;
+    }
+    void fetchPage(nextCursor);
+  }
 
-  function handleOpenProduct(product: ShopResponse["products"][number]) {
+  function handleOpenProduct(product: ShopProduct) {
     // Every public shop product is a persisted canonical catalog product, so it
     // always carries one of these two opaque server-side click ids: a
     // campaign-scoped assignment id, or a brand-storefront catalog id. A
@@ -116,10 +163,16 @@ export function ExperienceShopClient({
     // reachable storefront URL 404s), the campaign-scope check, and click
     // attribution. If neither id is present the item is not a canonical catalog
     // product and is simply not clickable.
-    const target = product.campaignAssignmentId
-      ? `/api/public/experience/${experienceSlug}/products/click/campaign/${product.campaignAssignmentId}`
-      : product.campaignProductId
-        ? `/api/public/experience/${experienceSlug}/products/click/catalog/${product.campaignProductId}`
+    //
+    // Both ids are interpolated into a URL PATH, so each is re-checked against
+    // the path-safe alphabet at the point of use. `parsePublicShopResponse`
+    // already rejects a card carrying an unsafe id, so this can only fire if a
+    // future caller renders an unvalidated card — it fails closed (not
+    // clickable) rather than addressing an unintended endpoint.
+    const target = isSafeClickPathSegment(product.campaignAssignmentId)
+      ? `/api/public/experience/${encodeURIComponent(experienceSlug)}/products/click/campaign/${product.campaignAssignmentId}`
+      : isSafeClickPathSegment(product.campaignProductId)
+        ? `/api/public/experience/${encodeURIComponent(experienceSlug)}/products/click/catalog/${product.campaignProductId}`
         : null;
 
     if (!target) {
@@ -131,17 +184,6 @@ export function ExperienceShopClient({
     window.open(target, "_blank", "noopener,noreferrer");
     setClickingId((current) => (current === product.id ? null : current));
   }
-
-  const productCount = shopData?.products.length ?? 0;
-  const totalPages = Math.max(1, Math.ceil(productCount / pageSize));
-  const safeCurrentPage = Math.min(currentPage, totalPages);
-  const pageStartIndex = productCount ? (safeCurrentPage - 1) * pageSize : 0;
-  const pageEndIndex = Math.min(pageStartIndex + pageSize, productCount);
-  const visibleProducts = useMemo(
-    () => shopData?.products.slice(pageStartIndex, pageEndIndex) ?? [],
-    [pageEndIndex, pageStartIndex, shopData?.products],
-  );
-  const showPaginationControls = productCount > pageSize;
 
   if (loading) {
     return <LoadingView label="Loading shop..." />;
@@ -157,10 +199,8 @@ export function ExperienceShopClient({
       activeTab="shop"
       actions={
         <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
-          <p className="text-sm text-white/55">Shop items</p>
-          <p className="mt-2 text-3xl font-semibold">
-            {shopData?.products.length ?? 0}
-          </p>
+          <p className="text-sm text-white/55">Shop items loaded</p>
+          <p className="mt-2 text-3xl font-semibold">{products.length}</p>
           <p className="mt-2 text-sm text-white/55">
             Opens the merchant storefront in a new tab.
           </p>
@@ -171,11 +211,11 @@ export function ExperienceShopClient({
         <PageCard>
           <p className="text-sm text-white/65">Loading products...</p>
         </PageCard>
-      ) : shopError ? (
+      ) : shopError && products.length === 0 ? (
         <PageCard>
           <p className="text-sm text-red-300">{shopError}</p>
         </PageCard>
-      ) : !shopData ? (
+      ) : !shopMeta ? (
         <PageCard>
           <div className="space-y-3">
             <h2 className="text-2xl font-semibold text-[#988dbf]">Shop</h2>
@@ -191,14 +231,14 @@ export function ExperienceShopClient({
               <div>
                 <h2 className="text-2xl font-semibold text-[#988dbf]">Shop</h2>
                 <p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">
-                  {shopData.campaign
+                  {shopMeta.campaign
                     ? "These products are linked to this experience, selected for this campaign, or available from its brand storefront."
                     : "These products are linked to this experience or available from its linked campaign brands and storefronts."}
                 </p>
               </div>
-              {shopData.campaign && (
+              {shopMeta.campaign && (
                 <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/65">
-                  Campaign: {shopData.campaign.name}
+                  Campaign: {shopMeta.campaign.name}
                 </div>
               )}
             </div>
@@ -206,7 +246,7 @@ export function ExperienceShopClient({
 
           <ShopifyShopRewardCard experienceSlug={experienceSlug} />
 
-          {productCount === 0 ? (
+          {products.length === 0 ? (
             <PageCard>
               <div className="space-y-3">
                 <h2 className="text-2xl font-semibold text-[#988dbf]">Shop</h2>
@@ -217,67 +257,8 @@ export function ExperienceShopClient({
             </PageCard>
           ) : (
             <>
-              {showPaginationControls && (
-                <div className="flex flex-col gap-3 rounded-3xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/65 sm:flex-row sm:items-center sm:justify-between">
-                  <p>
-                    Showing {pageStartIndex + 1}&ndash;{pageEndIndex} of{" "}
-                    {productCount} products
-                  </p>
-                  <div className="flex flex-wrap items-center gap-3">
-                    <label className="flex items-center gap-2 text-white/60">
-                      <span>Page size</span>
-                      <select
-                        value={pageSize}
-                        onChange={(event) =>
-                          setPageSize(
-                            Number(event.target.value) as typeof pageSize,
-                          )
-                        }
-                        className="rounded-full border border-white/10 bg-black/30 px-3 py-2 text-white outline-none transition focus:border-[#988dbf]"
-                      >
-                        {PAGE_SIZE_OPTIONS.map((option) => (
-                          <option
-                            key={option}
-                            value={option}
-                            className="bg-[#120f1f]"
-                          >
-                            {option}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() =>
-                          setCurrentPage((page) => Math.max(1, page - 1))
-                        }
-                        disabled={safeCurrentPage === 1}
-                        className="rounded-full border-white/15 bg-transparent text-white/75 hover:bg-white/10 hover:text-white"
-                      >
-                        Previous
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        onClick={() =>
-                          setCurrentPage((page) =>
-                            Math.min(totalPages, page + 1),
-                          )
-                        }
-                        disabled={safeCurrentPage === totalPages}
-                        className="rounded-full border-white/15 bg-transparent text-white/75 hover:bg-white/10 hover:text-white"
-                      >
-                        Next
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-              )}
-
               <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
-                {visibleProducts.map((product) => (
+                {products.map((product) => (
                   <PageCard
                     key={product.id}
                     className="flex flex-col justify-between overflow-hidden"
@@ -299,7 +280,15 @@ export function ExperienceShopClient({
                                 return next;
                               });
                             }}
-                            className="aspect-[4/3] w-full object-cover"
+                            /* Provider product images (Commerce7 wine bottle
+                               shots especially) legitimately vary in aspect
+                               ratio. `object-cover` CROPPED them — a tall
+                               bottle lost its top and base inside this 4/3
+                               canvas. `object-contain` keeps the fixed card
+                               footprint every row depends on while showing
+                               the entire source image, matching the Brand
+                               catalog thumbnail fix. */
+                            className="aspect-[4/3] w-full bg-white/5 object-contain p-2"
                           />
                         ) : (
                           <div className="flex aspect-[4/3] items-center justify-center bg-[linear-gradient(135deg,rgba(96,165,250,0.18),rgba(34,197,94,0.10),rgba(2,0,21,0.45))] text-sm text-white/45">
@@ -356,6 +345,26 @@ export function ExperienceShopClient({
                   </PageCard>
                 ))}
               </div>
+
+              {shopError && (
+                <PageCard>
+                  <p className="text-sm text-red-300">{shopError}</p>
+                </PageCard>
+              )}
+
+              {hasNextPage && (
+                <div className="flex justify-center">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={loadingMore}
+                    onClick={handleLoadMore}
+                    className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                  >
+                    {loadingMore ? "Loading..." : "Load more products"}
+                  </Button>
+                </div>
+              )}
             </>
           )}
         </div>

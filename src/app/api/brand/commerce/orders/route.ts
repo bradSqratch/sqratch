@@ -7,12 +7,20 @@ import {
 import {
   buildAttributionWhere,
   buildCommerceOrderCursorWhere,
+  buildOrderDateWhere,
+  buildOrderListWhere,
+  buildOrderNumberWhere,
   clampOrderListLimit,
   decodeCommerceOrderCursor,
   encodeCommerceOrderCursor,
+  MAX_ORDER_NUMBER_SEARCH_LENGTH,
   normalizeAttributionFilter,
+  normalizeConnectionIdFilter,
   normalizeOrderFinancialStatusFilter,
+  normalizeOrderFulfillmentStatusFilter,
+  normalizeOrderNumberSearch,
   normalizeOrderProviderFilter,
+  parseOrderDateRange,
   resolveDisplayOrderDate,
 } from "@/lib/commerce/order-list";
 import type { CommerceOrderFinancialStatus, CommerceOrderFulfillmentStatus, CommerceProvider, Prisma } from "@prisma/client";
@@ -62,7 +70,15 @@ export type BrandCommerceOrderListDeps = {
     brandId: string;
     provider: CommerceProvider | null;
     financialStatus: CommerceOrderFinancialStatus | null;
+    /** PHASE B — canonical fulfillment enum, independent of financial status. */
+    fulfillmentStatus: CommerceOrderFulfillmentStatus | null;
+    /** PHASE B — exact connection scope. Always ANDed with `brandId`, never a substitute for it. */
+    connectionId: string | null;
     attributionWhere: Prisma.CommerceOrderWhereInput;
+    /** PHASE B — order-number substring match. The ONLY free-text search; never customer data. */
+    orderNumberWhere: Prisma.CommerceOrderWhereInput;
+    /** PHASE B — business-order-date range (`providerCreatedAt ?? createdAt`). */
+    dateWhere: Prisma.CommerceOrderWhereInput;
     cursorWhere: Prisma.CommerceOrderWhereInput | null;
     limit: number;
   }): Promise<
@@ -109,13 +125,10 @@ async function defaultFindOrders(
 ) {
   const { default: prisma } = await import("@/lib/prisma");
   return prisma.commerceOrder.findMany({
-    where: {
-      brandId: input.brandId,
-      ...(input.provider ? { provider: input.provider } : {}),
-      ...(input.financialStatus ? { financialStatus: input.financialStatus } : {}),
-      ...input.attributionWhere,
-      ...(input.cursorWhere ?? {}),
-    },
+    // PHASE B — composition lives in a PURE, separately-tested helper so the
+    // AND-vs-spread correctness (see `buildOrderListWhere`) is provable
+    // without a database.
+    where: buildOrderListWhere(input),
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: input.limit + 1,
     select: ORDER_SELECT,
@@ -127,6 +140,32 @@ const DEFAULT_DEPS: BrandCommerceOrderListDeps = {
   findOrders: defaultFindOrders,
 };
 
+export type BrandCommerceOrderListQuery = {
+  provider: string | null;
+  financialStatus: string | null;
+  fulfillmentStatus: string | null;
+  connectionId: string | null;
+  orderNumber: string | null;
+  dateFrom: string | null;
+  dateTo: string | null;
+  attributed: string | null;
+  cursor: string | null;
+  limit: string | null;
+};
+
+const EMPTY_QUERY: BrandCommerceOrderListQuery = {
+  provider: null,
+  financialStatus: null,
+  fulfillmentStatus: null,
+  connectionId: null,
+  orderNumber: null,
+  dateFrom: null,
+  dateTo: null,
+  attributed: null,
+  cursor: null,
+  limit: null,
+};
+
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
   return brandCommerceOrdersGetImpl(
@@ -134,6 +173,11 @@ export async function GET(request: NextRequest) {
     {
       provider: params.get("provider"),
       financialStatus: params.get("financialStatus"),
+      fulfillmentStatus: params.get("fulfillmentStatus"),
+      connectionId: params.get("connectionId"),
+      orderNumber: params.get("orderNumber"),
+      dateFrom: params.get("dateFrom"),
+      dateTo: params.get("dateTo"),
       attributed: params.get("attributed"),
       cursor: params.get("cursor"),
       limit: params.get("limit"),
@@ -143,15 +187,12 @@ export async function GET(request: NextRequest) {
 
 export async function brandCommerceOrdersGetImpl(
   overrides: Partial<BrandCommerceOrderListDeps> = {},
-  query: {
-    provider: string | null;
-    financialStatus: string | null;
-    attributed: string | null;
-    cursor: string | null;
-    limit: string | null;
-  } = { provider: null, financialStatus: null, attributed: null, cursor: null, limit: null },
+  // `Partial` so a caller (notably a test) can supply only the filters it
+  // cares about; every unmentioned filter defaults to "not applied".
+  rawQuery: Partial<BrandCommerceOrderListQuery> = {},
 ) {
   const deps: BrandCommerceOrderListDeps = { ...DEFAULT_DEPS, ...overrides };
+  const query: BrandCommerceOrderListQuery = { ...EMPTY_QUERY, ...rawQuery };
 
   try {
     const context = await deps.getContext();
@@ -166,15 +207,52 @@ export async function brandCommerceOrdersGetImpl(
 
     const provider = normalizeOrderProviderFilter(query.provider);
     const financialStatus = normalizeOrderFinancialStatusFilter(query.financialStatus);
+    const fulfillmentStatus = normalizeOrderFulfillmentStatusFilter(query.fulfillmentStatus);
+    const connectionId = normalizeConnectionIdFilter(query.connectionId);
     const attributionFilter = normalizeAttributionFilter(query.attributed);
     const cursor = decodeCommerceOrderCursor(query.cursor);
     const limit = clampOrderListLimit(query.limit);
+
+    // PHASE B — STRUCTURALLY INVALID input is rejected with a
+    // machine-readable code rather than silently ignored. Silently dropping a
+    // date filter would show the operator far more orders than they asked
+    // for while the UI still displays the range as applied. See
+    // `order-list.ts`'s VALIDATION POLICY block for why enum filters
+    // deliberately stay lenient instead.
+    const dateRange = parseOrderDateRange(query.dateFrom, query.dateTo);
+    if (!dateRange.ok) {
+      return NextResponse.json(
+        {
+          error:
+            dateRange.code === "INVERTED_RANGE"
+              ? '"dateFrom" must not be after "dateTo".'
+              : '"dateFrom" and "dateTo" must be valid timestamps.',
+          code: dateRange.code,
+        },
+        { status: 400 },
+      );
+    }
+
+    const orderNumberSearch = normalizeOrderNumberSearch(query.orderNumber);
+    if (!orderNumberSearch.ok) {
+      return NextResponse.json(
+        {
+          error: `"orderNumber" must be at most ${MAX_ORDER_NUMBER_SEARCH_LENGTH} characters.`,
+          code: orderNumberSearch.code,
+        },
+        { status: 400 },
+      );
+    }
 
     const rows = await deps.findOrders({
       brandId,
       provider,
       financialStatus,
+      fulfillmentStatus,
+      connectionId,
       attributionWhere: buildAttributionWhere(attributionFilter),
+      orderNumberWhere: buildOrderNumberWhere(orderNumberSearch.value),
+      dateWhere: buildOrderDateWhere(dateRange.from, dateRange.to),
       cursorWhere: cursor ? buildCommerceOrderCursorWhere(cursor) : null,
       limit,
     });

@@ -432,6 +432,18 @@ function makeIngestionStack() {
   const state = { orderCount: 0 };
   const deps: Partial<OrderIngestionDeps> = {
     claimEvent: (input) => ledger.claim(input),
+    /**
+     * PHASE A — `finalizeEvent` is now an injectable `OrderIngestionDeps`
+     * member. Injecting it here removes the last real-Prisma fall-through in
+     * this suite (which previously emitted `Can't reach database server at
+     * 127.0.0.1:1` on every finalization) without changing any behavior under
+     * test: this file's ledger already drives terminal event status through
+     * its own `claim` bookkeeping, and these tests assert on webhook HTTP
+     * responses and ingest call counts, never on the finalize write itself.
+     */
+    async finalizeEvent() {
+      /* intentionally does nothing — see the comment above */
+    },
     async loadConnection() {
       return {
         id: "conn-1",

@@ -45,6 +45,8 @@ type OrderDetail = {
   totalRefundedMinor: string | null;
   netRevenueMinor: string | null;
   attributed: boolean;
+  /** PHASE B — the provider's own last-updated timestamp; see the DTO's doc comment. */
+  providerUpdatedAt: string | null;
   createdAt: string;
   updatedAt: string;
   lineItems: OrderDetailLineItem[];
@@ -172,12 +174,24 @@ export function OrderDetailClient({ orderId }: { orderId: string }) {
                 <p className="mt-1 text-sm text-white/80">{formatDateTime(order.orderDate)}</p>
               </div>
               <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-                <p className="text-xs text-white/50">Last updated</p>
-                <p className="mt-1 text-sm text-white/80">{formatDateTime(order.updatedAt)}</p>
-              </div>
-              <div className="rounded-xl border border-white/10 bg-black/20 p-3">
                 <p className="text-xs text-white/50">Currency</p>
                 <p className="mt-1 text-sm text-white/80">{order.currencyCode ?? "Unknown"}</p>
+              </div>
+              {/* PHASE B — the two timestamps are labelled DISTINCTLY and never
+                  conflated. `providerUpdatedAt` is the provider's own version of
+                  this order and is the exact key generic ingestion uses for
+                  out-of-order protection, which is what explains "my
+                  reconciliation ran but nothing changed". `updatedAt` is when
+                  SQRATCH last wrote the row. */}
+              <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                <p className="text-xs text-white/50">Provider last updated</p>
+                <p className="mt-1 text-sm text-white/80">
+                  {order.providerUpdatedAt ? formatDateTime(order.providerUpdatedAt) : "Unknown"}
+                </p>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-black/20 p-3">
+                <p className="text-xs text-white/50">SQRATCH last updated</p>
+                <p className="mt-1 text-sm text-white/80">{formatDateTime(order.updatedAt)}</p>
               </div>
             </div>
 

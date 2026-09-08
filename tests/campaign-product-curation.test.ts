@@ -233,6 +233,96 @@ describe("creator available-products curated path", () => {
     assert.equal(body.data.curation.requiresCampaignSelection, true);
     assert.deepEqual(body.data.curation.campaigns.map((x: { id: string }) => x.id), ["one", "two"]);
   });
+
+  test("PHASE 29: the query is bounded — never an unlimited fetch of a campaign's assignments", async () => {
+    const { MAX_CREATOR_AVAILABLE_PRODUCTS } = await import(
+      "../src/lib/commerce/campaign-product-curation"
+    );
+    let requestedTake: number | undefined;
+    const response = await availableProductsGet(
+      new NextRequest("https://sqratch.test/api/creator/lessons/lesson-1/available-products"),
+      context,
+      {
+        getAccess: async () => access([
+          { id: "campaign-1", name: "Campaign", brandId: "brand-1" },
+        ]),
+        curationRepository: {
+          listAuthorizedProducts: async () => {
+            // A well-behaved repository over-fetches by exactly one — this
+            // fake instead returns something absurdly large to prove the
+            // ROUTE itself truncates and reports `hasMore`, never trusting
+            // the repository alone.
+            requestedTake = MAX_CREATOR_AVAILABLE_PRODUCTS + 500;
+            return Array.from({ length: MAX_CREATOR_AVAILABLE_PRODUCTS + 500 }, (_, i) => ({
+              ...product,
+              id: `catalog-${i}`,
+              displayOrder: i,
+            }));
+          },
+          findAuthorizedProduct: async () => null,
+        },
+      },
+    );
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    assert.equal(body.data.items.length, MAX_CREATOR_AVAILABLE_PRODUCTS, "the response never exceeds the ceiling");
+    assert.equal(body.data.hasMore, true, "truncation must be reported honestly, never silent");
+    assert.ok(requestedTake && requestedTake > MAX_CREATOR_AVAILABLE_PRODUCTS);
+  });
+
+  test("PHASE 29: a set at or under the ceiling reports hasMore=false", async () => {
+    const { MAX_CREATOR_AVAILABLE_PRODUCTS } = await import(
+      "../src/lib/commerce/campaign-product-curation"
+    );
+    const response = await availableProductsGet(
+      new NextRequest("https://sqratch.test/api/creator/lessons/lesson-1/available-products"),
+      context,
+      {
+        getAccess: async () => access([
+          { id: "campaign-1", name: "Campaign", brandId: "brand-1" },
+        ]),
+        curationRepository: fakeRepository(
+          Array.from({ length: MAX_CREATOR_AVAILABLE_PRODUCTS }, (_, i) => ({
+            ...product,
+            id: `catalog-${i}`,
+            displayOrder: i,
+          })),
+        ),
+      },
+    );
+    const body = await response.json();
+    assert.equal(body.data.items.length, MAX_CREATOR_AVAILABLE_PRODUCTS);
+    assert.equal(body.data.hasMore, false);
+  });
+
+  test("PHASE 29: the real Prisma query applies `take:` — not merely the route's own truncation", () => {
+    const source = readFileSync(
+      join(process.cwd(), "src/lib/commerce/campaign-product-curation.ts"),
+      "utf8",
+    );
+    assert.match(source, /take: MAX_CREATOR_AVAILABLE_PRODUCTS \+ 1/);
+  });
+
+  test("hasMore is present (and false) on every non-catalog response branch too", async () => {
+    const selectionRequired = await availableProductsGet(
+      new NextRequest("https://sqratch.test/api/creator/lessons/lesson-1/available-products"),
+      context,
+      {
+        getAccess: async () => access([
+          { id: "one", name: "One", brandId: "brand-1" },
+          { id: "two", name: "Two", brandId: "brand-2" },
+        ]),
+      },
+    );
+    assert.equal((await selectionRequired.json()).data.hasMore, false);
+
+    const none = await availableProductsGet(
+      new NextRequest("https://sqratch.test/api/creator/lessons/lesson-1/available-products"),
+      context,
+      { getAccess: async () => access([]) },
+    );
+    assert.equal((await none.json()).data.hasMore, false);
+  });
 });
 
 test("creator catalog serialization uses only synchronized safe fields", () => {

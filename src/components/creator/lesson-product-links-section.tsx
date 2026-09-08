@@ -16,6 +16,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import {
+  parseCreatorAvailableProducts,
+  type CreatorAvailableProductsPayload,
+  type CreatorPickerCampaignOption,
+} from "@/lib/commerce/creator-product-response";
 
 /**
  * One CANONICAL lesson product attachment, mirroring
@@ -47,54 +52,14 @@ export type LessonProductLinkItem = {
   createdAt: string;
 };
 
-type AvailableLessonProduct = {
-  id: string;
-  /** A SQRATCH catalog id, never a provider product id — and the only product
-   * value ever sent when attaching. */
-  catalogProductId: string;
-  title: string;
-  handle: string;
-  productUrl: string;
-  images: string[];
-  imageUrl: string | null;
-  priceRange: {
-    min: number | null;
-    max: number | null;
-  };
-  priceText: string | null;
-  currency: string;
-  variantIds: string[];
-};
-
-/** One eligible campaign context offered by the explicit selector. Mirrors
- * `CampaignSelectorOption` in `src/lib/commerce/campaign-product-curation.ts`
- * (not imported directly — this file consumes only the JSON response shape,
- * consistent with how the rest of this file's response types are declared). */
-type CampaignSelectorOption = {
-  id: string;
-  name: string;
-  brandId: string;
-  brandName: string | null;
-};
-
-type CampaignCurationPickerState = {
-  enabled: boolean;
-  campaignId?: string;
-  requiresCampaignSelection: boolean;
-  campaigns: CampaignSelectorOption[];
-};
-
-type AvailableLessonProductsResponse = {
-  brand: {
-    id: string;
-    name: string;
-    slug: string;
-  } | null;
-  candidateBrandCount: number;
-  connected: boolean;
-  items: AvailableLessonProduct[];
-  curation?: CampaignCurationPickerState;
-};
+/**
+ * One eligible campaign context offered by the explicit selector, and the
+ * full available-products response. Owned by `parseCreatorAvailableProducts`,
+ * which validates the payload at runtime — aliased rather than re-declared
+ * so the rendered shape and the validated shape cannot drift.
+ */
+type CampaignSelectorOption = CreatorPickerCampaignOption;
+type AvailableLessonProductsResponse = CreatorAvailableProductsPayload;
 
 export function LessonProductLinksSection({
   lessonId,
@@ -169,13 +134,29 @@ export function LessonProductLinksSection({
 
       try {
         const requestedCampaignId = campaignId.trim();
-        const result = await fetchJson<AvailableLessonProductsResponse>(
-          `/api/creator/lessons/${lessonId}/available-products${
-            requestedCampaignId
-              ? `?campaignId=${encodeURIComponent(requestedCampaignId)}`
-              : ""
-          }`,
+        // Validated at RUNTIME, not merely cast. `fetchJson`'s final
+        // statement is `as T` — a compile-time claim only — and a body
+        // missing `items` would have reached the render and thrown on
+        // `available.items.filter(...)`/`.length`, the same defect class
+        // the public commerce surfaces were hardened against.
+        const result = parseCreatorAvailableProducts(
+          await fetchJson<unknown>(
+            `/api/creator/lessons/${lessonId}/available-products${
+              requestedCampaignId
+                ? `?campaignId=${encodeURIComponent(requestedCampaignId)}`
+                : ""
+            }`,
+          ),
         );
+
+        if (!result) {
+          // Deliberately NOT an empty picker: a genuinely product-less
+          // campaign parses to `items: []` and renders normally. `null`
+          // means the payload itself was malformed.
+          setPickerError("Failed to load available products.");
+          return;
+        }
+
         setAvailable(result);
         // Opportunistically learn brand names from this response for the
         // already-attached list's labels — no extra request, just reusing
@@ -349,7 +330,8 @@ export function LessonProductLinksSection({
                         alt={product.title || "Lesson product"}
                         width={80}
                         height={80}
-                        className="h-20 w-20 rounded-2xl object-cover"
+                        /* object-contain: provider images vary in aspect ratio; object-cover cropped tall bottle shots. */
+                        className="h-20 w-20 rounded-2xl bg-white/5 object-contain p-1"
                       />
                     ) : (
                       <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-white/8 text-xs text-white/45">
@@ -425,6 +407,14 @@ export function LessonProductLinksSection({
                 placeholder="Search products"
                 className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
               />
+            )}
+
+            {available?.hasMore && (
+              <p className="text-xs text-white/45">
+                Showing the first {available.items.length} campaign-eligible products. This
+                campaign has more than that assigned; search below filters only what has
+                loaded.
+              </p>
             )}
 
             {loadingAvailable ? (
@@ -547,7 +537,8 @@ export function LessonProductLinksSection({
                             alt={product.title}
                             width={80}
                             height={80}
-                            className="h-20 w-20 rounded-2xl object-cover"
+                            /* object-contain: provider images vary in aspect ratio; object-cover cropped tall bottle shots. */
+                            className="h-20 w-20 rounded-2xl bg-white/5 object-contain p-1"
                           />
                         ) : (
                           <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-white/8 text-xs text-white/45">

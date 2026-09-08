@@ -5,9 +5,12 @@ import { CreatorPageShell } from "@/components/creator/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
 import {
+  currenciesInTrend,
   formatMoneyRows,
+  minorForCurrency,
   parseCreatorConversionAnalytics,
   providerLabel,
+  type ConversionDailyPoint,
   type CreatorConversionAnalytics,
   type MoneyRow,
   type NamedBreakdownRow,
@@ -672,6 +675,8 @@ function ConversionAnalyticsSection({
             <MoneyRowsCard title="Net attributed revenue" rows={data.netAttributedRevenueByCurrency} />
           </div>
 
+          <CreatorConversionTrendSection trend={data.dailyTrend} />
+
           <div className="grid gap-4 lg:grid-cols-2">
             <PageCard>
               <h3 className="text-lg font-semibold">By provider</h3>
@@ -715,6 +720,139 @@ function ConversionAnalyticsSection({
         </>
       )}
     </>
+  );
+}
+
+/**
+ * PHASE D — the creator's daily conversion/revenue trend.
+ *
+ * Reuses the provider-neutral aggregation the Brand side uses, and inherits
+ * the creator route's OWN disclosure boundary rather than relaxing it: the
+ * server never selects a campaign id or a whole-order line item for a
+ * creator, so nothing campaign-shaped or basket-shaped can reach this
+ * component to be rendered. Only the creator's OWN attributed conversions
+ * are ever in scope (`attribution.creatorProfileId`), and the Experience
+ * filter is ownership-checked SERVER-SIDE.
+ *
+ * Currency separation and the UTC-day convention are identical to the Brand
+ * side — currencies are never combined.
+ */
+function CreatorConversionTrendSection({ trend }: { trend: ConversionDailyPoint[] }) {
+  if (trend.length === 0) return null;
+
+  const currencies = currenciesInTrend(trend);
+  const peakOrders = trend.reduce((peak, point) => Math.max(peak, point.attributedOrders), 0);
+  if (peakOrders === 0) return null;
+
+  return (
+    <>
+      <PageCard>
+        <h2 className="text-xl font-semibold">Attributed conversions per day</h2>
+        <p className="mt-1 text-xs text-white/45">
+          UTC days. Every day in the range is shown, including days with no attributed orders.
+        </p>
+        <div className="mt-4 max-h-80 overflow-y-auto">
+          <table className="w-full text-left text-sm">
+            <thead className="text-white/55">
+              <tr>
+                <th scope="col" className="pb-3">Day (UTC)</th>
+                <th scope="col" className="pb-3 w-full">Attributed orders</th>
+                <th scope="col" className="pb-3 text-right whitespace-nowrap">Paid now</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/10">
+              {trend.map((point) => (
+                <tr key={point.date}>
+                  <td className="py-2 whitespace-nowrap pr-4">{point.date}</td>
+                  <td className="py-2">
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="h-2 rounded-full bg-white/45"
+                        style={{
+                          width: `${Math.round((point.attributedOrders / peakOrders) * 100)}%`,
+                        }}
+                      />
+                      <span className="tabular-nums text-white/75">{point.attributedOrders}</span>
+                    </div>
+                  </td>
+                  <td className="py-2 text-right tabular-nums text-white/60">
+                    {point.currentlyNetPositivePaidOrders}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </PageCard>
+
+      {currencies.map((currencyCode) => (
+        <CreatorTrendCurrencyTable key={currencyCode} currencyCode={currencyCode} trend={trend} />
+      ))}
+    </>
+  );
+}
+
+/** One currency's daily revenue. See the Brand-side sibling — identical contract. */
+function CreatorTrendCurrencyTable({
+  currencyCode,
+  trend,
+}: {
+  currencyCode: string;
+  trend: ConversionDailyPoint[];
+}) {
+  const format = (rows: MoneyRow[]) => {
+    const minor = minorForCurrency(rows, currencyCode);
+    if (minor === null) return "—";
+    return formatMoneyRows([{ currencyCode, minor }])[0] ?? "—";
+  };
+
+  const daysWithActivity = trend.filter(
+    (point) =>
+      minorForCurrency(point.grossRevenueByCurrency, currencyCode) !== null ||
+      minorForCurrency(point.refundedRevenueByCurrency, currencyCode) !== null ||
+      minorForCurrency(point.netRevenueByCurrency, currencyCode) !== null,
+  );
+  if (daysWithActivity.length === 0) return null;
+
+  return (
+    <PageCard>
+      <h2 className="text-xl font-semibold">
+        {currencyCode === "UNKNOWN"
+          ? "Revenue per day — unknown currency"
+          : `Revenue per day — ${currencyCode}`}
+      </h2>
+      <p className="mt-1 text-xs text-white/45">
+        Shown separately per currency. Amounts in different currencies are never added together.
+      </p>
+      <div className="mt-4 max-h-80 overflow-auto">
+        <table className="w-full min-w-[420px] text-left text-sm">
+          <thead className="text-white/55">
+            <tr>
+              <th scope="col" className="pb-3">Day (UTC)</th>
+              <th scope="col" className="pb-3 text-right">Gross</th>
+              <th scope="col" className="pb-3 text-right">Refunded</th>
+              <th scope="col" className="pb-3 text-right">Net</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/10">
+            {daysWithActivity.map((point) => (
+              <tr key={point.date}>
+                <td className="py-2 whitespace-nowrap pr-4">{point.date}</td>
+                <td className="py-2 text-right tabular-nums whitespace-nowrap">
+                  {format(point.grossRevenueByCurrency)}
+                </td>
+                <td className="py-2 text-right tabular-nums whitespace-nowrap text-amber-200/80">
+                  {format(point.refundedRevenueByCurrency)}
+                </td>
+                <td className="py-2 text-right tabular-nums whitespace-nowrap">
+                  {format(point.netRevenueByCurrency)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </PageCard>
   );
 }
 

@@ -37,6 +37,7 @@ function validBrandFixture(): BrandConversionAnalytics {
     attributedOrdersByCreator: [{ id: "creator-1", name: "Jordan", orders: 6 }],
     attributedOrdersByLesson: [{ id: "lesson-1", name: "Intro", orders: 6 }],
     attributedOrdersByProduct: [{ id: "product-1", name: "Estate Red", orders: 6 }],
+    dailyTrend: [],
   };
 }
 

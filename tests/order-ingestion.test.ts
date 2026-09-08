@@ -121,6 +121,7 @@ class FakeEventTable {
     return this.rows.get(FakeEventTable.key(provider, providerEventId));
   }
 
+
   /** Pre-existing row, as if written by an earlier delivery. */
   seed(
     provider: CommerceProvider,
@@ -141,12 +142,16 @@ class FakeEventTable {
   /**
    * Simulates the terminal write `finalizeEvent` performs in production.
    *
-   * It cannot happen on its own here: `finalizeEvent` is NOT dependency
-   * injected, always imports the real prisma singleton, and swallows its own
-   * failure — so under this file's unreachable `DATABASE_URL` every row stays
-   * `RECEIVED` forever. That is exactly the crash/lost-finalize state the
-   * lease exists for, so it is the DEFAULT here and reaching a terminal status
-   * is the thing a test must ask for explicitly.
+   * PHASE A UPDATE: `finalizeEvent` IS dependency injected now, and
+   * `makeDeps` supplies a deliberate no-op for it (see that comment), so
+   * every row still stays `RECEIVED` by default — but for an explicit,
+   * documented reason rather than because production code was reaching past
+   * the deps object to an unreachable database.
+   *
+   * That default models the crash/lost-finalize state the claim lease exists
+   * to recover from (production's finalize is best-effort and can fail
+   * silently), so reaching a terminal status remains something a test asks
+   * for explicitly by calling this method.
    */
   finalize(
     provider: CommerceProvider,
@@ -455,6 +460,25 @@ function makeDeps(
     },
     async runTransaction(fn) {
       return fn(store.tx());
+    },
+    /**
+     * PHASE A — the fourth DB seam, now injected so this whole suite runs
+     * with ZERO real Prisma access (it previously fell through to the real
+     * singleton on every ingestion, emitting ~83 `Can't reach database
+     * server at 127.0.0.1:1` lines per run).
+     *
+     * Deliberately a NO-OP, which preserves this fixture's long-standing
+     * default: the event row stays `RECEIVED` unless a test explicitly calls
+     * `store.events.finalize(...)`. That is not a shortcut — production's
+     * `finalizeEvent` is a BEST-EFFORT write that legitimately fails
+     * silently (see its doc comment), leaving exactly this row state. It is
+     * the crash/lost-finalize case the claim lease exists to recover from,
+     * so having it be the default here is what keeps the IN_FLIGHT /
+     * RECLAIMED coverage meaningful. What changed is only that it is now
+     * EXPLICIT rather than an accidental side effect of a DI leak.
+     */
+    async finalizeEvent() {
+      /* intentionally does nothing — see the comment above */
     },
     hashAttributionToken(token: string): string {
       if (token === "MALFORMED-TOKEN") {
@@ -2480,8 +2504,22 @@ describe("30. the FAILED outcome never leaks the underlying error", () => {
       -1,
       "the write-failure catch must not bind the error (no `catch (error)`), so its message can never be read",
     );
-    const catchBody = source.slice(catchIdx, catchIdx + 400);
+    // PHASE A: sliced to the END OF THE CATCH BLOCK rather than a fixed
+    // character count. The previous fixed 400-char window was brittle — it
+    // broke merely because `finalizeEvent(` became `resolved.finalizeEvent(`,
+    // even though the property under test (the catch discards the error and
+    // records only the classified tag) was completely unaffected.
+    const catchEnd = source.indexOf("\n  }", catchIdx);
+    const catchBody = source.slice(catchIdx, catchEnd === -1 ? catchIdx + 800 : catchEnd);
     assert.match(catchBody, /WRITE_FAILED/);
+    // The real invariant: no EXECUTABLE line inside the catch reads a thrown
+    // error. Comments are stripped first — the block's own doc comment
+    // legitimately explains *why* the error is discarded, and matching on
+    // that prose would be testing the comment rather than the code.
+    const executable = catchBody
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    assert.doesNotMatch(executable, /\berror\b/);
   });
 
   test("the outer unexpected-failure catch is unbound for the same reason", () => {
@@ -2510,17 +2548,88 @@ test("31. this test file pins DATABASE_URL to the blocked host on line 1, before
 // Observation (not a fix): finalizeEvent is not dependency-injected
 // ---------------------------------------------------------------------------
 
-describe("observation: finalizeEvent bypasses the deps object entirely", () => {
-  test("order-ingestion.ts's finalizeEvent always dynamically imports the real @/lib/prisma module, unlike claimEvent/loadConnection/runTransaction", () => {
+describe("PHASE A: finalizeEvent is a fully injectable dependency", () => {
+  // This suite previously asserted the OPPOSITE — it documented that
+  // `finalizeEvent` bypassed `OrderIngestionDeps` and always reached the real
+  // Prisma singleton, "relying on its own try/catch to stay a no-op under the
+  // blocked test DATABASE_URL". That was a real dependency leak, not a
+  // property worth preserving: it meant a caller with a complete in-memory
+  // stack still opened a real DB connection on every finalization (surfacing
+  // as `prisma:error ... Can't reach database server at 127.0.0.1:1` noise),
+  // and no test could observe finalization at all. The tests below assert the
+  // repaired contract.
+
+  test("every DB touch in order-ingestion.ts is reachable through OrderIngestionDeps — finalizeEvent included", () => {
     const source = readSource("src/lib/commerce/order-ingestion.ts");
-    const fnStart = source.indexOf("async function finalizeEvent");
-    assert.notEqual(fnStart, -1);
+    assert.match(
+      source,
+      /finalizeEvent\(\s*\n?\s*eventId: string,/,
+      "OrderIngestionDeps must declare finalizeEvent",
+    );
+    assert.match(source, /finalizeEvent: defaultFinalizeEvent,/, "the default must be registered");
+    // No call site may reach the module-level default directly any more.
+    assert.doesNotMatch(
+      source,
+      /await finalizeEvent\(/,
+      "finalizeEvent must always be invoked through the resolved deps object",
+    );
+    assert.match(source, /await resolved\.finalizeEvent\(/);
+  });
+
+  test("the default implementation still performs the real write, and still deliberately swallows its own failure", () => {
+    const source = readSource("src/lib/commerce/order-ingestion.ts");
+    const fnStart = source.indexOf("async function defaultFinalizeEvent");
+    assert.notEqual(fnStart, -1, "the default implementation must still exist");
     const fnEnd = source.indexOf("\n// ---", fnStart + 1);
     const fnBody = source.slice(fnStart, fnEnd === -1 ? undefined : fnEnd);
-    assert.match(
-      fnBody,
-      /await import\("@\/lib\/prisma"\)/,
-      "documents that finalizeEvent is NOT part of OrderIngestionDeps and always touches the real prisma singleton, relying on its own try/catch to stay a no-op under the blocked test DATABASE_URL",
+    // Production behavior is unchanged: real prisma, same swallow.
+    assert.match(fnBody, /await import\("@\/lib\/prisma"\)/);
+    assert.match(fnBody, /commerceOrderEvent\.update/);
+    assert.match(fnBody, /catch\s*\{/, "the pre-existing best-effort swallow must remain");
+  });
+
+  test("an injected finalizeEvent is actually used by the pipeline, with the correct terminal status", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const finalized: Array<{ eventId: string; status: string }> = [];
+
+    const outcome = await ingestNormalizedOrder(
+      makeEvent(),
+      makeOrder(),
+      makeDeps(store, {
+        async finalizeEvent(eventId, data) {
+          finalized.push({ eventId, status: data.status });
+        },
+      }),
     );
+
+    assert.equal(outcome.status, "CREATED");
+    assert.equal(finalized.length, 1);
+    assert.equal(finalized[0].status, "PROCESSED");
+    assert.equal(finalized[0].eventId, outcome.eventId);
+  });
+
+  test("a deterministic rejection finalizes as FAILED through the same injected seam", async () => {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection());
+    const finalized: Array<{ eventId: string; status: string; failureSummary?: string | null }> = [];
+
+    const outcome = await ingestNormalizedOrder(
+      makeEvent(),
+      // No external order id -> MISSING_EXTERNAL_ORDER_ID, a deterministic
+      // rejection that must still be durably recorded.
+      makeOrder({ externalOrderId: null }),
+      makeDeps(store, {
+        async finalizeEvent(eventId, data) {
+          finalized.push({ eventId, status: data.status, failureSummary: data.failureSummary });
+        },
+      }),
+    );
+
+    assert.equal(outcome.status, "FAILED");
+    assert.equal(outcome.reason, "MISSING_EXTERNAL_ORDER_ID");
+    assert.equal(finalized.length, 1);
+    assert.equal(finalized[0].status, "FAILED");
+    assert.equal(finalized[0].failureSummary, "MISSING_EXTERNAL_ORDER_ID");
   });
 });

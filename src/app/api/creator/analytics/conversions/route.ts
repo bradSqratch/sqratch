@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCreatorContext, getOwnedExperienceForCreator } from "@/lib/creator-auth";
 import prisma from "@/lib/prisma";
-import { resolveCommerceClickAnalyticsDateRange } from "@/lib/commerce/commerce-click-analytics";
+import {
+  MAX_ANALYTICS_RANGE_DAYS,
+  resolveCommerceClickAnalyticsDateRange,
+} from "@/lib/commerce/commerce-click-analytics";
 import {
   buildConversionAnalytics,
-  type ConversionAnalyticsOrder,
+  buildConversionDailyTrend,
+  type ConversionTrendOrder,
 } from "@/lib/commerce/order-analytics";
 import {
   attachConversionNames,
@@ -142,13 +146,17 @@ export async function GET(request: NextRequest) {
     },
     select: {
       provider: true, financialStatus: true, currencyCode: true, totalMinor: true, totalRefundedMinor: true, netRevenueMinor: true,
+      // PHASE D — bucket key for the daily trend; the SAME column this
+      // query's `where` filters on. Still no campaign id and no line item.
+      createdAt: true,
       // No campaign id and no line item is selected at all: a column that is
       // never read cannot be leaked by a later refactor of the shared builder.
       attribution: { select: { experienceId: true, creatorProfileId: true, lessonId: true, connectedProductId: true } },
     },
   });
 
-  const scoped: ConversionAnalyticsOrder[] = rows.map((row) => ({
+  const scoped: ConversionTrendOrder[] = rows.map((row) => ({
+    orderDate: row.createdAt,
     provider: row.provider,
     financialStatus: row.financialStatus,
     currencyCode: row.currencyCode,
@@ -169,6 +177,11 @@ export async function GET(request: NextRequest) {
   }));
 
   const conversion = buildConversionAnalytics(scoped);
+  const dailyTrend = buildConversionDailyTrend(
+    scoped,
+    { start: range.range.start, end: range.range.end },
+    MAX_ANALYTICS_RANGE_DAYS,
+  );
   const creatorProfileId = context.creatorProfile.id;
 
   const [experienceNames, lessonNames, productNames] = await Promise.all([
@@ -189,6 +202,7 @@ export async function GET(request: NextRequest) {
       range: { start: range.range.start.toISOString(), end: range.range.end.toISOString() },
       filters: { experienceId: requestedExperienceId },
       ...data,
+      dailyTrend,
     },
   });
 }

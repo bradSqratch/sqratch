@@ -2,29 +2,32 @@
 
 import Link from "next/link";
 import Image from "next/image";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { BrandPageShell } from "@/components/brand/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import {
+  parseCampaignProductEnvelope,
+  type CampaignProductEnvelope,
+  type CampaignProductRow,
+} from "@/app/(withSidebar)/dashboard/brand/commerce/commerce-response-validation";
 
-type ProductRow = {
-  brandCommerceProductId: string;
-  title: string;
-  description: string | null;
-  imageUrl: string | null;
-  isVisibleInShop: boolean;
-  isCampaignEligible: boolean;
-  isAvailable: boolean;
-  hasPublicStorefrontUrl: boolean;
-  assignment: { id: string; isActive: boolean; displayOrder: number } | null;
-};
-type Response = {
-  campaign: { id: string; name: string };
-  products: ProductRow[];
-};
-type PageMeta = { hasNextPage: boolean; nextCursor: string | null; limit: number };
+/**
+ * Owned by `parseCampaignProductEnvelope`, which validates the payload at
+ * runtime. Aliased rather than re-declared so the rendered shape and the
+ * validated shape cannot drift.
+ */
+type ProductRow = CampaignProductRow;
+type Response = Pick<CampaignProductEnvelope, "campaign" | "products">;
+type PageMeta = CampaignProductEnvelope["meta"];
+
+/**
+ * Short enough that the list still feels live while typing, long enough that a
+ * normal search term costs ONE catalog query instead of one per character.
+ */
+const SEARCH_DEBOUNCE_MS = 300;
 
 function getVisibilityExplanation(product: ProductRow): string {
   if (!product.hasPublicStorefrontUrl) {
@@ -57,23 +60,75 @@ export default function BrandCampaignProductsPage({ params }: { params: { id: st
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState<string | null>(null);
 
+  // Discards a superseded response. Typing in the search box fires overlapping
+  // requests, and without this a SLOW earlier response could land after a fast
+  // later one and repopulate the list with results for a query the operator
+  // has already replaced.
+  const requestSeq = useRef(0);
+
   const load = useCallback(async (cursor?: string, append = false) => {
+    const seq = ++requestSeq.current;
     setError(null);
     try {
       const qs = new URLSearchParams();
       if (query.trim()) qs.set("q", query.trim());
       if (cursor) qs.set("cursor", cursor);
-      const result = await fetchJson<Response & { meta: PageMeta }>(`/api/brand/campaigns/${campaignId}/commerce-products?${qs}`);
+
+      // A PLAIN `fetch`, deliberately NOT `fetchJson`. This endpoint answers
+      // `{ data, meta }` with `meta` OUTSIDE `data`, and `fetchJson` returns
+      // only `json.data` — which silently dropped `meta` entirely, leaving
+      // `meta?.hasNextPage` permanently falsy so "Load more products" never
+      // rendered and pages past the first were unreachable. See
+      // `parseCampaignProductEnvelope`.
+      const response = await fetch(
+        `/api/brand/campaigns/${encodeURIComponent(campaignId)}/commerce-products?${qs}`,
+        { credentials: "include" },
+      );
+      const body: unknown = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        const message = (body as { error?: string } | null)?.error;
+        throw new Error(message || "Failed to load campaign products.");
+      }
+
+      const parsed = parseCampaignProductEnvelope(body);
+      if (!parsed) {
+        throw new Error("Failed to load campaign products.");
+      }
+
+      if (seq !== requestSeq.current) return; // superseded
+
       setData((current) => append && current
-        ? { ...result, products: [...current.products, ...result.products] }
-        : result);
-      setMeta(result.meta);
+        ? { campaign: parsed.campaign, products: [...current.products, ...parsed.products] }
+        : { campaign: parsed.campaign, products: parsed.products });
+      setMeta(parsed.meta);
     } catch (loadError) {
+      if (seq !== requestSeq.current) return; // superseded
       setError(getErrorMessage(loadError, "Failed to load campaign products."));
     }
   }, [campaignId, query]);
 
-  useEffect(() => { void load(); }, [load]);
+  // DEBOUNCED. `load`'s identity changes with `query`, so before this every
+  // keystroke fired its own request — typing "cabernet" issued eight catalog
+  // queries, each a `contains` scan over the brand's products. The trailing
+  // edge is what the operator actually meant; `requestSeq` still discards any
+  // in-flight response the debounce did not prevent.
+  //
+  // An EMPTY query waits for nothing. That is the first paint and the
+  // just-cleared-the-box case, where a delay would only make the page feel
+  // slower without collapsing any keystrokes.
+  useEffect(() => {
+    if (!query.trim()) {
+      void load();
+      return;
+    }
+    const timer = setTimeout(() => {
+      void load();
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+    // `load` already closes over `query`; it is the dependency that matters.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [load]);
 
   async function assign(product: ProductRow) {
     setSaving(product.brandCommerceProductId);
@@ -123,7 +178,10 @@ export default function BrandCampaignProductsPage({ params }: { params: { id: st
   >
     <PageCard>
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-        <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search catalog products" className="max-w-xl border-white/10 bg-black/20 text-white placeholder:text-white/35" />
+        {/* A placeholder is not an accessible name — it disappears on input
+            and several screen readers ignore it. The display-order input in
+            this same file already carries an aria-label; this matches it. */}
+        <Input aria-label="Search catalog products" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search catalog products" className="max-w-xl border-white/10 bg-black/20 text-white placeholder:text-white/35" />
       </div>
     </PageCard>
     {error && <PageCard><p className="text-sm text-red-300">{error}</p></PageCard>}
@@ -135,7 +193,10 @@ export default function BrandCampaignProductsPage({ params }: { params: { id: st
         return <PageCard key={product.brandCommerceProductId}>
           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
             <div className="flex gap-4">
-              {product.imageUrl && <Image src={product.imageUrl} alt="" width={64} height={64} className="h-16 w-16 rounded-lg object-cover" />}
+              {/* `object-contain` inside a fixed canvas — provider product
+                  images vary in aspect ratio and `object-cover` cropped tall
+                  bottle shots. Matches the Brand catalog thumbnail. */}
+              {product.imageUrl && <Image src={product.imageUrl} alt="" width={64} height={64} className="h-16 w-16 rounded-lg bg-white/5 object-contain p-1" />}
               <div className="space-y-2">
                 <h2 className="font-semibold text-white">{product.title}</h2>
                 {product.description && <p className="text-sm text-white/55">{product.description}</p>}

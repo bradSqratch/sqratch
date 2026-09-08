@@ -111,8 +111,9 @@ function baseDeps(
     getAccess: async () => twoCampaignAccess(null),
     ensureSession: async () => "session-1",
     findBrands: async () => [],
-    findCuratedProducts: async () => [],
-    findCampaignProducts: async () => [],
+    findCampaignScopedCatalogIds: async () => new Set(),
+    findCuratedProductsPage: async () => [],
+    findCampaignProductsPage: async () => [],
     ...overrides,
   };
 }
@@ -169,7 +170,12 @@ describe("public products route: explicit campaign scope and direct union", () =
           entryContext: { kind: "DIRECT" as const },
         }),
         findBrands: async () => [brand("brand-a"), brand("brand-b")],
-        findCampaignProducts: async ({ campaignId }) => {
+        // Mirrors what a real DB query independently computes across ALL
+        // visible campaigns: "bcp-a" is the one BrandCommerceProduct that is
+        // ALSO an active campaign-a assignment, so the storefront block must
+        // exclude it.
+        findCampaignScopedCatalogIds: async () => new Set(["bcp-a"]),
+        findCampaignProductsPage: async ({ campaignId }) => {
           campaignCalls.push(campaignId);
           return campaignId === "campaign-a"
             ? [
@@ -191,27 +197,32 @@ describe("public products route: explicit campaign scope and direct union", () =
                 }),
               ];
         },
-        findCuratedProducts: async (brandId) => {
-          if (brandId === "brand-a") {
-            // The same BCP is already campaign-scoped, so the generic card
-            // must not erase its campaign-specific click/attribution context.
-            return [
-              catalogProduct({
-                selectionId: "bcp-a",
-                connectedId: "connected-a",
-                brandId: "brand-a",
-                title: "A generic duplicate",
-              }),
-            ];
-          }
-          return [
-            catalogProduct({
-              selectionId: "bcp-b-generic",
-              connectedId: "connected-b-generic",
-              brandId: "brand-b",
-              title: "B storefront",
-            }),
-          ];
+        // A REAL storefront query would apply `excludeBrandCommerceProductIds`
+        // as a `notIn` WHERE predicate; this fake reproduces that so the test
+        // exercises the same dedup contract the route relies on.
+        findCuratedProductsPage: async ({ brandId, excludeBrandCommerceProductIds }) => {
+          const all =
+            brandId === "brand-a"
+              ? [
+                  // The same BCP is already campaign-scoped, so the generic
+                  // card must not erase its campaign-specific click/
+                  // attribution context.
+                  catalogProduct({
+                    selectionId: "bcp-a",
+                    connectedId: "connected-a",
+                    brandId: "brand-a",
+                    title: "A generic duplicate",
+                  }),
+                ]
+              : [
+                  catalogProduct({
+                    selectionId: "bcp-b-generic",
+                    connectedId: "connected-b-generic",
+                    brandId: "brand-b",
+                    title: "B storefront",
+                  }),
+                ];
+          return all.filter((row) => !excludeBrandCommerceProductIds.includes(row.id));
         },
       }),
     );
@@ -251,11 +262,11 @@ describe("public products route: explicit campaign scope and direct union", () =
           entryContext: { kind: "CAMPAIGN" as const, campaignId: "campaign-b" },
         }),
         findBrands: async () => [brand("brand-b")],
-        findCampaignProducts: async ({ campaignId }) => {
+        findCampaignProductsPage: async ({ campaignId }) => {
           scopedCampaignIds.push(campaignId);
           return [];
         },
-        findCuratedProducts: async (brandId) => {
+        findCuratedProductsPage: async ({ brandId }) => {
           requestedBrandId = brandId;
           return [];
         },
@@ -279,7 +290,7 @@ describe("public products route: explicit campaign scope and direct union", () =
           entryContext: { kind: "CAMPAIGN" as const, campaignId: "campaign-a" },
         }),
         findBrands: async () => [brand("brand-a")],
-        findCampaignProducts: async ({ campaignId }) => {
+        findCampaignProductsPage: async ({ campaignId }) => {
           if (campaignId === "campaign-a") {
             return [
               catalogProduct({
@@ -301,7 +312,7 @@ describe("public products route: explicit campaign scope and direct union", () =
             }),
           ];
         },
-        findCuratedProducts: async () => [],
+        findCuratedProductsPage: async () => [],
       }),
     );
 
@@ -398,6 +409,11 @@ describe("public lesson-products route wiring (source inspection)", () => {
       /access\.entryContext\.kind === "CAMPAIGN"[\s\S]*?access\.entryContext\.campaignId[\s\S]*?: null/,
     );
     assert.equal(/\.campaigns\[0\]/.test(lessonProductsRouteSource), false);
+  });
+
+  test("PHASE 29: the nested campaignProducts query is bounded — never an unlimited fetch of a Lesson's attachments", () => {
+    assert.match(lessonProductsRouteSource, /const MAX_LESSON_PRODUCTS = \d+;/);
+    assert.match(lessonProductsRouteCode, /take: MAX_LESSON_PRODUCTS,/);
   });
 
   test("the query root is CampaignLessonProduct, so nothing can render unscoped, and an inactive scope remains a denial", () => {
@@ -500,8 +516,13 @@ describe("public lesson-products route wiring (source inspection)", () => {
       "imageUrl",
       "priceText",
       "currency",
-      "brandId",
     ]));
+    // `brandId` used to be in this set, which contradicted this very test's
+    // stated rule — a Brand id IS a scoping key, not a public display field.
+    // It was read by NOTHING (the lesson client declared it in its response
+    // type and never referenced it), so it is no longer sent at all. Pinned
+    // negatively so it cannot drift back into a public, unauthenticated body.
+    assert.ok(!projected.includes("brandId"));
     // `sourceShopDomain` was legacy-compat only and has no client consumer.
     assert.doesNotMatch(lessonProductsRouteCode, /sourceShopDomain/);
   });

@@ -17,6 +17,16 @@ const PAGE_PATH = join(
   "src/app/(withSidebar)/dashboard/brand/analytics/page.tsx",
 );
 
+
+/**
+ * Strips comments before a "must NOT contain X" source scan. The modules
+ * under test legitimately explain in prose *why* they avoid a thing, and
+ * matching that prose would be testing the comment rather than the code.
+ */
+function executableSource(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+}
+
 describe("Brand Analytics — attributed conversions & revenue panel", () => {
   const source = readFileSync(PAGE_PATH, "utf8");
 
@@ -152,8 +162,11 @@ describe("Brand Analytics — attributed conversions & revenue panel", () => {
     const sectionEnd = source.indexOf("\nfunction ConversionMetricCard(");
     const sectionBody = source.slice(sectionStart, sectionEnd);
     assert.match(sectionBody, /href="\/dashboard\/brand\/commerce\/orders"/);
-    assert.doesNotMatch(sectionBody, /catch.?up/i);
-    assert.doesNotMatch(sectionBody, /reconcile/i);
+    // Scan EXECUTABLE code only: the section's own comment legitimately
+    // explains that these controls are deliberately absent.
+    const executableSection = executableSource(sectionBody);
+    assert.doesNotMatch(executableSection, /catch.?up/i);
+    assert.doesNotMatch(executableSection, /reconcile/i);
   });
 
   test("no naive conversion-rate (attributed orders / clicks) is ever computed", () => {

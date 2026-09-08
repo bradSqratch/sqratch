@@ -34,6 +34,7 @@ function orderRow(overrides: Partial<OrderDetailRow> = {}): OrderDetailRow {
     provider: CommerceProvider.COMMERCE7,
     orderNumber: "1001",
     providerCreatedAt: new Date("2026-01-05T00:00:00.000Z"),
+    providerUpdatedAt: new Date("2026-08-26T18:11:55.847Z"),
     createdAt: new Date("2026-01-05T00:05:00.000Z"),
     updatedAt: new Date("2026-01-06T00:00:00.000Z"),
     financialStatus: "PAID",
@@ -200,6 +201,7 @@ describe("route: brandCommerceOrderDetailGetImpl", () => {
             attributed: true,
             createdAt: "2026-01-05T00:05:00.000Z",
             updatedAt: "2026-01-06T00:00:00.000Z",
+            providerUpdatedAt: null,
             lineItems: [],
           };
         },

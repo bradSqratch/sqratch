@@ -83,6 +83,20 @@ const PUBLICLY_LISTABLE_CONNECTED_PRODUCT = {
   connection: { is: { status: "CONNECTED" as const } },
 } as const;
 
+/**
+ * PHASE 29 — a defensive ceiling, not a pagination page size. A
+ * `CampaignLessonProduct` row exists only where a Creator explicitly
+ * attached one product to one Lesson (see that model's own doc comment:
+ * "THE canonical Lesson product attachment"), so the realistic count per
+ * Lesson is a handful, far smaller even than the Creator's campaign-eligible
+ * picker (`MAX_CREATOR_AVAILABLE_PRODUCTS`). There is no "Load more" UI on
+ * this surface and none is warranted — a second pagination system for a set
+ * this size would be overengineering. This still bounds the query rather
+ * than trusting "lessons probably won't have that many," matching the same
+ * principle applied to every other commerce list in this codebase.
+ */
+const MAX_LESSON_PRODUCTS = 100;
+
 export async function GET(
   request: NextRequest,
   context: {
@@ -129,6 +143,7 @@ export async function GET(
             { createdAt: "desc" },
             { id: "asc" },
           ],
+          take: MAX_LESSON_PRODUCTS,
           select: {
             id: true,
             brandId: true,
@@ -208,7 +223,13 @@ export async function GET(
                 imageUrl: product.imageUrl,
                 priceText: formatMinorUnitPriceRange(product),
                 currency: product.currencyCode,
-                brandId: attachment.brandId,
+                // `brandId` was projected here and read by NOTHING — the
+                // lesson client declared it in its response type and never
+                // referenced it. An internal Brand identifier in a public,
+                // unauthenticated response is a data-minimization violation
+                // with no consumer to justify it, so it is no longer sent.
+                // Brand identity for this surface is server-side only: the
+                // click hop re-derives it from the attachment.
               };
             })
           : [],

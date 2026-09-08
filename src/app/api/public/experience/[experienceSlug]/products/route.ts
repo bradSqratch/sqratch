@@ -23,6 +23,56 @@
  * the Online Store channel. Password-protected development stores can still be
  * published and use the canonical fallback URL. The click routes apply the
  * identical pair, so a hidden card is never clickable.
+ *
+ * ===========================================================================
+ * PHASE 29 — BOUNDED, CURSOR-PAGINATED (was: unbounded, browser-paginated)
+ * ===========================================================================
+ * This route previously fetched EVERY eligible product for every visible
+ * campaign and every visible brand storefront in one request (no `take:`
+ * anywhere) and let the browser slice the full array into pages. For a large
+ * catalog that was an unbounded public, anonymous-accessible payload.
+ *
+ * The listing is a UNION of independently-ordered, cross-deduplicated
+ * sources — one "block" per visible campaign, then one "block" per distinct
+ * visible brand storefront (excluding anything already shown campaign-scoped)
+ * — concatenated, not merged, so a single flat `ORDER BY` cannot express it.
+ * Pagination here is therefore BLOCK-AWARE keyset pagination; the mechanics
+ * (cursor shape, block-walking, `hasNextPage` proof) live in the pure,
+ * DB-free `resolvePublicShopPage` in `@/lib/commerce/public-shop-pagination`.
+ * See that file's header for the full design rationale, including why the
+ * storefront exclusion set is recomputed narrowly (id-only) on every request
+ * rather than being the same unbounded-payload problem this fixes.
+ *
+ * DEFENSE-IN-DEPTH SPLIT ACROSS TWO CHECKS, DELIBERATELY UNEVEN.
+ * `isSafeCuratedProduct` (brand/availability/publication on the already-
+ * mapped `CuratedCampaignProduct` shape) is STILL applied, once, per fetched
+ * batch, exactly as the unpaginated version applied it — it is what makes
+ * "does not surface unavailable, cross-brand, non-public products" testable
+ * against a plain injected fake, not only against a real WHERE clause, and
+ * it is cheap enough (a handful of boolean/string comparisons on data
+ * already in hand) that applying it costs nothing.
+ *
+ * `isCampaignAssignmentCatalogAuthorized`'s specific checks (assignment
+ * active, campaign/brand cross-ownership, eligibility) are NOT separately
+ * re-verified in JS here, unlike the unpaginated version. Every field it
+ * checks is already a WHERE predicate in `findCampaignProductsPage`, and the
+ * composite foreign keys on `CampaignCommerceProduct` make the cross-tenant
+ * violations it exists to catch structurally impossible at the database
+ * level regardless of this check. Re-adding it would require carrying its
+ * raw input fields (`isActive`, `isCampaignEligible`, ...) through the public
+ * `CuratedCampaignProduct` shape for no protective value beyond the WHERE
+ * clause, and — critically for pagination correctness — a rejecting filter
+ * applied AFTER a bounded `take:` can silently under-fill a page (a rejected
+ * row still consumes part of the take budget), which `isSafeCuratedProduct`
+ * cannot do here specifically because it is proven to never reject a row a
+ * correct WHERE clause already admitted. `isCampaignAssignmentCatalogAuthorized`
+ * itself remains exhaustively unit-tested as a pure function in
+ * `campaign-assignment-catalog-authorization.test.ts`.
+ *
+ * The real, independent authorization boundary for actually reaching a
+ * merchant destination is unchanged either way: the click routes re-derive
+ * everything server-side themselves (see `click-attribution.ts`) and never
+ * trust what this listing showed.
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -30,7 +80,14 @@ import { getExperienceAccessContext, resolvePublicCampaignId } from "@/lib/exper
 import prisma from "@/lib/prisma";
 import { attachSessionCookie, ensureViewerSession } from "@/lib/session";
 import { formatMinorUnitPriceRange } from "@/lib/commerce/money";
-import { isCampaignAssignmentCatalogAuthorized } from "@/lib/commerce/campaign-assignment-authorization";
+import {
+  clampPublicShopLimit,
+  decodePublicShopCursor,
+  encodePublicShopCursor,
+  resolvePublicShopPage,
+  type PublicShopBlockCursor,
+  type PublicShopPageRow,
+} from "@/lib/commerce/public-shop-pagination";
 
 type PublicShopProduct = {
   id?: string;
@@ -167,6 +224,27 @@ const PUBLICLY_LISTABLE_CONNECTED_PRODUCT = {
   connection: { is: { status: "CONNECTED" as const } },
 } as const;
 
+/** One entry in the deterministic, request-scoped block ordering. See the file header. */
+type CampaignShopBlock = {
+  kind: "CAMPAIGN";
+  campaignId: string;
+  brandId: string;
+  brand: PublicShopBrand;
+  productCampaign: { id: string; name: string };
+};
+type StorefrontShopBlock = {
+  kind: "STOREFRONT";
+  brandId: string;
+  brand: PublicShopBrand;
+};
+type ShopBlockDef = CampaignShopBlock | StorefrontShopBlock;
+
+/** One candidate product plus the identity used only for cross-source dedup. */
+type ShopCandidate = {
+  catalogProductId: string;
+  product: PublicShopProduct;
+};
+
 export type PublicExperienceProductsDeps = {
   getAccess(
     experienceSlug: string,
@@ -179,21 +257,71 @@ export type PublicExperienceProductsDeps = {
   }): Promise<string>;
   findBrands(brandIds: string[]): Promise<PublicShopBrand[]>;
   /**
-   * Must return only current-brand, visible, available, publicly-reachable
-   * products (see default implementation). Zero rows means an intentionally
-   * empty storefront — there is no live-provider fallback behind it.
+   * The set of `BrandCommerceProduct.id` values that are an authorized,
+   * active campaign assignment for one of the given (campaignId, brandId)
+   * pairs. Deliberately narrow (id-only) — see the file header for why this
+   * is architecturally distinct from the unbounded-payload problem being
+   * fixed. Used ONLY to exclude a product from a storefront block that a
+   * campaign block already shows.
    */
-  findCuratedProducts(brandId: string): Promise<CuratedCampaignProduct[]>;
+  findCampaignScopedCatalogIds(
+    campaignRefs: Array<{ campaignId: string; brandId: string }>,
+  ): Promise<Set<string>>;
   /**
-   * Active, same-brand campaign assignments. Unlike the public brand
-   * storefront, these are explicitly campaign-scoped and must retain that
-   * identity when a direct Experience renders more than one campaign.
+   * One bounded, keyset-paginated page of ONE campaign's active, authorized
+   * assignments. Ordered by `(displayOrder, connectedProduct.title,
+   * brandCommerceProductId)` ascending — the same order the unpaginated
+   * version used. `cursor` scopes strictly-after; `null` starts at the top.
    */
-  findCampaignProducts(options: {
+  findCampaignProductsPage(options: {
     campaignId: string;
     brandId: string;
+    cursor: PublicShopBlockCursor | null;
+    limit: number;
+  }): Promise<CuratedCampaignProduct[]>;
+  /**
+   * One bounded, keyset-paginated page of ONE brand's generic storefront
+   * catalog, excluding `excludeBrandCommerceProductIds`. Ordered by
+   * `(displayOrder, connectedProduct.title, connectedProductId)` ascending —
+   * the same order the unpaginated version used.
+   */
+  findCuratedProductsPage(options: {
+    brandId: string;
+    excludeBrandCommerceProductIds: string[];
+    cursor: PublicShopBlockCursor | null;
+    limit: number;
   }): Promise<CuratedCampaignProduct[]>;
 };
+
+/** Keyset predicate for `(displayOrder, title, tiebreak) > cursor` under that ascending order. */
+/**
+ * `titlePath`/`titleEqPath` are arbitrary Prisma relation-filter fragments
+ * (e.g. `{ connectedProduct: { title: { gt: ... } } }` or, one relation
+ * deeper, `{ brandCommerceProduct: { connectedProduct: { title: { gt: ... } } } }`)
+ * — left as `Record<string, unknown>` rather than a strict union because the
+ * two call sites nest the same `title` predicate at different relation
+ * depths. Prisma's own generated types validate the ACTUAL query object this
+ * is spread into; this helper only assembles the shared 3-branch keyset
+ * shape once.
+ */
+function buildKeysetAfter(
+  cursor: PublicShopBlockCursor,
+  titlePath: Record<string, unknown>,
+  titleEqPath: Record<string, unknown>,
+  tiebreakField: "brandCommerceProductId" | "connectedProductId",
+) {
+  return {
+    OR: [
+      { displayOrder: { gt: cursor.displayOrder } },
+      { displayOrder: cursor.displayOrder, ...titlePath },
+      {
+        displayOrder: cursor.displayOrder,
+        ...titleEqPath,
+        [tiebreakField]: { gt: cursor.catalogId },
+      },
+    ],
+  };
+}
 
 const DEFAULT_DEPS: PublicExperienceProductsDeps = {
   getAccess: getExperienceAccessContext,
@@ -208,24 +336,140 @@ const DEFAULT_DEPS: PublicExperienceProductsDeps = {
       },
     });
   },
-  findCuratedProducts(brandId) {
-    return prisma.brandCommerceProduct.findMany({
+  async findCampaignScopedCatalogIds(campaignRefs) {
+    if (campaignRefs.length === 0) {
+      return new Set();
+    }
+    const rows = await prisma.campaignCommerceProduct.findMany({
+      where: {
+        isActive: true,
+        // One OR-branch per visible campaign. This is the ONLY top-level
+        // key in this query's `where`, so it cannot collide with any other
+        // predicate (there is no cursor/pagination applied to this
+        // exclusion-set computation — see the file header for why it must
+        // see ALL visible campaigns' assignments, not just one page's worth).
+        OR: campaignRefs.map(({ campaignId, brandId }) => ({
+          campaignId,
+          brandId,
+          campaign: { id: campaignId, brandId },
+          brandCommerceProduct: {
+            brandId,
+            isCampaignEligible: true,
+            connectedProduct: { brandId, ...PUBLICLY_LISTABLE_CONNECTED_PRODUCT },
+          },
+        })),
+      },
+      // NARROW BY DESIGN: only the id this set is keyed by. No title, image,
+      // description, or price — this is an authorization/dedup lookup, not
+      // presentation data, and its result never reaches the client.
+      select: { brandCommerceProductId: true },
+    });
+    return new Set(rows.map((row) => row.brandCommerceProductId));
+  },
+  async findCampaignProductsPage({ campaignId, brandId, cursor, limit }) {
+    const rows = await prisma.campaignCommerceProduct.findMany({
+      where: {
+        campaignId,
+        brandId,
+        isActive: true,
+        campaign: { id: campaignId, brandId },
+        brandCommerceProduct: {
+          brandId,
+          isCampaignEligible: true,
+          connectedProduct: { brandId, ...PUBLICLY_LISTABLE_CONNECTED_PRODUCT },
+        },
+        // Cursor keyset nested under AND — never spread as a second
+        // top-level OR — so a future filter added to this query's base
+        // predicates can never silently collide with it. Mirrors
+        // `order-list.ts`'s `buildOrderListWhere` reasoning exactly.
+        ...(cursor
+          ? {
+              AND: [
+                buildKeysetAfter(
+                  cursor,
+                  { brandCommerceProduct: { connectedProduct: { title: { gt: cursor.sortKey } } } },
+                  { brandCommerceProduct: { connectedProduct: { title: cursor.sortKey } } },
+                  "brandCommerceProductId",
+                ),
+              ],
+            }
+          : {}),
+      },
+      orderBy: [
+        { displayOrder: "asc" },
+        { brandCommerceProduct: { connectedProduct: { title: "asc" } } },
+        { brandCommerceProductId: "asc" },
+      ],
+      take: limit,
+      select: {
+        id: true,
+        displayOrder: true,
+        brandCommerceProduct: {
+          select: {
+            id: true,
+            titleOverride: true,
+            shortDescriptionOverride: true,
+            connectedProduct: {
+              select: {
+                id: true,
+                brandId: true,
+                externalId: true,
+                title: true,
+                productUrl: true,
+                imageUrl: true,
+                descriptionText: true,
+                isAvailable: true,
+                hasPublicStorefrontUrl: true,
+                currencyCode: true,
+                priceMinMinor: true,
+                priceMaxMinor: true,
+                priceMinorUnitExponent: true,
+              },
+            },
+          },
+        },
+      },
+    });
+    return rows.map((row) => ({
+      campaignAssignmentId: row.id,
+      displayOrder: row.displayOrder,
+      ...row.brandCommerceProduct,
+    }));
+  },
+  async findCuratedProductsPage({ brandId, excludeBrandCommerceProductIds, cursor, limit }) {
+    const rows = await prisma.brandCommerceProduct.findMany({
       // The relation predicate is intentional defense in depth. The schema
       // does not make the two brand ids a composite foreign key, so a bad
       // historical row must never expose another brand's catalog item.
       where: {
         brandId,
         isVisibleInShop: true,
+        ...(excludeBrandCommerceProductIds.length > 0
+          ? { id: { notIn: excludeBrandCommerceProductIds } }
+          : {}),
         connectedProduct: {
           brandId,
           ...PUBLICLY_LISTABLE_CONNECTED_PRODUCT,
         },
+        ...(cursor
+          ? {
+              AND: [
+                buildKeysetAfter(
+                  cursor,
+                  { connectedProduct: { title: { gt: cursor.sortKey } } },
+                  { connectedProduct: { title: cursor.sortKey } },
+                  "connectedProductId",
+                ),
+              ],
+            }
+          : {}),
       },
       orderBy: [
         { displayOrder: "asc" },
         { connectedProduct: { title: "asc" } },
         { connectedProductId: "asc" },
       ],
+      take: limit,
       select: {
         id: true,
         displayOrder: true,
@@ -250,92 +494,48 @@ const DEFAULT_DEPS: PublicExperienceProductsDeps = {
         },
       },
     });
-  },
-  findCampaignProducts({ campaignId, brandId }) {
-    return prisma.campaignCommerceProduct
-      .findMany({
-        // Both relations are constrained by brandId in the schema. These
-        // predicates remain deliberate defense in depth for historical rows and
-        // for any future repository replacement.
-        where: {
-          campaignId,
-          brandId,
-          isActive: true,
-          campaign: {
-            id: campaignId,
-            brandId,
-          },
-          brandCommerceProduct: {
-            brandId,
-            isCampaignEligible: true,
-            connectedProduct: {
-              brandId,
-              ...PUBLICLY_LISTABLE_CONNECTED_PRODUCT,
-            },
-          },
-        },
-        orderBy: [
-          { displayOrder: "asc" },
-          { brandCommerceProduct: { connectedProduct: { title: "asc" } } },
-          { brandCommerceProductId: "asc" },
-        ],
-        select: {
-          id: true,
-          campaignId: true,
-          brandId: true,
-          isActive: true,
-          displayOrder: true,
-          campaign: {
-            select: {
-              id: true,
-              brandId: true,
-            },
-          },
-          brandCommerceProduct: {
-            select: {
-              id: true,
-              brandId: true,
-              isCampaignEligible: true,
-              titleOverride: true,
-              shortDescriptionOverride: true,
-              connectedProduct: {
-                select: {
-                  id: true,
-                  brandId: true,
-                  externalId: true,
-                  title: true,
-                  productUrl: true,
-                  imageUrl: true,
-                  descriptionText: true,
-                  isAvailable: true,
-                  hasPublicStorefrontUrl: true,
-                  currencyCode: true,
-                  priceMinMinor: true,
-                  priceMaxMinor: true,
-                  priceMinorUnitExponent: true,
-                },
-              },
-            },
-          },
-        },
-      })
-      .then((rows) =>
-        rows
-          .filter((row) =>
-            isCampaignAssignmentCatalogAuthorized({
-              assignment: row,
-              campaign: row.campaign,
-              brandCommerceProduct: row.brandCommerceProduct,
-            }),
-          )
-          .map((row) => ({
-            campaignAssignmentId: row.id,
-            displayOrder: row.displayOrder,
-            ...row.brandCommerceProduct,
-          })),
-      );
+    return rows;
   },
 };
+
+/**
+ * In-process re-check of the same conditions the queries enforce. Defense in
+ * depth against a replaced repository or an injected dependency that forgets
+ * a predicate: BOTH `isAvailable` and `hasPublicStorefrontUrl` must hold, in
+ * addition to the same-brand check. See this file's header for why this is
+ * the one JS-level check retained after pagination, and applied without a
+ * retry: it is proven to never reject a row a correct WHERE clause already
+ * admitted, so it can never under-fill a bounded page.
+ */
+/**
+ * Defense in depth, matching `isSafeCuratedProduct`'s philosophy: re-sorts
+ * ONE fetched batch (bounded by page size, never the full catalog) by the
+ * exact `(displayOrder, sortKey, catalogId)` order every block's own
+ * `orderBy` already requests. `resolvePublicShopPage` documents that
+ * `fetchBlockPage` MUST return ascending-ordered rows — a real Prisma call
+ * already guarantees that, but a replaced repository or an injected test
+ * double can trivially violate it by construction. Getting this wrong would
+ * not just misorder cards: it would corrupt the KEYSET CURSOR derived from
+ * "the last row", silently breaking pagination (skipped or repeated rows) —
+ * a materially worse consequence than the display-order-only risk the
+ * original unpaginated `sortCuratedProducts` guarded against, so it is kept.
+ */
+function sortPageRows<T>(rows: Array<PublicShopPageRow<T>>): Array<PublicShopPageRow<T>> {
+  return [...rows].sort(
+    (a, b) =>
+      a.displayOrder - b.displayOrder ||
+      a.sortKey.localeCompare(b.sortKey) ||
+      a.catalogId.localeCompare(b.catalogId),
+  );
+}
+
+function isSafeCuratedProduct(selection: CuratedCampaignProduct, brandId: string) {
+  return (
+    selection.connectedProduct.brandId === brandId &&
+    selection.connectedProduct.isAvailable &&
+    selection.connectedProduct.hasPublicStorefrontUrl
+  );
+}
 
 /**
  * The campaign acquisition context for this public shop request. Direct entry
@@ -373,39 +573,11 @@ function resolvePrimaryCampaign(access: PublicShopAccess) {
   );
 }
 
-/**
- * In-process re-check of the same conditions the queries enforce. Defense in
- * depth against a replaced repository or an injected dependency that forgets a
- * predicate: BOTH `isAvailable` and `hasPublicStorefrontUrl` must hold, in
- * addition to the same-brand check.
- */
-function isSafeCuratedProduct(
-  selection: CuratedCampaignProduct,
-  brandId: string,
-) {
-  return (
-    selection.connectedProduct.brandId === brandId &&
-    selection.connectedProduct.isAvailable &&
-    selection.connectedProduct.hasPublicStorefrontUrl
-  );
-}
-
-function sortCuratedProducts(products: CuratedCampaignProduct[]) {
-  return products
-    .filter((product) => Number.isFinite(product.displayOrder))
-    .sort(
-      (a, b) =>
-        a.displayOrder - b.displayOrder ||
-        a.connectedProduct.title.localeCompare(b.connectedProduct.title) ||
-        a.connectedProduct.id.localeCompare(b.connectedProduct.id),
-    );
-}
-
 function serializeCuratedProduct(options: {
   selection: CuratedCampaignProduct;
   brand: PublicShopBrand;
   productCampaign?: { id: string; name: string } | null;
-  source?: "CAMPAIGN_PRODUCT" | "BRAND_STOREFRONT";
+  source: "CAMPAIGN_PRODUCT" | "BRAND_STOREFRONT";
   /** Keeps pre-union single-brand card ids response-compatible. */
   directUnion?: boolean;
 }): PublicShopProduct {
@@ -416,10 +588,6 @@ function serializeCuratedProduct(options: {
     : options.directUnion
       ? `${options.brand.id}-${selectionId}`
       : product.externalId;
-
-  const isCampaignProduct = Boolean(options.selection.campaignAssignmentId || options.productCampaign);
-  const source: "CAMPAIGN_PRODUCT" | "BRAND_STOREFRONT" =
-    options.source || (isCampaignProduct ? "CAMPAIGN_PRODUCT" : "BRAND_STOREFRONT");
 
   return {
     id: `campaign-${idSuffix}`,
@@ -445,8 +613,8 @@ function serializeCuratedProduct(options: {
       name: options.brand.name,
       slug: options.brand.slug,
     },
-    source,
-    ...(source === "CAMPAIGN_PRODUCT" && options.productCampaign
+    source: options.source,
+    ...(options.source === "CAMPAIGN_PRODUCT" && options.productCampaign
       ? { productCampaign: options.productCampaign }
       : {}),
   };
@@ -455,13 +623,15 @@ function serializeCuratedProduct(options: {
 function logPublicShopProductResult(options: {
   experienceSlug: string;
   experienceId: string;
-  catalogProductCount: number;
+  pageProductCount: number;
+  hasNextPage: boolean;
   primaryBrand: PublicShopBrand | null;
 }) {
-  console.info("[public/experience/products][GET] Products loaded:", {
+  console.info("[public/experience/products][GET] Page loaded:", {
     experienceSlug: options.experienceSlug,
     experienceId: options.experienceId,
-    catalogProductCount: options.catalogProductCount,
+    pageProductCount: options.pageProductCount,
+    hasNextPage: options.hasNextPage,
     primaryBrand: options.primaryBrand
       ? {
           id: options.primaryBrand.id,
@@ -541,45 +711,33 @@ export async function publicExperienceProductsGetImpl(
       : eligibleCampaigns;
     const isDirectUnion = !primaryCampaign && visibleCampaigns.length > 1;
 
-    // 1. CampaignCommerceProduct is explicit authorization. On a campaign entry
-    // only that campaign is queried; on a direct entry all valid linked
-    // campaigns are queried and each card retains its own campaign identity.
-    const scopedCandidates = await Promise.all(
-      visibleCampaigns.map(async (campaignLink) => {
-        const brandId = campaignLink.campaign.brand!.id;
-        const brand = brandMap.get(brandId)!;
-        const selections = sortCuratedProducts(
-          (
-            await deps.findCampaignProducts({
-              campaignId: campaignLink.campaignId,
-              brandId,
-            })
-          ).filter((selection) => isSafeCuratedProduct(selection, brandId)),
-        );
-        return selections.map((selection) => ({
-          catalogProductId: selection.id || selection.connectedProduct.id,
-          product: serializeCuratedProduct({
-            selection,
-            brand,
-            source: "CAMPAIGN_PRODUCT",
-            productCampaign: {
-              id: campaignLink.campaign.id,
-              name: campaignLink.campaign.name,
-            },
-          }),
-        }));
-      }),
-    );
-    const scopedProducts = scopedCandidates.flat();
-    const campaignScopedCatalogIds = new Set(
-      scopedProducts.map((candidate) => candidate.catalogProductId),
-    );
+    // The deterministic block ordering this request's cursor addresses:
+    // every visible campaign's block, in the SAME order `visibleCampaigns`
+    // is already sorted in, followed by every distinct visible brand's
+    // storefront block, in brand-name order. This exact ordering is what a
+    // cursor's `blockIndex` means for THIS request; it is recomputed fresh
+    // every request from the same deterministic inputs, so an unchanged
+    // dataset yields the same block assignment across pages.
+    const campaignBlocks: CampaignShopBlock[] = visibleCampaigns
+      .map((campaignLink): CampaignShopBlock | null => {
+        const brandId = campaignLink.campaign.brand?.id;
+        const brand = brandId ? brandMap.get(brandId) : null;
+        if (!brandId || !brand) {
+          return null;
+        }
+        return {
+          kind: "CAMPAIGN",
+          campaignId: campaignLink.campaignId,
+          brandId,
+          brand,
+          productCampaign: {
+            id: campaignLink.campaign.id,
+            name: campaignLink.campaign.name,
+          },
+        };
+      })
+      .filter((block): block is CampaignShopBlock => block !== null);
 
-    // 2. Brand storefront catalog rows are intentionally generic: they may be
-    // shown once for every distinct linked Brand, but never manufactured into
-    // campaign attribution. A campaign-scoped card wins over the same BCP id
-    // so a direct union cannot erase meaningful campaign identity by rendering
-    // a second generic card for it.
     const distinctVisibleBrandIds = Array.from(
       new Set(
         visibleCampaigns
@@ -592,54 +750,106 @@ export async function publicExperienceProductsGetImpl(
       return brandA.name.localeCompare(brandB.name) || a.localeCompare(b);
     });
 
-    const storefrontCandidates = await Promise.all(
-      distinctVisibleBrandIds.map(async (brandId) => {
-        const brand = brandMap.get(brandId)!;
-        // THE PERSISTED CATALOG IS THE ONLY SOURCE. Zero rows is an
-        // intentionally empty storefront, not a cue to call the provider live on
-        // the visitor request path.
-        return sortCuratedProducts(
-          (await deps.findCuratedProducts(brand.id)).filter((selection) =>
-            isSafeCuratedProduct(selection, brand.id),
-          ),
-        )
-          .filter(
-            (selection) =>
-              !campaignScopedCatalogIds.has(
-                selection.id || selection.connectedProduct.id,
-              ),
-          )
-          .map((selection) => ({
-            catalogProductId: selection.id || selection.connectedProduct.id,
-            product: serializeCuratedProduct({
-              selection,
-              brand,
-              source: "BRAND_STOREFRONT",
-              directUnion: isDirectUnion,
-            }),
-          }));
-      }),
-    );
-    const seenStorefrontCatalogIds = new Set<string>();
-    const storefrontProducts = storefrontCandidates
-      .flat()
-      .filter((candidate) => {
-        if (seenStorefrontCatalogIds.has(candidate.catalogProductId))
-          return false;
-        seenStorefrontCatalogIds.add(candidate.catalogProductId);
-        return true;
-      })
-      .map((candidate) => candidate.product);
+    const storefrontBlocks: StorefrontShopBlock[] = distinctVisibleBrandIds.map((brandId) => ({
+      kind: "STOREFRONT",
+      brandId,
+      brand: brandMap.get(brandId)!,
+    }));
 
-    const campaignProducts = [
-      ...scopedProducts.map((candidate) => candidate.product),
-      ...storefrontProducts,
-    ];
+    const orderedBlocks: ShopBlockDef[] = [...campaignBlocks, ...storefrontBlocks];
+
+    // Computed ONCE per request, across ALL visible campaigns regardless of
+    // which block is currently being paged — see the file header and
+    // `findCampaignScopedCatalogIds`'s own doc comment for why this must be
+    // complete rather than scoped to the current page.
+    const campaignScopedCatalogIds = await deps.findCampaignScopedCatalogIds(
+      campaignBlocks.map((block) => ({ campaignId: block.campaignId, brandId: block.brandId })),
+    );
+
+    const params = request.nextUrl.searchParams;
+    const limit = clampPublicShopLimit(params.get("limit"));
+    const decodedCursor = decodePublicShopCursor(params.get("cursor"));
+
+    const page = await resolvePublicShopPage<ShopCandidate>(
+      { cursor: decodedCursor, limit },
+      {
+        blockCount: orderedBlocks.length,
+        async fetchBlockPage(blockIndex, cursor, blockLimit) {
+          const block = orderedBlocks[blockIndex];
+          if (!block) {
+            return [];
+          }
+
+          if (block.kind === "CAMPAIGN") {
+            const rows = (
+              await deps.findCampaignProductsPage({
+                campaignId: block.campaignId,
+                brandId: block.brandId,
+                cursor,
+                limit: blockLimit,
+              })
+            ).filter((selection) => isSafeCuratedProduct(selection, block.brandId));
+            return sortPageRows(
+              rows.map(
+                (selection): PublicShopPageRow<ShopCandidate> => ({
+                  displayOrder: selection.displayOrder,
+                  sortKey: selection.connectedProduct.title,
+                  // Tiebreak matches this block's own orderBy: brandCommerceProductId.
+                  catalogId: selection.id || selection.connectedProduct.id,
+                  item: {
+                    catalogProductId: selection.id || selection.connectedProduct.id,
+                    product: serializeCuratedProduct({
+                      selection,
+                      brand: block.brand,
+                      source: "CAMPAIGN_PRODUCT",
+                      productCampaign: block.productCampaign,
+                    }),
+                  },
+                }),
+              ),
+            );
+          }
+
+          const rows = (
+            await deps.findCuratedProductsPage({
+              brandId: block.brandId,
+              excludeBrandCommerceProductIds: Array.from(campaignScopedCatalogIds),
+              cursor,
+              limit: blockLimit,
+            })
+          ).filter((selection) => isSafeCuratedProduct(selection, block.brandId));
+          return sortPageRows(
+            rows.map(
+              (selection): PublicShopPageRow<ShopCandidate> => ({
+                displayOrder: selection.displayOrder,
+                sortKey: selection.connectedProduct.title,
+                // Tiebreak matches this block's own orderBy: connectedProductId
+                // (NOT BrandCommerceProduct.id — a different column from the
+                // exclusion set's key, used only for THIS block's ordering).
+                catalogId: selection.connectedProduct.id,
+                item: {
+                  catalogProductId: selection.id || selection.connectedProduct.id,
+                  product: serializeCuratedProduct({
+                    selection,
+                    brand: block.brand,
+                    source: "BRAND_STOREFRONT",
+                    directUnion: isDirectUnion,
+                  }),
+                },
+              }),
+            ),
+          );
+        },
+      },
+    );
+
+    const products = page.items.map((candidate) => candidate.product);
 
     logPublicShopProductResult({
       experienceSlug,
       experienceId: access.experience.id,
-      catalogProductCount: campaignProducts.length,
+      pageProductCount: products.length,
+      hasNextPage: page.hasNextPage,
       primaryBrand,
     });
 
@@ -657,7 +867,19 @@ export async function publicExperienceProductsGetImpl(
               brand: primaryCampaign.campaign.brand,
             }
           : null,
-        products: campaignProducts,
+        products,
+      },
+      // OUTSIDE `data`, matching this repository's other keyset-pagination
+      // envelopes (`order-list.ts`, the campaign-products route). `fetchJson`
+      // unwraps to `json.data` only, so a client reading this endpoint MUST
+      // use a raw `fetch()` and parse the full body — see
+      // `parsePublicShopEnvelope` in `public-commerce-response.ts` — never
+      // `fetchJson<T>()`, which would silently discard `meta` exactly as the
+      // Brand campaign-products page once did.
+      meta: {
+        hasNextPage: page.hasNextPage,
+        nextCursor: page.nextCursor ? encodePublicShopCursor(page.nextCursor) : null,
+        limit,
       },
     });
 
