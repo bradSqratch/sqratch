@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getExperienceAccessContext } from "@/lib/experience-access";
+import { mintCampaignReturnToken } from "@/lib/public-experience-entry";
 import prisma from "@/lib/prisma";
 
 export async function GET(
@@ -71,6 +72,10 @@ export async function GET(
             name: item.campaign.name,
             brand: item.campaign.brand,
           })),
+          campaignReturnToken: mintCampaignReturnToken({
+            entryContext: access.entryContext,
+            experienceSlug: access.experience.slug,
+          }),
           isLoggedIn: access.isLoggedIn,
           hasUnlockedCampaign: access.hasUnlockedCampaign,
           isCreatorOwner: access.isCreatorOwner,

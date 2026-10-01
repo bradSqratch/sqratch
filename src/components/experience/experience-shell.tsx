@@ -19,6 +19,7 @@ import {
 import type { ExperienceShellData } from "@/components/experience/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { appendCampaignEntryToken } from "@/lib/experience-entry-url";
 import { cn } from "@/lib/utils";
 import { normalizeInternalRedirectPath } from "@/lib/safe-redirect";
 
@@ -231,8 +232,14 @@ export function GatePanel({
 }) {
   const hubHref = `/x/${experience.slug}`;
   const nextHref = normalizeInternalRedirectPath(returnTo, hubHref);
-  const loginHref = `/login?next=${encodeURIComponent(nextHref)}`;
-  const signupHref = `/signup?next=${encodeURIComponent(nextHref)}`;
+  // Carries the visitor's validated campaign context through login/signup/
+  // verification; absent for a direct visitor, whose return stays DIRECT.
+  const returnHref = appendCampaignEntryToken(
+    nextHref,
+    experience.campaignReturnToken,
+  );
+  const loginHref = `/login?next=${encodeURIComponent(returnHref)}`;
+  const signupHref = `/signup?next=${encodeURIComponent(returnHref)}`;
   const canOfferSignup =
     !experience.isLoggedIn && !experience.hasRedeemedQrWarning;
   // Co-sponsored Experiences must never send a visitor to an arbitrary

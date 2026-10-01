@@ -2,6 +2,7 @@ import { getServerSession } from "next-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import { createCampaignExperienceEntryToken } from "@/lib/public-experience-entry";
+import { CAMPAIGN_ENTRY_QUERY_PARAM } from "@/lib/experience-entry-url";
 import prisma from "@/lib/prisma";
 import { attachSessionCookie, ensureViewerSession } from "@/lib/session";
 
@@ -45,7 +46,7 @@ export async function GET(
     });
     const destination = new URL(`/x/${encodeURIComponent(experienceSlug)}`, request.url);
     destination.searchParams.set(
-      "campaignEntry",
+      CAMPAIGN_ENTRY_QUERY_PARAM,
       createCampaignExperienceEntryToken({
         campaignId: campaign.id,
         experienceSlug,

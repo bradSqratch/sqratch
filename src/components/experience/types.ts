@@ -28,6 +28,12 @@ export type ExperienceShellData = {
   hasRedeemedQrWarning: boolean;
   /** Server-resolved public acquisition context, never inferred client-side. */
   resolvedCampaignId?: string | null;
+  /**
+   * Short-lived signed proof that this visitor is in a validated campaign
+   * context on this Experience, appended to login/signup return URLs so the
+   * campaign survives auth. Null for a direct visitor. Opaque to the client.
+   */
+  campaignReturnToken?: string | null;
 };
 
 export type PublicExperienceData = ExperienceShellData & {

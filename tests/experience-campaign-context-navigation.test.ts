@@ -18,7 +18,7 @@ import {
 import {
   createCampaignExperienceEntryToken,
   isSameExperienceNavigation,
-  resolveExperienceHubEntry,
+  resolveExperienceEntry,
 } from "../src/lib/public-experience-entry";
 
 const HOST = "sqratch.test";
@@ -44,7 +44,7 @@ const other: Campaign = {
 
 /**
  * A faithful in-memory model of what `/x/:slug` does per request: decide with
- * the real `resolveExperienceHubEntry`, clear the session campaign exactly when
+ * the real `resolveExperienceEntry`, clear the session campaign exactly when
  * the page would, then resolve the entry context with the real resolver.
  */
 class Visitor {
@@ -67,7 +67,7 @@ class Visitor {
     secFetchSite?: string | null;
     now?: number;
   }) {
-    const entry = resolveExperienceHubEntry({
+    const entry = resolveExperienceEntry({
       token: options.token ?? null,
       experienceSlug: SLUG,
       sessionCampaignId: this.sessionCampaignId,
@@ -298,7 +298,7 @@ describe("campaign context is not granted by untrusted signals", () => {
     });
 
     assert.deepEqual(
-      resolveExperienceHubEntry({
+      resolveExperienceEntry({
         token,
         experienceSlug: "another-experience",
         sessionCampaignId: benje.id,
@@ -381,26 +381,20 @@ describe("Experience hero campaign display", () => {
 describe("wiring", () => {
   const read = (path: string) => readFileSync(join(process.cwd(), path), "utf8");
 
-  test("only the hub page resets campaign context; sibling Experience routes do not", () => {
-    assert.match(
-      read("src/app/x/[experienceSlug]/page.tsx"),
-      /clearViewerSessionCampaignContext/,
-    );
-
+  test("every Experience route applies the shared entry policy (see experience-sibling-entry-context.test.ts)", () => {
     for (const route of [
-      "learn",
-      "posts",
-      "qa",
-      "shop",
-      "courses/[courseSlug]",
-      "lessons/[lessonId]",
+      "",
+      "/learn",
+      "/posts",
+      "/qa",
+      "/shop",
+      "/courses/[courseSlug]",
+      "/lessons/[lessonId]",
     ]) {
-      assert.equal(
-        /clearViewerSessionCampaignContext/.test(
-          read(`src/app/x/[experienceSlug]/${route}/page.tsx`),
-        ),
-        false,
-        route,
+      assert.match(
+        read(`src/app/x/[experienceSlug]${route}/page.tsx`),
+        /enforceExperienceEntryContext/,
+        route || "hub",
       );
     }
   });

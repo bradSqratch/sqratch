@@ -78,11 +78,17 @@ describe("direct Experience entry wiring", () => {
     "utf8",
   );
 
-  test("hub entry clears stale acquisition context before loading unless the entry is trusted", () => {
-    assert.match(pageSource, /resolveExperienceHubEntry\(\{/);
-    assert.match(pageSource, /if \(!entry\.keepSessionCampaign\) \{\s*await clearViewerSessionCampaignContext\(\);/);
-    assert.match(pageSource, /await clearViewerSessionCampaignContext\(\);[\s\S]*?loadPublicExperience/);
-    assert.match(pageSource, /sessionCampaignId: viewerSession\?\.campaignId \?\? null/);
+  test("hub entry runs the shared guard, which clears stale acquisition context before loading", () => {
+    const guardSource = readFileSync(
+      join(root, "src/lib/experience-entry-guard.ts"),
+      "utf8",
+    );
+
+    assert.match(pageSource, /await enforceExperienceEntryContext\(\{/);
+    assert.match(pageSource, /await enforceExperienceEntryContext\([\s\S]*?loadPublicExperience\(/);
+    assert.match(guardSource, /resolveExperienceEntry\(\{/);
+    assert.match(guardSource, /if \(!entry\.keepSessionCampaign\) \{\s*await clearViewerSessionCampaignContext\(\);/);
+    assert.match(guardSource, /sessionCampaignId: viewerSession\?\.campaignId \?\? null/);
   });
 
   test("campaign handoff validates the CampaignExperience relation and signs server-derived ids", () => {

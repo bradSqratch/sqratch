@@ -1,4 +1,5 @@
 import crypto from "crypto";
+import type { PublicExperienceEntryContext } from "@/lib/campaign-context";
 
 /**
  * A short-lived, server-signed proof that navigation into an Experience came
@@ -18,6 +19,11 @@ type CampaignExperienceEntryPayload = {
 
 const TOKEN_VERSION = "v1";
 const TOKEN_TTL_MS = 2 * 60 * 1000;
+// A login/signup/verify round-trip is far slower than a page hop, so the token
+// that carries campaign context back from auth lives longer.  It is still
+// bounded, bound to one Experience, and only ever matched against the
+// visitor's own session campaign.
+const RETURN_TOKEN_TTL_MS = 60 * 60 * 1000;
 
 function getSigningSecret() {
   const secret = process.env.NEXTAUTH_SECRET || process.env.AUTH_SECRET;
@@ -60,16 +66,44 @@ export function createCampaignExperienceEntryToken(options: {
   campaignId: string;
   experienceSlug: string;
   now?: number;
+  ttlMs?: number;
 }) {
   const payload = Buffer.from(
     JSON.stringify({
       campaignId: options.campaignId,
       experienceSlug: options.experienceSlug,
-      expiresAt: (options.now ?? Date.now()) + TOKEN_TTL_MS,
+      expiresAt: (options.now ?? Date.now()) + (options.ttlMs ?? TOKEN_TTL_MS),
     } satisfies CampaignExperienceEntryPayload),
   ).toString("base64url");
 
   return `${TOKEN_VERSION}.${payload}.${sign(payload)}`;
+}
+
+/**
+ * Proof, carried in the login/signup `next` URL, that the visitor leaving an
+ * Experience page for auth was legitimately in this campaign context.  Minted
+ * only from a server-validated CAMPAIGN entry context; returns null for a
+ * DIRECT visitor (or if signing is unavailable), so no token means no context.
+ */
+export function mintCampaignReturnToken(options: {
+  entryContext: PublicExperienceEntryContext;
+  experienceSlug: string;
+  now?: number;
+}): string | null {
+  if (options.entryContext.kind !== "CAMPAIGN") {
+    return null;
+  }
+
+  try {
+    return createCampaignExperienceEntryToken({
+      campaignId: options.entryContext.campaignId,
+      experienceSlug: options.experienceSlug,
+      now: options.now,
+      ttlMs: RETURN_TOKEN_TTL_MS,
+    });
+  } catch {
+    return null;
+  }
 }
 
 export function verifyCampaignExperienceEntryToken(options: {
@@ -176,16 +210,18 @@ export function isSameExperienceNavigation(options: {
 }
 
 /**
- * Decides whether a request for the Experience hub (`/x/:slug`) keeps the
+ * Decides whether a request for ANY public Experience page (`/x/:slug`,
+ * `/x/:slug/shop`, `/learn`, `/posts`, `/qa`, courses and lessons) keeps the
  * visitor's session campaign context or is a DIRECT entry that must clear it.
  *
- *  - `signed_entry`: a fresh, valid handoff token naming the exact campaign the
- *    cookie-backed session was just stamped with.
+ *  - `signed_entry`: a valid, unexpired token (campaign handoff, or a
+ *    login-return token minted by an Experience page) naming the exact campaign
+ *    the cookie-backed session is stamped with.
  *  - `in_experience_navigation`: the visitor navigated here from another page
- *    of this same Experience (bottom tabs).
+ *    of this same Experience (bottom tabs, lesson links).
  *  - `direct`: anything else, including forged/expired/mismatched tokens.
  */
-export function resolveExperienceHubEntry(options: {
+export function resolveExperienceEntry(options: {
   token: string | null | undefined;
   experienceSlug: string;
   sessionCampaignId: string | null | undefined;

@@ -6,6 +6,7 @@ import {
   resolvePublicCampaignId,
   type ExperienceAccessContext,
 } from "@/lib/experience-access";
+import { mintCampaignReturnToken } from "@/lib/public-experience-entry";
 import prisma from "@/lib/prisma";
 import { getAuthorizedLessonVideoUrl } from "@/lib/lesson-video-playback";
 
@@ -205,6 +206,10 @@ export async function loadPublicExperience(
       // re-deriving `campaigns[0]`, and render a neutral placeholder when the
       // context is ambiguous. Only an id already present in `campaigns` above.
       resolvedCampaignId: resolvedCampaign?.campaignId || null,
+      campaignReturnToken: mintCampaignReturnToken({
+        entryContext: access.entryContext,
+        experienceSlug: access.experience.slug,
+      }),
       featuredStory,
       courses: courses.map((course) => ({
         id: course.id,
