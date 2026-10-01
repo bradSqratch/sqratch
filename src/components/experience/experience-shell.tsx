@@ -12,13 +12,15 @@ import {
 } from "lucide-react";
 import { ReactNode } from "react";
 import CommonNavbar from "@/components/commonNavbar";
+import {
+  experienceTabHref,
+  type ExperienceTab,
+} from "@/components/experience/experience-tabs";
 import type { ExperienceShellData } from "@/components/experience/types";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { normalizeInternalRedirectPath } from "@/lib/safe-redirect";
-
-type ExperienceTab = "hub" | "learn" | "posts" | "qa" | "shop";
 
 type ExperienceShellProps = {
   experience: ExperienceShellData;
@@ -26,14 +28,6 @@ type ExperienceShellProps = {
   children: ReactNode;
   actions?: ReactNode;
   hero?: ReactNode;
-};
-
-const tabHrefMap: Record<ExperienceTab, (slug: string) => string> = {
-  hub: (slug) => `/x/${slug}`,
-  learn: (slug) => `/x/${slug}/learn`,
-  posts: (slug) => `/x/${slug}/posts`,
-  qa: (slug) => `/x/${slug}/qa`,
-  shop: (slug) => `/x/${slug}/shop`,
 };
 
 const experienceTabs: Array<{
@@ -194,7 +188,7 @@ function StickyExperienceTabsNav({
             return (
               <Link
                 key={tabKey}
-                href={tabHrefMap[tabKey](experienceSlug)}
+                href={experienceTabHref(tabKey, experienceSlug)}
                 className={cn(
                   "flex min-h-[72px] flex-col items-center justify-center gap-1.5 rounded-[20px] px-2 text-center text-[11px] font-semibold tracking-[0.04em] transition sm:min-h-[82px] sm:gap-2 sm:text-[12px]",
                   isActive

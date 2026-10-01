@@ -26,10 +26,10 @@ test("missing and unsafe next values use the safe dashboard fallback", () => {
 test("gated experience callers pass tab-specific return paths", () => {
   const read = (file: string) =>
     readFileSync(new URL(`../src/components/experience/${file}`, import.meta.url), "utf8");
-  const shell = read("experience-shell.tsx");
+  const tabs = read("experience-tabs.ts");
 
-  assert.match(shell, /shop: \(slug\) => `\/x\/\$\{slug\}\/shop`/);
-  assert.match(shell, /learn: \(slug\) => `\/x\/\$\{slug\}\/learn`/);
+  assert.match(tabs, /shop: \(slug\) => `\/x\/\$\{slug\}\/shop`/);
+  assert.match(tabs, /learn: \(slug\) => `\/x\/\$\{slug\}\/learn`/);
   assert.match(read("posts-client.tsx"), /returnTo=\{`\/x\/\$\{data\.slug\}\/posts`\}/);
   assert.match(read("qa-client.tsx"), /returnTo=\{`\/x\/\$\{data\.slug\}\/qa`\}/);
   assert.match(read("hub-client.tsx"), /returnTo=\{`\/x\/\$\{data\.slug\}\/posts`\}/);

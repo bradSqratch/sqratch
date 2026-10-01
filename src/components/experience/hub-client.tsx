@@ -23,6 +23,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { resolveExperienceDisplayCampaign } from "@/lib/campaign-context";
 import { cn } from "@/lib/utils";
 
 type HubYouTubePlayer = {
@@ -352,15 +353,16 @@ function ExperienceWhyHero({
   const [useRightSheet, setUseRightSheet] = useState(false);
 
   const featuredStory = data?.featuredStory || null;
-  // Server-resolved context only. `campaigns[0]` would show one sponsor's name
-  // and branding to a co-sponsor's visitor; when the server could not resolve a
-  // context the neutral placeholders below are the correct render.
-  const resolvedCampaignId = data?.resolvedCampaignId || null;
-  const primaryCampaign =
-    data?.campaigns.find((campaign) => campaign.id === resolvedCampaignId) ||
-    null;
-  const campaignName = primaryCampaign?.name || "Campaign";
-  const brandName = primaryCampaign?.brand?.name || "Brand";
+  // Display-only: the server-resolved campaign, else an Experience's sole
+  // campaign. Several campaigns with no resolved context render no sponsor
+  // header at all, never `campaigns[0]` or a generic placeholder. Attribution
+  // is unaffected: it stays on `data.resolvedCampaignId`.
+  const displayCampaign = data
+    ? resolveExperienceDisplayCampaign({
+        resolvedCampaignId: data.resolvedCampaignId,
+        campaigns: data.campaigns,
+      })
+    : null;
   const description =
     data?.description || "This experience is waiting for its story.";
 
@@ -792,14 +794,18 @@ function ExperienceWhyHero({
                   </p>
                 </div>
 
-                <div className="max-w-[48%] text-right">
-                  <p className="text-[clamp(0.95rem,1.7vw,1.6rem)] font-black uppercase leading-none tracking-[-0.03em] text-white">
-                    {campaignName}
-                  </p>
-                  <p className="text-sm font-semibold leading-none text-white/76 sm:text-lg">
-                    by {brandName}
-                  </p>
-                </div>
+                {displayCampaign ? (
+                  <div className="max-w-[48%] text-right">
+                    <p className="text-[clamp(0.95rem,1.7vw,1.6rem)] font-black uppercase leading-none tracking-[-0.03em] text-white">
+                      {displayCampaign.name}
+                    </p>
+                    {displayCampaign.brand?.name ? (
+                      <p className="text-sm font-semibold leading-none text-white/76 sm:text-lg">
+                        by {displayCampaign.brand.name}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
               </div>
             </div>
 

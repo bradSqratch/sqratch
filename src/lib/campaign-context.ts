@@ -267,3 +267,27 @@ export function resolvePublicExperienceEntryContext(options: {
 
   return { kind: "DIRECT" };
 }
+
+/**
+ * The campaign shown in the Experience hero. DISPLAY ONLY — it never changes
+ * attribution, which stays driven by `resolvedCampaignId` (null for a direct
+ * entry).
+ *
+ *  - A server-resolved campaign is always the one shown.
+ *  - With no resolved context, an Experience with exactly one linked campaign
+ *    shows that sole sponsor (unambiguous, so no guess is involved).
+ *  - Otherwise nothing is shown: never `campaigns[0]` of several, and never a
+ *    generic placeholder.
+ */
+export function resolveExperienceDisplayCampaign<T extends { id: string }>(options: {
+  resolvedCampaignId: string | null | undefined;
+  campaigns: readonly T[];
+}): T | null {
+  const { resolvedCampaignId, campaigns } = options;
+
+  if (resolvedCampaignId) {
+    return campaigns.find((campaign) => campaign.id === resolvedCampaignId) ?? null;
+  }
+
+  return campaigns.length === 1 ? campaigns[0] : null;
+}

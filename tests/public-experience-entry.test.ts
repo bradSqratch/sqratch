@@ -78,13 +78,11 @@ describe("direct Experience entry wiring", () => {
     "utf8",
   );
 
-  test("unmarked /x entry explicitly clears stale acquisition context before loading", () => {
-    assert.match(pageSource, /if \(!campaignEntry\) \{\s*await clearViewerSessionCampaignContext\(\);/);
+  test("hub entry clears stale acquisition context before loading unless the entry is trusted", () => {
+    assert.match(pageSource, /resolveExperienceHubEntry\(\{/);
+    assert.match(pageSource, /if \(!entry\.keepSessionCampaign\) \{\s*await clearViewerSessionCampaignContext\(\);/);
     assert.match(pageSource, /await clearViewerSessionCampaignContext\(\);[\s\S]*?loadPublicExperience/);
-    assert.match(
-      pageSource,
-      /viewerSession\?\.campaignId === signedCampaignEntry/,
-    );
+    assert.match(pageSource, /sessionCampaignId: viewerSession\?\.campaignId \?\? null/);
   });
 
   test("campaign handoff validates the CampaignExperience relation and signs server-derived ids", () => {
