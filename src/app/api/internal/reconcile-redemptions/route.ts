@@ -14,8 +14,11 @@
  */
 
 import { NextResponse } from "next/server";
+import { reconcileCommerce7Claims } from "@/lib/commerce7-rewards";
+import { reconcileCommerce7RewardOrders } from "@/lib/commerce/providers/commerce7-reward-orders";
 import { reconcileStuckRedemptions } from "@/lib/reward-reconciliation";
 import { timingSafeEqualString } from "@/lib/security/timing-safe-equal";
+export const maxDuration = 60;
 
 /**
  * Compares the incoming cron secret to the expected env value in constant
@@ -35,20 +38,21 @@ export async function POST(req: Request) {
   }
 
   try {
-    const summary = await reconcileStuckRedemptions({
-      limit: 20,
-      minAgeMs: 5 * 60 * 1000,  // 5 minutes
-      maxAttempts: 5,
-    });
-
-    console.log("[reconcile-redemptions] DONE", summary);
-
-    return NextResponse.json({ ok: true, summary });
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error("[reconcile-redemptions] ERROR", { message });
+    const [shopify, claims, orders] = await Promise.allSettled([
+      reconcileStuckRedemptions({ limit: 20, minAgeMs: 5 * 60 * 1000, maxAttempts: 5 }),
+      reconcileCommerce7Claims(),
+      reconcileCommerce7RewardOrders(),
+    ]);
+    const summary = shopify.status === "fulfilled" ? shopify.value : null;
+    const commerce7 = claims.status === "fulfilled" ? claims.value : null;
+    const commerce7Orders = orders.status === "fulfilled" ? orders.value : null;
+    const failedWorkers = [shopify, claims, orders].filter((result) => result.status === "rejected").length;
+    console.log("[reconcile-redemptions] DONE", { summary, commerce7, commerce7Orders, failedWorkers });
+    return NextResponse.json({ ok: failedWorkers === 0, summary, commerce7, commerce7Orders, failedWorkers }, { status: failedWorkers ? 500 : 200 });
+  } catch {
+    console.error("[reconcile-redemptions] ERROR");
     return NextResponse.json(
-      { error: "Reconciliation failed.", detail: message },
+      { error: "Reconciliation failed." },
       { status: 500 },
     );
   }

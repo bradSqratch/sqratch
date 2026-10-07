@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { saveCommerce7Offer } from "@/lib/commerce7-rewards";
+import { rewardErrorResponse } from "@/lib/commerce7-reward-http";
+import { object } from "@/lib/commerce/providers/commerce7-rewards-client";
 import { CommerceProvider } from "@prisma/client";
 import {
   getBrandContextFailure,
@@ -27,6 +30,7 @@ async function getOwnedOffer(offerId: string, brandId: string) {
     },
     select: {
       id: true,
+      provider: true,
       discountType: true,
       minimumSubtotalCents: true,
       currencyCode: true,
@@ -62,6 +66,12 @@ export async function PUT(
     }
 
     const brand = auth.membership.brand;
+    const body = await request.json().catch(() => null);
+    if (object(body)?.provider != null && object(body)?.provider !== existing.provider) return NextResponse.json({ error: "An offer's provider cannot be changed." }, { status: 409 });
+    if (existing.provider === CommerceProvider.COMMERCE7) {
+      try { return NextResponse.json({ data: await saveCommerce7Offer(brand.id, body, offerId) }); }
+      catch (error) { return rewardErrorResponse(error); }
+    }
 
     // CANONICAL — `isConnected` and every domain/currency comparison below
     // come from the SAME resolved connection (see AGENTS.md Commerce
@@ -102,8 +112,6 @@ export async function PUT(
       connectionSummary?.externalAccountId ?? null,
     );
     const currentStoreCurrency = normalizeCurrency(shopCurrency);
-
-    const body = await request.json().catch(() => null);
 
     const resolution = await resolveRewardOfferUpdate({
       existing,
@@ -235,3 +243,4 @@ export async function DELETE(
 ) {
   return PATCH(_request, context);
 }
+export const maxDuration = 60;

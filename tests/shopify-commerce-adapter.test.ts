@@ -1,3 +1,4 @@
+import { COMMERCE7_REWARD_CAPABILITIES } from "../src/lib/commerce7-reward-domain";
 /**
  * tests/shopify-commerce-adapter.test.ts
  *
@@ -953,6 +954,7 @@ describe("ShopifyCommerceAdapter", () => {
         minimumSubtotal: false,
         productSpecific: false,
         singleUse: false,
+        customerBoundClaims: COMMERCE7_REWARD_CAPABILITIES,
       },
     });
   });

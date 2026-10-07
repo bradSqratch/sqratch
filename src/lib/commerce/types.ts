@@ -35,6 +35,20 @@ export type CommerceCapabilities = {
     minimumSubtotal: boolean;
     productSpecific: boolean;
     singleUse: boolean;
+    /** Customer-bound saga is separate from the bearer-code createDiscount contract. */
+    customerBoundClaims?: {
+      fixedAmount: boolean;
+      percentage: boolean;
+      productScope: "NATIVE_TEMPLATE";
+      customerRestriction: "MANUAL_CUSTOMER_TAG";
+      automaticCustomerTagAssignment: boolean;
+      exclusiveProductAccess: boolean;
+      createCoupon: boolean;
+      lookupCoupon: boolean;
+      revokeCoupon: boolean;
+      minimumSubtotal: boolean;
+      usageReconciliation: "EXACT_ORDER_COUPON_AND_CUSTOMER";
+    };
   };
 };
 

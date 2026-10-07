@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import { Commerce7BrandRewardsPanel, type Commerce7BrandRewardData } from "@/components/rewards/commerce7-brand-rewards";
 import { useEffect, useMemo, useState } from "react";
 import { Gift, Package, Pencil, Power, RefreshCw } from "lucide-react";
 import { BrandPageShell } from "@/components/brand/page-shell";
@@ -223,7 +224,7 @@ function getCompatibilityBadges(
   return badges;
 }
 
-export default function BrandRewardsPage() {
+function ShopifyBrandRewardsPanel() {
   const [brand, setBrand] = useState<ShopifyStatus>(null);
   const [offers, setOffers] = useState<RewardOffer[]>([]);
   const [products, setProducts] = useState<ShopifyProduct[]>([]);
@@ -1125,4 +1126,12 @@ export default function BrandRewardsPage() {
       </PageCard>
     </BrandPageShell>
   );
+}
+
+export default function BrandRewardsPage() {
+  const [providers, setProviders] = useState<Commerce7BrandRewardData["providers"] | null>(null);
+  const [provider, setProvider] = useState<"SHOPIFY" | "COMMERCE7">("SHOPIFY");
+  useEffect(() => { void fetchJson<Commerce7BrandRewardData>("/api/brand/rewards/commerce7").then((data) => { setProviders(data.providers); if (data.providers.COMMERCE7 && !data.providers.SHOPIFY) setProvider("COMMERCE7"); }).catch(() => setProviders({ SHOPIFY: true, COMMERCE7: false })); }, []);
+  if (!providers) return <p className="p-6" role="status">Loading rewards…</p>;
+  return <>{providers.SHOPIFY && providers.COMMERCE7 && <label className="block px-6 pt-6 text-sm">Rewards provider<select className="ml-3 rounded border p-2" value={provider} onChange={(event) => setProvider(event.target.value as "SHOPIFY" | "COMMERCE7")}><option value="SHOPIFY">Shopify</option><option value="COMMERCE7">Commerce7</option></select></label>}{provider === "COMMERCE7" ? <Commerce7BrandRewardsPanel /> : <ShopifyBrandRewardsPanel />}</>;
 }

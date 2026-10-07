@@ -58,6 +58,7 @@ export async function GET(request: NextRequest) {
     // filter by canonical connectivity in-memory below.
     const offers = await prisma.brandRewardOffer.findMany({
       where: {
+        provider: CommerceProvider.SHOPIFY,
         isActive: true,
         OR: [{ claimStartsAt: null }, { claimStartsAt: { lte: now } }],
         AND: [{ OR: [{ claimEndsAt: null }, { claimEndsAt: { gte: now } }] }],

@@ -387,6 +387,7 @@ function buildProductionDeps(): ReconciliationDeps {
       const ageThreshold = new Date(now.getTime() - minAgeMs);
       return prisma.commerceRewardRedemption.findMany({
         where: {
+          provider: CommerceProvider.SHOPIFY,
           status: CommerceRewardRedemptionStatus.POINTS_DEBITED,
           needsManualReview: false,
           createdAt: { lt: ageThreshold },

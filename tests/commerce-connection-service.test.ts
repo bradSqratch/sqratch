@@ -1,3 +1,4 @@
+import { COMMERCE7_REWARD_CAPABILITIES } from "../src/lib/commerce7-reward-domain";
 /**
  * tests/commerce-connection-service.test.ts
  *
@@ -287,9 +288,9 @@ describe("getCommerceCapabilities / getAdapterForConnection", () => {
   // ROUND / SUBPHASE 2: publicDestinations is now true too (a
   // merchant-configured connection can produce a real public destination —
   // see tests/commerce7-storefront-public-destinations.test.ts). Every
-  // reward capability still reports false because none of that is
-  // implemented.
-  test("8b. COMMERCE7 reports catalog + public-destination capabilities, no rewards", () => {
+  // generic bearer-code capability remains false; customer-bound claims
+  // advertise their separate, manually assisted provisioning contract.
+  test("8b. COMMERCE7 reports customer-bound saga capabilities without generic bearer issuance", () => {
     const capabilities = getCommerceCapabilities(CommerceProvider.COMMERCE7);
     assert.deepEqual(capabilities, {
       products: { sync: true, publicDestinations: true },
@@ -303,6 +304,7 @@ describe("getCommerceCapabilities / getAdapterForConnection", () => {
         minimumSubtotal: false,
         productSpecific: false,
         singleUse: false,
+        customerBoundClaims: COMMERCE7_REWARD_CAPABILITIES,
       },
     });
   });

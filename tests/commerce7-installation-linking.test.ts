@@ -1129,7 +1129,7 @@ describe("provider isolation", () => {
   // actually needs to stay true is narrower and still holds — the
   // installation/linking lifecycle grants Commerce7 no reward or discount
   // behavior.
-  test("42. the registered Commerce7 adapter exposes catalog reads and public destinations — still no rewards", async () => {
+  test("42. Commerce7 exposes customer-bound reward capabilities; generic reward methods remain unavailable", async () => {
     const { defaultCommerceAdapterRegistry } =
       await import("../src/lib/commerce/default-registry");
 
@@ -1137,7 +1137,10 @@ describe("provider isolation", () => {
     const capabilities = adapter.getCapabilities();
 
     assert.equal(capabilities.products.publicDestinations, true);
+    assert.equal(capabilities.rewards.customerBoundClaims?.createCoupon, true);
+    assert.equal(capabilities.rewards.customerBoundClaims?.exclusiveProductAccess, false);
     for (const [name, value] of Object.entries(capabilities.rewards)) {
+      if (name === "customerBoundClaims") continue;
       assert.equal(
         value,
         false,

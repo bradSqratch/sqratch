@@ -1,4 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
+import { saveCommerce7Offer } from "@/lib/commerce7-rewards";
+import { rewardErrorResponse } from "@/lib/commerce7-reward-http";
+import { object } from "@/lib/commerce/providers/commerce7-rewards-client";
+import { GET as commerce7RewardsGET } from "../commerce7/route";
 import { CommerceProvider } from "@prisma/client";
 import {
   getBrandContextFailure,
@@ -20,8 +24,12 @@ import {
   validateProductsBelongToConnectedStore,
 } from "@/lib/reward-offers";
 import { computeShopifyRewardCompatibility } from "@/lib/shopify-reward-compatibility";
+export const maxDuration = 60;
 
-export async function GET() {
+export async function GET(request?: NextRequest) {
+  const provider = request?.nextUrl.searchParams.get("provider");
+  if (provider === "COMMERCE7") return commerce7RewardsGET();
+  if (provider && provider !== "SHOPIFY") return NextResponse.json({ error: "Unsupported rewards provider." }, { status: 400 });
   try {
     const context = await getBrandManagementContext();
 
@@ -37,6 +45,7 @@ export async function GET() {
     const offers = await prisma.brandRewardOffer.findMany({
       where: {
         brandId: brand.id,
+        provider: CommerceProvider.SHOPIFY,
       },
       include: {
         products: true,
@@ -54,6 +63,7 @@ export async function GET() {
       by: ["offerId", "status"],
       where: {
         brandId: brand.id,
+        provider: CommerceProvider.SHOPIFY,
       },
       _count: {
         _all: true,
@@ -171,6 +181,13 @@ export async function POST(request: NextRequest) {
     }
 
     const brand = context.membership.brand;
+    const body = await request.json().catch(() => null);
+    const provider = object(body)?.provider;
+    if (provider === "COMMERCE7") {
+      try { return NextResponse.json({ data: await saveCommerce7Offer(brand.id, body) }, { status: 201 }); }
+      catch (error) { return rewardErrorResponse(error); }
+    }
+    if (provider != null && provider !== "SHOPIFY") return NextResponse.json({ error: "Unsupported rewards provider." }, { status: 400 });
 
     // CANONICAL — see the GET handler's comment. `isConnected` and every
     // domain/currency comparison below come from the SAME resolved
@@ -208,7 +225,6 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const body = await request.json().catch(() => null);
     const parsed = parseRewardOfferPayload(body, shopCurrency);
 
     if (!parsed.ok) {

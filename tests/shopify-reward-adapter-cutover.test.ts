@@ -238,6 +238,7 @@ const SHOP_DOMAIN = "test-shop.myshopify.com";
 
 function defaultOffer(overrides: Record<string, unknown> = {}) {
   return {
+    provider: CommerceProvider.SHOPIFY,
     id: "offer-1",
     brandId: "brand-1",
     pointsCost: 50,
@@ -1646,6 +1647,7 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
     t.mock.method(prisma.commerceRewardRedemption, "create", async () => {
       const row = {
         id: "redemption-idem",
+        provider: CommerceProvider.SHOPIFY,
         userId: "user-1",
         brandId: "brand-1",
         offerId: "offer-1",
@@ -1667,6 +1669,7 @@ describe("Shopify reward adapter cutover — end-to-end redeem route", () => {
         const typedArgs = args as { data: Record<string, unknown> };
         const updated = {
           id: "redemption-idem",
+          provider: CommerceProvider.SHOPIFY,
           userId: "user-1",
           offerId: "offer-1",
           code: "TEST-IDEM",

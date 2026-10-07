@@ -10,6 +10,7 @@ import {
 } from "@/components/experience/experience-shell";
 import { getErrorMessage } from "@/components/experience/client-utils";
 import { useExperience } from "@/components/experience/use-experience";
+import { Commerce7RewardsClient } from "@/components/rewards/commerce7-rewards-client";
 import { ShopifyShopRewardCard } from "@/components/rewards/shopify-shop-reward-card";
 import { Button } from "@/components/ui/button";
 import {
@@ -245,6 +246,7 @@ export function ExperienceShopClient({
           </PageCard>
 
           <ShopifyShopRewardCard experienceSlug={experienceSlug} />
+          <Commerce7RewardsClient experienceSlug={experienceSlug} campaignId={shopMeta.campaign?.id} />
 
           {products.length === 0 ? (
             <PageCard>

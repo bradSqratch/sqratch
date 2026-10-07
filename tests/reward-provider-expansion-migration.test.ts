@@ -110,10 +110,14 @@ test("Phase 15C3 guards every known reward create path and requires explicit fut
     [
       "src/app/api/brand/rewards/offers/route.ts",
       "src/app/api/rewards/shopify/redeem/route.ts",
+      "src/lib/commerce7-rewards.ts",
     ],
   );
-  for (const { source } of writers) {
-    assert.match(source, /\bprovider\s*:\s*CommerceProvider\.SHOPIFY/);
+  for (const { path, source } of writers) {
+    if (path.endsWith("commerce7-rewards.ts")) {
+      assert.match(source, /\bprovider\s*:\s*"COMMERCE7"/);
+      assert.match(source, /connectionId: connection\.id/);
+    } else assert.match(source, /\bprovider\s*:\s*CommerceProvider\.SHOPIFY/);
   }
 
   const commerce7OfferWrite: Pick<Prisma.BrandRewardOfferCreateInput, "provider"> = {

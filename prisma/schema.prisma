@@ -403,6 +403,11 @@ model BrandRewardOffer {
   /// Required explicitly by every writer; no provider may silently inherit
   /// Shopify identity from a database default.
   provider                      CommerceProvider
+  connectionId                  String?
+  rewardMode                    RewardMode                 @default(DISCOUNT)
+  commerce7Config               Json?
+  /// Durable capacity survives account deletion; only safe compensation releases it.
+  reservedClaimCount            Int                        @default(0)
   title                         String
   description                   String?
   isActive                      Boolean                    @default(false)
@@ -1307,6 +1312,22 @@ model CommerceRewardRedemption {
   idempotencyKey                String                         @unique
   code                          String                         @unique
   status                        CommerceRewardRedemptionStatus
+  connectionId                  String?
+  rewardMode                    RewardMode                     @default(DISCOUNT)
+  provisioningState             RewardProvisioningState?
+  provisioningOwner             String?
+  provisioningStartedAt         DateTime?
+  providerCustomerId            String?
+  verifiedEmailAt               DateTime?
+  providerTagId                 String?
+  tagCreateAttempted            Boolean                        @default(false)
+  couponCreateAttempted         Boolean                        @default(false)
+  entitlementEverGranted        Boolean                        @default(false)
+  slotReleased                  Boolean                        @default(false)
+  rewardConfigSnapshot          Json?
+  canonicalOrderId              String?
+  rewardOrderCursor             String?
+  rewardOrderCheckedAt          DateTime?
   pointsCost                    Int
   discountType                  RewardDiscountType             @default(FIXED_AMOUNT)
   discountAmountCents           Int?
@@ -1333,6 +1354,10 @@ model CommerceRewardRedemption {
   pointTransactions             PointTransaction[]
   user                          User                           @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+  @@index([provider, provisioningState, createdAt], map: "reward_c7_provisioning")
+  @@index([provider, status, providerLastCheckedAt], map: "reward_provider_pending")
+  @@index([offerId, slotReleased], map: "reward_offer_capacity")
+  @@index([offerId, userId, slotReleased], map: "reward_offer_user_capacity")
   @@index([userId, createdAt])
   @@index([brandId, createdAt])
   @@index([offerId])
@@ -1706,4 +1731,21 @@ enum CommerceOrderEventStatus {
   SKIPPED_STALE
   SKIPPED_DISCONNECTED
   FAILED
+}
+
+/// Customer access writes stay unsupported until an atomic native contract is verified.
+enum RewardMode {
+  DISCOUNT
+  EXCLUSIVE_PRODUCT_ACCESS
+}
+
+enum RewardProvisioningState {
+  AWAITING_CUSTOMER
+  AWAITING_ELIGIBILITY
+  PROVISIONING
+  READY
+  FAILED_RETRYABLE
+  MANUAL_REVIEW
+  FAILED_FINAL
+  REVOKED
 }

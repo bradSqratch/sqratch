@@ -586,7 +586,7 @@ describe("normalization contract", () => {
 
 // ===========================================================================
 describe("20/21. adapter capabilities and registry wiring", () => {
-  test("Commerce7 capabilities report catalog sync and public destinations, no rewards", () => {
+  test("Commerce7 capabilities report catalog sync and explicit customer-bound rewards; generic bearer issuance stays off", () => {
     const { adapter } = makeAdapter(connectionRow());
     const capabilities = adapter.getCapabilities();
 
@@ -602,7 +602,11 @@ describe("20/21. adapter capabilities and registry wiring", () => {
       true,
       "Subphase 2 implemented merchant-configured public destinations",
     );
+    assert.equal(capabilities.rewards.customerBoundClaims?.createCoupon, true);
+    assert.equal(capabilities.rewards.customerBoundClaims?.automaticCustomerTagAssignment, false);
+    assert.equal(capabilities.rewards.customerBoundClaims?.exclusiveProductAccess, false);
     for (const [name, value] of Object.entries(capabilities.rewards)) {
+      if (name === "customerBoundClaims") continue;
       assert.equal(value, false, `rewards.${name} must not be claimed`);
     }
   });

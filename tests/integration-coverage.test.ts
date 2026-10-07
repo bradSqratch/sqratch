@@ -2446,6 +2446,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
       id: "offer-123",
+      provider: CommerceProvider.SHOPIFY,
       brandId: "brand-123",
       pointsCost: 100,
       isActive: true,
@@ -2517,6 +2518,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
     let pointsDebited = false;
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
       id: "offer-currency-mismatch",
+      provider: CommerceProvider.SHOPIFY,
       brandId: "brand-123",
       pointsCost: 50,
       isActive: true,
@@ -2658,6 +2660,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
       id: "offer-percentage-ok",
+      provider: CommerceProvider.SHOPIFY,
       brandId: "brand-123",
       pointsCost: 50,
       isActive: true,
@@ -2695,6 +2698,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
     t.mock.method(prisma.user, "findUnique", async () => ({ id: "user-123" }));
     t.mock.method(prisma.commerceRewardRedemption, "create", async () => ({
       id: "redemption-percentage-ok",
+      provider: CommerceProvider.SHOPIFY,
       userId: "user-123",
       brandId: "brand-123",
       offerId: "offer-percentage-ok",
@@ -2711,6 +2715,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       const typedArgs = args as { data: { status?: string } };
       return {
         id: "redemption-percentage-ok",
+      provider: CommerceProvider.SHOPIFY,
         code: "TEST-CODE-OK",
         status: typedArgs.data.status || "ISSUED",
         pointsCost: 50,
@@ -2775,6 +2780,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
     let pointsDebited = false;
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
       id: "offer-stale-products",
+      provider: CommerceProvider.SHOPIFY,
       brandId: "brand-123",
       pointsCost: 50,
       isActive: true,
@@ -2843,6 +2849,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
     t.mock.method(prisma.commerceRewardRedemption, "findUnique", async () => null);
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
       id: "offer-other-brand",
+      provider: CommerceProvider.SHOPIFY,
       brandId: "brand-other",
       pointsCost: 10,
       isActive: true,
@@ -2893,6 +2900,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
     t.mock.method(prisma.commerceRewardRedemption, "findUnique", async () => ({
       id: "redemption-existing",
+      provider: CommerceProvider.SHOPIFY,
       userId: "user-123",
       offerId: "offer-123",
       code: "TEST-CODE",
@@ -2994,6 +3002,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
       id: "offer-123",
+      provider: CommerceProvider.SHOPIFY,
       brandId: "brand-123",
       pointsCost: 50,
       isActive: true,
@@ -3033,6 +3042,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
     t.mock.method(prisma.commerceRewardRedemption, "create", async () => ({
       id: "redemption-new",
+      provider: CommerceProvider.SHOPIFY,
       userId: "user-123",
       brandId: "brand-123",
       offerId: "offer-123",
@@ -3055,6 +3065,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       }
       return {
         id: "redemption-new",
+      provider: CommerceProvider.SHOPIFY,
         code: "TEST-CODE-NEW",
         status: typedArgs.data.status || "ISSUED",
         pointsCost: 50,
@@ -3173,6 +3184,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
     t.mock.method(prisma.brandRewardOffer, "findUnique", async () => ({
       id: "offer-123",
+      provider: CommerceProvider.SHOPIFY,
       brandId: "brand-123",
       pointsCost: 50,
       isActive: true,
@@ -3212,6 +3224,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
     t.mock.method(prisma.commerceRewardRedemption, "create", async () => ({
       id: "redemption-fail",
+      provider: CommerceProvider.SHOPIFY,
       userId: "user-123",
       brandId: "brand-123",
       offerId: "offer-123",
@@ -3248,6 +3261,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       }
       return {
         id: "redemption-fail",
+      provider: CommerceProvider.SHOPIFY,
         code: "TEST-CODE-FAIL",
         status: "REFUNDED",
         pointsCost: 50,
@@ -3325,6 +3339,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
 
     t.mock.method(prisma.commerceRewardRedemption, "findFirst", async () => ({
       id: "redemption-refresh",
+      provider: CommerceProvider.SHOPIFY,
       userId: "user-123",
       brandId: "brand-123",
       externalDiscountId: "gid://shopify/DiscountCodeNode/123",
@@ -3358,6 +3373,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
       }
       return {
         id: "redemption-refresh",
+      provider: CommerceProvider.SHOPIFY,
         code: "TEST-CODE-REFRESH",
         status: "USED",
       };

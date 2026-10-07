@@ -400,6 +400,7 @@ export async function redeemImpl(
     });
 
     if (existing) {
+      if (existing.provider !== CommerceProvider.SHOPIFY) return NextResponse.json({ error: "Idempotency key conflicts with another provider." }, { status: 409 });
       // NOTE: experienceSlug / campaignId are request-time routing context that
       // is NOT persisted on the redemption row.  offerId is the authoritative
       // binding identity for idempotency purposes.
@@ -432,7 +433,7 @@ export async function redeemImpl(
       },
     });
 
-    if (!offer) {
+    if (!offer || offer.provider !== CommerceProvider.SHOPIFY) {
       return NextResponse.json(
         { error: "Reward offer is not available." },
         { status: 404 },
@@ -632,7 +633,7 @@ export async function redeemImpl(
               },
             });
 
-            if (!currentOffer || currentOffer.brandId !== offer.brandId) {
+            if (!currentOffer || currentOffer.provider !== CommerceProvider.SHOPIFY || currentOffer.brandId !== offer.brandId) {
               throw new Error("OFFER_NOT_AVAILABLE");
             }
 

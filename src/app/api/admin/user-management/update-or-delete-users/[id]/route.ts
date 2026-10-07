@@ -188,7 +188,16 @@ export async function DELETE(
       );
     }
 
-    await prisma.user.delete({ where: { id } });
+    // Preserve reward evidence and lifetime claim ceilings. The serializable
+    // predicate read also protects against a claim racing account deletion.
+    const deleted = await prisma.$transaction(async (tx) => {
+      if (await tx.commerceRewardRedemption.count({ where: { userId: id, provider: "COMMERCE7" } })) return false;
+      await tx.user.delete({ where: { id } });
+      return true;
+    }, { isolationLevel: "Serializable" });
+    if (!deleted) {
+      return NextResponse.json({ error: "Cannot delete user: Commerce7 reward history must be retained. Deactivate the account instead." }, { status: 409 });
+    }
 
     if (user.imageUrl) {
       await deleteStorageObjectByUrl(user.imageUrl);
@@ -197,6 +206,9 @@ export async function DELETE(
     return NextResponse.json({});
   } catch (err: unknown) {
     const prismaErr = err as { code?: string };
+    if (prismaErr.code === "P2034") {
+      return NextResponse.json({ error: "Account activity changed during deletion. Review the account and retry or deactivate it." }, { status: 409 });
+    }
     if (prismaErr.code === "P2003") {
       return NextResponse.json(
         {

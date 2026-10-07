@@ -22,6 +22,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
+import { Commerce7RewardsClient } from "@/components/rewards/commerce7-rewards-client";
 import { ShopifyRewardsClient } from "@/components/rewards/shopify-rewards-client";
 import {
   formatRewardMoney,
@@ -304,6 +305,7 @@ export default async function DashboardPointsPage() {
         </Card>
 
         <ShopifyRewardsClient currentPoints={totals.spendablePoints} />
+        <Commerce7RewardsClient key={session.user.id} showErrors />
 
         <Card className="rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
           <CardContent className="p-6">

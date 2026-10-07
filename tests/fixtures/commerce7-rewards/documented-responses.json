@@ -1,0 +1,32 @@
+{
+  "coupon": {
+    "id": "synthetic-public-coupon",
+    "code": "synthetic-public-example",
+    "title": "Synthetic ten dollar discount",
+    "usageLimitType": "Unlimited",
+    "usageLimit": null,
+    "appliesTo": "Store",
+    "appliesToObjectIds": null,
+    "productDiscountType": "Dollar Off",
+    "productDiscount": 1000,
+    "shippingDiscountType": "No Discount",
+    "shippingDiscount": null,
+    "startDate": "2026-10-01T00:00:00.000Z",
+    "endDate": null,
+    "status": "Enabled",
+    "minimumCartAmount": 5000,
+    "availableTo": "Everyone",
+    "availableToObjectIds": null
+  },
+  "tag": {
+    "id": "synthetic-manual-tag",
+    "title": "Synthetic Manual Tag",
+    "objectType": "Customer",
+    "type": "Manual"
+  },
+  "customer": {
+    "id": "synthetic-customer",
+    "emails": [{ "id": "synthetic-email", "email": "synthetic@example.test" }],
+    "tags": [{ "id": "synthetic-manual-tag", "title": "Synthetic Manual Tag", "objectType": "Customer", "type": "Manual" }]
+  }
+}

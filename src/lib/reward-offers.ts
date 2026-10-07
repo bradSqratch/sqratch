@@ -349,7 +349,7 @@ export function generateRewardCode(prefix?: string | null) {
 }
 
 export function serializeRewardOffer(
-  offer: BrandRewardOffer & { products?: BrandRewardOfferProduct[] },
+  offer: Omit<BrandRewardOffer, "connectionId" | "rewardMode" | "commerce7Config" | "reservedClaimCount"> & { products?: BrandRewardOfferProduct[] },
 ) {
   return {
     id: offer.id,

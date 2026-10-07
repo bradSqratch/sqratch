@@ -20,7 +20,10 @@
  * CREDENTIALS: app-global, from backend environment configuration only. This
  * adapter never reads or writes `CommerceConnectionSecret`.
  *
- * DELIBERATELY NOT IMPLEMENTED: rewards/discounts, orders, carts, attribution.
+ * The generic bearer-code discount API stays unsupported. Customer-bound
+ * reward sagas are exposed through rewards.customerBoundClaims and implemented
+ * by commerce7-rewards.ts / commerce7-rewards-client.ts. Orders, carts and
+ * attribution are handled by their existing separate provider modules.
  * `getCapabilities()` reports exactly what is real, so the neutral layer
  * refuses anything else rather than discovering it at runtime. Public
  * storefront destinations (PHASE 16 BIG ROUND / SUBPHASE 2) ARE implemented,
@@ -35,6 +38,7 @@ import {
   type Prisma,
 } from "@prisma/client";
 import type { CommerceAdapter } from "../adapter";
+import { COMMERCE7_REWARD_CAPABILITIES } from "../../commerce7-reward-domain";
 import {
   CommerceConnectionNotFoundError,
   CommerceConnectionNotReadyError,
@@ -189,10 +193,9 @@ export class Commerce7CommerceAdapter implements CommerceAdapter {
    * computes a real, host-pinned `productUrl` for a product that passes the
    * full public-eligibility gate (see `computeCommerce7ProductDestination`).
    * An unconfigured connection still safely yields `productUrl: ""` for
-   * every product — this flag reports genuine CAPABILITY, not "every product
-   * currently has a destination." Every reward capability stays false
-   * because none is implemented; claiming one would let the neutral reward
-   * path attempt a provider call that does not exist.
+   * every product. Generic reward issuance remains false because it has no
+   * customer-binding context. The explicit customerBoundClaims capability
+   * reports the implemented, template-based saga and its manual setup boundary.
    */
   getCapabilities(): CommerceCapabilities {
     return {
@@ -207,6 +210,7 @@ export class Commerce7CommerceAdapter implements CommerceAdapter {
         minimumSubtotal: false,
         productSpecific: false,
         singleUse: false,
+        customerBoundClaims: COMMERCE7_REWARD_CAPABILITIES,
       },
     };
   }
