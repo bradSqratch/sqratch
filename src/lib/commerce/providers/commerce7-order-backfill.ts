@@ -46,6 +46,7 @@ import {
 import { extractCurrencyCodeFromProviderMetadata } from "../connection-resolver";
 import {
   ingestNormalizedOrder,
+  isRetryableOrderIngestionOutcome,
   type OrderIngestionDeps,
   type OrderIngestionOutcome,
 } from "../order-ingestion";
@@ -78,7 +79,7 @@ export type Commerce7OrderBackfillInput = {
 };
 
 export type Commerce7OrderBackfillOutcome = {
-  status: "COMPLETED" | "TRUNCATED";
+  status: "COMPLETED" | "TRUNCATED" | "INCOMPLETE";
   ordersFetched: number;
   ordersProcessed: number;
   outcomes: OrderIngestionOutcome[];
@@ -241,6 +242,10 @@ export async function backfillCommerce7Orders(
   const ordersToProcess = page.orders.slice(0, COMMERCE7_BACKFILL_MAX_RESULTS);
 
   const outcomes: OrderIngestionOutcome[] = [];
+  // A provider-side partial response cannot prove coverage, even if its
+  // client-filtered slice is small. Test/injected pages can omit `complete`
+  // only when their reported count equals the provided list.
+  let incomplete = !(page.complete ?? page.total === page.orders.length);
   // A backfill window can legitimately contain BOTH a root order and one or
   // more of its own linked refund orders — the realistic repair case this
   // round exists for (see the round's brief, Part 20). Each such entry
@@ -271,6 +276,7 @@ export async function backfillCommerce7Orders(
       // refund-blind guess. A later Catch Up / Custom Range run retries
       // it — the same self-healing property the rest of this backfill
       // entrypoint already relies on.
+      incomplete = true;
       continue;
     }
 
@@ -279,6 +285,7 @@ export async function backfillCommerce7Orders(
     if (!order.externalOrderId || !order.providerUpdatedAt) {
       // Cannot form a stable dedup key without both — skip rather than
       // guess at an event id (see file header's IDEMPOTENCY section).
+      incomplete = true;
       continue;
     }
 
@@ -322,10 +329,15 @@ export async function backfillCommerce7Orders(
       resolved.ingestionDeps,
     );
     outcomes.push(outcome);
+    // A window is proven only when every order has settled. Keep the same
+    // checkpoint for a retry; successful writes already deduplicate.
+    if (isRetryableOrderIngestionOutcome(outcome) || outcome.status === "FAILED" || outcome.status === "SKIPPED_DISCONNECTED") {
+      incomplete = true;
+    }
   }
 
   return {
-    status: truncated ? "TRUNCATED" : "COMPLETED",
+    status: incomplete ? "INCOMPLETE" : truncated ? "TRUNCATED" : "COMPLETED",
     ordersFetched: page.orders.length,
     ordersProcessed: outcomes.length,
     outcomes,

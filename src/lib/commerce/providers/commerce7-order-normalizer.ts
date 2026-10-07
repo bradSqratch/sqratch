@@ -429,9 +429,9 @@ export function normalizeCommerce7Order(
 
     lineItems: readLineItems(record.items, hasCurrency),
 
-    // Commerce7's Order object documents no click-token-carrying field.
-    // Attribution is explicitly fail-closed for this round regardless (see
-    // the order-webhook route) — this stays null unconditionally.
+    // URL metadata and String custom fields are documented separately, but
+    // arbitrary-token persistence from product entry through order/webhook
+    // is unverified. Fail closed; see production-stabilization-2026-10.md.
     attributionToken: null,
   };
 

@@ -304,13 +304,14 @@ async function runBackfill(
   store: FakeStore,
   page: Record<string, unknown>[],
   providerOrdersById: Record<string, Record<string, unknown>>,
+  range = { from: "2026-08-25T04:47:00.000Z", to: "2026-08-27T04:47:00.000Z" },
 ) {
   const result = await backfillCommerce7Orders(
     {
       brandId: BRAND_ID,
       connectionId: CONNECTION_ID,
-      updatedAtGte: new Date("2026-08-25T04:47:00.000Z"),
-      updatedAtLte: new Date("2026-08-27T04:47:00.000Z"),
+      updatedAtGte: new Date(range.from),
+      updatedAtLte: new Date(range.to),
     },
     {
       loadConnection: async () => BACKFILL_CONNECTION,
@@ -798,4 +799,41 @@ describe("PHASE 27 — decideOrderStaleness repair contract stays narrow", () =>
     assert.match(COMMERCE7_REFUND_RECONCILIATION_SEMANTICS_VERSION, /^[a-z0-9-]+$/);
     assert.doesNotMatch(COMMERCE7_REFUND_RECONCILIATION_SEMANTICS_VERSION, /\d{4}-\d{2}-\d{2}|\d{10}/);
   });
+});
+
+
+describe("missed Commerce7 webhook: ordinary paid root #1004", () => {
+  for (const metadata of [null, { "sqratch-ref": "A".repeat(43) }, { "_sqratch_ref": "A".repeat(43) }]) {
+    test(`backfill creates exactly one canonical #1004; unverified metadata cannot attribute (${metadata === null ? "absent" : Object.keys(metadata)[0]})`, async () => {
+      const store = new FakeStore();
+      const raw = {
+        id: "fixture-order-1004", orderNumber: 1004, channel: "Web", purchaseType: "Regular",
+        paymentStatus: "Paid", fulfillmentStatus: "Not Fulfilled",
+        createdAt: "2026-10-06T23:32:46.210Z", updatedAt: "2026-10-06T23:35:16.560Z",
+        subTotal: 4900, taxTotal: 637, shipTotal: 0, total: 5537,
+        previousOrderId: null, linkedOrders: [], metaData: metadata,
+        tenders: [{ id: "fixture-sale-1004", chargeType: "Sale", chargeStatus: "Success", amountTendered: 5537 }],
+        items: [{ id: "fixture-item-1004", productId: "fixture-product", productTitle: "Sample Wine", sku: "WINE", quantity: 1, price: 4900, tax: 637 }],
+      };
+      const range = { from: "2026-10-06T00:00:00.000Z", to: "2026-10-07T00:00:00.000Z" };
+      const first = await runBackfill(store, [raw], {}, range);
+      const second = await runBackfill(store, [raw], {}, range);
+      assert.equal(first.status, "COMPLETED");
+      assert.equal(first.outcomes[0].status, "CREATED");
+      assert.equal(second.outcomes[0].status, "ALREADY_PROCESSED");
+      assert.equal(store.orders.size, 1);
+      assert.equal(store.events.size, 1);
+      const order = store.find("fixture-order-1004")!;
+      assert.equal(order.orderNumber, "1004");
+      assert.equal(order.totalMinor, BigInt(5537));
+      assert.equal(order.totalRefundedMinor, BigInt(0));
+      assert.equal(order.netRevenueMinor, BigInt(5537));
+      assert.equal(order.currencyCode, "CAD");
+      assert.equal(order.financialStatus, "PAID");
+      assert.equal(order.fulfillmentStatus, "UNFULFILLED");
+      assert.equal(order.attributionId, null);
+      assert.equal((order as unknown as { provider: string }).provider, "COMMERCE7");
+      assert.equal(store.linesFor(order.id).length, 1);
+    });
+  }
 });

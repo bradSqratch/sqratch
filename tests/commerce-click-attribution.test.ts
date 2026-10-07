@@ -20,7 +20,7 @@ process.env.COMMERCE_CLICK_TOKEN_PEPPER =
  * test here, not an ad-hoc one-time check by whoever wrote it.
  */
 
-import { test, describe, before, beforeEach } from "node:test";
+import { test, describe, before, beforeEach, mock } from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -2073,4 +2073,147 @@ describe("migration shape: 20260808150000_add_commerce_click_analytics_durabilit
     );
     assert.match(schema, /surface CommerceClickSurface\?/);
   });
+});
+
+
+function replacePrismaMethod(target: object, method: string, replacement: unknown) {
+  const record = target as Record<string, unknown>;
+  const previous = record[method];
+  record[method] = replacement;
+  return { mock: { restore: () => { record[method] = previous; } } };
+}
+
+describe("Commerce7 production click path and safe diagnostics", () => {
+  const product = {
+    id: "connected-c7", connectionId: "connection-c7", provider: "COMMERCE7" as const,
+    brandId: "brand-1", isAvailable: true,
+    productUrl: "https://sqratch-inc.v2-template.commerce7.com/product/sample-wine",
+    providerMetadata: {},
+    connection: { status: "CONNECTED" as const, storefrontUrl: "https://sqratch-inc.v2-template.commerce7.com" },
+  };
+  for (const kind of ["BRAND_STOREFRONT", "CAMPAIGN_PRODUCT", "LESSON"] as const) {
+    for (const entry of ["DIRECT", "CAMPAIGN"] as const) {
+      test(`${kind}, ${entry}: real canonical resolver and Prisma create shape record Commerce7 evidence`, async () => {
+        const { default: prisma } = await import("../src/lib/prisma");
+        const saved: Record<string, unknown>[] = [];
+        const row = { id: "bcp-1", brandId: "brand-1", isCampaignEligible: true, connectedProduct: product };
+        const mocks = [
+          replacePrismaMethod(prisma.brandCommerceProduct, "findFirst", async () => row),
+          replacePrismaMethod(prisma.campaignCommerceProduct, "findFirst", async () => ({
+            id: "assignment-c7", campaignId: "campaign-A", brandId: "brand-1", isActive: true,
+            campaign: { id: "campaign-A", brandId: "brand-1" },
+            brandCommerceProductId: "bcp-1", brandCommerceProduct: row,
+          })),
+          replacePrismaMethod(prisma.campaignLessonProduct, "findFirst", async () => ({
+            id: "clp-1", campaignId: "campaign-A", brandId: "brand-1", isActive: true,
+            lessonId: "lesson-1", brandCommerceProductId: "bcp-1", brandCommerceProduct: row,
+            lesson: { courseId: "course-1", course: { access: "PUBLIC" } },
+          })),
+          replacePrismaMethod(prisma.userSession, "findUnique", async () => ({ qrCodeId: null })),
+          replacePrismaMethod(prisma.commerceClickAttribution, "create", async ({ data }: { data: Record<string, unknown> }) => {
+            saved.push(data); return { id: "click-c7", ...data };
+          }),
+        ];
+        try {
+          const surface: CommerceClickSurface = kind === "BRAND_STOREFRONT" ? SHOP_SURFACE
+            : kind === "LESSON" ? LESSON_SURFACE
+            : { kind: "CAMPAIGN_PRODUCT", campaignAssignmentId: "assignment-c7" };
+          const response = await handleCommerceClick(req(), { experienceSlug: "exp", surface }, {
+            getAccess: async () => access({ entryContext: entry === "DIRECT" ? { kind: "DIRECT" } : { kind: "CAMPAIGN", campaignId: "campaign-A" } }),
+          });
+          assert.equal(response.status, 302);
+          assert.equal(saved.length, 1);
+          const click = saved[0];
+          assert.equal(click.provider, "COMMERCE7");
+          assert.equal(click.surface, kind);
+          assert.equal(click.entryCampaignId, entry === "DIRECT" ? null : "campaign-A");
+          assert.equal(click.productCampaignId, kind === "BRAND_STOREFRONT" ? null : "campaign-A");
+          assert.equal(click.experienceId, "experience-1");
+          assert.equal(click.connectedProductId, "connected-c7");
+          assert.equal(click.commerceConnectionId, "connection-c7");
+          assert.equal(click.attributedBrandId, "brand-1");
+          assert.ok(click.redirectedAt instanceof Date);
+          assert.match(String(click.tokenHash), /^[a-f0-9]{64}$/);
+          // Commerce7 transport remains disabled pending a verified arbitrary-token contract.
+          assert.equal(new URL(response.headers.get("location")!).searchParams.has("sqratch_ref"), false);
+        } finally { for (const m of mocks) m.mock.restore(); }
+      });
+    }
+  }
+
+  test("missing pepper redirects without a token and emits only bounded diagnostics", async () => {
+    const previous = process.env.COMMERCE_CLICK_TOKEN_PEPPER;
+    const logs: unknown[][] = [];
+    const log = mock.method(console, "error", (...args: unknown[]) => logs.push(args));
+    delete process.env.COMMERCE_CLICK_TOKEN_PEPPER;
+    try {
+      let inserted = false;
+      const response = await click(SHOP_SURFACE, { recordAttribution: async () => { inserted = true; } });
+      assert.equal(response.status, 302);
+      assert.equal(inserted, false);
+      assert.equal(new URL(response.headers.get("location")!).searchParams.has("sqratch_ref"), false);
+      assert.deepEqual(logs[0][1], {
+        provider: "SHOPIFY", surface: "BRAND_STOREFRONT", stage: "token_hash", code: "UNCLASSIFIED",
+        attributionConfigured: false, entryCampaignContextResolved: false,
+        hasEntryCampaign: false, hasProductCampaign: false, hasSession: true,
+      });
+    } finally { process.env.COMMERCE_CLICK_TOKEN_PEPPER = previous; log.mock.restore(); }
+  });
+
+  for (const stage of ["session_lookup", "attribution_create"] as const) {
+    test(`${stage}: default storage errors are classified without raw Prisma values`, async () => {
+      const { default: prisma } = await import("../src/lib/prisma");
+      const logs: unknown[][] = [];
+      const log = mock.method(console, "error", (...args: unknown[]) => logs.push(args));
+      const error = Object.assign(new Error("SECRET token email query destination"), { code: "P2003", name: "SECRET", meta: { field_name: "SECRET" } });
+      const lookup = replacePrismaMethod(prisma.userSession, "findUnique", async () => {
+        if (stage === "session_lookup") throw error;
+        return { qrCodeId: null };
+      });
+      const create = replacePrismaMethod(prisma.commerceClickAttribution, "create", async () => { throw error; });
+      try {
+        const overrides = deps(); delete overrides.recordAttribution;
+        const response = await handleCommerceClick(req(), { experienceSlug: "exp", surface: SHOP_SURFACE }, overrides);
+        assert.equal(response.status, 302);
+        assert.equal((logs[0][1] as { stage: string }).stage, stage);
+        assert.equal((logs[0][1] as { code: string }).code, "P2003");
+        assert.doesNotMatch(JSON.stringify(logs), /SECRET|tokenHash|viewer-session|acme.test/);
+      } finally { log.mock.restore(); lookup.mock.restore(); create.mock.restore(); }
+    });
+  }
+
+  test("viewer-session creation failure is fail-open after destination authorization", async () => {
+    const log = mock.method(console, "error", () => {});
+    try {
+      const a = access(); a.viewer.sessionId = null;
+      const response = await click(SHOP_SURFACE, {
+        getAccess: async () => a, ensureSession: async () => { throw new Error("private"); },
+        recordAttribution: async () => assert.fail("must not insert"),
+      });
+      assert.equal(response.status, 302);
+      assert.equal(response.headers.get("set-cookie"), null);
+      assert.equal(new URL(response.headers.get("location")!).searchParams.has("sqratch_ref"), false);
+    } finally { log.mock.restore(); }
+  });
+});
+
+test("stale session cookies do not cause a Commerce7 click FK failure", async () => {
+  const { default: prisma } = await import("../src/lib/prisma");
+  const lookup = replacePrismaMethod(prisma.userSession, "findUnique", async () => null);
+  const saved: Record<string, unknown>[] = [];
+  const create = replacePrismaMethod(prisma.commerceClickAttribution, "create", async ({ data }: { data: Record<string, unknown> }) => {
+    // Models the actual FK, rather than accepting the old invalid shape.
+    if (data.sessionId !== null) throw Object.assign(new Error("foreign key"), { code: "P2003" });
+    saved.push(data); return { id: "click", ...data };
+  });
+  try {
+    const overrides = deps({ findBrandStorefrontProduct: async () => resolvedLink({ provider: "COMMERCE7", productUrl: "https://acme.test/product/wine" }) });
+    delete overrides.recordAttribution;
+    const response = await handleCommerceClick(req(), { experienceSlug: "exp", surface: SHOP_SURFACE }, overrides);
+    assert.equal(response.status, 302);
+    assert.equal(saved.length, 1);
+    assert.equal(saved[0].provider, "COMMERCE7");
+    assert.equal(saved[0].sessionId, null);
+    assert.equal(saved[0].qrCodeId, null);
+  } finally { lookup.mock.restore(); create.mock.restore(); }
 });

@@ -189,6 +189,7 @@ function depsFor(
   provider: FakeOrderProvider,
 ): Partial<Commerce7ReconciliationDeps> {
   return {
+    withRunClaim: async (_owner, run) => run(),
     runInTransaction: (fn) => store.runInTransaction(fn),
     fetchOrders: (input) => provider.fetchOrders(input) as never,
     now: () => new Date("2026-08-10T00:00:00.000Z"),
@@ -545,7 +546,8 @@ describe("Part 9: Fulfillment via reconciliation", () => {
 
     const result = await runCatchUpStep(
       { brandId: "brand-a", connectionId: "conn-1" },
-      { runInTransaction: (fn) => store.runInTransaction(fn), fetchOrders: realBackfill, now: () => new Date("2026-08-10T00:00:00.000Z") },
+      { withRunClaim: async (_owner, run) => run(),
+    runInTransaction: (fn) => store.runInTransaction(fn), fetchOrders: realBackfill, now: () => new Date("2026-08-10T00:00:00.000Z") },
     );
 
     assert.equal(result.status, "PROGRESS");
@@ -647,4 +649,33 @@ describe("processOneChunk: adaptive narrowing on TRUNCATED", () => {
     assert.equal(result.outcome, "FAILED");
     assert.equal(provider.calls.length, 1, "a real error must not trigger narrowing retries — narrowing only helps a TRUNCATED result count");
   });
+});
+
+
+test("INCOMPLETE backfill never advances Catch Up or Custom Range and retries the same window", async () => {
+  const store = new FakeReconciliationStore();
+  store.connections.set("conn-1", connectionRow());
+  const calls: Date[] = [];
+  let incomplete = true;
+  const deps: Commerce7ReconciliationDeps = {
+    withRunClaim: async (_owner, run) => run(),
+    runInTransaction: (fn) => store.runInTransaction(fn),
+    now: () => new Date("2026-07-03T00:00:00Z"),
+    fetchOrders: async (input) => {
+      calls.push(input.updatedAtGte);
+      return { status: incomplete ? "INCOMPLETE" : "COMPLETED", ordersFetched: 2, ordersProcessed: 1, outcomes: [] };
+    },
+  };
+  const a = await runCatchUpStep({ brandId: "brand-a", connectionId: "conn-1" }, deps);
+  assert.equal(a.status, "FAILED");
+  assert.equal(store.states.get("conn-1")?.reconciledThrough, null);
+  incomplete = false;
+  const b = await runCatchUpStep({ brandId: "brand-a", connectionId: "conn-1" }, deps);
+  assert.equal(b.status, "PROGRESS");
+  assert.equal(calls[0].getTime(), calls[1].getTime());
+  incomplete = true;
+  const from = new Date("2026-08-01T00:00:00Z");
+  const c = await runCustomRangeStep({ brandId: "brand-a", connectionId: "conn-1", from, to: new Date("2026-08-03T00:00:00Z") }, deps);
+  assert.equal(c.status, "FAILED");
+  assert.equal(c.cursor?.getTime(), from.getTime());
 });

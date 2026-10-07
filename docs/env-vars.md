@@ -81,7 +81,7 @@ The extension writes exactly one Shopify cart attribute, `_sqratch_ref` (single 
 
 | Variable | Classification | Read in | Notes |
 |---|---|---|---|
-| `CRON_SECRET` | Required for scheduled jobs, production-supplied | `src/app/api/internal/email-worker/route.ts`, `src/app/api/internal/reconcile-redemptions/route.ts` | Required in the `x-cron-secret` header for the email and redemption-reconciliation workers. |
+| `CRON_SECRET` | Required for scheduled jobs, production-supplied | `src/app/api/internal/email-worker/route.ts`, `src/app/api/internal/reconcile-redemptions/route.ts`, `src/app/api/internal/commerce7-reconciliation-worker/route.ts` | Required in the `x-cron-secret` header for internal workers. The Commerce7 worker is code-only and requires separate migration/deployment/scheduling; see `docs/commerce/production-stabilization-2026-10.md`. |
 
 Supabase Cron is manually managed outside this repository. It calls `POST /api/internal/email-worker` every five minutes and `POST /api/internal/reconcile-redemptions` every ten minutes, each with `x-cron-secret: <CRON_SECRET>`. Do not add Vercel Cron configuration for either worker — the absence of a `vercel.json` `crons` entry does not mean these workers are unscheduled; it means the scheduler lives in Supabase (`pg_cron` + `pg_net`), not in this repository. A reviewer who concludes "unscheduled" from a missing `vercel.json` alone has not checked the actual production scheduler.
 

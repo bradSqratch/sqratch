@@ -46,6 +46,11 @@ function getPepper(): string {
   return pepper;
 }
 
+/** Server readiness only; never returns any portion of the pepper. */
+export function isCommerceClickAttributionConfigured(): boolean {
+  return Boolean(process.env.COMMERCE_CLICK_TOKEN_PEPPER?.trim());
+}
+
 /** A fresh 256-bit click token. Never persist the return value. */
 export function generateClickToken(): string {
   return crypto.randomBytes(CLICK_TOKEN_BYTES).toString("base64url");

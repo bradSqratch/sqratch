@@ -170,7 +170,7 @@ export function endOfUtcDay(value: Date): Date {
  * Also rejects a well-formed but non-existent calendar date (`2026-02-30`),
  * which `Date.UTC` would otherwise roll forward into March.
  */
-function parseUtcCalendarDate(value: string): Date | null {
+export function parseUtcCalendarDate(value: string): Date | null {
   if (!DATE_ONLY_PATTERN.test(value)) {
     return null;
   }

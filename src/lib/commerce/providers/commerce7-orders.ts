@@ -158,6 +158,8 @@ export type Commerce7OrderListRequest = {
 export type Commerce7OrderListPage = {
   orders: Record<string, unknown>[];
   total: number;
+  /** Compared against the raw response BEFORE client-side range filtering. */
+  complete?: boolean;
 };
 
 function formatCommerce7DateParam(date: Date): string {
@@ -224,22 +226,27 @@ export async function fetchCommerce7OrdersByDateRange(
   // this function targets `updatedAt`, whose documented operators are
   // singular comparisons) — enforced client-side instead, so the caller's
   // window is exact regardless of how the server-side filter behaves.
+  let validEntries = true;
   const orders = rawOrders.filter((entry): entry is Record<string, unknown> => {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      validEntries = false;
       return false;
     }
     const updatedAtRaw = (entry as Record<string, unknown>).updatedAt;
     if (typeof updatedAtRaw !== "string") {
+      validEntries = false;
       return false;
     }
     const updatedAt = new Date(updatedAtRaw);
     if (Number.isNaN(updatedAt.getTime())) {
+      validEntries = false;
       return false;
     }
-    return updatedAt.getTime() <= request.updatedAtLte.getTime();
+    return updatedAt.getTime() >= request.updatedAtGte.getTime() && updatedAt.getTime() <= request.updatedAtLte.getTime();
   });
 
-  const total = typeof body.total === "number" ? body.total : orders.length;
+  const countValid = typeof body.total === "number" && Number.isSafeInteger(body.total) && body.total >= 0;
+  const total = countValid ? body.total as number : rawOrders.length;
 
-  return { orders, total };
+  return { orders, total, complete: validEntries && countValid && total === rawOrders.length };
 }

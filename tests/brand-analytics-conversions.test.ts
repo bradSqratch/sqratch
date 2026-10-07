@@ -45,7 +45,7 @@ describe("Brand Analytics — attributed conversions & revenue panel", () => {
   test("3. the campaign dropdown is never forwarded to the conversions request, and the effect does not depend on it", () => {
     const effectStart = source.indexOf("useEffect(() => {\n    const seq = ++conversionRequestSeq.current;");
     assert.ok(effectStart > -1, "conversion effect not found");
-    const effectEnd = source.indexOf("}, [filters.dateFrom, filters.dateTo]);", effectStart);
+    const effectEnd = source.indexOf("}, [filters.dateFrom, filters.dateTo, dateError]);", effectStart);
     assert.ok(effectEnd > -1, "conversion effect must depend only on the date range, not campaignId");
     const effectBody = source.slice(effectStart, effectEnd);
     assert.doesNotMatch(effectBody, /campaignId/);

@@ -238,6 +238,12 @@ function CatchUpOrdersControl({
             <p>Last attempted: {formatDateTime(state.lastAttemptedAt)}</p>
           ) : null}
           {state.lastRunOutcome ? <p>Last outcome: {state.lastRunOutcome}</p> : null}
+          {state.activeRunStartedAt ? (
+            <p className="text-amber-200/80 sm:col-span-2">
+              Reconciliation claimed since {formatDateTime(state.activeRunStartedAt)}.
+              If the process stopped, an operator must confirm termination before releasing the claim.
+            </p>
+          ) : null}
           {/* Already a short classified tag server-side, never a raw error. */}
           {state.lastRunError ? (
             <p className="text-amber-200/80 sm:col-span-2">Last error: {state.lastRunError}</p>

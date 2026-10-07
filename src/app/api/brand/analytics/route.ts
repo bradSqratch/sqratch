@@ -4,16 +4,17 @@ import {
   getBrandContextFailure,
 } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
+import { endOfUtcDay, parseUtcCalendarDate } from "@/lib/commerce/commerce-click-analytics";
 
 function getDateRange(request: NextRequest) {
   const dateFrom = request.nextUrl.searchParams.get("dateFrom");
   const dateTo = request.nextUrl.searchParams.get("dateTo");
 
-  const start = dateFrom ? new Date(dateFrom) : null;
-  const end = dateTo ? new Date(dateTo) : null;
-
-  if (end) {
-    end.setHours(23, 59, 59, 999);
+  const start = dateFrom ? parseUtcCalendarDate(dateFrom) : null;
+  const parsedEnd = dateTo ? parseUtcCalendarDate(dateTo) : null;
+  const end = parsedEnd ? endOfUtcDay(parsedEnd) : null;
+  if ((dateFrom && !start) || (dateTo && !end) || (start && end && end < start)) {
+    return { error: "Choose a valid From and To date range." } as const;
   }
 
   return { start, end };
@@ -32,7 +33,9 @@ export async function GET(request: NextRequest) {
     }
 
     const campaignId = request.nextUrl.searchParams.get("campaignId");
-    const { start, end } = getDateRange(request);
+    const dateRange = getDateRange(request);
+    if ("error" in dateRange) return NextResponse.json({ error: dateRange.error }, { status: 400 });
+    const { start, end } = dateRange;
 
     const campaigns = await prisma.campaign.findMany({
       where: {
@@ -174,8 +177,8 @@ export async function GET(request: NextRequest) {
         byCampaign,
       },
     });
-  } catch (error) {
-    console.error("[brand/analytics][GET] Error:", error);
+  } catch {
+    console.error("[brand/analytics][GET] Failed");
     return NextResponse.json(
       { error: "Failed to load brand analytics." },
       { status: 500 },

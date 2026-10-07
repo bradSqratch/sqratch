@@ -20,6 +20,8 @@ import {
   CommerceConnectionNotFoundError,
   CommerceConnectionNotReadyError,
 } from "../src/lib/commerce/errors";
+import { Commerce7ReconciliationBusyError } from "../src/lib/commerce/providers/commerce7-reconciliation-claim";
+import { brandCommerceReconcilePostImpl } from "../src/app/api/brand/commerce/connections/[connectionId]/orders/reconcile/route";
 import type { BrandAdminContext } from "../src/lib/brand-auth";
 
 function makeContext(): BrandAdminContext {
@@ -329,3 +331,18 @@ describe("GET .../orders/reconciliation-state", () => {
     assert.equal(body.data.reconciledThrough, "2026-08-10T00:00:00.000Z");
   });
 });
+
+for (const route of ["catch-up", "custom-range", "legacy"] as const) {
+  test(`${route} returns 409 for an active reconciliation claim`, async () => {
+    const getContext = async () => makeContext();
+    const denied = async () => { throw new Commerce7ReconciliationBusyError(); };
+    const range = { from: "2026-10-05T00:00:00Z", to: "2026-10-06T00:00:00Z" };
+    const response = route === "catch-up"
+      ? await brandCommerceCatchUpPostImpl({ getContext, catchUp: denied }, "conn-1")
+      : route === "custom-range"
+        ? await brandCommerceReconcileRangePostImpl({ getContext, reconcileRange: denied }, "conn-1", range)
+        : await brandCommerceReconcilePostImpl({ getContext, reconcile: denied }, "conn-1", range);
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).code, "RECONCILIATION_BUSY");
+  });
+}

@@ -19,6 +19,8 @@ import {
   type ProviderBreakdownRow,
 } from "@/lib/commerce/conversion-analytics-client";
 
+import { defaultBrandAnalyticsDates, brandAnalyticsDateError } from "@/lib/commerce/brand-analytics-filters";
+
 type BoundedCount = { value: number; truncated: boolean };
 
 /**
@@ -130,11 +132,12 @@ type AnalyticsResponse = {
 };
 
 export default function BrandAnalyticsPage() {
-  const [filters, setFilters] = useState({
+  const [filters, setFilters] = useState(() => ({
     campaignId: "",
-    dateFrom: "",
-    dateTo: "",
-  });
+    ...defaultBrandAnalyticsDates(new Date()),
+  }));
+  const dateError = brandAnalyticsDateError(filters.dateFrom, filters.dateTo);
+  const [campaigns, setCampaigns] = useState<AnalyticsResponse["campaigns"]>([]);
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [commerce, setCommerce] = useState<CommerceAnalyticsResponse | null>(null);
@@ -153,8 +156,11 @@ export default function BrandAnalyticsPage() {
   const conversionRequestSeq = useRef(0);
 
   useEffect(() => {
+    let active = true;
+    setData(null);
+    setError(null);
+    if (dateError) return;
     async function load() {
-      setError(null);
 
       try {
         const query = new URLSearchParams();
@@ -165,14 +171,18 @@ export default function BrandAnalyticsPage() {
         const result = await fetchJson<AnalyticsResponse>(
           `/api/brand/analytics?${query.toString()}`,
         );
+        if (!active) return;
         setData(result);
+        if (!filters.campaignId) setCampaigns(result.campaigns);
       } catch (loadError) {
+        if (!active) return;
         setError(getErrorMessage(loadError, "Failed to load brand analytics."));
       }
     }
 
     void load();
-  }, [filters]);
+    return () => { active = false; };
+  }, [filters, dateError]);
 
   /**
    * Product-click analytics load on their own effect rather than being folded
@@ -186,8 +196,11 @@ export default function BrandAnalyticsPage() {
    * section says out loud rather than leaving a stale-looking panel.
    */
   useEffect(() => {
+    let active = true;
+    setCommerce(null);
+    setCommerceError(null);
+    if (dateError) return;
     async function loadCommerce() {
-      setCommerceError(null);
 
       try {
         const query = new URLSearchParams();
@@ -197,8 +210,10 @@ export default function BrandAnalyticsPage() {
         const result = await fetchJson<CommerceAnalyticsResponse>(
           `/api/brand/analytics/commerce?${query.toString()}`,
         );
+        if (!active) return;
         setCommerce(result);
       } catch (loadError) {
+        if (!active) return;
         setCommerce(null);
         setCommerceError(
           getErrorMessage(loadError, "Failed to load product click analytics."),
@@ -207,7 +222,8 @@ export default function BrandAnalyticsPage() {
     }
 
     void loadCommerce();
-  }, [filters.dateFrom, filters.dateTo]);
+    return () => { active = false; };
+  }, [filters.dateFrom, filters.dateTo, dateError]);
 
   /**
    * Attributed conversions & revenue — a THIRD, independent endpoint and
@@ -218,6 +234,13 @@ export default function BrandAnalyticsPage() {
    */
   useEffect(() => {
     const seq = ++conversionRequestSeq.current;
+    let active = true;
+    setConversion(null);
+    setConversionError(null);
+    if (dateError) {
+      setConversionLoading(false);
+      return;
+    }
 
     async function loadConversion() {
       setConversionLoading(true);
@@ -231,7 +254,7 @@ export default function BrandAnalyticsPage() {
         const result = await fetchJson<unknown>(
           `/api/brand/analytics/conversions?${query.toString()}`,
         );
-        if (seq !== conversionRequestSeq.current) return; // superseded by a newer request
+        if (!active || seq !== conversionRequestSeq.current) return;
 
         const parsed = parseBrandConversionAnalytics(result);
         if (!parsed) {
@@ -241,18 +264,19 @@ export default function BrandAnalyticsPage() {
         }
         setConversion(parsed);
       } catch (loadError) {
-        if (seq !== conversionRequestSeq.current) return;
+        if (!active || seq !== conversionRequestSeq.current) return;
         setConversion(null);
         setConversionError(
           getErrorMessage(loadError, "Failed to load conversion and revenue analytics."),
         );
       } finally {
-        if (seq === conversionRequestSeq.current) setConversionLoading(false);
+        if (active && seq === conversionRequestSeq.current) setConversionLoading(false);
       }
     }
 
     void loadConversion();
-  }, [filters.dateFrom, filters.dateTo]);
+    return () => { active = false; };
+  }, [filters.dateFrom, filters.dateTo, dateError]);
 
   return (
     <BrandPageShell
@@ -260,49 +284,41 @@ export default function BrandAnalyticsPage() {
       description="Track scans, unlocks, lesson engagement, and shop clicks across brand-owned campaigns."
     >
       <PageCard>
-        <div className="grid gap-4 lg:grid-cols-3">
-          <select
-            value={filters.campaignId}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                campaignId: event.target.value,
-              }))
-            }
-            className="flex h-10 rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
-          >
-            <option value="">All campaigns</option>
-            {data?.campaigns.map((campaign) => (
-              <option key={campaign.id} value={campaign.id}>
-                {campaign.name}
-              </option>
-            ))}
-          </select>
-
-          <input
-            type="date"
-            value={filters.dateFrom}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                dateFrom: event.target.value,
-              }))
-            }
-            className="flex h-10 rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
-          />
-
-          <input
-            type="date"
-            value={filters.dateTo}
-            onChange={(event) =>
-              setFilters((current) => ({
-                ...current,
-                dateTo: event.target.value,
-              }))
-            }
-            className="flex h-10 rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
-          />
+        <h2 className="text-lg font-semibold">Global date range</h2>
+        <p className="mt-1 text-sm text-white/65">UTC calendar days. Applies to every section below.</p>
+        <div className="mt-3 grid gap-4 sm:grid-cols-2">
+          <label htmlFor="analytics-from" className="grid gap-2 text-sm">
+            From
+            <input id="analytics-from" type="date" value={filters.dateFrom}
+              onChange={(event) => setFilters((current) => ({ ...current, dateFrom: event.target.value }))}
+              className="flex h-10 rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white" />
+          </label>
+          <label htmlFor="analytics-to" className="grid gap-2 text-sm">
+            To
+            <input id="analytics-to" type="date" value={filters.dateTo}
+              onChange={(event) => setFilters((current) => ({ ...current, dateTo: event.target.value }))}
+              className="flex h-10 rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white" />
+          </label>
         </div>
+        {dateError && <p role="alert" className="mt-3 text-sm text-amber-300">{dateError}</p>}
+      </PageCard>
+
+      {!dateError && <>
+      <PageCard>
+        <h2 className="text-xl font-semibold">Engagement</h2>
+        <p id="campaign-filter-scope" className="mt-1 text-sm text-white/65">
+          Campaign filters engagement only. Product clicks and conversions cover the whole brand.
+        </p>
+        <label htmlFor="analytics-campaign" className="mt-3 grid max-w-md gap-2 text-sm">
+          Campaign
+          <select id="analytics-campaign" aria-describedby="campaign-filter-scope"
+            value={filters.campaignId}
+            onChange={(event) => setFilters((current) => ({ ...current, campaignId: event.target.value }))}
+            className="flex h-10 rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white">
+            <option value="">All campaigns</option>
+            {campaigns.map((campaign) => <option key={campaign.id} value={campaign.id}>{campaign.name}</option>)}
+          </select>
+        </label>
       </PageCard>
 
       {error && (
@@ -311,11 +327,11 @@ export default function BrandAnalyticsPage() {
         </PageCard>
       )}
 
-      {!data ? (
+      {!data && !error ? (
         <PageCard>
           <p className="text-sm text-white/65">Loading analytics...</p>
         </PageCard>
-      ) : (
+      ) : data ? (
         <>
           <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
             <MetricCard label="Scans" value={data.totals.scans} />
@@ -328,7 +344,9 @@ export default function BrandAnalyticsPage() {
             <MetricCard label="Shop clicks" value={data.totals.shopClicks} />
           </div>
 
-          <PageCard>
+          {Object.values(data.totals).every((value) => value === 0) ? (
+            <p className="text-sm text-white/65">No engagement was recorded in this date range.</p>
+          ) : <PageCard>
             <h2 className="text-xl font-semibold">By campaign</h2>
             <div className="mt-5 overflow-x-auto">
               <table className="w-full min-w-[760px] text-left text-sm">
@@ -361,9 +379,9 @@ export default function BrandAnalyticsPage() {
                 </tbody>
               </table>
             </div>
-          </PageCard>
+          </PageCard>}
         </>
-      )}
+      ) : null}
 
       <CommerceClickSection data={commerce} error={commerceError} />
 
@@ -372,6 +390,7 @@ export default function BrandAnalyticsPage() {
         error={conversionError}
         loading={conversionLoading}
       />
+      </>}
     </BrandPageShell>
   );
 }
@@ -798,6 +817,7 @@ function ConversionAnalyticsSection({
             </PageCard>
           )}
 
+          {!noAttributionYet && <>
           <div className="grid gap-4 lg:grid-cols-3">
             <MoneyRowsCard title="Gross attributed revenue" rows={data.grossAttributedRevenueByCurrency} />
             <MoneyRowsCard title="Refunded attributed revenue" rows={data.refundedRevenueByCurrency} />
@@ -884,6 +904,7 @@ function ConversionAnalyticsSection({
               />
             </PageCard>
           </div>
+          </>}
         </>
       )}
     </>

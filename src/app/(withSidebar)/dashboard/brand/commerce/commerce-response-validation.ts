@@ -361,6 +361,7 @@ export function nextDiagnosticsRefreshKey(
 // ---------------------------------------------------------------------------
 
 export type ReconciliationStateView = {
+  activeRunStartedAt?: string | null;
   reconciledThrough: string | null;
   targetThrough: string | null;
   lastAttemptedAt: string | null;
@@ -389,6 +390,7 @@ export function parseReconciliationState(data: unknown): ReconciliationStateView
     (field) => record[field] === null || typeof record[field] === "string",
   );
   if (!allValid) return null;
+  if (record.activeRunStartedAt !== undefined && record.activeRunStartedAt !== null && typeof record.activeRunStartedAt !== "string") return null;
   return data as ReconciliationStateView;
 }
 

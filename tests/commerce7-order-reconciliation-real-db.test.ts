@@ -81,7 +81,7 @@ function emptyOutcome(): Commerce7OrderBackfillOutcome {
 }
 
 test(
-  "real Postgres — two CONCURRENT runCatchUpStep calls for the SAME connection genuinely serialize on the real row lock; the checkpoint never regresses and no work is lost",
+  "real Postgres — two CONCURRENT runCatchUpStep calls for the SAME connection use an exclusive durable claim; the checkpoint never regresses and no work is lost",
   { skip: !ENABLED && SKIP_REASON },
   async () => {
     const { default: prisma } = await import("../src/lib/prisma");
@@ -131,27 +131,16 @@ test(
       );
       await firstFetchStarted;
 
-      // Request B starts concurrently. Its OWN checkpoint-decide
-      // transaction must wait for a real Postgres row lock exactly like
-      // `tests/commerce-connection-lock.test.ts`'s 3B/14B proof — but since
-      // A already committed its decide-phase transaction (it's blocked in
-      // the UNLOCKED fetch phase, not holding any lock), B's decide-phase
-      // transaction proceeds immediately and reads whatever A's decide
-      // phase already committed as `targetThrough`.
-      const bStartedAt = Date.now();
-      const callB = runCatchUpStep(
-        { brandId: brand.id, connectionId: connection.id },
-        { fetchOrders: secondFetchOrders as never },
-      );
-      const resultB = await callB;
-      const bCompletedAt = Date.now();
-
-      releaseFirst();
+      // The whole-step claim denies B while A's provider call is suspended.
+      // No database row lock or transaction is held over that provider call.
+      try {
+        await assert.rejects(
+          runCatchUpStep({ brandId: brand.id, connectionId: connection.id }, { fetchOrders: secondFetchOrders as never }),
+          { name: "Error", message: "Reconciliation is already running for this connection." },
+        );
+      } finally { releaseFirst(); }
       const resultA = await callA;
-
-      // Both calls must have reached the provider (the lock is never held
-      // across provider HTTP — see the reconciliation service's own header).
-      assert.equal(fetchCallCount, 2, "neither call may be starved by the other's lock");
+      assert.equal(fetchCallCount, 1);
 
       const finalState = await prisma.commerceOrderReconciliationState.findUniqueOrThrow({
         where: { connectionId: connection.id },
@@ -173,8 +162,7 @@ test(
       assert.equal(rowCount, 1, "concurrent chunk commits must never create a second state row");
 
       assert.equal(resultA.status, "PROGRESS");
-      assert.equal(resultB.status, "PROGRESS");
-      assert.ok(bCompletedAt >= bStartedAt, "sanity: causal ordering is well-formed");
+      assert.equal(finalState.activeRunId, null);
     } finally {
       await cleanup(prisma, brand.id, connection.id);
     }

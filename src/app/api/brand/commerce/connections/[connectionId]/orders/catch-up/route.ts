@@ -1,3 +1,4 @@
+import { Commerce7ReconciliationBusyError } from "@/lib/commerce/providers/commerce7-reconciliation-claim";
 import { NextResponse, type NextRequest } from "next/server";
 import {
   getBrandContextFailure,
@@ -69,6 +70,9 @@ export async function brandCommerceCatchUpPostImpl(
     try {
       result = await deps.catchUp({ brandId, connectionId });
     } catch (error) {
+      if (error instanceof Commerce7ReconciliationBusyError) {
+        return NextResponse.json({ error: error.message, code: error.code }, { status: 409 });
+      }
       if (error instanceof CommerceConnectionNotFoundError) {
         return NextResponse.json(
           { error: "That commerce connection was not found.", code: error.code },
@@ -104,8 +108,8 @@ export async function brandCommerceCatchUpPostImpl(
         error: result.error,
       },
     });
-  } catch (error) {
-    console.error("[brand/commerce/connections/[connectionId]/orders/catch-up][POST] Error:", error);
+  } catch {
+    console.error("[brand/commerce/connections/[connectionId]/orders/catch-up][POST] Error:");
     return NextResponse.json({ error: "Failed to run order catch-up." }, { status: 500 });
   }
 }

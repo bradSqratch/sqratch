@@ -69,11 +69,10 @@
  * checkpoint-decide and checkpoint-advance steps; two DIFFERENT connections'
  * reconciliation never contend with each other (per-row lock, not global).
  *
- * NO AGE-BASED "ASSUME ABANDONED" RECOVERY EXISTS ANYWHERE IN THIS MODULE —
- * see the `CommerceOrderReconciliationState` schema doc comment for why no
- * "in progress" flag is even stored. A stale/abandoned request simply never
- * advances anything; the durable checkpoint it would have advanced from is
- * exactly where the NEXT request (from anyone) resumes.
+ * A durable whole-step claim additionally prevents overlapping provider
+ * fetches across worker, Catch Up and Custom Range calls. It holds no row lock
+ * across HTTP and has no age-based takeover. A killed request leaves a claim
+ * requiring verified operator recovery; see commerce7-reconciliation-claim.ts.
  */
 
 import { CommerceProvider, type CommerceConnectionStatus } from "@prisma/client";
@@ -83,6 +82,7 @@ import {
   CommerceConnectionNotReadyError,
   CommerceProviderApiError,
 } from "../errors";
+import { withCommerce7ReconciliationClaim } from "./commerce7-reconciliation-claim";
 import { lockCommerceConnectionForTransaction } from "../connection-row-lock";
 import {
   backfillCommerce7Orders,
@@ -166,6 +166,7 @@ export type Commerce7ReconciliationDeps = {
   runInTransaction<T>(fn: (tx: Commerce7ReconciliationTx) => Promise<T>): Promise<T>;
   fetchOrders: typeof backfillCommerce7Orders;
   now(): Date;
+  withRunClaim?: typeof withCommerce7ReconciliationClaim;
 };
 
 async function getPrisma() {
@@ -389,6 +390,17 @@ export async function processOneChunk(
     totalFetched += outcome.ordersFetched;
     totalProcessed += outcome.ordersProcessed;
 
+    if (outcome.status === "INCOMPLETE") {
+      return {
+        achievedThrough: null,
+        outcome: "FAILED",
+        error: "Some orders could not be ingested. Retry this reconciliation chunk.",
+        ordersFetched: totalFetched,
+        ordersProcessed: totalProcessed,
+        chunk: { from: input.from, to: chunkTo },
+      };
+    }
+
     if (outcome.status === "COMPLETED") {
       return {
         achievedThrough: chunkTo,
@@ -450,6 +462,13 @@ export type Commerce7CatchUpStepResult = {
  * reported as `status: "FAILED"` with a sanitized `error`.
  */
 export async function runCatchUpStep(
+  input: { brandId: string; connectionId: string },
+  deps: Partial<Commerce7ReconciliationDeps> = {},
+): Promise<Commerce7CatchUpStepResult> {
+  return (deps.withRunClaim ?? withCommerce7ReconciliationClaim)(input, () => catchUpStep(input, deps));
+}
+
+async function catchUpStep(
   input: { brandId: string; connectionId: string },
   deps: Partial<Commerce7ReconciliationDeps> = {},
 ): Promise<Commerce7CatchUpStepResult> {
@@ -545,6 +564,13 @@ export async function runCustomRangeStep(
   input: { brandId: string; connectionId: string; from: Date; to: Date },
   deps: Partial<Commerce7ReconciliationDeps> = {},
 ): Promise<Commerce7CustomRangeStepResult> {
+  return (deps.withRunClaim ?? withCommerce7ReconciliationClaim)(input, () => customRangeStep(input, deps));
+}
+
+async function customRangeStep(
+  input: { brandId: string; connectionId: string; from: Date; to: Date },
+  deps: Partial<Commerce7ReconciliationDeps> = {},
+): Promise<Commerce7CustomRangeStepResult> {
   const resolved: Commerce7ReconciliationDeps = { ...DEFAULT_DEPS, ...deps };
 
   const decision = await resolved.runInTransaction(async (tx) => {
@@ -613,6 +639,7 @@ export async function runCustomRangeStep(
 }
 
 export type Commerce7ReconciliationStateView = {
+  activeRunStartedAt?: string | null;
   reconciledThrough: string | null;
   targetThrough: string | null;
   lastAttemptedAt: string | null;
@@ -658,6 +685,7 @@ export async function getReconciliationState(
   const state = toStateRow(row);
 
   return {
+    activeRunStartedAt: row?.activeRunStartedAt?.toISOString() ?? null,
     reconciledThrough: state.reconciledThrough?.toISOString() ?? null,
     targetThrough: state.targetThrough?.toISOString() ?? null,
     lastAttemptedAt: state.lastAttemptedAt?.toISOString() ?? null,

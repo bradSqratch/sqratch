@@ -1,3 +1,4 @@
+import { Commerce7ReconciliationBusyError } from "@/lib/commerce/providers/commerce7-reconciliation-claim";
 import { NextResponse, type NextRequest } from "next/server";
 import {
   getBrandContextFailure,
@@ -137,6 +138,9 @@ export async function brandCommerceReconcileRangePostImpl(
     try {
       result = await deps.reconcileRange({ brandId, connectionId, from, to });
     } catch (error) {
+      if (error instanceof Commerce7ReconciliationBusyError) {
+        return NextResponse.json({ error: error.message, code: error.code }, { status: 409 });
+      }
       if (error instanceof CommerceConnectionNotFoundError) {
         return NextResponse.json(
           { error: "That commerce connection was not found.", code: error.code },
@@ -173,10 +177,9 @@ export async function brandCommerceReconcileRangePostImpl(
         error: result.error,
       },
     });
-  } catch (error) {
+  } catch {
     console.error(
       "[brand/commerce/connections/[connectionId]/orders/reconcile-range][POST] Error:",
-      error,
     );
     return NextResponse.json({ error: "Failed to reconcile the custom range." }, { status: 500 });
   }

@@ -190,6 +190,10 @@ async function runCommerce7OrderWebhook(
 ): Promise<NextResponse> {
   const resolved: Commerce7OrderWebhookDeps = { ...DEFAULT_WEBHOOK_DEPS, ...deps };
 
+  // Arrival is independent of authentication, tenant resolution and event
+  // claims. A request can reach us without ever creating an order event.
+  logWebhook("", "REQUEST_RECEIVED", null);
+
   // 1. Authenticate BEFORE anything reads the parsed payload.
   const auth = verifyCommerce7OrderWebhookAuth(request);
   if (!auth.ok) {
@@ -222,7 +226,7 @@ async function runCommerce7OrderWebhook(
   // 2. Validate object/action BEFORE any connection lookup or ingestion —
   // a deterministic no-op never needs to touch the DB.
   if (object !== "Order" || !action || !SUPPORTED_ACTIONS.has(action)) {
-    logWebhook(tenant ?? "", "UNSUPPORTED_EVENT", { object, action });
+    logWebhook(tenant ?? "", "UNSUPPORTED_EVENT", null);
     return new NextResponse(null, { status: 200 });
   }
 

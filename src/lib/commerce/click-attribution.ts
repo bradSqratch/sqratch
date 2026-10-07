@@ -61,12 +61,14 @@ import {
   generateClickToken,
   hashClickIp,
   hashClickToken,
+  isCommerceClickAttributionConfigured,
 } from "@/lib/commerce/click-token";
 import {
   isPublicCampaignScopedContentVisible,
   type PublicCampaignScopedContent,
 } from "@/lib/campaign-context";
 import { isCampaignAssignmentCatalogAuthorized } from "@/lib/commerce/campaign-assignment-authorization";
+import { ClickMintFailure, clickMintErrorCode, type ClickMintStage } from "@/lib/commerce/click-diagnostics";
 import { providerTrustsSuppliedStorefrontUrl } from "@/lib/commerce/provider-capabilities";
 
 /**
@@ -640,51 +642,60 @@ const DEFAULT_DEPS: CommerceClickDeps = {
     // finder query that authorized this click, so there is no second lookup
     // that could race the authorization, and no shop-domain guess that could
     // attach a click to the wrong same-brand connection.
-    const qrCodeId = input.sessionId
-      ? ((
-          await prisma.userSession.findUnique({
-            where: { id: input.sessionId },
-            select: { qrCodeId: true },
-          })
-        )?.qrCodeId ?? null)
-      : null;
+    let qrCodeId: string | null = null;
+    let persistedSessionId: string | null = null;
+    try {
+      const session = input.sessionId
+        ? await prisma.userSession.findUnique({ where: { id: input.sessionId }, select: { qrCodeId: true } })
+        : null;
+      // A format-valid cookie can outlive its database session. It is not FK
+      // evidence: preserve the click without inventing/recreating a session.
+      persistedSessionId = session ? input.sessionId : null;
+      qrCodeId = session?.qrCodeId ?? null;
+    } catch (error) {
+      throw new ClickMintFailure("session_lookup", error);
+    }
 
-    await prisma.commerceClickAttribution.create({
-      data: {
-        tokenHash: input.tokenHash,
-        tokenPrefix: input.tokenPrefix,
-        entryCampaignId: input.entryCampaignId,
-        productCampaignId: input.productCampaignId,
-        entryCampaignContextResolved: input.entryCampaignContextResolved,
-        experienceId: input.experienceId,
-        courseId: input.courseId,
-        lessonId: input.lessonId,
-        creatorProfileId: input.creatorProfileId,
-        // The canonical identity columns. `lessonProductLinkId` and
-        // `experienceProductLinkId` are deliberately NOT written: the columns
-        // still exist until WS5's destructive migration drops them, and nothing
-        // in this module may populate them again.
-        campaignLessonProductId: input.campaignLessonProductId,
-        brandCommerceProductId: input.brandCommerceProductId,
-        connectedProductId: input.connectedProductId,
-        commerceConnectionId: input.commerceConnectionId,
-        // Written once, never updated. `?? null` keeps the fail-open mint path
-        // safe: a caller that omits either value still records the click.
-        surface: input.surface ?? null,
-        attributedBrandId: input.attributedBrandId ?? null,
-        destinationUrl: input.destinationUrl,
-        destinationHost: input.destinationHost,
-        provider: input.provider,
-        userId: input.userId,
-        sessionId: input.sessionId,
-        qrCodeId,
-        ipHash: input.ipHash,
-        userAgent: input.userAgent,
-        referrer: input.referrer,
-        expiresAt: input.expiresAt,
-        redirectedAt: input.redirectedAt,
-      },
-    });
+    try {
+      await prisma.commerceClickAttribution.create({
+        data: {
+          tokenHash: input.tokenHash,
+          tokenPrefix: input.tokenPrefix,
+          entryCampaignId: input.entryCampaignId,
+          productCampaignId: input.productCampaignId,
+          entryCampaignContextResolved: input.entryCampaignContextResolved,
+          experienceId: input.experienceId,
+          courseId: input.courseId,
+          lessonId: input.lessonId,
+          creatorProfileId: input.creatorProfileId,
+          // The canonical identity columns. `lessonProductLinkId` and
+          // `experienceProductLinkId` are deliberately NOT written: the columns
+          // still exist until WS5's destructive migration drops them, and nothing
+          // in this module may populate them again.
+          campaignLessonProductId: input.campaignLessonProductId,
+          brandCommerceProductId: input.brandCommerceProductId,
+          connectedProductId: input.connectedProductId,
+          commerceConnectionId: input.commerceConnectionId,
+          // Written once, never updated. `?? null` keeps the fail-open mint path
+          // safe: a caller that omits either value still records the click.
+          surface: input.surface ?? null,
+          attributedBrandId: input.attributedBrandId ?? null,
+          destinationUrl: input.destinationUrl,
+          destinationHost: input.destinationHost,
+          provider: input.provider,
+          userId: input.userId,
+          sessionId: persistedSessionId,
+          qrCodeId,
+          ipHash: input.ipHash,
+          userAgent: input.userAgent,
+          referrer: input.referrer,
+          expiresAt: input.expiresAt,
+          redirectedAt: input.redirectedAt,
+        },
+      });
+    } catch (error) {
+      throw new ClickMintFailure("attribution_create", error);
+    }
   },
 };
 
@@ -779,15 +790,7 @@ export async function handleCommerceClick(
       return genericNotFound();
     }
 
-    const sessionId =
-      access.viewer.sessionId ||
-      (await deps.ensureSession({
-        request,
-        userId: access.viewer.userId,
-        campaignId: entryCampaignContextResolved
-          ? visitorCampaign!.campaignId
-          : null,
-      }));
+    let sessionId = access.viewer.sessionId;
 
     // BRAND — re-derived from the link row first, falling back to the resolved
     // context's brand only when the link carries none. This mirrors the
@@ -861,11 +864,22 @@ export async function handleCommerceClick(
     //
     // Do NOT "fix" this into a hard failure. Losing one attribution row is a
     // reporting gap; blocking the redirect is an outage on the revenue path.
+    let mintStage: ClickMintStage = "viewer_session";
     try {
+      sessionId ||= await deps.ensureSession({
+        request,
+        userId: access.viewer.userId,
+        campaignId: entryCampaignContextResolved ? visitorCampaign!.campaignId : null,
+      });
+      mintStage = "token_generation";
       const mintedToken = generateClickToken();
-
+      mintStage = "token_hash";
+      const tokenHash = hashClickToken(mintedToken);
+      mintStage = "ip_hash";
+      const ipHash = hashClickIp(ip);
+      mintStage = "attribution_create";
       await deps.recordAttribution({
-        tokenHash: hashClickToken(mintedToken),
+        tokenHash,
         tokenPrefix: clickTokenPrefix(mintedToken),
         entryCampaignId,
         productCampaignId,
@@ -887,7 +901,7 @@ export async function handleCommerceClick(
         destinationHost: destination.hostname,
         userId: access.viewer.userId,
         sessionId,
-        ipHash: hashClickIp(ip),
+        ipHash,
         userAgent: truncate(
           request.headers.get("user-agent"),
           MAX_USER_AGENT_LENGTH,
@@ -901,21 +915,23 @@ export async function handleCommerceClick(
 
       token = mintedToken;
     } catch (error) {
-      // Error NAME only. Never the error object (it can carry query text and
-      // parameter values), never the destination, never any visitor identifier.
       console.error("[commerce/click] Attribution mint failed:", {
+        provider: link.provider,
         surface: options.surface.kind,
-        experienceId: access.experience.id,
-        clickTargetId: link.id,
-        brandId,
-        errorName: error instanceof Error ? error.name : "UnknownError",
+        stage: error instanceof ClickMintFailure ? error.stage : mintStage,
+        code: clickMintErrorCode(error),
+        attributionConfigured: isCommerceClickAttributionConfigured(),
+        entryCampaignContextResolved,
+        hasEntryCampaign: entryCampaignId !== null,
+        hasProductCampaign: productCampaignId !== null,
+        hasSession: Boolean(sessionId),
       });
     }
 
     // The Shopify Theme App Extension observes this SQRATCH-namespaced query
     // parameter and persists it as a cart attribute. Only our namespaced key
     // is written; merchant referral parameters are left untouched.
-    if (token && !destination.searchParams.has(CLICK_TOKEN_QUERY_PARAM)) {
+    if (link.provider === "SHOPIFY" && token && !destination.searchParams.has(CLICK_TOKEN_QUERY_PARAM)) {
       destination.searchParams.set(CLICK_TOKEN_QUERY_PARAM, token);
     }
 
@@ -925,13 +941,13 @@ export async function handleCommerceClick(
     // Stops the token — and even the bare click path — from reaching the
     // merchant's server logs through the Referer header.
     response.headers.set("Referrer-Policy", "no-referrer");
-    attachSessionCookie(response, sessionId);
+    if (sessionId) attachSessionCookie(response, sessionId);
 
     return response;
   } catch (error) {
     console.error("[commerce/click] Error:", {
       surface: options.surface.kind,
-      errorName: error instanceof Error ? error.name : "UnknownError",
+      code: clickMintErrorCode(error),
     });
     return genericNotFound();
   }

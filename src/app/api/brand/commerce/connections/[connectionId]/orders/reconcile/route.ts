@@ -1,3 +1,4 @@
+import { Commerce7ReconciliationBusyError, withCommerce7ReconciliationClaim } from "@/lib/commerce/providers/commerce7-reconciliation-claim";
 import { NextResponse, type NextRequest } from "next/server";
 import {
   getBrandContextFailure,
@@ -55,8 +56,7 @@ export type BrandCommerceReconcileDeps = {
 
 const DEFAULT_DEPS: BrandCommerceReconcileDeps = {
   getContext: getBrandManagementContext,
-  reconcile: ({ brandId, connectionId, updatedAtGte, updatedAtLte }) =>
-    backfillCommerce7Orders({ brandId, connectionId, updatedAtGte, updatedAtLte }),
+  reconcile: (input) => withCommerce7ReconciliationClaim(input, () => backfillCommerce7Orders(input)),
 };
 
 export async function POST(
@@ -131,6 +131,9 @@ export async function brandCommerceReconcilePostImpl(
     try {
       outcome = await deps.reconcile({ brandId, connectionId, updatedAtGte: from, updatedAtLte: to });
     } catch (error) {
+      if (error instanceof Commerce7ReconciliationBusyError) {
+        return NextResponse.json({ error: error.message, code: error.code }, { status: 409 });
+      }
       if (error instanceof CommerceConnectionNotFoundError) {
         return NextResponse.json(
           { error: "That commerce connection was not found.", code: error.code },
@@ -165,7 +168,7 @@ export async function brandCommerceReconcilePostImpl(
 
     return NextResponse.json({
       data: {
-        status: outcome.status === "TRUNCATED" ? "PARTIAL" : failedCount > 0 ? "PARTIAL" : "SUCCEEDED",
+        status: outcome.status !== "COMPLETED" || failedCount > 0 ? "PARTIAL" : "SUCCEEDED",
         fetchedCount: outcome.ordersFetched,
         createdCount,
         updatedCount,
@@ -174,8 +177,8 @@ export async function brandCommerceReconcilePostImpl(
         truncated: outcome.status === "TRUNCATED",
       },
     });
-  } catch (error) {
-    console.error("[brand/commerce/connections/[connectionId]/orders/reconcile][POST] Error:", error);
+  } catch {
+    console.error("[brand/commerce/connections/[connectionId]/orders/reconcile][POST] Failed");
     return NextResponse.json({ error: "Failed to reconcile orders." }, { status: 500 });
   }
 }

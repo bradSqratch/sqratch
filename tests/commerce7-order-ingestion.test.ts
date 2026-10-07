@@ -1316,6 +1316,7 @@ describe("59-60. backfillCommerce7Orders", () => {
         },
       },
     );
+    assert.equal(outcome.status, "INCOMPLETE");
     assert.deepEqual(ingestedOrderIds, ["order-fine"]);
     assert.equal(outcome.ordersProcessed, 1);
   });
@@ -1410,3 +1411,38 @@ describe("59-60. backfillCommerce7Orders", () => {
     assert.equal(secondRun.ordersProcessed, 1);
   });
 });
+
+for (const kind of ["partial", "invalid-row", "missing-total", "complete-filtered"] as const) {
+  test(`list completeness is checked before range filtering (${kind})`, async () => {
+    const body: Record<string, unknown> = {
+      orders: [rawOrder({ updatedAt: "2026-10-06T23:35:16.560Z" }), rawOrder({ id: "later", updatedAt: "2026-10-08T00:00:00Z" })], total: 2,
+    };
+    if (kind === "partial") body.total = 5;
+    if (kind === "invalid-row") (body.orders as unknown[]).push({ id: "missing-date" });
+    if (kind === "missing-total") delete body.total;
+    const page = await fetchCommerce7OrdersByDateRange({ tenant: "sqratch-inc", updatedAtGte: new Date("2026-10-06T00:00:00Z"), updatedAtLte: new Date("2026-10-07T00:00:00Z") }, {
+      fetchImpl: async () => jsonResponse(200, body),
+    });
+    assert.equal(page.orders.length, 1);
+    assert.equal(page.complete, kind === "complete-filtered");
+    const outcome = await backfillCommerce7Orders({ brandId: "brand-a", connectionId: "conn-1", updatedAtGte: new Date("2026-10-06"), updatedAtLte: new Date("2026-10-07") }, {
+      loadConnection: async () => backfillRow(), fetchOrders: async () => page,
+      prepareOrder: async (raw, context) => ({ outcome: "READY", ...normalizeCommerce7Order(raw, context), refundReconciliationOutcome: "NOT_APPLICABLE", refundReconciliationReason: null }),
+      ingest: async () => ({ status: "CREATED", reason: null, eventId: "event", orderId: "order", lineItemCount: 1, attributionLinked: false, brandIdOverriddenFromConnection: false }),
+    });
+    assert.equal(outcome.status, kind === "complete-filtered" ? "COMPLETED" : "INCOMPLETE");
+  });
+}
+
+for (const status of ["IN_FLIGHT", "FAILED", "SKIPPED_DISCONNECTED"] as const) {
+  test(`backfill cannot prove coverage after ${status} ingestion`, async () => {
+    const outcome = await backfillCommerce7Orders({ brandId: "brand-a", connectionId: "conn-1", updatedAtGte: new Date("2026-08-01"), updatedAtLte: new Date("2026-08-31") }, {
+      loadConnection: async () => backfillRow(),
+      fetchOrders: async () => ({ orders: [rawOrder()], total: 1 }),
+      prepareOrder: async (raw, context) => ({ outcome: "READY", ...normalizeCommerce7Order(raw, context), refundReconciliationOutcome: "NOT_APPLICABLE", refundReconciliationReason: null }),
+      ingest: async () => ({ status, reason: status === "IN_FLIGHT" ? "DELIVERY_IN_FLIGHT" : status === "FAILED" ? "WRITE_FAILED" : "CONNECTION_NOT_INGESTIBLE", eventId: "event", orderId: null, lineItemCount: 0, attributionLinked: false, brandIdOverriddenFromConnection: false }),
+    });
+    assert.equal(outcome.status, "INCOMPLETE");
+    assert.equal(outcome.ordersProcessed, 1);
+  });
+}
