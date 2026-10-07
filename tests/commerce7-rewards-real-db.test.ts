@@ -16,10 +16,11 @@ test("real Postgres: cap 25, duplicate request, point overspend, cancellation an
   const { default: db } = await import("../src/lib/prisma");
   const { reserveCommerce7Claim, cancelCommerce7Claim, provisionCommerce7Claim, saveCommerce7Offer } = await import("../src/lib/commerce7-rewards");
   const { reconcileCommerce7RewardOrders } = await import("../src/lib/commerce/providers/commerce7-reward-orders");
-  const { Commerce7RewardsClient, Commerce7RewardError, claimTagTitle } = await import("../src/lib/commerce/providers/commerce7-rewards-client");
+  const { Commerce7RewardsClient, Commerce7RewardError, claimTagTitle, parseNativeCoupon } = await import("../src/lib/commerce/providers/commerce7-rewards-client");
   const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const brand = await db.brand.create({ data: { name: "Reward fixture", slug: `c7-reward-${unique}` } });
   const connection = await db.commerceConnection.create({ data: { brandId: brand.id, provider: "COMMERCE7", status: "CONNECTED", externalAccountId: "synthetic-reward-tenant", displayName: "Synthetic store", providerMetadata: { currencyCode: "CAD" } } });
+  // Pre-refinement offers embed the merchant's native template; that shape must keep issuing. New offers carry no template.
   const template = { id: "native-template", title: "Template", code: "template", usageLimitType: "Per Store", usageLimit: 1, appliesTo: "Store", appliesToObjectIds: null, productDiscountType: "Dollar Off", productDiscount: 1000, shippingDiscountType: "No Discount", shippingDiscount: null, startDate: "2026-01-01T00:00:00.000Z", endDate: null, status: "Enabled", minimumCartAmount: null, availableTo: "opaque-native-tag-selector", availableToObjectIds: ["native-tag"] };
   const userIds: string[] = []; let userIndex = 0;
   async function user(balance = 1000, verified = true) {
@@ -27,24 +28,23 @@ test("real Postgres: cap 25, duplicate request, point overspend, cancellation an
     const row = await db.user.create({ data: { email: `reward-${index}-${unique}@example.test`, password: "synthetic-unused", isEmailVerified: verified, emailVerifiedAt: verified ? new Date() : null } }); userIds.push(row.id);
     await db.userPointAccount.create({ data: { userId: row.id, spendablePoints: balance, lifetimeEarnedPoints: balance } }); return row;
   }
-  async function offer(cap: number, perUser = 1) {
-    return db.brandRewardOffer.create({ data: { brandId: brand.id, provider: "COMMERCE7", connectionId: connection.id, sourceExternalAccountId: connection.externalAccountId, title: "Reward fixture", isActive: true, pointsCost: 100, discountAmountCents: 1000, currencyCode: "CAD", maxTotalRedemptions: cap, maxRedemptionsPerUser: perUser, commerce7Config: { templateCouponId: template.id, template } } });
+  async function offer(cap: number, perUser = 1, config: Record<string, unknown> = { templateCouponId: template.id, template }) {
+    return db.brandRewardOffer.create({ data: { brandId: brand.id, provider: "COMMERCE7", connectionId: connection.id, sourceExternalAccountId: connection.externalAccountId, title: "Reward fixture", isActive: true, pointsCost: 100, discountAmountCents: 1000, currencyCode: "CAD", maxTotalRedemptions: cap, maxRedemptionsPerUser: perUser, commerce7Config: config as never } });
   }
   try {
     await db.connectedCommerceProduct.create({ data: { brandId: brand.id, connectionId: connection.id, provider: "COMMERCE7", externalId: "rare-wine", externalKey: "rare-wine", title: "Rare wine", productUrl: "", images: [], externalVariantIds: [] } });
-    const exclusiveDraft = { title: "Rare wine access", isActive: false, rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", discountEnabled: false, discountType: "FIXED_AMOUNT", pointsCost: 100, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, codeValidDays: 30, templateCouponId: null, productIds: ["rare-wine"] };
+    const exclusiveDraft = { title: "Rare wine access", isActive: false, rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", discountEnabled: false, discountType: "FIXED_AMOUNT", pointsCost: 100, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, codeValidDays: 30, productIds: ["rare-wine"] };
     const draft = await saveCommerce7Offer(brand.id, exclusiveDraft);
     assert.equal(draft.rewardMode, "EXCLUSIVE_PRODUCT_ACCESS"); assert.equal(draft.discountAmountCents, null);
     await assert.rejects(saveCommerce7Offer(brand.id, { ...exclusiveDraft, isActive: true }), { code: "INVALID_OFFER" });
     await assert.rejects(saveCommerce7Offer(brand.id, { ...exclusiveDraft, productIds: ["foreign-wine"] }), { code: "INVALID_OFFER" });
-    class OfferReads extends Commerce7RewardsClient {
-      async coupon() { return template; }
-      async tag(id: string) { return { id, title: "Native template tag", type: "Manual" as const, objectType: "Customer" as const }; }
-    }
-    const offerDeps = { db, client: (tenant: string) => new OfferReads(tenant), now: () => new Date() };
-    const offerInput = { title: "Real offer service", isActive: true, rewardMode: "DISCOUNT", discountType: "FIXED_AMOUNT", discountAmountCents: 1000, pointsCost: 100, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, codeValidDays: 30, templateCouponId: template.id, productIds: [], brandId: "forged-brand", connectionId: "forged-connection", currencyCode: "USD" };
+    // Saving an offer is SQRATCH-only: any provider client use fails the test.
+    const offerDeps = { db, client: (): never => { throw new Error("offer save must not use the provider"); }, now: () => new Date() };
+    const offerInput = { eligibilityMode: "ANYONE_WITH_CODE", title: "Real offer service", isActive: true, rewardMode: "DISCOUNT", discountType: "FIXED_AMOUNT", discountAmountCents: 1000, pointsCost: 100, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, codeValidDays: 30, productIds: [], brandId: "forged-brand", connectionId: "forged-connection", currencyCode: "USD" };
     const createdOffer = await saveCommerce7Offer(brand.id, offerInput, undefined, offerDeps);
     assert.equal(createdOffer.brandId, brand.id); assert.equal(createdOffer.connectionId, connection.id); assert.equal(createdOffer.currencyCode, "CAD");
+    assert.deepEqual(createdOffer.commerce7Config, { eligibilityMode: "ANYONE_WITH_CODE", discountEnabled: true });
+    await assert.rejects(saveCommerce7Offer(brand.id, { ...offerInput, eligibilityMode: "CLAIMANT_ONLY" }, undefined, offerDeps), { code: "COUPON_CONTRACT_UNVERIFIED" });
     const editedOffer = await saveCommerce7Offer(brand.id, { ...offerInput, isActive: false, discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 1500 }, createdOffer.id, offerDeps);
     assert.equal(editedOffer.discountPercentageBasisPoints, 1500); assert.equal(editedOffer.isActive, false);
     await assert.rejects(saveCommerce7Offer(brand.id, offerInput, "foreign-offer", offerDeps), { code: "NOT_FOUND" });
@@ -67,7 +67,7 @@ test("real Postgres: cap 25, duplicate request, point overspend, cancellation an
     await db.brandRewardOffer.update({ where: { id: foreignConnectionOffer.id }, data: { connectionId: "foreign-connection" } });
     await assert.rejects(reserveCommerce7Claim(guardedUser.id, foreignConnectionOffer.id, "foreign-connection-key", [brand.id]), { code: "CONNECTION_UNAVAILABLE" });
     const retiredOffer = await offer(1);
-    await db.brandRewardOffer.update({ where: { id: retiredOffer.id }, data: { appliesTo: "SPECIFIC_PRODUCTS", commerce7Config: { templateCouponId: template.id, template: { ...template, appliesTo: "opaque-product-selector", appliesToObjectIds: ["retired-product"] } } } });
+    await db.brandRewardOffer.update({ where: { id: retiredOffer.id }, data: { appliesTo: "SPECIFIC_PRODUCTS", commerce7Config: { templateCouponId: template.id, template: { ...template, appliesTo: "opaque-product-selector", appliesToObjectIds: ["retired-product"] } }, products: { create: [{ externalProductId: "retired-product", title: "Retired" }] } } });
     await assert.rejects(reserveCommerce7Claim(guardedUser.id, retiredOffer.id, "retired-product-key", [brand.id]), { code: "PRODUCT_UNAVAILABLE" });
     assert.equal(await db.pointTransaction.count({ where: { userId: guardedUser.id } }), 0);
     await assert.rejects(reserveCommerce7Claim(guardedUser.id, draft.id, "exclusive-draft-claim-key", [brand.id]), { code: "INACTIVE" });
@@ -147,17 +147,17 @@ test("real Postgres: cap 25, duplicate request, point overspend, cancellation an
     // Full provider saga with synthetic native resources. No network calls.
     let clock = Date.now();
     class NativeFixture extends Commerce7RewardsClient {
-      lastEmail = "";
+      lastEmail = ""; lastPayload: import("../src/lib/commerce/providers/commerce7-rewards-client").CouponRequest | null = null; customerReads = 0;
       eligible = false; tagCreates = 0; couponCreates = 0; loseTagResponse = false; loseCouponResponse = false;
       tagResource: { id: string; title: string; type: "Manual"; objectType: "Customer" } | null = null;
       couponResource: import("../src/lib/commerce/providers/commerce7-rewards-client").NativeCoupon | null = null;
-      async customer(email: string) { this.lastEmail = email; return { id: "exact-customer", emails: [email], tagIds: this.eligible && this.tagResource ? [this.tagResource.id] : [] }; }
+      async customer(email: string) { this.customerReads++; this.lastEmail = email; return { id: "exact-customer", emails: [email], tagIds: this.eligible && this.tagResource ? [this.tagResource.id] : [] }; }
       async customerById() { return this.customer(this.lastEmail); }
       async tagOnlyForCustomer() { return this.eligible; }
       async findTag() { return this.tagResource; }
       async createTag(id: string) { this.tagCreates++; this.tagResource = { id: `tag-${id}`, title: claimTagTitle(id), type: "Manual", objectType: "Customer" }; if (this.loseTagResponse) throw new Commerce7RewardError("PROVIDER_UNAVAILABLE", true); return this.tagResource; }
       async findCoupon() { return this.couponResource; }
-      async createCoupon(payload: import("../src/lib/commerce/providers/commerce7-rewards-client").CouponPayload) { this.couponCreates++; this.couponResource = { id: "exact-native-coupon", ...payload }; if (this.loseCouponResponse) throw new Commerce7RewardError("PROVIDER_UNAVAILABLE", true); return this.couponResource; }
+      async createCoupon(payload: import("../src/lib/commerce/providers/commerce7-rewards-client").CouponRequest) { this.couponCreates++; this.lastPayload = payload; const created = parseNativeCoupon({ id: "exact-native-coupon", appliesToObjectIds: null, availableToObjectIds: null, shippingDiscount: null, minimumCartAmount: null, ...payload }); this.couponResource = created; if (this.loseCouponResponse) throw new Commerce7RewardError("PROVIDER_UNAVAILABLE", true); return created; }
     }
     async function setup() { const owner = await user(100); const reward = await offer(10); const claim = await reserveCommerce7Claim(owner.id, reward.id, "synthetic-saga-request", [brand.id]); const native = new NativeFixture(connection.externalAccountId); return { owner, claim, native, deps: { db, client: () => native, now: () => new Date(clock += 60000) } }; }
     const saga = await setup();
@@ -226,6 +226,31 @@ test("real Postgres: cap 25, duplicate request, point overspend, cancellation an
     await first; assert.equal(blocking.tagCreates, 1);
     await db.commerceRewardRedemption.update({ where: { id: owned.claim.id }, data: { provisioningOwner: "crashed-owner", provisioningStartedAt: new Date(0) } });
     checked = await provisionCommerce7Claim(owned.claim.id, owned.owner.id, deps); assert.equal(checked?.provisioningOwner, "crashed-owner"); assert.equal(blocking.tagCreates, 1);
+
+    // Template-free bearer reward on Postgres: frozen snapshot, minute-aligned window, one coupon, no customer or tag traffic.
+    const bearerConfig = { eligibilityMode: "ANYONE_WITH_CODE", discountEnabled: true };
+    const bearerOffer = await offer(5, 5, bearerConfig); await db.brandRewardOffer.update({ where: { id: bearerOffer.id }, data: { discountAmountCents: 1999, minimumSubtotalCents: 5000 } });
+    const bearerUser = await user(100, false); const bearerNative = new NativeFixture(connection.externalAccountId);
+    const bearerClaims = await Promise.all([1, 2].map(() => reserveCommerce7Claim(bearerUser.id, bearerOffer.id, "template-free-bearer-key", [brand.id])));
+    assert.equal(bearerClaims[0].id, bearerClaims[1].id); assert.equal(await db.commerceRewardRedemption.count({ where: { offerId: bearerOffer.id } }), 1);
+    assert.deepEqual(bearerClaims[0].rewardConfigSnapshot, { snapshotVersion: 2, eligibilityMode: "ANYONE_WITH_CODE", title: "Reward fixture", minimumSubtotalCents: 5000, appliesTo: "ALL_PRODUCTS", productIds: [], discount: { type: "FIXED_AMOUNT", amountCents: 1999, percentageBasisPoints: null } });
+    assert.equal(bearerClaims[0].expiresAt!.getTime() % 60000, 0);
+    const bearerDeps = { db, client: () => bearerNative, now: () => new Date(clock += 60000) };
+    const bearerIssued = await provisionCommerce7Claim(bearerClaims[0].id, bearerUser.id, bearerDeps);
+    assert.equal(bearerIssued?.status, "ISSUED"); assert.equal(bearerNative.couponCreates, 1); assert.equal(bearerNative.customerReads, 0); assert.equal(bearerNative.tagCreates, 0);
+    assert.equal(bearerNative.lastPayload?.productDiscount, 1999); assert.equal(bearerNative.lastPayload?.availableTo, "Everyone"); assert.equal(bearerNative.lastPayload?.appliesTo, "Store"); assert.equal(bearerNative.lastPayload?.minimumCartAmount, 5000);
+    assert.equal(bearerNative.lastPayload?.endDate, bearerClaims[0].expiresAt!.toISOString());
+    await provisionCommerce7Claim(bearerClaims[0].id, bearerUser.id, bearerDeps); assert.equal(bearerNative.couponCreates, 1);
+    // A definitive provider rejection refunds once; a lost response keeps the points and never posts twice.
+    const rejectedUser = await user(100, false); const rejectedClaim = await reserveCommerce7Claim(rejectedUser.id, bearerOffer.id, "template-free-rejected-key", [brand.id]);
+    class RejectingNative extends NativeFixture { async createCoupon(): Promise<never> { this.couponCreates++; throw new Commerce7RewardError("WRITE_REJECTED"); } }
+    const rejecting = new RejectingNative(connection.externalAccountId);
+    const refunded = await provisionCommerce7Claim(rejectedClaim.id, rejectedUser.id, { db, client: () => rejecting, now: () => new Date(clock += 60000) });
+    assert.equal(refunded?.status, "REFUNDED"); assert.equal(refunded?.couponCreateAttempted, false); assert.equal((await db.userPointAccount.findUniqueOrThrow({ where: { userId: rejectedUser.id } })).spendablePoints, 100);
+    assert.equal(await db.pointTransaction.count({ where: { userId: rejectedUser.id, type: "REFUND" } }), 1);
+    const unverifiedUser = await user(100); const unverifiedOffer = await offer(5, 5, { eligibilityMode: "CLAIMANT_ONLY", discountEnabled: true });
+    await assert.rejects(reserveCommerce7Claim(unverifiedUser.id, unverifiedOffer.id, "template-free-claimant-key", [brand.id]), { code: "COUPON_CONTRACT_UNVERIFIED" });
+    assert.equal(await db.pointTransaction.count({ where: { userId: unverifiedUser.id } }), 0);
 
     await db.commerceRewardRedemption.updateMany({ where: { brandId: brand.id }, data: { rewardOrderCheckedAt: new Date(Date.now() + 86400000) } });
     await db.commerceRewardRedemption.update({ where: { id: saga.claim.id }, data: { rewardOrderCheckedAt: null } });

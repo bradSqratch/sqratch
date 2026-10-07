@@ -3,24 +3,30 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import type { BrandRewardOffer, CommerceOrder, CommerceRewardRedemption } from "@prisma/client";
-import { Commerce7RewardsClient, Commerce7RewardError, buildCommerce7RewardCoupon, claimTagTitle, couponMatches, parseNativeCoupon, type NativeCoupon } from "../src/lib/commerce/providers/commerce7-rewards-client";
-import { parseCommerce7Offer, parseRewardSnapshot, rewardIdempotencyKey, serializeCommerce7Claim, validateNativeTemplate, commerce7OfferAvailable, COMMERCE7_REWARD_CAPABILITIES } from "../src/lib/commerce7-reward-domain";
+import { Commerce7RewardsClient, Commerce7RewardError, buildCommerce7RewardCoupon, claimTagTitle, couponMatches, parseNativeCoupon, type CouponRequest, type NativeCoupon } from "../src/lib/commerce/providers/commerce7-rewards-client";
+import { parseCommerce7Offer, parseRewardSnapshot, rewardIdempotencyKey, serializeCommerce7Claim, validateLegacyNativeTemplate, commerce7OfferAvailable, COMMERCE7_REWARD_CAPABILITIES } from "../src/lib/commerce7-reward-domain";
 import { exactCommerce7RewardOrderMatch } from "../src/lib/commerce/providers/commerce7-reward-orders";
 
-// Eligibility/scope literals are deliberately opaque native-read fixtures.
-// They are not claimed to be Commerce7's unpublished REST enum values.
+// Pre-refinement offers embedded the merchant's native template. Its eligibility/scope literals are deliberately
+// opaque native-read fixtures, not claimed to be Commerce7 REST enums. New offers never read or require a template.
 export const template: NativeCoupon = { id: "template", title: "Template", code: "native-template", usageLimitType: "Per Store", usageLimit: 1, appliesTo: "Store", appliesToObjectIds: null, productDiscountType: "Dollar Off", productDiscount: 1000, shippingDiscountType: "No Discount", shippingDiscount: null, startDate: "2026-01-01T00:00:00.000Z", endDate: null, status: "Enabled", minimumCartAmount: null, availableTo: "native-tag-eligibility", availableToObjectIds: ["template-tag"] };
-export const offerBody = { title: "Wine reward", description: "A discount", isActive: true, rewardMode: "DISCOUNT", pointsCost: 100, discountType: "FIXED_AMOUNT", discountAmountCents: 1000, discountPercentageBasisPoints: null, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, codeValidDays: 30, minimumSubtotalCents: 5000, templateCouponId: "template", productIds: [] };
+export const offerBody = { title: "Wine reward", description: "A discount", isActive: true, rewardMode: "DISCOUNT", pointsCost: 100, discountType: "FIXED_AMOUNT", discountAmountCents: 1000, discountPercentageBasisPoints: null, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, codeValidDays: 30, minimumSubtotalCents: 5000, productIds: [] };
 const start = new Date("2026-10-01T00:00:00.000Z"); const end = new Date("2026-10-31T00:00:00.000Z"); const code = `SQRA${"A".repeat(32)}`;
-function payload() { return buildCommerce7RewardCoupon(template, { title: "Wine reward", discountType: "FIXED_AMOUNT", discountAmountCents: 1000, discountPercentageBasisPoints: null, minimumSubtotalCents: 5000 }, code, "claim-tag", start, end); }
+const bearerScope = { appliesTo: "Store", appliesToObjectIds: null, availableTo: "Everyone", availableToObjectIds: null };
+const boundScope = { ...bearerScope, availableTo: "native-tag-eligibility", availableToObjectIds: ["claim-tag"] };
+const fixedTerms = { title: "Wine reward", discountType: "FIXED_AMOUNT" as const, discountAmountCents: 1000, discountPercentageBasisPoints: null, minimumSubtotalCents: 5000 };
+function payload(scope = boundScope) { return buildCommerce7RewardCoupon({ terms: fixedTerms, scope, code, claimId: "claim", startsAt: start, endsAt: end }); }
+/** The provider's read-back of a request, as a native coupon. */
+const native = (request: CouponRequest): NativeCoupon => parseNativeCoupon({ id: "created", appliesToObjectIds: null, availableToObjectIds: null, shippingDiscount: null, minimumCartAmount: null, ...request });
 
 test("fixed Commerce7 contract: cents, UTC dates, one store use, native eligibility and scope retained", () => {
-  const body = payload(); assert.equal(body.productDiscount, 1000); assert.equal(body.productDiscountType, "Dollar Off"); assert.equal(body.minimumCartAmount, 5000); assert.equal(body.startDate, start.toISOString()); assert.equal(body.endDate, end.toISOString()); assert.equal(body.availableTo, template.availableTo); assert.deepEqual(body.availableToObjectIds, ["claim-tag"]); assert.equal(body.usageLimit, 1); assert.ok(!JSON.stringify(body).includes("@"));
+  const body = payload(); assert.equal(body.productDiscount, 1000); assert.equal(body.productDiscountType, "Dollar Off"); assert.equal(body.minimumCartAmount, 5000); assert.equal(body.startDate, start.toISOString()); assert.equal(body.endDate, end.toISOString()); assert.equal(body.availableTo, "native-tag-eligibility"); assert.deepEqual(body.availableToObjectIds, ["claim-tag"]); assert.equal(body.usageLimit, 1); assert.ok(!JSON.stringify(body).includes("@"));
 });
 test("percentage conversion uses whole percent, rejects fractional unsupported values and overflow", () => {
-  const config = { title: "Wine reward", discountType: "PERCENTAGE" as const, discountAmountCents: null, discountPercentageBasisPoints: 1500, minimumSubtotalCents: null };
-  assert.equal(buildCommerce7RewardCoupon(template, config, code, "tag", start, end).productDiscount, 15);
-  for (const basis of [0, 1, 1550, 10001, NaN, Infinity]) assert.throws(() => buildCommerce7RewardCoupon(template, { ...config, discountPercentageBasisPoints: basis }, code, "tag", start, end));
+  const percent = { ...fixedTerms, discountType: "PERCENTAGE" as const, discountAmountCents: null };
+  const build = (basis: number) => buildCommerce7RewardCoupon({ terms: { ...percent, discountPercentageBasisPoints: basis }, scope: bearerScope, code, claimId: "claim", startsAt: start, endsAt: end });
+  assert.equal(build(1500).productDiscount, 15);
+  for (const basis of [0, 1, 1550, 10001, NaN, Infinity]) assert.throws(() => build(basis));
 });
 test("offer validation rejects malformed limits, dates, unknown modes/currencies, duplicates and irrelevant amounts", () => {
   assert.equal(parseCommerce7Offer(offerBody, "CAD").maxTotalRedemptions, 25);
@@ -30,22 +36,24 @@ test("offer validation rejects malformed limits, dates, unknown modes/currencies
 test("exclusive wine domain requires one catalog product, cap <=25 and cannot activate an unproven grant", () => {
   const draft = { ...offerBody, rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", isActive: false, productIds: ["wine"] };
   assert.equal(parseCommerce7Offer(draft, "CAD").rewardMode, "EXCLUSIVE_PRODUCT_ACCESS");
-  const accessOnly = parseCommerce7Offer({ ...draft, templateCouponId: null, discountAmountCents: null, discountEnabled: false }, "CAD");
-  assert.equal(accessOnly.discountEnabled, false); assert.equal(accessOnly.discountAmountCents, null); assert.equal(accessOnly.templateCouponId, null);
+  const accessOnly = parseCommerce7Offer({ ...draft, discountAmountCents: null, discountEnabled: false }, "CAD");
+  assert.equal(accessOnly.discountEnabled, false); assert.equal(accessOnly.discountAmountCents, null);
   for (const change of [{ isActive: true }, { maxTotalRedemptions: 26 }, { productIds: [] }, { productIds: ["a", "b"] }]) assert.throws(() => parseCommerce7Offer({ ...draft, ...change }, "CAD"));
   assert.equal(COMMERCE7_REWARD_CAPABILITIES.automaticCustomerTagAssignment, false); assert.equal(COMMERCE7_REWARD_CAPABILITIES.exclusiveProductAccess, false);
 });
-test("template validation rejects public/shared/club-like wrong references and mismatched scope", () => {
-  validateNativeTemplate(template, [], "template-tag");
-  for (const change of [{ availableTo: "Everyone" }, { availableToObjectIds: [] }, { availableToObjectIds: ["wrong"] }, { usageLimit: 2 }, { usageLimitType: "Unlimited" }, { shippingDiscountType: "Free" }, { appliesToObjectIds: ["wine"] }]) assert.throws(() => validateNativeTemplate({ ...template, ...change }, [], "template-tag"));
+test("legacy template validation rejects public/shared/club-like wrong references and mismatched scope", () => {
+  validateLegacyNativeTemplate(template, [], "template-tag");
+  for (const change of [{ availableTo: "Everyone" }, { availableToObjectIds: [] }, { availableToObjectIds: ["wrong"] }, { usageLimit: 2 }, { usageLimitType: "Unlimited" }, { shippingDiscountType: "Free" }, { appliesToObjectIds: ["wine"] }]) assert.throws(() => validateLegacyNativeTemplate({ ...template, ...change }, [], "template-tag"));
   const productTemplate = { ...template, appliesTo: "native-product-scope", appliesToObjectIds: ["wine"] };
-  validateNativeTemplate(productTemplate, ["wine"], "template-tag"); assert.throws(() => validateNativeTemplate(productTemplate, ["foreign-wine"], "template-tag"));
+  validateLegacyNativeTemplate(productTemplate, ["wine"], "template-tag"); assert.throws(() => validateLegacyNativeTemplate(productTemplate, ["foreign-wine"], "template-tag"));
+  // A real tenant reads "no shipping discount" as null; that is the same fact as "No Discount".
+  validateLegacyNativeTemplate({ ...template, shippingDiscountType: null }, [], "template-tag");
 });
 test("closed native coupon parser ignores PII and rejects malformed response/semantic mismatches", () => {
   const parsed = parseNativeCoupon({ ...template, customer: { email: "do-not-store@example.test" }, extra: "ignore" });
   assert.ok(!JSON.stringify(parsed).includes("example.test"));
   for (const change of [{ id: "" }, { startDate: "bad" }, { endDate: "bad" }, { minimumCartAmount: -1 }, { usageLimit: 1.5 }, { availableToObjectIds: [{}] }]) assert.throws(() => parseNativeCoupon({ ...template, ...change }));
-  assert.ok(couponMatches({ id: "created", ...payload() }, payload())); assert.equal(couponMatches({ id: "created", ...payload(), usageLimit: 10 }, payload()), false);
+  assert.ok(couponMatches(native(payload()), payload())); assert.equal(couponMatches({ ...native(payload()), usageLimit: 10 }, payload()), false);
   assert.throws(() => parseRewardSnapshot({ template: null }));
 });
 test("server idempotency namespace binds user and offer without PII; tag titles are stable opaque identifiers", () => {
@@ -64,12 +72,12 @@ function client(responses: unknown[], seen: { url: string; init?: RequestInit }[
   return new Commerce7RewardsClient("test-tenant", async (url, init) => { seen.push({ url: String(url), init }); const response = responses.shift(); if (response instanceof Error) throw response; return response instanceof Response ? response : Response.json(response); });
 }
 const customer = (id: string, email: string, tags: string[] = []) => ({ id, emails: [{ email }], tags: tags.map((id) => ({ id })) });
-test("official documented response shapes parse, but a public coupon cannot become a restricted template", async () => {
+test("official documented response shapes parse, but a public coupon is never a customer-restricted legacy template", async () => {
   const fixture = JSON.parse(readFileSync(new URL("./fixtures/commerce7-rewards/documented-responses.json", import.meta.url), "utf8"));
   const coupon = parseNativeCoupon(fixture.coupon);
   assert.equal(coupon.productDiscount, 1000); assert.equal(coupon.availableTo, "Everyone");
-  assert.throws(() => validateNativeTemplate(coupon, [], fixture.tag.id));
-  assert.equal((await client([fixture.tag]).tag(fixture.tag.id)).type, "Manual");
+  assert.throws(() => validateLegacyNativeTemplate(coupon, [], fixture.tag.id));
+  assert.equal((await client([{ tags: [{ ...fixture.tag, title: claimTagTitle("claim") }], total: 1 }]).findTag("claim"))?.type, "Manual");
   assert.equal((await client([fixture.customer]).customerById(fixture.customer.id)).emails[0], "synthetic@example.test");
 });
 test("verified-email lookup normalizes exact emails, exhausts pages, rejects ambiguity and another tag member", async () => {

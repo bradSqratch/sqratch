@@ -1,0 +1,38 @@
+{
+  "coupon": {
+    "id": "00000000-0000-4000-8000-0000000000c1",
+    "code": "testcoupon1",
+    "title": "test coupon 1",
+    "usageLimitType": "Unlimited",
+    "usageLimit": null,
+    "appliesTo": "Store",
+    "appliesToObjectIds": "",
+    "productDiscountType": null,
+    "productDiscount": null,
+    "shippingDiscountType": null,
+    "shippingDiscount": null,
+    "status": "Enabled",
+    "minimumCartAmount": null,
+    "availableTo": "Everyone",
+    "availableToObjectIds": "",
+    "startDate": "2026-10-07T07:00:00.000Z",
+    "endDate": "2026-11-01T06:59:00.000Z"
+  },
+  "productSecurity": {
+    "id": "00000000-0000-4000-8000-0000000000a1",
+    "title": "Rare - 2015 Chardonnay",
+    "webStatus": "Available",
+    "adminStatus": "Available",
+    "security": {
+      "availableTo": "Tag",
+      "displayOption": "Display Product / Show Login",
+      "availableToObjectIds": ["00000000-0000-4000-8000-0000000000b1"]
+    }
+  },
+  "customerTag": {
+    "id": "00000000-0000-4000-8000-0000000000b1",
+    "title": "SQRATCH Rare Wine Test",
+    "type": "Manual",
+    "objectType": "Customer"
+  }
+}

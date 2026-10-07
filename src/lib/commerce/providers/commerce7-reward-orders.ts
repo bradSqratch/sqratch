@@ -1,4 +1,5 @@
 import type { CommerceOrder, CommerceRewardRedemption } from "@prisma/client";
+import { storedCommerce7Eligibility } from "../../commerce7-reward-eligibility";
 import { object } from "./commerce7-rewards-client";
 import { fetchCommerce7Order } from "./commerce7-orders";
 
@@ -8,7 +9,9 @@ import { fetchCommerce7Order } from "./commerce7-orders";
  * This is evidence observation, never a provider write or payment inference. */
 export function exactCommerce7RewardOrderMatch(raw: unknown, order: CommerceOrder, claim: CommerceRewardRedemption) {
   const row = object(raw);
-  if (!row || order.provider !== "COMMERCE7" || claim.provider !== "COMMERCE7" || order.brandId !== claim.brandId || order.connectionId !== claim.connectionId || order.externalOrderId !== row.id || !claim.providerCustomerId || row.customerId !== claim.providerCustomerId || !claim.externalDiscountId || order.financialStatus !== "PAID" || order.cancelledAt || order.totalMinor === null || order.totalMinor <= BigInt(0) || !order.providerUpdatedAt || typeof row.updatedAt !== "string" || Date.parse(row.updatedAt) !== order.providerUpdatedAt.getTime() || !Array.isArray(row.coupons) || row.coupons.length > 50) return false;
+  const eligibilityMode = storedCommerce7Eligibility(claim.rewardConfigSnapshot, claim.rewardMode);
+  if (!eligibilityMode || (eligibilityMode === "CLAIMANT_ONLY" && (!claim.providerCustomerId || row?.customerId !== claim.providerCustomerId))) return false;
+  if (!row || order.provider !== "COMMERCE7" || claim.provider !== "COMMERCE7" || order.brandId !== claim.brandId || order.connectionId !== claim.connectionId || order.externalOrderId !== row.id || !claim.externalDiscountId || order.financialStatus !== "PAID" || order.cancelledAt || order.totalMinor === null || order.totalMinor <= BigInt(0) || !order.providerUpdatedAt || typeof row.updatedAt !== "string" || Date.parse(row.updatedAt) !== order.providerUpdatedAt.getTime() || !Array.isArray(row.coupons) || row.coupons.length > 50) return false;
   if (claim.status !== "ISSUED" && claim.status !== "USED" && claim.status !== "EXPIRED" && !(claim.status === "CANCELLED" && claim.entitlementEverGranted)) return false;
   if ((claim.status === "EXPIRED" || claim.status === "CANCELLED") && (!claim.expiresAt || !order.providerCreatedAt || order.providerCreatedAt > claim.expiresAt)) return false;
   const matches = row.coupons.filter((entry) => {

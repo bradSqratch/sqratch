@@ -1,3 +1,5 @@
+> Historical report for the original `df53568` release. Eligibility, scope UX and setup diagnostics are superseded by [the refinement report](commerce7-rewards-refinement.md) and [current operator guide](commerce7-rewards.md). **The merchant-created "native coupon template" described below no longer exists:** SQRATCH now creates each claim's coupon directly from a frozen snapshot, and saving an offer makes no Commerce7 call. Original validation totals below describe that original release.
+
 # Commerce7 rewards implementation handoff
 
 Completed 2026-10-07. All changes are uncommitted on `main`. The implementation is ready for source review and operator sandbox acceptance; it has not been deployed or validated against live native writes. [Design, sources and exact operator guide](/Users/sumedh/Documents/PersonalProjects/sqratch/docs/commerce/commerce7-rewards.md).

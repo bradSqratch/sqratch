@@ -1,3 +1,4 @@
+import { storedCommerce7Eligibility } from "@/lib/commerce7-reward-eligibility";
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { resolveSession } from "@/lib/auth-session";
@@ -24,9 +25,11 @@ export async function GET(request: NextRequest) {
     for (const offer of offers) {
       const connection = await getActiveCommerceConnection(offer.brandId, "COMMERCE7");
       if (!connection || !isConnectionUsable(connection) || connection.id !== offer.connectionId || connection.externalAccountId !== offer.sourceExternalAccountId || connection.currencyCode !== offer.currencyCode) continue;
+      const eligibilityMode = storedCommerce7Eligibility(offer.commerce7Config, offer.rewardMode);
+      if (!eligibilityMode) continue;
       const total = offer.reservedClaimCount;
       const userTotal = await prisma.commerceRewardRedemption.count({ where: { offerId: offer.id, userId: session.user.id, slotReleased: false } });
-      data.push({ id: offer.id, title: offer.title, description: offer.description, brandName: offer.brand.name, productTitles: offer.products.flatMap((product) => product.title ? [product.title] : []), storefrontUrl: storefrontUrl(connection.storefrontUrl), pointsCost: offer.pointsCost, discountType: offer.discountType, discountAmountCents: offer.discountAmountCents, discountPercentageBasisPoints: offer.discountPercentageBasisPoints, currencyCode: offer.currencyCode, minimumSubtotalCents: offer.minimumSubtotalCents, codeValidDays: offer.codeValidDays, claimStartsAt: offer.claimStartsAt, claimEndsAt: offer.claimEndsAt, unavailableReason: commerce7OfferUnavailableReason(offer, total, userTotal)?.message ?? null, remaining: Math.max(0, (offer.maxTotalRedemptions ?? 0) - total), claimable: commerce7OfferAvailable(offer, total, userTotal), requiresManualEligibility: true });
+      data.push({ id: offer.id, title: offer.title, description: offer.description, brandName: offer.brand.name, productTitles: offer.products.flatMap((product) => product.title ? [product.title] : []), storefrontUrl: storefrontUrl(connection.storefrontUrl), pointsCost: offer.pointsCost, discountType: offer.discountType, discountAmountCents: offer.discountAmountCents, discountPercentageBasisPoints: offer.discountPercentageBasisPoints, currencyCode: offer.currencyCode, minimumSubtotalCents: offer.minimumSubtotalCents, codeValidDays: offer.codeValidDays, claimStartsAt: offer.claimStartsAt, claimEndsAt: offer.claimEndsAt, unavailableReason: commerce7OfferUnavailableReason(offer, total, userTotal)?.message ?? null, remaining: Math.max(0, (offer.maxTotalRedemptions ?? 0) - total), claimable: commerce7OfferAvailable(offer, total, userTotal), eligibilityMode, requiresManualEligibility: eligibilityMode === "CLAIMANT_ONLY" });
     }
     return NextResponse.json({ data: { offers: data, claims: claims.map((claim) => {
       const connection = claimConnections.find((row) => row.id === claim.connectionId && row.brandId === claim.brandId && row.externalAccountId === claim.externalAccountId);

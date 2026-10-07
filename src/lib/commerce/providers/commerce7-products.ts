@@ -111,6 +111,11 @@ export function minorUnitsToDecimalString(
  *   webStatus            Available | Not Available | Retired
  *   adminStatus          Available | Not Available | Hidden
  *   security.availableTo Public | Allocation | Group | Club
+ *     (a live sandbox tenant has also been observed returning "Tag", with
+ *     `displayOption` and the Customer tag UUIDs in `availableToObjectIds`;
+ *     see tests/fixtures/commerce7-rewards/operator-sandbox-evidence.json.
+ *     The value is never rewritten, and like every non-"Public" value it is
+ *     non-public. This module only READS security; no write contract exists.)
  *
  * TWO DISTINCT DECISIONS, deliberately kept apart (the canonical catalog draws
  * the same line between `isAvailable` and `hasPublicStorefrontUrl`):

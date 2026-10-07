@@ -1,14 +1,17 @@
 import { createHash } from "node:crypto";
 import type { BrandRewardOffer, CommerceRewardRedemption } from "@prisma/client";
-import { object, parseNativeCoupon, type NativeCoupon } from "./commerce/providers/commerce7-rewards-client";
+import { storedCommerce7Eligibility, type Commerce7RewardEligibility } from "./commerce7-reward-eligibility";
+import { COMMERCE7_COUPON_CONTRACT, commerce7CouponSupport, isCouponBranchSupported, resolveCouponScope, type Commerce7CouponAppliesTo, type CouponContract, type CouponScopeResult } from "./commerce7-coupon-contract";
+import { object, parseNativeCoupon, type NativeCoupon, type RewardCouponTerms } from "./commerce/providers/commerce7-rewards-client";
 
 export const COMMERCE7_REWARD_CAPABILITIES = {
   fixedAmount: true, percentage: true, minimumSubtotal: true,
-  productScope: "NATIVE_TEMPLATE" as const, customerRestriction: "MANUAL_CUSTOMER_TAG" as const,
+  productScope: "NATIVE_COUPON" as const, customerRestriction: "OPTIONAL_MANUAL_CUSTOMER_TAG" as const,
   automaticCustomerTagAssignment: false, exclusiveProductAccess: false,
   createCoupon: true, lookupCoupon: true, revokeCoupon: true,
-  usageReconciliation: "EXACT_ORDER_COUPON_AND_CUSTOMER" as const,
+  usageReconciliation: "EXACT_ORDER_COUPON_WITH_ELIGIBILITY_CHECK" as const,
 };
+const REVIEW_MESSAGE = "Reward configuration needs review.";
 export class RewardClaimError extends Error {
   constructor(readonly code: string, message: string, readonly status = 409) { super(message); }
 }
@@ -32,6 +35,8 @@ export function parseCommerce7Offer(value: unknown, currency: string | null) {
   requireValue(row.isActive === true || row.isActive === false, "Specify whether the offer is active.");
   const rewardMode = row.rewardMode ?? "DISCOUNT";
   requireValue(rewardMode === "DISCOUNT" || rewardMode === "EXCLUSIVE_PRODUCT_ACCESS", "Invalid reward mode.");
+  requireValue(row.eligibilityMode === undefined || row.eligibilityMode === "ANYONE_WITH_CODE" || row.eligibilityMode === "CLAIMANT_ONLY", "Choose a valid reward eligibility mode.");
+  const eligibilityMode: Commerce7RewardEligibility = rewardMode === "EXCLUSIVE_PRODUCT_ACCESS" ? "CLAIMANT_ONLY" : row.eligibilityMode ?? "ANYONE_WITH_CODE";
   const discountEnabled = rewardMode === "DISCOUNT" || row.discountEnabled === true;
   const discountType = row.discountType ?? "FIXED_AMOUNT";
   requireValue(discountType === "FIXED_AMOUNT" || discountType === "PERCENTAGE", "Choose fixed amount or percentage.");
@@ -47,10 +52,12 @@ export function parseCommerce7Offer(value: unknown, currency: string | null) {
   requireValue(!claimStartsAt || !claimEndsAt || claimEndsAt > claimStartsAt, "End date must follow start date.");
   const maxTotalRedemptions = integer(row.maxTotalRedemptions, 1, rewardMode === "EXCLUSIVE_PRODUCT_ACCESS" ? 25 : 1000, "Total claim limit");
   const maxRedemptionsPerUser = integer(row.maxRedemptionsPerUser, 1, maxTotalRedemptions, "Per-user claim limit");
-  const productIds = row.productIds ?? [];
+  const appliesTo = rewardMode === "EXCLUSIVE_PRODUCT_ACCESS" ? "SPECIFIC_PRODUCTS" : row.appliesTo ?? ((Array.isArray(row.productIds) && row.productIds.length) ? "SPECIFIC_PRODUCTS" : "ALL_PRODUCTS");
+  requireValue(appliesTo === "ALL_PRODUCTS" || appliesTo === "SPECIFIC_PRODUCTS", "Choose all products or selected products.");
+  const productIds = appliesTo === "ALL_PRODUCTS" ? [] : row.productIds ?? [];
   requireValue(Array.isArray(productIds) && productIds.length <= 50 && productIds.every((id) => typeof id === "string" && id.length > 0 && id.length <= 100) && new Set(productIds).size === productIds.length, "Select valid, distinct catalog products.");
+  requireValue(appliesTo !== "SPECIFIC_PRODUCTS" || productIds.length > 0, "Select at least one product.");
   requireValue(rewardMode !== "EXCLUSIVE_PRODUCT_ACCESS" || productIds.length === 1, "Exclusive access requires one synchronized product.");
-  requireValue(!discountEnabled || (typeof row.templateCouponId === "string" && row.templateCouponId.length > 0 && row.templateCouponId.length <= 100), "Enter a native Commerce7 coupon template ID.");
   requireValue(!row.isActive || rewardMode === "DISCOUNT", "Exclusive access cannot be activated until Commerce7 confirms a writable, customer-bound access contract.");
   return {
     title: row.title.trim(), description: typeof row.description === "string" ? row.description.trim() || null : null,
@@ -58,20 +65,116 @@ export function parseCommerce7Offer(value: unknown, currency: string | null) {
     discountAmountCents, discountPercentageBasisPoints, currencyCode: currency, claimStartsAt, claimEndsAt,
     maxTotalRedemptions, maxRedemptionsPerUser, codeValidDays: integer(row.codeValidDays, 1, 365, "Validity in days"),
     minimumSubtotalCents: !discountEnabled || row.minimumSubtotalCents == null ? null : integer(row.minimumSubtotalCents, 1, 2147483647, "Minimum subtotal in cents"),
-    appliesTo: productIds.length ? "SPECIFIC_PRODUCTS" as const : "ALL_PRODUCTS" as const,
-    productIds: productIds as string[], templateCouponId: discountEnabled ? row.templateCouponId as string : null, discountEnabled,
+    appliesTo: appliesTo as "SPECIFIC_PRODUCTS" | "ALL_PRODUCTS", eligibilityMode,
+    productIds: productIds as string[], discountEnabled,
   };
 }
-export function validateNativeTemplate(template: NativeCoupon, productIds: string[], tagId: string) {
-  requireValue(template.availableTo !== "Everyone" && template.availableToObjectIds?.length === 1 && template.availableToObjectIds[0] === tagId, "Template must be restricted to exactly one manual Customer tag.");
-  requireValue(template.usageLimitType === "Per Store" && template.usageLimit === 1 && template.shippingDiscountType === "No Discount" && template.shippingDiscount === null, "Template must allow one use per store and no shipping discount.");
-  requireValue(productIds.length ? template.appliesTo !== "Store" && JSON.stringify([...(template.appliesToObjectIds ?? [])].sort()) === JSON.stringify([...productIds].sort()) : template.appliesTo === "Store" && !template.appliesToObjectIds?.length, "Native template product scope must exactly match the selected catalog products.");
+/** Pre-refinement offers/claims embed the merchant's native template. It is only ever validated here, never fetched or required. */
+export function validateLegacyNativeTemplate(template: NativeCoupon, productIds: string[], tagId: string | null, eligibilityMode: Commerce7RewardEligibility = "CLAIMANT_ONLY") {
+  const { usageLimitType, usageLimit, shippingDiscountType, appliesTo, availableTo } = COMMERCE7_COUPON_CONTRACT;
+  const everyone = availableTo.ANYONE_WITH_CODE; const store = appliesTo.ALL_PRODUCTS;
+  if (eligibilityMode === "ANYONE_WITH_CODE") requireValue(template.availableTo === everyone && !template.availableToObjectIds?.length, REVIEW_MESSAGE);
+  else requireValue(template.availableTo !== everyone && template.availableToObjectIds?.length === 1 && template.availableToObjectIds[0] === tagId, REVIEW_MESSAGE);
+  requireValue(template.usageLimitType === usageLimitType && template.usageLimit === usageLimit && (template.shippingDiscountType ?? shippingDiscountType) === shippingDiscountType && template.shippingDiscount === null, REVIEW_MESSAGE);
+  requireValue(productIds.length ? template.appliesTo !== store && JSON.stringify([...(template.appliesToObjectIds ?? [])].sort()) === JSON.stringify([...productIds].sort()) : template.appliesTo === store && !template.appliesToObjectIds?.length, REVIEW_MESSAGE);
 }
-export function parseRewardSnapshot(value: unknown): { template: NativeCoupon; templateCouponId: string; title: string; minimumSubtotalCents: number | null } {
+export type Commerce7RewardDiscount = { type: "FIXED_AMOUNT" | "PERCENTAGE"; amountCents: number | null; percentageBasisPoints: number | null };
+/** Frozen at reservation. Everything POST /coupon needs, so issuance never reads a provider template. */
+export type Commerce7RewardSnapshot = {
+  eligibilityMode: Commerce7RewardEligibility; title: string; minimumSubtotalCents: number | null;
+  appliesTo: Commerce7CouponAppliesTo; productIds: string[];
+  /** Null only on pre-refinement snapshots, whose discount terms live in the claim columns. */
+  discount: Commerce7RewardDiscount | null;
+  /** Observed native enums for a branch the contract has not verified. Null when the contract covers the branch. */
+  legacyTemplate: NativeCoupon | null;
+};
+function reviewNeeded(message = REVIEW_MESSAGE): never { throw new RewardClaimError("INVALID_OFFER", message, 400); }
+function legacyTemplate(value: unknown, eligibilityMode: Commerce7RewardEligibility, productIds: string[]): NativeCoupon {
+  let template: NativeCoupon;
+  try { template = parseNativeCoupon(value); } catch { return reviewNeeded(); }
+  validateLegacyNativeTemplate(template, productIds, template.availableToObjectIds?.[0] ?? null, eligibilityMode);
+  return template;
+}
+function snapshotDiscount(value: unknown): Commerce7RewardDiscount {
   const row = object(value);
-  requireValue(row && typeof row.templateCouponId === "string" && typeof row.title === "string", "Reward configuration needs review.");
+  if (!row || (row.type !== "FIXED_AMOUNT" && row.type !== "PERCENTAGE")) return reviewNeeded();
+  const amount = row.amountCents; const basis = row.percentageBasisPoints;
+  const fixed = row.type === "FIXED_AMOUNT" && typeof amount === "number" && Number.isSafeInteger(amount) && amount >= 1 && amount <= 2147483647 && basis === null;
+  const percentage = row.type === "PERCENTAGE" && amount === null && typeof basis === "number" && Number.isSafeInteger(basis) && basis >= 100 && basis <= 10000 && basis % 100 === 0;
+  if (!fixed && !percentage) return reviewNeeded();
+  return { type: row.type, amountCents: amount as number | null, percentageBasisPoints: basis as number | null };
+}
+export function parseRewardSnapshot(value: unknown): Commerce7RewardSnapshot {
+  const row = object(value);
+  requireValue(row && typeof row.title === "string", "Reward configuration needs review.");
   requireValue(row.minimumSubtotalCents === null || (Number.isSafeInteger(row.minimumSubtotalCents) && Number(row.minimumSubtotalCents) > 0), "Invalid reward minimum.");
-  return { template: parseNativeCoupon(row.template), templateCouponId: row.templateCouponId, title: row.title, minimumSubtotalCents: row.minimumSubtotalCents as number | null };
+  const eligibilityMode = storedCommerce7Eligibility(row);
+  requireValue(eligibilityMode, "Reward eligibility configuration needs review.");
+  const common = { eligibilityMode, title: row.title, minimumSubtotalCents: row.minimumSubtotalCents as number | null };
+  if (row.snapshotVersion === undefined) {
+    // Pre-refinement shape: scope and eligibility are read from the embedded native template.
+    requireValue(typeof row.templateCouponId === "string", "Reward configuration needs review.");
+    let template: NativeCoupon;
+    try { template = parseNativeCoupon(row.template); } catch { return reviewNeeded(); }
+    const storeScope = template.appliesTo === COMMERCE7_COUPON_CONTRACT.appliesTo.ALL_PRODUCTS;
+    const productIds = storeScope ? [] : template.appliesToObjectIds ?? [];
+    validateLegacyNativeTemplate(template, productIds, template.availableToObjectIds?.[0] ?? null, eligibilityMode);
+    return { ...common, appliesTo: storeScope ? "ALL_PRODUCTS" : "SPECIFIC_PRODUCTS", productIds, discount: null, legacyTemplate: template };
+  }
+  requireValue(row.snapshotVersion === 2, "Reward configuration needs review.");
+  requireValue(row.appliesTo === "ALL_PRODUCTS" || row.appliesTo === "SPECIFIC_PRODUCTS", "Reward configuration needs review.");
+  const productIds = row.productIds;
+  requireValue(Array.isArray(productIds) && productIds.every((id) => typeof id === "string" && id.length > 0) && new Set(productIds).size === productIds.length && (row.appliesTo === "ALL_PRODUCTS" ? productIds.length === 0 : productIds.length >= 1 && productIds.length <= 50), "Reward configuration needs review.");
+  return { ...common, appliesTo: row.appliesTo, productIds: productIds as string[], discount: snapshotDiscount(row.discount), legacyTemplate: row.legacyTemplate == null ? null : legacyTemplate(row.legacyTemplate, eligibilityMode, productIds as string[]) };
+}
+export function serializeRewardSnapshot(snapshot: Commerce7RewardSnapshot) {
+  requireValue(snapshot.discount, "Reward configuration needs review.");
+  return { snapshotVersion: 2, eligibilityMode: snapshot.eligibilityMode, title: snapshot.title, minimumSubtotalCents: snapshot.minimumSubtotalCents, appliesTo: snapshot.appliesTo, productIds: snapshot.productIds, discount: snapshot.discount, ...(snapshot.legacyTemplate ? { legacyTemplate: snapshot.legacyTemplate } : {}) };
+}
+type SnapshotOffer = Pick<BrandRewardOffer, "title" | "minimumSubtotalCents" | "appliesTo" | "discountType" | "discountAmountCents" | "discountPercentageBasisPoints">;
+/** Freeze an offer into a claim snapshot. A stored template is ignored where the contract is verified and kept (validated) where it is the only evidence. */
+export function buildRewardSnapshot(offer: SnapshotOffer, config: Record<string, unknown>, productIds: readonly string[], contract: CouponContract = COMMERCE7_COUPON_CONTRACT): Commerce7RewardSnapshot {
+  const eligibilityMode = storedCommerce7Eligibility(config);
+  requireValue(eligibilityMode, "Reward eligibility configuration needs review.");
+  const appliesTo = offer.appliesTo as Commerce7CouponAppliesTo;
+  const keepTemplate = !isCouponBranchSupported(eligibilityMode, appliesTo, contract) && config.template != null;
+  return parseRewardSnapshot(serializeRewardSnapshot({
+    eligibilityMode, title: offer.title, minimumSubtotalCents: offer.minimumSubtotalCents, appliesTo,
+    productIds: appliesTo === "ALL_PRODUCTS" ? [] : [...productIds].sort(),
+    discount: { type: offer.discountType as "FIXED_AMOUNT" | "PERCENTAGE", amountCents: offer.discountAmountCents, percentageBasisPoints: offer.discountPercentageBasisPoints },
+    legacyTemplate: keepTemplate ? config.template as NativeCoupon : null,
+  }));
+}
+/** On edit: keep a stored merchant template only while it is still valid for the edited eligibility and scope. Never required, never fetched. */
+export function retainLegacyTemplate(config: unknown, eligibilityMode: Commerce7RewardEligibility, productIds: string[]): { templateCouponId: string; template: NativeCoupon } | null {
+  const row = object(config);
+  if (!row || typeof row.templateCouponId !== "string" || row.template == null) return null;
+  try { return { templateCouponId: row.templateCouponId, template: legacyTemplate(row.template, eligibilityMode, productIds) }; } catch { return null; }
+}
+export function commerce7SnapshotIssuable(snapshot: Commerce7RewardSnapshot, contract: CouponContract = COMMERCE7_COUPON_CONTRACT) {
+  return isCouponBranchSupported(snapshot.eligibilityMode, snapshot.appliesTo, contract) || snapshot.legacyTemplate !== null;
+}
+/** Contract first; a legacy snapshot's observed enums only for a branch the contract has no value for. */
+export function couponScopeForSnapshot(snapshot: Commerce7RewardSnapshot, claimTagId: string | null, contract: CouponContract = COMMERCE7_COUPON_CONTRACT): CouponScopeResult {
+  const resolved = resolveCouponScope({ eligibilityMode: snapshot.eligibilityMode, appliesTo: snapshot.appliesTo, productIds: snapshot.productIds, customerTagId: claimTagId }, contract);
+  const template = snapshot.legacyTemplate;
+  if (resolved.ok || !template || resolved.unsupported === "INVALID_INPUT") return resolved;
+  if (snapshot.eligibilityMode === "CLAIMANT_ONLY" && !claimTagId) return { ok: false, unsupported: "INVALID_INPUT" };
+  return { ok: true, scope: { appliesTo: template.appliesTo, appliesToObjectIds: template.appliesToObjectIds ? [...template.appliesToObjectIds].sort() : null, availableTo: template.availableTo, availableToObjectIds: snapshot.eligibilityMode === "CLAIMANT_ONLY" ? [claimTagId!] : template.availableToObjectIds } };
+}
+/** Discount terms from the snapshot, which must agree with the claim's immutable columns. */
+export function couponTermsForClaim(snapshot: Commerce7RewardSnapshot, claim: Pick<CommerceRewardRedemption, "discountType" | "discountAmountCents" | "discountPercentageBasisPoints">): RewardCouponTerms {
+  const columns = { type: claim.discountType, amountCents: claim.discountAmountCents, percentageBasisPoints: claim.discountPercentageBasisPoints };
+  if (columns.type !== "FIXED_AMOUNT" && columns.type !== "PERCENTAGE") return reviewNeeded();
+  const frozen = snapshot.discount;
+  if (frozen && (frozen.type !== columns.type || frozen.amountCents !== columns.amountCents || frozen.percentageBasisPoints !== columns.percentageBasisPoints)) throw new RewardClaimError("SNAPSHOT_MISMATCH", "The reward's frozen terms differ from the claim. The store must review this claim.");
+  const discount = frozen ?? columns as Commerce7RewardDiscount;
+  return { title: snapshot.title, discountType: discount.type, discountAmountCents: discount.amountCents, discountPercentageBasisPoints: discount.percentageBasisPoints, minimumSubtotalCents: snapshot.minimumSubtotalCents };
+}
+/** Brand-facing view of stored config. Never exposes native template IDs or bodies, and never throws on historical rows. */
+export function serializeBrandCommerce7Config(config: unknown, rewardMode?: string) {
+  const row = object(config);
+  return { eligibilityMode: storedCommerce7Eligibility(config, rewardMode), discountEnabled: typeof row?.discountEnabled === "boolean" ? row.discountEnabled : undefined };
 }
 export function rewardIdempotencyKey(userId: string, offerId: string, key: unknown) {
   requireValue(typeof key === "string" && /^[A-Za-z0-9_-]{16,100}$/.test(key), "Provide a valid claim request key.");
@@ -90,11 +193,23 @@ export function commerce7OfferUnavailableReason(offer: BrandRewardOffer, total: 
   return null;
 }
 export function serializeCommerce7Claim(claim: CommerceRewardRedemption) {
+  const eligibilityMode = storedCommerce7Eligibility(claim.rewardConfigSnapshot, claim.rewardMode);
   const expired = claim.status === "ISSUED" && claim.expiresAt !== null && claim.expiresAt <= new Date();
-  return { id: claim.id, offerId: claim.offerId, status: expired ? "EXPIRED" : claim.status, provisioningState: claim.provisioningState,
-    pointsCost: claim.pointsCost, code: !expired && claim.status === "ISSUED" && claim.provisioningState === "READY" ? claim.code : null,
+  return { eligibilityMode, id: claim.id, offerId: claim.offerId, status: expired ? "EXPIRED" : claim.status, provisioningState: claim.provisioningState,
+    pointsCost: claim.pointsCost, code: eligibilityMode && !expired && claim.status === "ISSUED" && claim.provisioningState === "READY" ? claim.code : null,
     issuedAt: claim.issuedAt, expiresAt: claim.expiresAt, usedAt: claim.usedAt,
     canCancel: claim.status === "POINTS_DEBITED" && !claim.couponCreateAttempted && !claim.entitlementEverGranted && !claim.provisioningOwner,
     canRetry: claim.status === "POINTS_DEBITED" && !claim.provisioningOwner && !claim.needsManualReview,
     message: claim.errorMessage, createdAt: claim.createdAt };
+}
+/** What the Brand UI may offer. `couponContract` tells it which eligibility/scope choices can go live; nothing about provider objects. */
+export function commerce7RewardReadiness(backendConfigured: boolean) {
+  return {
+    backendConfigured, manualCustomerTagAssignmentRequiredFor: "CLAIMANT_ONLY" as const, eligibilityModes: ["ANYONE_WITH_CODE", "CLAIMANT_ONLY"] as const,
+    exclusiveAccessSupported: false, couponContract: commerce7CouponSupport(), permissions: ["Coupon: Full", "Tag: Full", "Customer: Read", "Product: Read", "Order: Read"],
+  };
+}
+/** Operators see a closed STAGE:CODE token, never free-form provider text. */
+export function safeClaimDiagnostic(value: string | null | undefined) {
+  return typeof value === "string" && /^[A-Z_]{3,40}(:[A-Z_]{3,40})?$/.test(value) ? value : null;
 }
