@@ -47,6 +47,7 @@ import type {
   CommerceCapabilities,
   CommerceConnectionResult,
   CommerceConnectionSummary,
+  CommerceProductAccessSecurity,
   ProductSyncPageRequest,
   ProductSyncPageResult,
   ProductSyncResult,
@@ -57,6 +58,7 @@ import {
 } from "../connection-resolver";
 import {
   fetchAllCommerce7Products,
+  fetchCommerce7ProductAccessSecurity,
   fetchCommerce7ProductPage,
   type Commerce7Fetch,
   type Commerce7StorefrontConfig,
@@ -323,6 +325,37 @@ export class Commerce7CommerceAdapter implements CommerceAdapter {
       fetchedAt: new Date(),
       limit: request.limit ?? COMMERCE7_REPORTED_PAGE_LIMIT,
     };
+  }
+
+  /**
+   * Product Security for products whose catalog list entry omitted it: one public `GET /v1/product/{id}` each, sequentially,
+   * on this connection's own tenant. The neutral sync bounds the ids per run. A product that no longer exists, or whose read
+   * fails, is omitted so it stays unknown; one failure never fails the catalog sync.
+   */
+  async fetchProductAccessSecurity(
+    connectionId: string,
+    externalIds: string[],
+    request: { signal?: AbortSignal },
+  ): Promise<Map<string, CommerceProductAccessSecurity | null>> {
+    const row = await this.loadCommerce7Connection(connectionId);
+    if (!row) {
+      throw new CommerceConnectionNotFoundError(connectionId);
+    }
+    this.requireConnected(row);
+    const result = new Map<string, CommerceProductAccessSecurity | null>();
+    for (const externalId of externalIds) {
+      if (request.signal?.aborted) break;
+      try {
+        const read = await fetchCommerce7ProductAccessSecurity(
+          { tenant: row.externalAccountId, externalId, ...(request.signal ? { signal: request.signal } : {}) },
+          { fetchImpl: this.deps.fetchImpl },
+        );
+        if (read.found) result.set(externalId, read.security);
+      } catch {
+        // Unknown stays unknown: the caller keeps any previously known security.
+      }
+    }
+    return result;
   }
 
   async completeProductSync(

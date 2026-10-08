@@ -14,6 +14,8 @@
 
 `live-coupon-create-product-201.json` is the sanitized HTTP 201 response of a live `POST /v1/coupon` restricted to one product. It proves `appliesTo: "Product"` with the product IDs in `appliesToObjectIds` (selected-product discounts and the optional Exclusive Wine Access discount). The coupon UUID, product UUID and 20-character probe code are replaced with synthetic values; fields whose names were not supplied are not invented.
 
+`live-coupon-percentage-observation.json` records the 2026-10-08 live QA observation that a coupon created with `discountType: "Percentage Off"` and `discount: 15` (HTTP 201) was shown as 0.15% in Commerce7 Admin and took CAD 0.03 off a CAD 18.97 item. It proves the native percentage unit is 1/100 of a percent; a live 1500 = 15% observation is still required before percentage issuance is enabled.
+
 `live-customer-tag-membership.json` holds the operator's live Customer Tag membership requests: the customer's `tags` entries (`GET /v1/customer/{id}`), the `POST /v1/tag-x-object/customer` 201 that succeeded for a customer who already held the tag and then listed it twice, and the `DELETE /v1/tag-x-object/customer/{tagId}/{customerId}` 204 that removed both copies. Only the customer's `tags` array is stored; no other customer field. SQRATCH uses the POST (once, after verified absence) and never the DELETE.
 
 Still missing, and therefore still fail-closed: a sandbox **Coupon** restricted to a Customer tag (proving the `availableTo` value; see `src/lib/commerce7-coupon-contract.ts`), the live `GET /v1/tag/customer/{id}` shape, and evidence of whether a product secured to several tags is purchasable by holders of any one of them (`COMMERCE7_EXCLUSIVE_ACCESS_CONTRACT.multiTagAccessVerified`).

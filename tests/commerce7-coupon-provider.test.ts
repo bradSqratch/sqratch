@@ -50,7 +50,7 @@ test("fixed amounts stay integers with no float math; percentages convert whole 
   for (const bad of [0, -1, 1.5, NaN, Infinity, null]) assert.throws(() => build({ terms: { ...terms, discountAmountCents: bad as number } }), { code: "SETUP_INCOMPLETE" });
   const percent = { ...terms, discountType: "PERCENTAGE" as const, discountAmountCents: null };
   const body = build({ terms: { ...percent, discountPercentageBasisPoints: 1500 } });
-  assert.equal(body.discount, 15); assert.equal(body.discountType, "Percentage Off"); assert.equal("dollarOffDiscountApplies" in body, false);
+  assert.equal(body.discount, 1500, "15% in the native unit (1/100 percent); 15 would be 0.15%"); assert.equal(body.discountType, "Percentage Off"); assert.equal("dollarOffDiscountApplies" in body, false);
   for (const basis of [0, 1, 99, 1550, 10001, NaN, Infinity, null]) assert.throws(() => build({ terms: { ...percent, discountPercentageBasisPoints: basis as number } }), { code: "SETUP_INCOMPLETE" });
 });
 

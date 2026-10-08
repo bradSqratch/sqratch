@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { Commerce7RewardsClient } from "../src/lib/commerce/providers/commerce7-rewards-client";
+import { COMMERCE7_COUPON_CONTRACT } from "../src/lib/commerce7-coupon-contract";
 import { harness, type Row } from "./commerce7-reward-harness";
 
 const live = JSON.parse(readFileSync(new URL("./fixtures/commerce7-rewards/live-coupon-create-422.json", import.meta.url), "utf8")) as { evidence: { sentButNotFlagged: string[] }; status: number; body: { errors: { field: string; message: string }[] } };
@@ -54,7 +55,9 @@ test("the 422 classification is the provider client's, independent of the claim 
 const created = JSON.parse(readFileSync(new URL("./fixtures/commerce7-rewards/live-coupon-create-201.json", import.meta.url), "utf8")) as { fixedAmount: { request: Row }; percentage: { request: Row }; minimumSubtotal: { requestFields: Row } };
 const obsolete = ["productDiscountType", "productDiscount", "shippingDiscountType", "shippingDiscount", "minimumCartAmount"];
 const dynamic = new Set(["code", "title", "startDate", "endDate"]);
-async function postedFor(offer: Row = {}) { const app = harness({ offer }); const claim = await app.reserve(); const result = await app.provision(claim.id); return { app, claim, result, body: app.postBodies()[0] }; }
+// Percentage issuance is gated until a live 1500 = 15% is observed; these writer tests opt in to the verified unit explicitly.
+const percentVerified = { ...COMMERCE7_COUPON_CONTRACT, percentage: { ...COMMERCE7_COUPON_CONTRACT.percentage, verified: true } };
+async function postedFor(offer: Row = {}) { const app = harness({ offer, ...(offer.discountType === "PERCENTAGE" ? { contract: percentVerified } : {}) }); const claim = await app.reserve(); const result = await app.provision(claim.id); return { app, claim, result, body: app.postBodies()[0] }; }
 const withoutDynamic = (body: Row) => Object.fromEntries(Object.entries(body).filter(([key]) => !dynamic.has(key)));
 
 test("the current writer sends every field the live provider requires and none that it rejects", async () => {
@@ -71,9 +74,10 @@ test("fixed amount: the outgoing payload is exactly the proven 201 request (plus
   assert.equal(result?.status, "ISSUED");
 });
 
-test("percentage: the outgoing payload is exactly the proven 201 request, with no per-order field", async () => {
+test("percentage: the outgoing payload is the 201-proven shape, but 15% is sent as 1500 because the probe's 15 was applied as 0.15%", async () => {
   const { body, result } = await postedFor({ discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 1500 });
-  assert.deepEqual(withoutDynamic(body), created.percentage.request); assert.equal("dollarOffDiscountApplies" in body, false);
+  assert.equal(created.percentage.request.discount, 15, "the probe value that HTTP 201 accepted but Commerce7 applied as 0.15%");
+  assert.equal(body.discount, 1500); assert.deepEqual({ ...withoutDynamic(body), discount: created.percentage.request.discount }, created.percentage.request); assert.equal("dollarOffDiscountApplies" in body, false);
   assert.equal(result?.status, "ISSUED", "the provider-defaulted dollarOffDiscountApplies echo is accepted");
 });
 

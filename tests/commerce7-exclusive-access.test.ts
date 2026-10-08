@@ -162,6 +162,7 @@ test("the Exclusive picker lists this connection's available Tag-secured product
   assert.deepEqual(body.exclusiveProducts, [{ externalId: "rare", title: "Rare - 2015 Chardonnay", tagCount: 1 }, { externalId: "multi", title: "Two Tags", tagCount: 2 }]);
   assert.deepEqual(body.products.map((product: Row) => product.externalId).sort(), ["allocated", "club", "multi", "plain", "rare", "sample", "zero"], "the discount picker still lists every available product of this connection");
   assert.ok(body.products.every((product: Row) => JSON.stringify(Object.keys(product).sort()) === JSON.stringify(["externalId", "title"])));
+  assert.deepEqual(body.exclusiveDiagnostics, { securityUnknownCount: 1, lastProductSyncAt: null }, "only 'Unsynced Security' (no stored security) is unknown; counts only, no product data");
 });
 
 test("the Brand API never exposes raw security, provider metadata or Customer Tag UUIDs", async () => {

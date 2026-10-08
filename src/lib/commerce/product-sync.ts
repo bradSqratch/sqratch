@@ -140,7 +140,7 @@ import {
   UnsupportedCapabilityError,
 } from "./errors";
 import { getCurrencyExponent, providerPriceStringToMinorUnits } from "./money";
-import type { CommerceConnectionSummary, CommerceProduct } from "./types";
+import type { CommerceConnectionSummary, CommerceProduct, CommerceProductAccessSecurity } from "./types";
 import {
   getActiveCommerceConnection,
   getAdapterForConnection,
@@ -838,6 +838,63 @@ function computePrice(
   };
 }
 
+/** The access security persisted for a row, or undefined when none was ever obtained. Only the three whitelisted fields. */
+function storedAccessSecurity(metadata: Prisma.JsonValue | null | undefined): CommerceProductAccessSecurity | undefined {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return undefined;
+  const security = (metadata as Record<string, Prisma.JsonValue>).security;
+  if (!security || typeof security !== "object" || Array.isArray(security)) return undefined;
+  const { availableTo, displayOption, availableToObjectIds } = security as Record<string, Prisma.JsonValue>;
+  if (typeof availableTo !== "string" || !Array.isArray(availableToObjectIds) || !availableToObjectIds.every((id) => typeof id === "string")) return undefined;
+  return { availableTo, displayOption: typeof displayOption === "string" ? displayOption : null, availableToObjectIds: availableToObjectIds as string[] };
+}
+
+/**
+ * Some catalog listings omit access security (production evidence: every synchronized Commerce7 product, public ones
+ * included, had none after list-based syncs). A product whose listing gave no security is UNKNOWN, never "unsecured":
+ *   - known security is carried forward while the product's provider version (`providerUpdatedAt`) is unchanged;
+ *   - otherwise, if the product is available, it is read individually through the adapter's optional
+ *     `fetchProductAccessSecurity`, at most `budget` products per run, never-read products first;
+ *   - a product beyond the budget, or whose read failed, keeps any previously known security (never wiped) and is otherwise
+ *     left unknown for the next run.
+ * Read-only toward the provider. Security only ever makes a product eligible for exclusive access configuration; every
+ * activation and claim re-reads it live, so a carried-forward value can never grant anything by itself.
+ */
+export async function resolveUnknownAccessSecurity(
+  adapter: CommerceAdapter,
+  connectionId: string,
+  products: CommerceProduct[],
+  existingByKey: ReadonlyMap<string, ExistingConnectedProductRow>,
+  budget: number,
+  signal?: AbortSignal,
+): Promise<{ products: CommerceProduct[]; read: number }> {
+  if (!adapter.fetchProductAccessSecurity) return { products, read: 0 };
+  const resolved = [...products];
+  const candidates: { index: number; neverRead: boolean }[] = [];
+  resolved.forEach((product, index) => {
+    if (product.accessSecurity !== undefined) return;
+    const existing = existingByKey.get(product.externalId);
+    const stored = storedAccessSecurity(existing?.providerMetadata);
+    const sameVersion = !!product.providerUpdatedAt && jsonStringField(existing?.providerMetadata, "providerUpdatedAt") === product.providerUpdatedAt.toISOString();
+    if (stored && sameVersion) resolved[index] = { ...product, accessSecurity: stored };
+    else if (isStatusActive(product.status)) candidates.push({ index, neverRead: !stored });
+    else if (stored) resolved[index] = { ...product, accessSecurity: stored };
+  });
+  const toRead = candidates.sort((a, b) => Number(b.neverRead) - Number(a.neverRead) || a.index - b.index).slice(0, Math.max(0, budget));
+  let reads = new Map<string, CommerceProductAccessSecurity | null>();
+  if (toRead.length) {
+    const timeout = AbortSignal.timeout(SECURITY_READ_BUDGET_MS);
+    try { reads = await adapter.fetchProductAccessSecurity(connectionId, toRead.map(({ index }) => resolved[index].externalId), { signal: signal ? AbortSignal.any([signal, timeout]) : timeout }); }
+    catch { reads = new Map(); }
+  }
+  for (const { index } of candidates) {
+    const product = resolved[index];
+    if (reads.has(product.externalId)) { resolved[index] = { ...product, accessSecurity: reads.get(product.externalId) ?? null }; continue; }
+    const stored = storedAccessSecurity(existingByKey.get(product.externalId)?.providerMetadata);
+    if (stored) resolved[index] = { ...product, accessSecurity: stored };
+  }
+  return { products: resolved, read: toRead.length };
+}
+
 /**
  * Whitelisted, sanitized `providerMetadata`. Only these six fields are ever
  * copied out of the neutral `CommerceProduct` — never the raw provider node,
@@ -1120,12 +1177,19 @@ export type SyncBrandCommerceProductsOptions = {
   maxDurationMs?: number;
   /** Injectable clock for deterministic unit tests. */
   now?: () => number;
+  /**
+   * Per-run ceiling on individual access-security reads for products whose catalog listing omitted it (see
+   * `resolveUnknownAccessSecurity`). Bounded so a large catalog never becomes an uncontrolled N+1; later runs continue.
+   */
+  maxSecurityReads?: number;
 };
 
 const DEFAULT_PAGE_SIZE = 100;
 const DEFAULT_MAX_PAGES = 100;
 const DEFAULT_MAX_PRODUCTS = 10_000;
 const DEFAULT_MAX_DURATION_MS = 45_000;
+const DEFAULT_MAX_SECURITY_READS = 25;
+const SECURITY_READ_BUDGET_MS = 15_000;
 
 type CollectedCatalog = {
   products: CommerceProduct[];
@@ -1731,8 +1795,15 @@ async function runProductSync(
     const existingByKey = new Map(
       existingRows.map((row) => [row.externalKey, row]),
     );
+    const { products: catalogProducts } = await resolveUnknownAccessSecurity(
+      adapter,
+      connectionId,
+      catalog.products,
+      existingByKey,
+      positiveBound(options.maxSecurityReads, DEFAULT_MAX_SECURITY_READS, 200),
+    );
 
-    for (const product of catalog.products) {
+    for (const product of catalogProducts) {
       // PHASE 19 REPAIR (P1-1): `computed`/`decision` are still built
       // OPTIMISTICALLY (assuming the baseline captured at the top of this
       // function remains trustworthy) — but unlike the prior round, this

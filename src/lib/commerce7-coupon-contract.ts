@@ -26,6 +26,13 @@ export type CouponContract = {
   /** WRITE (POST /v1/coupon), proven by live 201s: tests/fixtures/commerce7-rewards/live-coupon-create-201.json. */
   type: string; usageLimitType: string; usageLimit: number; status: string;
   discountType: { FIXED_AMOUNT: string; PERCENTAGE: string };
+  /**
+   * Native "Percentage Off" `discount` units per whole percent. Live QA proved a native 15 is 0.15% in Commerce7 Admin and at
+   * checkout (tests/fixtures/commerce7-rewards/live-coupon-percentage-observation.json), so the unit is 1/100 of a percent and
+   * 15% is written as 1500. `verified` stays false until a live coupon created with 1500 is observed as 15%; until then new
+   * percentage rewards cannot be activated, claimed or issued.
+   */
+  percentage: { nativeUnitsPerPercent: number; verified: boolean };
   dollarOffDiscountApplies: string;
   cartRequirement: { none: string; minimum: string; countType: string };
   /** READ only: how a coupon GET reports "no shipping discount". Never written. */
@@ -36,6 +43,7 @@ export type CouponContract = {
 export const COMMERCE7_COUPON_CONTRACT: CouponContract = {
   type: "Product", usageLimitType: "Per Store", usageLimit: 1, status: "Enabled",
   discountType: { FIXED_AMOUNT: "Dollar Off", PERCENTAGE: "Percentage Off" },
+  percentage: { nativeUnitsPerPercent: 100, verified: false },
   dollarOffDiscountApplies: "Once Per Order",
   cartRequirement: { none: "None", minimum: "Minimum Purchase Amount", countType: "All Items" },
   readNoShippingDiscount: "No Discount",
@@ -51,7 +59,25 @@ export function commerce7CouponSupport(contract: CouponContract = COMMERCE7_COUP
   return {
     eligibility: { ANYONE_WITH_CODE: contract.availableTo.ANYONE_WITH_CODE !== null, CLAIMANT_ONLY: contract.availableTo.CLAIMANT_ONLY !== null },
     scope: { ALL_PRODUCTS: contract.appliesTo.ALL_PRODUCTS !== null, SPECIFIC_PRODUCTS: contract.appliesTo.SPECIFIC_PRODUCTS !== null },
+    discount: { FIXED_AMOUNT: true, PERCENTAGE: contract.percentage.verified },
   };
+}
+export type Commerce7DiscountKind = "FIXED_AMOUNT" | "PERCENTAGE";
+/** Whether a coupon of this discount kind may be issued under the contract. Fixed amounts are proven; see `percentage`. */
+export function isDiscountTypeSupported(type: Commerce7DiscountKind, contract: CouponContract = COMMERCE7_COUPON_CONTRACT) {
+  return type === "FIXED_AMOUNT" || contract.percentage.verified;
+}
+/** SQRATCH basis points (1500 = 15%) to the native Percentage Off `discount`. Null for anything outside 0.01%–100%. */
+export function commerce7NativePercentage(basisPoints: number, contract: CouponContract = COMMERCE7_COUPON_CONTRACT): number | null {
+  if (!Number.isSafeInteger(basisPoints) || basisPoints < 1 || basisPoints > 10000) return null;
+  const native = (basisPoints * contract.percentage.nativeUnitsPerPercent) / 100;
+  return Number.isSafeInteger(native) && native >= 1 ? native : null;
+}
+/** The native Percentage Off `discount` back to basis points, for readback and diagnostics (native 15 = 15 bp = 0.15%). */
+export function commerce7PercentageBasisPoints(native: number, contract: CouponContract = COMMERCE7_COUPON_CONTRACT): number | null {
+  if (!Number.isFinite(native) || native < 0) return null;
+  const basisPoints = (native * 100) / contract.percentage.nativeUnitsPerPercent;
+  return Number.isSafeInteger(basisPoints) ? basisPoints : null;
 }
 export function isCouponBranchSupported(eligibilityMode: Commerce7RewardEligibility, appliesTo: Commerce7CouponAppliesTo, contract: CouponContract = COMMERCE7_COUPON_CONTRACT) {
   const support = commerce7CouponSupport(contract);

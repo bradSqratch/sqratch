@@ -20,6 +20,22 @@ export function exactCommerce7RewardOrderMatch(raw: unknown, order: CommerceOrde
   });
   return matches.length === 1;
 }
+/**
+ * Why an imported order did or did not prove this claim's coupon was used. Diagnostic only: linking still requires
+ * `exactCommerce7RewardOrderMatch`. A code that appears without the exact native coupon identity is reported (the populated
+ * Commerce7 order `coupons` shape is unverified), never accepted.
+ */
+export type Commerce7RewardOrderEvidence = "MATCHED" | "ORDER_NOT_ELIGIBLE" | "ORDER_VERSION_STALE" | "COUPON_IDENTITY_UNCONFIRMED" | "NOT_THIS_COUPON";
+export function commerce7RewardOrderEvidence(raw: unknown, order: CommerceOrder, claim: CommerceRewardRedemption): Commerce7RewardOrderEvidence {
+  if (exactCommerce7RewardOrderMatch(raw, order, claim)) return "MATCHED";
+  const row = object(raw);
+  const coupons = Array.isArray(row?.coupons) ? row.coupons : [];
+  const codeSeen = coupons.some((entry) => { const coupon = object(entry); return typeof coupon?.code === "string" && coupon.code.toUpperCase() === claim.code.toUpperCase(); });
+  if (!codeSeen) return "NOT_THIS_COUPON";
+  if (order.financialStatus !== "PAID" || order.cancelledAt || order.totalMinor === null || order.totalMinor <= BigInt(0)) return "ORDER_NOT_ELIGIBLE";
+  if (!order.providerUpdatedAt || typeof row?.updatedAt !== "string" || Date.parse(row.updatedAt) !== order.providerUpdatedAt.getTime()) return "ORDER_VERSION_STALE";
+  return "COUPON_IDENTITY_UNCONFIRMED";
+}
 export type Commerce7RewardOrderDeps = {
   db: typeof import("@/lib/prisma").default;
   fetchOrder: typeof fetchCommerce7Order;
@@ -37,6 +53,8 @@ export async function reconcileCommerce7RewardOrders(deps: Partial<Commerce7Rewa
   let linked = 0; let failed = 0; let checked = 0;
   for (const claim of claims) {
     let nextCursor = claim.rewardOrderCursor;
+    // PII-free progress for the Brand (closed STAGE:CODE token on the claim). Undefined keeps the previous reason.
+    let diagnostic: string | undefined;
     try {
       const connection = await prisma.commerceConnection.findFirst({ where: { id: claim.connectionId ?? "", brandId: claim.brandId, provider: "COMMERCE7", externalAccountId: claim.externalAccountId, status: "CONNECTED", uninstalledAt: null } });
       if (!connection) continue;
@@ -47,7 +65,8 @@ export async function reconcileCommerce7RewardOrders(deps: Partial<Commerce7Rewa
         const remaining = deadline - Date.now();
         if (remaining <= 0) throw new Error("Reward order read budget exhausted");
         const raw = await fetchOrder({ tenant: connection.externalAccountId, externalOrderId: order.externalOrderId!, signal: AbortSignal.timeout(Math.min(10000, remaining)) });
-        if (!exactCommerce7RewardOrderMatch(raw, order, claim)) continue;
+        const evidence = commerce7RewardOrderEvidence(raw, order, claim);
+        if (evidence !== "MATCHED") { if (evidence !== "NOT_THIS_COUPON") diagnostic = `PURCHASE_CHECK:${evidence}`; continue; }
         // Re-read payment/version inside the transaction: concurrent financial
         // changes cannot turn a stale observation into a recorded purchase.
         await prisma.$transaction(async (tx) => {
@@ -60,11 +79,13 @@ export async function reconcileCommerce7RewardOrders(deps: Partial<Commerce7Rewa
         }, { isolationLevel: "Serializable" });
       }
       nextCursor = orders.length === 5 ? orders[orders.length - 1].id : null;
-    } catch { failed++; }
+      // A completed pass with no evidence: the coupon's order has not been imported (or used) yet.
+      if (!diagnostic && nextCursor === null) diagnostic = "PURCHASE_CHECK:NO_MATCHING_ORDER";
+    } catch { failed++; diagnostic = "PURCHASE_CHECK:PROVIDER_UNAVAILABLE"; }
     finally {
       // Failed or disconnected claims must not monopolize the bounded queue.
       // On failure retain the cursor, so the same evidence is retried later.
-      await prisma.commerceRewardRedemption.updateMany({ where: { id: claim.id, provider: "COMMERCE7", canonicalOrderId: null, rewardOrderCursor: claim.rewardOrderCursor, rewardOrderCheckedAt: claim.rewardOrderCheckedAt }, data: { rewardOrderCursor: nextCursor, rewardOrderCheckedAt: now } });
+      await prisma.commerceRewardRedemption.updateMany({ where: { id: claim.id, provider: "COMMERCE7", canonicalOrderId: null, rewardOrderCursor: claim.rewardOrderCursor, rewardOrderCheckedAt: claim.rewardOrderCheckedAt }, data: { rewardOrderCursor: nextCursor, rewardOrderCheckedAt: now, ...(diagnostic ? { lastReconcileReason: diagnostic } : {}) } });
     }
   }
   return { checked, linked, failed };

@@ -6,9 +6,16 @@ import ts from "typescript";
 import * as formatting from "../src/lib/reward-formatting";
 import * as contractModule from "../src/lib/commerce7-coupon-contract";
 import * as safeRedirect from "../src/lib/safe-redirect";
+import * as claimWindow from "../src/lib/reward-claim-window";
 type Node = { type: string; props: Record<string, unknown> };
-function harness(path: string, exportName: string, props = {}) {
+/** `DateImpl` pins "now" for date defaults; timers are fake and advanced explicitly; effects run React-style cleanups. */
+function harness(path: string, exportName: string, props = {}, env: { DateImpl?: DateConstructor } = {}) {
   const states: unknown[] = []; const effects: unknown[][] = []; let index = 0; let effectIndex = 0; let effectsToRun: (() => void)[] = [];
+  const cleanups: ((() => void) | undefined)[] = []; let unmounted = false;
+  let clock = 0; let timerId = 0; const timers = new Map<number, { at: number; run: () => void }>();
+  const fakeSetTimeout = (run: () => void, ms = 0) => { const id = ++timerId; timers.set(id, { at: clock + ms, run }); return id; };
+  const fakeClearTimeout = (id: number) => { timers.delete(id); };
+  const clipboard = { fail: false };
   const requests: { url: string; init?: RequestInit; resolve: (value: unknown) => void; reject: (error: Error) => void }[] = [];
   const storage = new Map<string, string>(); const copied: string[] = []; let requestKey = 0; const pushed: string[] = []; const location = { pathname: "/x/commerce7-demo-experience/shop", search: "" };
   const exports: Record<string, (props: object) => Node> = {};
@@ -16,11 +23,11 @@ function harness(path: string, exportName: string, props = {}) {
     useState(initial: unknown) { const i = index++; if (!(i in states)) states[i] = typeof initial === "function" ? initial() : initial; return [states[i], (value: unknown) => { states[i] = typeof value === "function" ? value(states[i]) : value; }]; },
     useRef(initial: unknown) { const i = index++; if (!(i in states)) states[i] = { current: initial }; return states[i]; },
     useCallback(value: unknown, deps: unknown[]) { const i = index++; const prior = states[i] as { deps: unknown[]; value: unknown } | undefined; if (!prior || !deps.every((dep, j) => Object.is(dep, prior.deps[j]))) states[i] = { deps, value }; return (states[i] as { value: unknown }).value; },
-    useEffect(run: () => void, deps: unknown[]) { const i = effectIndex++; if (!effects[i] || !deps.every((dep, j) => Object.is(dep, effects[i][j]))) { effects[i] = deps; effectsToRun.push(run); } },
+    useEffect(run: () => unknown, deps: unknown[]) { const i = effectIndex++; if (!effects[i] || !deps.every((dep, j) => Object.is(dep, effects[i][j]))) { effects[i] = deps; effectsToRun.push(() => { cleanups[i]?.(); const cleanup = run(); cleanups[i] = typeof cleanup === "function" ? cleanup as () => void : undefined; }); } },
   };
   const jsx = (type: string, props: object) => ({ type, props });
   runInNewContext(ts.transpileModule(readFileSync(path, "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, {
-    exports, URLSearchParams, Date, Set, Map, Array, Number, JSON, window: { location }, crypto: { randomUUID: () => `synthetic-client-request-key-${++requestKey}` }, sessionStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) }, navigator: { clipboard: { writeText: async (value: string) => { copied.push(value); } } },
+    exports, URLSearchParams, Date: env.DateImpl ?? Date, Set, Map, Array, Number, JSON, String, Promise, Math, window: { location }, setTimeout: fakeSetTimeout, clearTimeout: fakeClearTimeout, crypto: { randomUUID: () => `synthetic-client-request-key-${++requestKey}` }, sessionStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) }, navigator: { clipboard: { writeText: async (value: string) => { if (clipboard.fail) throw new Error("synthetic clipboard denial"); copied.push(value); } } },
     require(name: string) {
       if (name === "react") return react;
       if (name === "react/jsx-runtime") return { jsx, jsxs: jsx, Fragment: "fragment" };
@@ -28,12 +35,18 @@ function harness(path: string, exportName: string, props = {}) {
       if (name === "@/lib/safe-redirect") return safeRedirect;
       if (name === "@/lib/reward-formatting") return formatting;
       if (name === "@/lib/commerce7-coupon-contract") return contractModule;
+      if (name === "@/lib/reward-claim-window") return claimWindow;
+      if (name === "lucide-react") return new Proxy({}, { get: (_target, key) => `Icon:${String(key)}` });
       if (name === "@/components/experience/client-utils") return { fetchJson: (url: string, init?: RequestInit) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })), getErrorMessage: (error: Error) => error.message };
       if (name.startsWith("@/components/ui/")) return new Proxy({}, { get: (_target, key) => String(key) });
       throw new Error(`Unexpected dependency ${name}`);
     },
   });
-  return { requests, copied, storage, pushed, setLocation(pathname: string, search = "") { location.pathname = pathname; location.search = search; }, setProps(value: object) { props = value; }, render() { index = 0; effectIndex = 0; return exports[exportName](props); }, flush() { const work = effectsToRun; effectsToRun = []; work.forEach((run) => run()); } };
+  return { requests, copied, storage, pushed, clipboard,
+    /** Advances the fake clock and fires due timers. */
+    advance(ms: number) { clock += ms; for (const [id, timer] of [...timers]) if (timer.at <= clock) { timers.delete(id); timer.run(); } },
+    pendingTimers: () => timers.size, unmount() { unmounted = true; cleanups.forEach((cleanup) => cleanup?.()); }, isUnmounted: () => unmounted,
+    setLocation(pathname: string, search = "") { location.pathname = pathname; location.search = search; }, setProps(value: object) { props = value; }, render() { index = 0; effectIndex = 0; return exports[exportName](props); }, flush() { const work = effectsToRun; effectsToRun = []; work.forEach((run) => run()); } };
 }
 function nodes(value: unknown): Node[] { if (Array.isArray(value)) return value.flatMap(nodes); if (!value || typeof value !== "object" || !("props" in value)) return []; const node = value as Node; return [node, ...nodes(node.props.children)]; }
 function text(value: unknown): string { if (Array.isArray(value)) return value.map(text).join(" "); if (value && typeof value === "object" && "props" in value) return text((value as Node).props.children); return value == null || value === false ? "" : String(value); }
@@ -393,7 +406,7 @@ test("several tags require an explicit choice, warn that other tags may grant ac
   const options = nodes(tagSelect(app)!).filter((node) => node.type === "option");
   assert.deepEqual(options.map((node) => [node.props.value, node.props.disabled === true]), [["", false], ["tag-uuid-1", false], ["tag-uuid-2", true]]);
   assert.match(text(options[2]), /Club Auto Segment.*not a Manual tag/);
-  let copy = text(app.render()); assert.match(copy, /secured to\s+2\s+Customer Tags/); assert.match(copy, /may not be the only way to access it/); assert.match(copy, /saved as a draft only/);
+  let copy = text(app.render()); assert.match(copy, /secured to\s+2\s+Customer Tags/); assert.match(copy, /may not be the only way to access it/); assert.match(copy, /can be saved but not activated/);
   const before = app.requests.length; (nodes(app.render()).find((node) => node.type === "form")!.props.onSubmit as (event: object) => void)({ preventDefault() {} }); await settle();
   assert.equal(app.requests.length, before, "no save without an explicit tag"); assert.match(text(app.render()), /Choose which Customer Tag SQRATCH should grant/);
   change(tagSelect(app)!, "tag-uuid-1"); copy = text(app.render());
@@ -451,4 +464,169 @@ test("claimant exclusive claim states: waiting for account, confirmation pending
   assert.match(copy, /verified SQRATCH email, then check again/); assert.match(copy, /will not be requested twice/); assert.match(copy, /Your Commerce7 access is active/, "access granted while the discount is under review");
   assert.match(copy, /SQRA-EXCLUSIVE/); assert.match(copy, /Single-use discount for this wine/); assert.match(copy, /keep it private/);
   assert.equal(nodes(app.render()).filter((node) => node.type === "Button" && /Cancel and return points/.test(text(node))).length, 1, "only the waiting claim, where nothing was written, can be cancelled");
+});
+
+// ── B: Copy coupon feedback resets ──
+const readyClaim = (id: string, codeValue: string) => ({ id, offerId: `offer-${id}`, title: `Reward ${id}`, status: "ISSUED", provisioningState: "READY", code: codeValue, expiresAt: "2027-01-01T00:00:00.000Z", canRetry: false, canCancel: false, message: null });
+async function claimsCard(claims: object[]) { const app = harness("src/components/rewards/commerce7-rewards-client.tsx", "Commerce7RewardsClient"); app.render(); app.flush(); app.requests[0].resolve({ viewerState: "READY", offers: [], claims, points: 100 }); await settle(); return app; }
+const copyButtons = (app: ReturnType<typeof harness>) => nodes(app.render()).filter((node) => node.type === "Button" && /^(Copy coupon|Copied)$/.test(text(node).trim()));
+const labelsOf = (app: ReturnType<typeof harness>) => copyButtons(app).map((node) => text(node).trim());
+
+test("Copy coupon -> Copied -> Copy coupon after two seconds, with an accessible announcement and no server request", async () => {
+  const app = await claimsCard([readyClaim("a", "SQRA-COPY-A")]); const before = app.requests.length;
+  (copyButtons(app)[0].props.onClick as () => void)(); await settle();
+  assert.deepEqual(labelsOf(app), ["Copied"]); assert.deepEqual(app.copied, ["SQRA-COPY-A"]);
+  assert.ok(nodes(app.render()).some((node) => node.props.role === "status" && node.props["aria-live"] === "polite" && /Coupon code copied/.test(text(node))));
+  app.advance(1999); assert.deepEqual(labelsOf(app), ["Copied"]);
+  app.advance(1); assert.deepEqual(labelsOf(app), ["Copy coupon"]); assert.equal(app.pendingTimers(), 0);
+  assert.equal(app.requests.length, before, "copying never calls the server"); assert.match(text(app.render()), /SQRA-COPY-A/, "the code itself is unchanged");
+});
+
+test("clicking again restarts the feedback period; several coupons keep independent labels", async () => {
+  const app = await claimsCard([readyClaim("a", "SQRA-COPY-A"), readyClaim("b", "SQRA-COPY-B")]);
+  (copyButtons(app)[0].props.onClick as () => void)(); await settle(); app.advance(1500);
+  (copyButtons(app)[0].props.onClick as () => void)(); await settle(); app.advance(1000);
+  assert.deepEqual(labelsOf(app), ["Copied", "Copy coupon"], "restarted: still Copied 2.5s after the first click");
+  app.advance(1000); assert.deepEqual(labelsOf(app), ["Copy coupon", "Copy coupon"]);
+  (copyButtons(app)[0].props.onClick as () => void)(); await settle(); (copyButtons(app)[1].props.onClick as () => void)(); await settle();
+  assert.deepEqual(labelsOf(app), ["Copy coupon", "Copied"], "only the most recently copied coupon shows Copied"); assert.deepEqual(app.copied.slice(-2), ["SQRA-COPY-A", "SQRA-COPY-B"]);
+  app.advance(2000); assert.deepEqual(labelsOf(app), ["Copy coupon", "Copy coupon"]); assert.equal(app.pendingTimers(), 0);
+});
+
+test("a failed clipboard write never says Copied and explains how to copy manually, on that card only", async () => {
+  const app = await claimsCard([readyClaim("a", "SQRA-COPY-A"), readyClaim("b", "SQRA-COPY-B")]); app.clipboard.fail = true;
+  (copyButtons(app)[1].props.onClick as () => void)(); await settle();
+  assert.deepEqual(labelsOf(app), ["Copy coupon", "Copy coupon"]); assert.equal(app.pendingTimers(), 0);
+  const cards = nodes(app.render()).filter((node) => node.type === "article");
+  assert.match(text(cards[1]), /Could not copy automatically/); assert.doesNotMatch(text(cards[0]), /Could not copy/);
+  app.clipboard.fail = false; (copyButtons(app)[1].props.onClick as () => void)(); await settle();
+  assert.deepEqual(labelsOf(app), ["Copy coupon", "Copied"]); assert.doesNotMatch(text(app.render()), /Could not copy/);
+});
+
+test("unmounting clears the pending Copied timer", async () => {
+  const app = await claimsCard([readyClaim("a", "SQRA-COPY-A")]);
+  (copyButtons(app)[0].props.onClick as () => void)(); await settle(); assert.equal(app.pendingTimers(), 1);
+  app.unmount(); assert.equal(app.pendingTimers(), 0);
+});
+
+// ── C: default claim window ──
+function pinnedDate(start: string) {
+  const clock = { now: Date.parse(start) };
+  class PinnedDate extends Date { constructor(...args: unknown[]) { if (args.length) super(...(args as [string])); else super(clock.now); } static now() { return clock.now; } }
+  return { clock, PinnedDate: PinnedDate as unknown as DateConstructor };
+}
+const dateInput = (app: ReturnType<typeof harness>, label: RegExp) => { const found = nodes(app.render()).find((node) => node.type === "label" && label.test(text(node))); assert.ok(found, String(label)); return nodes(found).find((node) => node.type === "Input")!; };
+
+test("a new reward is prefilled with Now through 30 calendar days later, computed when the form opens", async () => {
+  const { clock, PinnedDate } = pinnedDate("2026-10-08T12:13:47.000Z");
+  const app = harness("src/components/rewards/commerce7-brand-rewards.tsx", "Commerce7BrandRewardsPanel", {}, { DateImpl: PinnedDate }); app.render(); app.flush();
+  app.requests[0].resolve(brandData); await settle();
+  const expected = claimWindow.defaultClaimWindow(new Date(clock.now));
+  assert.equal(dateInput(app, /Claim starts/).props.value, expected.starts); assert.equal(dateInput(app, /Claim ends/).props.value, expected.ends);
+  assert.match(text(app.render()), /Clear a date to leave that side of the claim window open/);
+  const body = submitted(app); assert.equal(body.claimStartsAt, claimWindow.claimWindowIso(expected.starts)); assert.equal(body.claimEndsAt, claimWindow.claimWindowIso(expected.ends));
+  assert.equal(body.codeValidDays, 30, "coupon validity stays its own field");
+  // After a successful save the next new reward uses the clock at that moment, not the first render's.
+  clock.now = Date.parse("2026-10-20T15:00:00.000Z");
+  app.requests[1].resolve({}); await settle(); app.requests[2].resolve(brandData); await settle();
+  assert.equal(dateInput(app, /Claim starts/).props.value, claimWindow.defaultClaimWindow(new Date(clock.now)).starts);
+});
+
+test("the operator can override or clear either date; an end before the start is refused before any request", async () => {
+  const app = await brandForm();
+  (dateInput(app, /Claim ends/).props.onChange as (event: object) => void)({ target: { value: "" } });
+  assert.equal(submitted(app).claimEndsAt, null, "a cleared end stays open-ended");
+  const second = await brandForm();
+  (dateInput(second, /Claim starts/).props.onChange as (event: object) => void)({ target: { value: "2026-12-01T10:00" } });
+  (dateInput(second, /Claim ends/).props.onChange as (event: object) => void)({ target: { value: "2026-11-01T10:00" } });
+  const before = second.requests.length; (nodes(second.render()).find((node) => node.type === "form")!.props.onSubmit as (event: object) => void)({ preventDefault() {} }); await settle();
+  assert.equal(second.requests.length, before); assert.match(text(second.render()), /Claim end must be after claim start/);
+});
+
+test("editing an existing open-ended reward keeps it open-ended and never applies the 30-day default", async () => {
+  const openEnded = { ...offer, id: "open", title: "Open reward", appliesTo: "ALL_PRODUCTS", rewardMode: "DISCOUNT", isActive: false, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, totalClaims: 0, issuedCount: 0, editable: true, claimStartsAt: null, claimEndsAt: null, _count: { redemptions: 0 }, commerce7Config: { eligibilityMode: "ANYONE_WITH_CODE", discountEnabled: true }, products: [] };
+  const app = await brandForm({ ...brandData, offers: [openEnded] });
+  (button(app.render(), "Edit").props.onClick as () => void)();
+  assert.equal(dateInput(app, /Claim starts/).props.value, ""); assert.equal(dateInput(app, /Claim ends/).props.value, "");
+  const body = submitted(app); assert.equal(body.claimStartsAt, null); assert.equal(body.claimEndsAt, null);
+  assert.match(text(app.render()), /Claim window: open/, "the offer card states the window plainly");
+});
+
+// ── D: compact removable product chips ──
+test("selected products are compact chips with an icon-only, labelled remove button", async () => {
+  const app = await brandForm(); change(select(app.render(), "ALL_PRODUCTS"), "SPECIFIC_PRODUCTS");
+  (product(app.render(), "Rare wine").props.onCheckedChange as (v: boolean) => void)(true); (product(app.render(), "Second wine").props.onCheckedChange as (v: boolean) => void)(true);
+  const tree = app.render(); assert.doesNotMatch(text(tree), /· Remove/, "no 'Remove' word");
+  const list = nodes(tree).find((node) => node.type === "ul" && node.props["aria-label"] === "Selected products")!; assert.match(String(list.props.className), /flex-wrap/);
+  const remove = nodes(list).filter((node) => node.type === "button");
+  assert.deepEqual(remove.map((node) => node.props["aria-label"]), ["Remove Rare wine", "Remove Second wine"]); assert.equal(remove[0].props.type, "button");
+  assert.ok(nodes(remove[0]).some((node) => node.type === "Icon:X"), "an X icon"); assert.equal(text(remove[0]).trim(), "", "icon only");
+  (remove[0].props.onClick as () => void)();
+  assert.deepEqual(submitted(app).productIds, ["second-wine"], "removing a chip unselects only that product");
+});
+
+test("removing the exclusive product chip clears the chosen tag, the tag options and Active", async () => {
+  const app = await brandForm(); setMode(app, "EXCLUSIVE_PRODUCT_ACCESS");
+  (product(app.render(), "Rare wine").props.onCheckedChange as (v: boolean) => void)(true); await resolveTags(app);
+  (activeBox(app).props.onChange as (event: object) => void)({ target: { checked: true } }); assert.equal(activeBox(app).props.checked, true);
+  const chip = nodes(app.render()).find((node) => node.type === "button" && node.props["aria-label"] === "Remove Rare wine")!; (chip.props.onClick as () => void)();
+  app.render(); app.flush();
+  assert.equal(tagSelect(app), undefined); assert.equal(activeBox(app).props.checked, false); assert.equal(product(app.render(), "Rare wine").props.checked, false);
+  const before = app.requests.length; (nodes(app.render()).find((node) => node.type === "form")!.props.onSubmit as (event: object) => void)({ preventDefault() {} }); await settle();
+  assert.equal(app.requests.length, before, "nothing to save without a product and tag");
+});
+
+// ── E/F: exclusive picker diagnostics and multi-tag guidance ──
+test("when product security has not been read, the picker says so and how to fix it instead of claiming no products exist", async () => {
+  const app = await brandForm({ ...catalogData, exclusiveProducts: [], exclusiveDiagnostics: { securityUnknownCount: 10, lastProductSyncAt: "2026-10-07T17:59:14.383Z" } });
+  setMode(app, "EXCLUSIVE_PRODUCT_ACCESS"); const copy = text(app.render());
+  assert.ok(!copy.includes(noneNote), "not 'No eligible exclusive products found'");
+  assert.match(copy, /Product Security has not been read yet for\s+10\s+synchronized product/); assert.match(copy, /Products → Sync/);
+  const partial = await brandForm({ ...catalogData, exclusiveDiagnostics: { securityUnknownCount: 3, lastProductSyncAt: null } }); setMode(partial, "EXCLUSIVE_PRODUCT_ACCESS");
+  assert.deepEqual(pickerTitles(partial), ["Rare - 2015 Chardonnay"]); assert.match(text(partial.render()), /security has not been read yet for\s+3/i);
+  const known = await brandForm({ ...catalogData, exclusiveProducts: [], exclusiveDiagnostics: { securityUnknownCount: 0, lastProductSyncAt: null } }); setMode(known, "EXCLUSIVE_PRODUCT_ACCESS");
+  assert.ok(text(known.render()).includes(noneNote), "with every product's security known, the original guidance stands");
+});
+
+test("a multi-tag product explains exactly why it is draft-only and what sandbox evidence would enable it", async () => {
+  const app = await brandForm(catalogData); setMode(app, "EXCLUSIVE_PRODUCT_ACCESS");
+  (product(app.render(), "Rare - 2015 Chardonnay").props.onCheckedChange as (v: boolean) => void)(true); await resolveTags(app, twoTags);
+  const copy = text(app.render());
+  assert.match(copy, /Why draft only/); assert.match(copy, /holds only one of several security tags/); assert.match(copy, /To verify/); assert.match(copy, /log in to the storefront/);
+  assert.equal(activeBox(app).props.disabled, true, "the safety gate is unchanged");
+});
+
+// ── H: used coupons ──
+test("a used coupon reads 'Coupon used' and never shows a reusable code; the Brand sees purchase-check progress", async () => {
+  const app = await claimsCard([{ ...readyClaim("used", "SQRA-SHOULD-NOT-SHOW"), status: "USED", code: null }]);
+  const copy = text(app.render()); assert.match(copy, /Coupon used/); assert.doesNotMatch(copy, /SQRA-SHOULD-NOT-SHOW|Copy coupon/);
+  const claim = (id: string, diagnostic: string | null, extra: object = {}) => ({ id, title: `Claim ${id}`, status: "ISSUED", provisioningState: "READY", providerCustomerId: null, providerTagId: null, tagTitle: null, message: null, ownerActive: false, canRevoke: true, canonicalOrderId: null, diagnostic, purchaseCheckedAt: "2026-10-08T10:40:01.423Z", rewardMode: "DISCOUNT", ...extra });
+  const brand = await brandForm({ ...brandData, claims: [claim("waiting", "PURCHASE_CHECK:NO_MATCHING_ORDER"), claim("shape", "PURCHASE_CHECK:COUPON_IDENTITY_UNCONFIRMED"), claim("done", null, { status: "USED", canonicalOrderId: "order-1006", canRevoke: false })] });
+  const brandCopy = text(brand.render());
+  assert.match(brandCopy, /No imported Commerce7 order uses this coupon yet/); assert.match(brandCopy, /Custom Range/);
+  assert.match(brandCopy, /coupon identity could not be confirmed/); assert.match(brandCopy, /Last checked/); assert.match(brandCopy, /Coupon used/);
+});
+
+// ── I: status badges ──
+test("offer status is a separate badge with text, green when active and red when inactive", async () => {
+  const listed = (id: string, isActive: boolean) => ({ ...offer, id, title: `Offer ${id}`, appliesTo: "ALL_PRODUCTS", rewardMode: "DISCOUNT", isActive, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, totalClaims: 0, issuedCount: 0, _count: { redemptions: 0 }, commerce7Config: { eligibilityMode: "ANYONE_WITH_CODE", discountEnabled: true }, products: [] });
+  const app = await brandForm({ ...brandData, offers: [listed("live", true), listed("paused", false)] });
+  const tree = app.render(); const copy = text(tree);
+  assert.doesNotMatch(copy, /Offer live · Active|Offer paused · Inactive/);
+  const badges = nodes(tree).filter((node) => node.type === "span" && /^(Active|Inactive)$/.test(text(node).trim()));
+  assert.deepEqual(badges.map((node) => text(node).trim()), ["Active", "Inactive"]);
+  assert.match(String(badges[0].props.className), /rounded-full/); assert.match(String(badges[0].props.className), /emerald/); assert.match(String(badges[1].props.className), /red/);
+  assert.ok(nodes(tree).some((node) => /^h3$|^p$/.test(node.type) && text(node).trim() === "Offer live"), "the title stands on its own");
+});
+
+// ── A: percentage gate in the editor ──
+test("the editor marks Percentage draft-only while Commerce7 percentage units are unverified and turns Active off", async () => {
+  const gated = { ...brandData, readiness: { backendConfigured: true, couponContract: { ...couponContract, discount: { FIXED_AMOUNT: true, PERCENTAGE: false } } } };
+  const app = await brandForm(gated); (activeBox(app).props.onChange as (e: object) => void)({ target: { checked: true } });
+  const discountSelect = select(app.render(), "FIXED_AMOUNT"); assert.match(text(discountSelect), /Percentage\s+\(draft only\)/);
+  change(discountSelect, "PERCENTAGE");
+  assert.equal(activeBox(app).props.checked, false); assert.equal(activeBox(app).props.disabled, true); assert.match(text(app.render()), /percentage units are verified/);
+  const paused = { ...offer, id: "pct", title: "Fifteen Percent", appliesTo: "ALL_PRODUCTS", rewardMode: "DISCOUNT", isActive: true, discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 1500, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, totalClaims: 1, issuedCount: 1, _count: { redemptions: 1 }, commerce7Config: { eligibilityMode: "ANYONE_WITH_CODE", discountEnabled: true }, products: [] };
+  const list = await brandForm({ ...gated, offers: [paused] });
+  assert.match(text(list.render()), /15% off/); assert.match(text(list.render()), /New percentage coupons are paused/);
 });

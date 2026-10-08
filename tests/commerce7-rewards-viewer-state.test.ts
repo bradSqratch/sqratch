@@ -9,6 +9,7 @@ import * as domain from "../src/lib/commerce7-reward-domain";
 import * as eligibility from "../src/lib/commerce7-reward-eligibility";
 import * as viewer from "../src/lib/commerce7-reward-viewer";
 import { object } from "../src/lib/commerce/providers/commerce7-rewards-client";
+import * as couponContract from "../src/lib/commerce7-coupon-contract";
 
 function load(path: string, dependencies: Record<string, unknown>) {
   const exports: Record<string, (...args: unknown[]) => Promise<Response>> = {};
@@ -36,7 +37,7 @@ function listing(options: { session: unknown; context?: unknown; hasRewards?: bo
     "@/lib/reward-access": { getRewardClaimContext: async () => options.context ?? { ok: true, brandIds: ["brand-a"] } },
     "@/lib/points": { getUserSpendablePointBalance: options.private?.points ?? forbidden("points") },
     "@/lib/commerce/connection-service": { getActiveCommerceConnection: options.private?.active ?? forbidden("active connection"), isConnectionUsable: () => true },
-    "@/lib/commerce7-reward-domain": domain, "@/lib/commerce7-reward-viewer": viewer, "@/lib/commerce/providers/commerce7-rewards-client": { object },
+    "@/lib/commerce7-reward-domain": domain, "@/lib/commerce7-reward-viewer": viewer, "@/lib/commerce/providers/commerce7-rewards-client": { object }, "@/lib/commerce7-coupon-contract": couponContract,
     "@/lib/commerce7-reward-http": { rewardErrorResponse: (error: unknown) => NextResponse.json({ error: error instanceof Error ? error.message : "x" }, { status: 500 }) },
     "@/lib/commerce/providers/commerce7-connection-config": { validateCommerce7StorefrontUrl: () => ({ ok: false }) },
   });
@@ -114,4 +115,14 @@ test("unlocked exclusive offers: storefront access with no tag, security or cust
     const [blocked] = (await run(drifted)).data.offers;
     assert.equal(blocked.claimable, false); assert.match(blocked.unavailableReason, /not available right now/);
   }
+});
+
+test("an active percentage offer is listed but not claimable while Commerce7 percentage units are unverified; fixed amounts are unaffected", async () => {
+  const base = { title: "Reward", description: null, brandId: "brand-a", brand: { name: "Winery" }, products: [], connectionId: "conn", sourceExternalAccountId: "tenant", currencyCode: "CAD", pointsCost: 100, minimumSubtotalCents: null, codeValidDays: 7, claimStartsAt: null, claimEndsAt: null, isActive: true, rewardMode: "DISCOUNT", reservedClaimCount: 0, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, commerce7Config: { eligibilityMode: "ANYONE_WITH_CODE", discountEnabled: true } };
+  const offers = [{ ...base, id: "percent", discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 1500 }, { ...base, id: "fixed", discountType: "FIXED_AMOUNT", discountAmountCents: 1000, discountPercentageBasisPoints: null }];
+  const connection = { id: "conn", externalAccountId: "tenant", currencyCode: "CAD", storefrontUrl: null };
+  const data = (await (await listing({ session: { user: { id: "alice" } }, private: { offers: async () => offers, claims: async () => [], count: async () => 0, connections: async () => [], points: async () => 500, active: async () => connection } }).get()).json()).data;
+  const byId = Object.fromEntries(data.offers.map((offer: Record<string, unknown>) => [offer.id, offer]));
+  assert.equal(byId.percent.claimable, false); assert.match(byId.percent.unavailableReason, /temporarily unavailable/); assert.equal(byId.percent.discountPercentageBasisPoints, 1500, "15% is still presented as 15%");
+  assert.equal(byId.fixed.claimable, true);
 });

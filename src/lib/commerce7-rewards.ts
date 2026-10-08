@@ -2,12 +2,12 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { Prisma, type BrandRewardOffer, type CommerceRewardRedemption } from "@prisma/client";
 import prisma from "./prisma";
 import { storedCommerce7Eligibility, type Commerce7RewardEligibility } from "./commerce7-reward-eligibility";
-import { COMMERCE7_COUPON_CONTRACT, isCouponBranchSupported, type Commerce7CouponAppliesTo, type CouponContract } from "./commerce7-coupon-contract";
+import { COMMERCE7_COUPON_CONTRACT, isCouponBranchSupported, isDiscountTypeSupported, type Commerce7CouponAppliesTo, type CouponContract } from "./commerce7-coupon-contract";
 import { applyPointLedgerEvent } from "./points";
 import { getActiveCommerceConnection, isConnectionUsable } from "./commerce/connection-service";
 import { getCommerce7AppConfig } from "./commerce/providers/commerce7";
 import { Commerce7RewardsClient, Commerce7RewardError, buildCommerce7RewardCoupon, couponMatches, customerTagCount, floorToMinute, normalizeRewardEmail, object, type NativeCoupon, type NativeCustomer } from "./commerce/providers/commerce7-rewards-client";
-import { buildRewardSnapshot, COMMERCE7_EDIT_SAFE_CLAIM, COMMERCE7_EXCLUSIVE_ACCESS_CONTRACT, COMMERCE7_EXCLUSIVE_SECURITY_AVAILABLE_TO, commerce7ClaimRefundable, commerce7ExclusiveAccessStatus, commerce7ExclusiveSecurity, commerce7GrantableTag, commerce7OfferEditable, commerce7OfferUnavailableReason, commerce7SnapshotIssuable, couponScopeForSnapshot, couponTermsForClaim, frozenExclusiveAccess, parseCommerce7Offer, parseRewardSnapshot, requireValue, retainLegacyTemplate, RewardClaimError, rewardIdempotencyKey, serializeRewardSnapshot, storedCommerce7OfferInput, type Commerce7ExclusiveAccessStatus } from "./commerce7-reward-domain";
+import { buildRewardSnapshot, COMMERCE7_EDIT_SAFE_CLAIM, COMMERCE7_PERCENTAGE_UNVERIFIED_MESSAGE, commerce7SnapshotDiscountBlocked, COMMERCE7_EXCLUSIVE_ACCESS_CONTRACT, COMMERCE7_EXCLUSIVE_SECURITY_AVAILABLE_TO, commerce7ClaimRefundable, commerce7ExclusiveAccessStatus, commerce7ExclusiveSecurity, commerce7GrantableTag, commerce7OfferEditable, commerce7OfferUnavailableReason, commerce7SnapshotIssuable, couponScopeForSnapshot, couponTermsForClaim, frozenExclusiveAccess, parseCommerce7Offer, parseRewardSnapshot, requireValue, retainLegacyTemplate, RewardClaimError, rewardIdempotencyKey, serializeRewardSnapshot, storedCommerce7OfferInput, type Commerce7ExclusiveAccessStatus } from "./commerce7-reward-domain";
 
 type Db = typeof prisma;
 /**
@@ -122,6 +122,7 @@ export async function saveCommerce7Offer(brandId: string, body: unknown, offerId
     const couponEligibility = exclusive ? "ANYONE_WITH_CODE" : eligibilityMode;
     const supported = isCouponBranchSupported(couponEligibility, fields.appliesTo, contract);
     const retained = !exclusive && !supported && discountEnabled && existing ? retainLegacyTemplate(existing.commerce7Config, eligibilityMode, productIds) : null;
+    if (fields.isActive && discountEnabled && !isDiscountTypeSupported(fields.discountType, contract)) throw new RewardClaimError("COUPON_CONTRACT_UNVERIFIED", COMMERCE7_PERCENTAGE_UNVERIFIED_MESSAGE);
     if (fields.isActive && discountEnabled && !supported && !retained) throw new RewardClaimError("COUPON_CONTRACT_UNVERIFIED", unverifiedBranchMessage(couponEligibility, fields.appliesTo, contract));
     // Exclusive offers freeze the one product and the ONE Customer Tag SQRATCH will grant (by UUID; the title is display-only),
     // re-checked here against the synchronized catalog. Nothing is written to Commerce7.
@@ -195,7 +196,7 @@ export async function setCommerce7OfferActive(brandId: string, offerId: string, 
     requireValue(new Set(products.map((product) => product.externalId)).size === input.productIds.length, "Select products from this Commerce7 connection's synchronized catalog.");
   }
   const snapshot = buildRewardSnapshot(offer, config, productIds, contract);
-  if (!commerce7SnapshotIssuable(snapshot, contract)) throw new RewardClaimError("COUPON_CONTRACT_UNVERIFIED", unverifiedBranchMessage(snapshot.exclusiveAccess ? "ANYONE_WITH_CODE" : snapshot.eligibilityMode, snapshot.appliesTo, contract));
+  if (!commerce7SnapshotIssuable(snapshot, contract)) throw new RewardClaimError("COUPON_CONTRACT_UNVERIFIED", commerce7SnapshotDiscountBlocked(snapshot, contract) ? COMMERCE7_PERCENTAGE_UNVERIFIED_MESSAGE : unverifiedBranchMessage(snapshot.exclusiveAccess ? "ANYONE_WITH_CODE" : snapshot.eligibilityMode, snapshot.appliesTo, contract));
   // Exclusive access: the synchronized product must still match exactly, then live reads prove the tag and product security.
   const exclusiveProduct = (where: Pick<Prisma.TransactionClient, "connectedCommerceProduct">) => snapshot.exclusiveAccess ? where.connectedCommerceProduct.findFirst({ where: { brandId, connectionId: offer.connectionId ?? "", provider: "COMMERCE7", externalId: snapshot.exclusiveAccess.productId }, select: { externalId: true, isAvailable: true, providerMetadata: true } }) : Promise.resolve(null);
   const securityOf = (product: { isAvailable: boolean; providerMetadata: unknown } | null) => JSON.stringify(product ? { available: product.isAvailable, security: object(product.providerMetadata)?.security ?? null } : null);
@@ -369,6 +370,8 @@ export async function provisionCommerce7Claim(claimId: string, userId?: string, 
     // The gate precedes every provider read and write, so a refusal can never leave a provider resource behind.
     if (!commerce7SnapshotIssuable(snapshot, contract)) throw new RewardClaimError("COUPON_CONTRACT_UNVERIFIED", "This reward cannot be issued yet.");
     const terms = !exclusive || snapshot.discount ? couponTermsForClaim(snapshot, claim) : null;
+    // A pre-refinement snapshot carries its discount kind only in the claim columns; gate it here, before any provider call.
+    if (terms && !isDiscountTypeSupported(terms.discountType, contract)) throw new RewardClaimError("COUPON_CONTRACT_UNVERIFIED", "This reward cannot be issued yet.");
     const user = await deps.db.user.findUnique({ where: { id: claim.userId }, select: { email: true, isActive: true, isEmailVerified: true, emailVerifiedAt: true } });
     if (!user?.isActive) throw new RewardClaimError("ACCOUNT_UNAVAILABLE", "Your SQRATCH account is unavailable.", 403);
     if (snapshot.eligibilityMode === "CLAIMANT_ONLY" && (!user.isEmailVerified || !user.email || !user.emailVerifiedAt || user.emailVerifiedAt.getTime() !== claim.verifiedEmailAt?.getTime())) throw new RewardClaimError("EMAIL_CHANGED", "Your verified email changed. Contact the store or cancel this pending claim.");

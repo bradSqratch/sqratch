@@ -23,7 +23,8 @@ Product scope is independent of eligibility: **Applies to → All products** hid
 
 Every Commerce7 Coupon enum SQRATCH may send lives in one typed module, `src/lib/commerce7-coupon-contract.ts`. An entry is either observed or `null`; `null` fails closed and is never filled with a guess.
 
-* **Verified** (documented create example, operator sandbox reads and live 201s): `Store`, `Product` (selected products, with the exact IDs in `appliesToObjectIds`), `Everyone`, `Per Store`, `Dollar Off`, `Percentage Off`, `No Discount`, `Enabled`.
+* **Verified** (documented create example, operator sandbox reads and live 201s): `Store`, `Product` (selected products, with the exact IDs in `appliesToObjectIds`), `Everyone`, `Per Store`, `Dollar Off`, `Percentage Off` (the field name; see the unit note below), `No Discount`, `Enabled`.
+* **Percentage units: corrected, not yet verified for issuance.** HTTP 201 for `discount: 15` did not prove semantics: live QA showed that coupon as **0.15%** in Commerce7 Admin and it took CAD 0.03 off CAD 18.97 (`live-coupon-percentage-observation.json`). The native unit is 1/100 of a percent, the same scale as SQRATCH basis points, so 15% is written as `discount: 1500`. `COMMERCE7_COUPON_CONTRACT.percentage.verified` stays `false` until a live coupon created with 1500 is observed as 15%; until then percentage rewards save as drafts only, an already-active percentage offer is shown as paused and refuses new claims before any debit, and a pending percentage claim is refunded before any coupon request.
 * **Unverified for the Coupon object**: the customer-tag `availableTo` value. The Coupons page publishes no enum table, and live Commerce7 enums have already drifted from the public documentation (a live Product reads `security.availableTo: "Tag"` where the docs say `Group`), so no value is assumed.
 
 An unverified branch can be **saved as a draft but not activated**. The server refuses activation and refuses reservation (before any debit, capacity change or provider call), and the Brand UI shows the option as draft-only. To enable a branch, add a redacted sandbox **Coupon** GET for it to `tests/fixtures/commerce7-rewards/` and set the one value in the contract module. See the fixture README.
@@ -35,7 +36,7 @@ The public [Coupons](https://developer.commerce7.com/docs/coupons) page is **sta
 | Reward | Outgoing fields (plus `code`, `title`, `startDate`, `endDate`) |
 | --- | --- |
 | Fixed amount | `type: "Product"`, `discountType: "Dollar Off"`, `discount: <integer minor units>`, `dollarOffDiscountApplies: "Once Per Order"` |
-| Percentage | `type: "Product"`, `discountType: "Percentage Off"`, `discount: <whole percent>` (no per-order field) |
+| Percentage | `type: "Product"`, `discountType: "Percentage Off"`, `discount: <basis points>` (1500 = 15%; the live probe's 15 was 0.15%), no per-order field. **Issuance gated** until a live 1500 = 15% is observed |
 | No minimum | `cartRequirementType: "None"` (no `cartRequirement`, `cartRequirementMaximum` or `cartRequirementCountType`) |
 | Minimum subtotal | `cartRequirementType: "Minimum Purchase Amount"`, `cartRequirement: <integer minor units>`, `cartRequirementCountType: "All Items"` |
 | All products | `appliesTo: "Store"` (no `appliesToObjectIds`) |
@@ -156,7 +157,7 @@ All paths use `https://api.commerce7.com/v1`, server-only app credentials and th
 | DELETE /coupon/{id} | Merchant-requested revocation; no automatic points refund |
 | GET /tag/customer?page={n}&limit=50 | Recover a claimant-only per-claim tag by its exact opaque title; complete bounded scan required |
 | GET /tag/customer/{id} | Exclusive access: resolve the chosen Customer Tag by UUID (Manual + Customer only) at save, Enable, pre-check and provisioning |
-| GET /product/{id} | Exclusive access: live, read-only security and availability proof at activation, Enable, pre-check and provisioning |
+| GET /product/{id} | Exclusive access: live, read-only security and availability proof at activation, Enable, pre-check and provisioning; product sync: bounded per-product Product Security read (at most 25 per run) when the list entry omits `security` |
 | POST /tag-x-object/customer | Exclusive access: grant the chosen tag to the pinned customer, at most once per claim, after verified absence |
 | POST /tag/customer | Create `{title: SQRATCH-<opaque hash>, type: Manual}` |
 | GET /customer?cursor={cursor} | Initial exact verified-email binding, at most 20 pages / 1,000 customers |
@@ -176,7 +177,7 @@ Migration `20261008010000_commerce7_rewards` is additive. It adds columns/enums/
 
 Migration `20261009010000_commerce7_exclusive_access` (new, additive, not applied to any shared database) is required because the applied schema **cannot** represent Exclusive Wine Access: `reward_c7_offer_limits` forbids an active exclusive offer, both discount CHECKs forbid an access-only offer or claim, and durable membership ownership cannot live in the immutable snapshot or in unrelated columns. It adds enum `RewardMembershipOwnership` and four claim columns (`membershipWriteAttempted` defaulting to false, `membershipOwnership`, `providerMembershipId`, `membershipVerifiedAt`). It adds CHECKs `reward_c7_membership_owner` and `reward_c7_membership_write`. It replaces `reward_c7_release_safe` (now also requiring no membership write), `reward_c7_offer_limits` (exclusive offers may be active, still at most 25 claims) and the two discount CHECKs (only a Commerce7 exclusive row may carry no discount). It adds index `reward_c7_membership_inflight`. No row is rewritten, and every existing row satisfies the new constraints. Existing provider data keeps defaults; the new capacity counter is backfilled only for C7 offers. No financial or points tables are rewritten. Existing unique code/idempotency/ledger keys remain decisive. Indexes support offer/user capacity and provider queues.
 
-Fixed amounts and minimums are safe integer cents, bounded by the existing Prisma Int representation. CAD/USD/EUR/GBP/AUD/NZD/ZAR discounts are allowed; unverified monetary exponents are rejected rather than treated as two-decimal currencies. Percentages are whole values 1–100, persisted as basis points and mapped to provider units. Canonical order money continues using the existing BigInt/minor-unit pipeline. Discount scopes are whole store or exact synchronized catalog products (the latter draft-only until the Coupon scope enum is verified); collections/departments are unavailable. Coupon dates are minute-aligned UTC derived from the claim's stable creation and expiry, so every retry and recovery sends and expects the same window.
+Fixed amounts and minimums are safe integer cents, bounded by the existing Prisma Int representation. CAD/USD/EUR/GBP/AUD/NZD/ZAR discounts are allowed; unverified monetary exponents are rejected rather than treated as two-decimal currencies. Percentages are whole values 1–100 in the editor, persisted as basis points (1500 = 15%) and written natively in the same 1/100-percent unit (1500); readback compares the same native value, so a coupon created with the old 0.15% value is never adopted. Canonical order money continues using the existing BigInt/minor-unit pipeline. Discount scopes are whole store or exact synchronized catalog products (the latter draft-only until the Coupon scope enum is verified); collections/departments are unavailable. Coupon dates are minute-aligned UTC derived from the claim's stable creation and expiry, so every retry and recovery sends and expects the same window.
 
 ### Claim state machine
 
@@ -210,6 +211,57 @@ Purchase observation scans at most one due claim and five canonical orders per i
 A match requires C7 provider, exact Brand + original connection, native order ID, pinned customer ID for claimant-only rewards, coupon ID + case-insensitive code, matching provider update version, canonical PAID status, positive gross total and no cancellation. Expired/revoked claims require a purchase within validity. The worker re-reads canonical financial/version evidence in a serializable transaction and records the claim link once. It writes no order, order event, attribution, financial, inventory or points data. Bearer links record coupon redemption, without asserting that the claimant was the purchaser. Later refunds/fulfillment preserve the historical link. If first observed after partial/full refund, missing identity, or an unknown coupon representation, the claim remains unlinked for review.
 
 The Commerce7 Order/Update subscription and webhook handler are unchanged. Do not add Order/Create. The prior sandbox registration repair and order #1005/#1002 behavior are not redesigned here.
+
+## Post-deployment QA round (2026-10-08): findings and fixes
+
+Production inspection used read-only SELECTs (a `READ ONLY` transaction) and no Commerce7 request was made by the agent.
+
+| Issue | Evidence | Root cause | Fix |
+| --- | --- | --- | --- |
+| A. 15% applied as 0.15% | Offer `C7 QA 02` stores 1500 bp; its coupon was POSTed with `discount: 15`; Admin showed 0.15%; checkout took CAD 0.03 off 18.97 | The writer divided basis points by 100, trusting an HTTP 201 instead of the applied discount | Native unit is 1/100 percent: 15% is written as 1500, readback compares the same unit. Percentage issuance is **gated** (`percentage.verified: false`) until a live 1500 = 15% is observed |
+| B. "Copied" never reset | UI | No reset timer | Copy coupon → Copied → Copy coupon after 2 s; repeat clicks restart it; one card at a time; timer cleared on unmount; failures say so on that card; polite live region |
+| C. Empty claim dates | UI | No defaults | New rewards open now and close 30 calendar days later (same local wall time, DST-safe), computed when the form opens; existing open-ended rewards stay open-ended on Edit; end must follow start (client and server); claim window and coupon validity are shown separately |
+| D. "· Remove" buttons | UI | Text buttons | Compact chips with an icon-only, labelled `Remove {product}` button; removing the exclusive product also clears its tag, tag options and Active |
+| E. Rare wine missing from the Exclusive picker | Every synchronized product, public ones included, had no stored `security`; the last product sync (2026-10-07 17:59 UTC) predates the deployment of security-aware sync (migration applied 2026-10-08 01:41 UTC) | No sync had run with security-aware code; in addition, whether the `/v1/product` list includes `security` is unproven | A list entry without `security` is now *unknown*, never unsecured. Each sync reads Product Security per product with public `GET /v1/product/{id}` for at most 25 available products whose security is unknown or whose provider version changed (unknown first), reuses known security for unchanged products, and never wipes known security after a failed read. The picker reports "Product Security has not been read yet for N products — Sync" instead of "no eligible products" |
+| F. Multi-tag products draft-only | Safety gate | OR/AND semantics unverified | Gate unchanged; the editor explains why and exactly what sandbox evidence enables it |
+| G. Order #1006 missing | No `CommerceOrder` row; no order event of any kind after 2026-10-07 05:20 UTC; `reconciledThrough` 2026-08-26; last Custom Range 2026-10-06 23:13 → 10-07 04:13 | The subscription is Order Update only (zero Create events ever recorded); a completed checkout with no later update produces no webhook; the catch-up worker is intentionally unscheduled | No code change. Operator recovery: **Order Operations → Custom Range** covering #1006's update time (see below). Optional, separate operator decision: subscribe Order Create (the receiver already accepts `Create` idempotently) or schedule the existing authenticated catch-up worker |
+| H. Claim still "Ready to use" | The observer checks each issued claim every few minutes but no imported order exists | Missing canonical order (G). After import, linking also requires the order's `coupons[]` entry to carry the exact native coupon `id` and `code`, a populated shape not yet observed | Each pass now records a PII-free reason on the claim (`PURCHASE_CHECK:NO_MATCHING_ORDER`, `…COUPON_IDENTITY_UNCONFIRMED`, `…ORDER_VERSION_STALE`, `…ORDER_NOT_ELIGIBLE`, `…PROVIDER_UNAVAILABLE`) and the Brand sees it with the last-checked time. A used coupon reads "Coupon used" and never shows its code. Matching is unchanged and still strict |
+| I. "Title · Active" text | UI | Inline text | Separate status badge with text: green Active, red Inactive, matching the Shopify rewards badge styling |
+
+### Remediating the percentage coupon already issued
+
+The `C7 QA 02 - Fifteen Percent` claim holds a single-use coupon that Commerce7 applies as 0.15%. SQRATCH never mutates issued coupons, claim snapshots or spent points. Choose one, as an operator:
+
+1. **Correct it in Commerce7 (keeps the customer's code):** in Commerce7 Admin → Coupons, open the coupon whose title starts `SQRATCH C7 QA 02 - Fifteen Percent` and set the discount to 15%. This matches what SQRATCH recorded (1500 basis points). No SQRATCH change is needed.
+2. **Revoke it and reissue:** Brand Rewards → Recent claims → Revoke coupon (deletes the native coupon and verifies it is gone; capacity stays consumed, points are not refunded automatically). Return the points only through a separately authorized ledger adjustment, then let the member claim a correctly generated reward once percentage issuance is verified.
+
+The offer itself keeps showing 15% and is paused for new claims while percentage units are unverified. Do not activate new percentage rewards until the verification step in the checklist below passes and `percentage.verified` is set with its evidence.
+
+### Order #1006 recovery and the Create subscription
+
+Immediate, no configuration change: **Brand → Commerce → Order Operations → Custom Range**, from 2026-10-08 00:00 (your local time) to now, then run it until it completes. It reads the public order list by `updatedAt`, ingests idempotently and never fabricates attribution or totals; repeating it is safe. Then confirm #1006 appears once with its real totals. The reward observer will recheck the Chardonnay claim within a few cron cycles.
+
+Evidence for a separate operator decision on Order Create: the ledger contains zero `Create` events since installation; every recorded order arrived as `Update` or backfill; `handleCommerce7OrderWebhook` already accepts `Create` and `Update` on the same URL, authenticates before parsing, deduplicates by payload digest and resolves the exact tenant connection. Subscribing Order Create in the Commerce7 app (same URL and Basic auth) is therefore compatible, but it changes the app's webhook configuration and must be approved and tested as its own step (deliver a sandbox Create, confirm one canonical order, then the Update dedupes). Alternatively, schedule the existing authenticated `POST /api/internal/commerce7-reconciliation-worker` (see production-stabilization-2026-10.md). Neither is done by this change.
+
+### What is still unproven
+
+* **Percentage units for issuance:** a live coupon created with `discount: 1500` shown as 15% (Admin and checkout).
+* **Order coupon shape:** a redacted public `GET /v1/order/{id}` for #1006 showing only the `coupons` array entries' keys and the coupon `id`/`code` relation (values may be redacted). Until then a code-only or differently keyed entry is reported, never accepted.
+* **Product list security:** whether `GET /v1/product` list entries include `security` (the bounded per-product read makes the picker correct either way).
+* **Multi-tag access semantics** (unchanged; see the remaining-facts list).
+
+### Condensed QA checklist (reuse proven coupons; no redundant claims)
+
+Already passed and not repeated: $10 fixed / all products; $15 off with CAD 50 minimum; $5 off selected Chardonnay; login and unlock gating; per-user limits, duplicate-claim protection and safe editing.
+
+1. **Deploy and sync.** After deployment, Products → Sync once. Expected: the sync succeeds; Brand Rewards → Exclusive wine access lists "Rare - 2015 Chardonnay" (one tag); public sample wines are not listed; no "has not been read" note remains for this 10-product catalog.
+2. **Percentage, verification only (operator, outside SQRATCH):** with the app's public `/v1` credentials, POST one probe coupon with `discountType: "Percentage Off"` and `discount: 1500` (unique probe code, `usageLimit: 1`). Expected: Admin shows 15%; a CAD 18.97 item gets about CAD 2.85 off. Send the sanitized 201 and the observation; only then is `percentage.verified` set. Meanwhile: the `C7 QA 02` offer card shows "New percentage coupons are paused"; the shop card shows it unavailable; claiming is refused with no points spent; remediate the old coupon as above.
+3. **Copy, dates, chips, badges (UI only):** Copy coupon → Copied → back after ~2 s; create a new reward and see Now / +30 days prefilled; clear the end date and save (open-ended); set end before start (refused); chips remove with the X; offers show green Active / red Inactive badges. No coupons need to be claimed for this step.
+4. **Single-tag exclusive access:** create an access-only reward for the Rare wine (tag preselected), activate, and claim as a member whose Commerce7 email matches and who lacks the tag. Expected: one tag grant, 100 points spent, "Access granted"; log in to the Commerce7 storefront and confirm the wine is purchasable. Claim again → "Already eligible", no points.
+5. **Multi-tag (verification only):** add a second Customer Tag to the Rare wine's security, sync, and confirm the reward shows the draft-only explanation and cannot be activated. Optionally perform the storefront test it describes and send the evidence.
+6. **Order #1006 and USED:** run Custom Range as above. Expected: #1006 appears once in Order Operations with its real totals; within a few reconcile cycles the Chardonnay claim's Brand view shows either "Coupon used" (linked to the order) or a purchase-check reason. If it reports `COUPON_IDENTITY_UNCONFIRMED`, send the redacted order `coupons` section.
+7. **Failed-final regression:** the 2026-10-07 claim that ended `COUPON_CREATE:WRITE_REJECTED` (REFUNDED / FAILED_FINAL) still shows points returned, and its offer remains editable.
+8. **Refund behavior:** partially refund #1006 in Commerce7 (or any already-linked order). Expected: Orders show the refunded and net totals; a linked claim keeps its purchase link and points are unchanged.
 
 ## Merchant setup and readiness
 

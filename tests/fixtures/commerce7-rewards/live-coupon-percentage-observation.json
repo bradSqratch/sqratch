@@ -1,0 +1,15 @@
+{
+  "evidence": {
+    "source": "Operator's live sandbox QA on 2026-10-08: offer 'C7 QA 02 - Fifteen Percent' (15% in SQRATCH, stored as 1500 basis points) issued a coupon through the public POST /v1/coupon.",
+    "redaction": "Only the facts below were supplied. No coupon code, customer, order or credential is stored.",
+    "credentials": "None."
+  },
+  "request": { "discountType": "Percentage Off", "discount": 15 },
+  "status": 201,
+  "observed": {
+    "commerce7AdminCouponEditorDiscount": "0.15%",
+    "checkout": { "currency": "CAD", "approximateProductPriceMinor": 1897, "discountMinor": 3 }
+  },
+  "conclusion": "A native Percentage Off `discount` of 15 means 0.15%: the native unit is one hundredth of a percent (the same scale as SQRATCH basis points). HTTP 201 alone did not prove the percentage semantics.",
+  "stillUnverified": "A live coupon created with discount 1500 shown as 15% in Commerce7 Admin and at checkout. Until that is observed, SQRATCH keeps new percentage issuance gated."
+}

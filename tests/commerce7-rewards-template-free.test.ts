@@ -96,8 +96,9 @@ test("the payload is Per Store / one use, Everyone and whole-store, with no obje
 });
 
 test("fixed amounts map to exact integer cents and whole percentages map exactly; minimums and validity never use float math", async () => {
-  for (const [offer, type, value] of [[{ discountAmountCents: 1999 }, "Dollar Off", 1999], [{ discountAmountCents: 1 }, "Dollar Off", 1], [{ discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 1500 }, "Percentage Off", 15], [{ discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 10000 }, "Percentage Off", 100]] as const) {
-    const app = harness({ offer: { ...offer, minimumSubtotalCents: 4999 } }); const claim = await app.reserve(); await app.provision(claim.id);
+  for (const [offer, type, value] of [[{ discountAmountCents: 1999 }, "Dollar Off", 1999], [{ discountAmountCents: 1 }, "Dollar Off", 1], [{ discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 1500 }, "Percentage Off", 1500], [{ discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 10000 }, "Percentage Off", 10000]] as const) {
+    // Native percentages are hundredths of a percent (live: 15 was 0.15%); percentage issuance requires the verified unit.
+    const app = harness({ offer: { ...offer, minimumSubtotalCents: 4999 }, ...("discountType" in offer ? { contract: { ...verifiedContract, percentage: { ...verifiedContract.percentage, verified: true } } } : {}) }); const claim = await app.reserve(); await app.provision(claim.id);
     const [body] = app.postBodies(); assert.equal(body.discountType, type); assert.equal(body.discount, value); assert.equal(body.cartRequirement, 4999); assert.equal(body.cartRequirementType, "Minimum Purchase Amount"); assert.equal(body.cartRequirementCountType, "All Items");
   }
 });

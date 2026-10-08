@@ -1,7 +1,7 @@
 {
   "evidence": {
     "source": "Operator's live sandbox POST https://api.commerce7.com/v1/coupon through the public API (App ID / App Secret Basic Auth). Every request below returned HTTP 201.",
-    "observed": ["For the percentage coupon, the provider echoed dollarOffDiscountApplies = \"Once Per Order\" although the field was not sent."],
+    "observed": ["For the percentage coupon, the provider echoed dollarOffDiscountApplies = \"Once Per Order\" although the field was not sent.", "2026-10-08: a coupon created with discount 15 was shown as 0.15% in Commerce7 Admin and took CAD 0.03 off CAD 18.97 at checkout. HTTP 201 did not prove percentage semantics; the native unit is 1/100 of a percent (live-coupon-percentage-observation.json)."],
     "notSupplied": "Only the request payloads, status and the observation above were supplied. The 201 response bodies were not, so no response body is stored here; readback tests that need one build a synthetic echo and say so. startDate/endDate values were elided in the evidence; code and title were sent but not shown.",
     "credentials": "None. No Authorization header, JWT, tenant secret or cookie is stored."
   },

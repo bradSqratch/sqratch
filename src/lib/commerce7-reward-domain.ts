@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { BrandRewardOffer, CommerceRewardRedemption } from "@prisma/client";
 import { storedCommerce7Eligibility, type Commerce7RewardEligibility } from "./commerce7-reward-eligibility";
-import { COMMERCE7_COUPON_CONTRACT, commerce7CouponSupport, isCouponBranchSupported, resolveCouponScope, type Commerce7CouponAppliesTo, type CouponContract, type CouponScopeResult } from "./commerce7-coupon-contract";
+import { COMMERCE7_COUPON_CONTRACT, commerce7CouponSupport, isCouponBranchSupported, isDiscountTypeSupported, resolveCouponScope, type Commerce7CouponAppliesTo, type CouponContract, type CouponScopeResult } from "./commerce7-coupon-contract";
 import { object, parseNativeCoupon, type NativeCoupon, type RewardCouponTerms } from "./commerce/providers/commerce7-rewards-client";
 
 /**
@@ -186,7 +186,13 @@ export function retainLegacyTemplate(config: unknown, eligibilityMode: Commerce7
   if (!row || typeof row.templateCouponId !== "string" || row.template == null) return null;
   try { return { templateCouponId: row.templateCouponId, template: legacyTemplate(row.template, eligibilityMode, productIds) }; } catch { return null; }
 }
+export const COMMERCE7_PERCENTAGE_UNVERIFIED_MESSAGE = "Percentage rewards can be saved as drafts but cannot be activated until Commerce7's percentage units are verified. Use a fixed amount to go live.";
+/** A snapshot whose discount kind the contract cannot issue yet (today: percentages, until live-verified). */
+export function commerce7SnapshotDiscountBlocked(snapshot: Commerce7RewardSnapshot, contract: CouponContract = COMMERCE7_COUPON_CONTRACT) {
+  return !!snapshot.discount && !isDiscountTypeSupported(snapshot.discount.type, contract);
+}
 export function commerce7SnapshotIssuable(snapshot: Commerce7RewardSnapshot, contract: CouponContract = COMMERCE7_COUPON_CONTRACT) {
+  if (commerce7SnapshotDiscountBlocked(snapshot, contract)) return false;
   if (snapshot.exclusiveAccess) return !snapshot.discount || isCouponBranchSupported(EXCLUSIVE_COUPON_ELIGIBILITY, "SPECIFIC_PRODUCTS", contract);
   return isCouponBranchSupported(snapshot.eligibilityMode, snapshot.appliesTo, contract) || snapshot.legacyTemplate !== null;
 }

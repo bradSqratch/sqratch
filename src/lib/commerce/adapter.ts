@@ -22,6 +22,7 @@ import type {
   ProductSyncResult,
   ProviderDiscount,
   ProviderDiscountLookup,
+  CommerceProductAccessSecurity,
 } from "./types";
 
 export interface CommerceAdapter {
@@ -64,6 +65,18 @@ export interface CommerceAdapter {
     connectionId: string,
     request: ProductSyncPageRequest,
   ): Promise<ProductSyncPageResult>;
+
+  /**
+   * Optionally reads access security (for example a product secured to a Customer Tag) for specific products, one by one,
+   * when the catalog listing did not include it. Read-only. Products the provider no longer has, or whose read failed, are
+   * omitted from the result so the caller keeps them unknown rather than treating them as unsecured. The caller bounds how
+   * many ids are requested per sync.
+   */
+  fetchProductAccessSecurity?(
+    connectionId: string,
+    externalIds: string[],
+    request: { signal?: AbortSignal },
+  ): Promise<Map<string, CommerceProductAccessSecurity | null>>;
 
   /**
    * Records a fully persisted catalog sync. It is deliberately separate from

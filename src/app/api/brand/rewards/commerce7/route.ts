@@ -28,6 +28,9 @@ export async function GET() {
     // Exclusive-eligible: Tag-secured with one or more tags. The tag count is shown; the tags themselves are never sent here.
     const tagsOf = (metadata: unknown) => commerce7ExclusiveSecurity(metadata)?.tagIds ?? [];
     const exclusiveProducts = catalog.filter((product) => tagsOf(product.providerMetadata).length).map((product) => ({ externalId: product.externalId, title: product.title, tagCount: tagsOf(product.providerMetadata).length }));
+    // Products whose Product Security has never been read (a catalog list may omit it): a count only, so the picker can say
+    // "sync products" instead of "no eligible products".
+    const securityUnknownCount = catalog.filter((product) => { const metadata = product.providerMetadata; return !metadata || typeof metadata !== "object" || Array.isArray(metadata) || !("security" in metadata); }).length;
     const exclusiveDetails = (offer: { rewardMode: string; commerce7Config: unknown; products: { externalProductId: string }[] }) => {
       if (offer.rewardMode !== "EXCLUSIVE_PRODUCT_ACCESS") return { exclusiveAccessStatus: null };
       const product = catalog.find((row) => row.externalId === offer.products[0]?.externalProductId) ?? null;
@@ -52,7 +55,7 @@ export async function GET() {
         // Exclusive claims grant the merchant's own tag: its UUID is never sent, and SQRATCH never revokes the membership.
         return { eligibilityMode, rewardMode: claim.rewardMode, id: claim.id, title: claim.offer.title, status: claim.status, provisioningState: claim.provisioningState, providerCustomerId: claim.providerCustomerId, providerTagId: exclusive ? null : claim.providerTagId, tagTitle: !exclusive && eligibilityMode === "CLAIMANT_ONLY" ? claimTagTitle(claim.id) : null,
           accessState: commerce7ClaimAccessState(claim), membershipOwnership: exclusive ? claim.membershipOwnership : null, membershipGuidance: exclusive ? commerce7MembershipGuidance(claim.membershipOwnership, otherLiveClaims(claim)) : null,
-          message: claim.errorMessage, diagnostic: safeClaimDiagnostic(claim.lastReconcileReason), needsManualReview: claim.needsManualReview, ownerActive: !!claim.provisioningOwner, canRevoke: !exclusive && claim.status === "ISSUED" && !!claim.externalDiscountId, canonicalOrderId: claim.canonicalOrderId, createdAt: claim.createdAt };
-      }), products, exclusiveProducts });
+          message: claim.errorMessage, diagnostic: safeClaimDiagnostic(claim.lastReconcileReason), purchaseCheckedAt: claim.rewardOrderCheckedAt, needsManualReview: claim.needsManualReview, ownerActive: !!claim.provisioningOwner, canRevoke: !exclusive && claim.status === "ISSUED" && !!claim.externalDiscountId, canonicalOrderId: claim.canonicalOrderId, createdAt: claim.createdAt };
+      }), products, exclusiveProducts, exclusiveDiagnostics: { securityUnknownCount, lastProductSyncAt: commerce7?.lastProductSyncAt ?? null } });
   } catch (error) { return rewardErrorResponse(error); }
 }

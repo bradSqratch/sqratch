@@ -1,4 +1,4 @@
-import { COMMERCE7_COUPON_CONTRACT, type CouponContract, type CouponScope } from "../../commerce7-coupon-contract";
+import { COMMERCE7_COUPON_CONTRACT, commerce7NativePercentage, type CouponContract, type CouponScope } from "../../commerce7-coupon-contract";
 import { getCommerce7AppConfig, buildCommerce7AppAuthorizationHeader, normalizeCommerce7Tenant } from "./commerce7";
 import { computeCommerce7Availability, readCommerce7ProductSecurity } from "./commerce7-products";
 import type { CommerceProductAccessSecurity } from "../types";
@@ -120,11 +120,12 @@ export function buildCommerce7RewardCoupon(input: { terms: RewardCouponTerms; sc
   const startsAt = floorToMinute(input.startsAt); const endsAt = floorToMinute(input.endsAt);
   if (!/^SQRA[A-F0-9]{32}$/.test(code) || !input.claimId || !Number.isFinite(startsAt.getTime()) || !Number.isFinite(endsAt.getTime()) || endsAt <= startsAt) throw new Commerce7RewardError("SETUP_INCOMPLETE");
   if (!scope.appliesTo || !scope.availableTo || (scope.appliesToObjectIds && !scope.appliesToObjectIds.length) || (scope.availableToObjectIds && !scope.availableToObjectIds.length)) throw new Commerce7RewardError("SETUP_INCOMPLETE");
-  // Integer minor units / whole percentages only. No floating-point money math.
+  // Integer minor units / whole percentages only. No floating-point money math. A percentage is written in the native unit
+  // (1/100 of a percent, live-observed): 15% is 1500, never 15, which Commerce7 applies as 0.15%.
   const basis = terms.discountPercentageBasisPoints;
   const discount = terms.discountType === "FIXED_AMOUNT" ? terms.discountAmountCents
-    : typeof basis === "number" && Number.isSafeInteger(basis) && basis >= 100 && basis <= 10000 && basis % 100 === 0 ? basis / 100 : null;
-  const max = terms.discountType === "FIXED_AMOUNT" ? 2147483647 : 100;
+    : typeof basis === "number" && Number.isSafeInteger(basis) && basis >= 100 && basis <= 10000 && basis % 100 === 0 ? commerce7NativePercentage(basis, contract) : null;
+  const max = terms.discountType === "FIXED_AMOUNT" ? 2147483647 : 100 * contract.percentage.nativeUnitsPerPercent;
   if (typeof discount !== "number" || !Number.isSafeInteger(discount) || discount < 1 || discount > max) throw new Commerce7RewardError("SETUP_INCOMPLETE");
   if (terms.minimumSubtotalCents !== null && (!Number.isSafeInteger(terms.minimumSubtotalCents) || terms.minimumSubtotalCents < 1)) throw new Commerce7RewardError("SETUP_INCOMPLETE");
   return {

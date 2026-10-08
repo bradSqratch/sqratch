@@ -23,10 +23,10 @@ const native = (request: CouponWriteRequest): NativeCoupon => parseNativeCoupon(
 test("fixed Commerce7 contract: cents, UTC dates, one store use, native eligibility and scope retained", () => {
   const body = payload(); assert.equal(body.discount, 1000); assert.equal(body.discountType, "Dollar Off"); assert.equal(body.dollarOffDiscountApplies, "Once Per Order"); assert.equal(body.cartRequirement, 5000); assert.equal(body.cartRequirementType, "Minimum Purchase Amount"); assert.equal(body.startDate, start.toISOString()); assert.equal(body.endDate, end.toISOString()); assert.equal(body.availableTo, "native-tag-eligibility"); assert.deepEqual(body.availableToObjectIds, ["claim-tag"]); assert.equal(body.usageLimit, 1); assert.ok(!JSON.stringify(body).includes("@"));
 });
-test("percentage conversion uses whole percent, rejects fractional unsupported values and overflow", () => {
+test("percentage conversion writes the native unit (1/100 percent), rejects fractional unsupported values and overflow", () => {
   const percent = { ...fixedTerms, discountType: "PERCENTAGE" as const, discountAmountCents: null };
   const build = (basis: number) => buildCommerce7RewardCoupon({ terms: { ...percent, discountPercentageBasisPoints: basis }, scope: bearerScope, code, claimId: "claim", startsAt: start, endsAt: end });
-  assert.equal(build(1500).discount, 15);
+  assert.equal(build(1500).discount, 1500);
   for (const basis of [0, 1, 1550, 10001, NaN, Infinity]) assert.throws(() => build(basis));
 });
 test("offer validation rejects malformed limits, dates, unknown modes/currencies, duplicates and irrelevant amounts", () => {

@@ -437,7 +437,9 @@ export function normalizeCommerce7Product(
     providerCreatedAt: readDate(record.createdAt),
     providerUpdatedAt: readDate(record.updatedAt),
     hasProviderStorefrontPublication: destination.isPublic,
-    accessSecurity: readCommerce7ProductSecurity(record),
+    // A list entry without a security block is UNKNOWN (the catalog list may omit it), never "unsecured": the neutral sync
+    // then reads it per product (bounded). A present-but-malformed block is null: known-unusable.
+    accessSecurity: record.security == null ? undefined : readCommerce7ProductSecurity(record),
     // ALWAYS false — see the `hasProviderSuppliedStorefrontUrl` doc comment
     // on `normalizeCommerce7Product` above.
     hasProviderSuppliedStorefrontUrl: false,
@@ -551,6 +553,41 @@ export async function fetchCommerce7ProductPage(
     nextCursor,
     isComplete: nextCursor === null,
   };
+}
+
+/**
+ * Authoritative Product Security for ONE product: public `GET /v1/product/{id}` (Product: Read), the read the live evidence
+ * came from. Used only when a catalog list entry omitted `security`. Read-only. `found: false` when the product no longer
+ * exists; `security: null` when the detail carries no readable block.
+ */
+export async function fetchCommerce7ProductAccessSecurity(
+  request: { tenant: string; externalId: string; signal?: AbortSignal },
+  deps: { fetchImpl?: Commerce7Fetch } = {},
+): Promise<{ found: boolean; security: CommerceProductAccessSecurity | null }> {
+  const tenant = normalizeCommerce7Tenant(request.tenant);
+  if (!tenant) providerError("A valid Commerce7 tenant is required.");
+  const config = getCommerce7AppConfig();
+  if (!config) providerError("Commerce7 API credentials are not configured.");
+  if (!request.externalId || request.externalId.length > 100) providerError("A valid Commerce7 product id is required.");
+  const fetchImpl = (deps.fetchImpl ?? (globalThis.fetch as unknown as Commerce7Fetch)) as Commerce7Fetch;
+  let response: Awaited<ReturnType<Commerce7Fetch>>;
+  try {
+    response = await fetchImpl(`${COMMERCE7_API_BASE}/product/${encodeURIComponent(request.externalId)}`, {
+      method: "GET",
+      headers: { Authorization: buildCommerce7AppAuthorizationHeader(config), tenant, Accept: "application/json" },
+      ...(request.signal ? { signal: request.signal } : {}),
+    });
+  } catch {
+    providerError("Commerce7 could not be reached.");
+  }
+  if (response.status === 404) return { found: false, security: null };
+  if (response.status === 401 || response.status === 403) providerError("Commerce7 rejected the app credentials for this tenant.", response.status);
+  if (!response.ok) providerError("Commerce7 returned an error for the product request.", response.status);
+  let payload: unknown;
+  try { payload = await response.json(); } catch { providerError("Commerce7 returned a malformed product response.", response.status); }
+  const record = payload && typeof payload === "object" && !Array.isArray(payload) ? (payload as Record<string, unknown>) : null;
+  if (!record || record.id !== request.externalId) providerError("Commerce7 returned a different product than requested.");
+  return { found: true, security: readCommerce7ProductSecurity(record) };
 }
 
 /** Bounded guard against a provider that never stops paginating. */
