@@ -10,26 +10,37 @@ export type Commerce7CouponAppliesTo = "ALL_PRODUCTS" | "SPECIFIC_PRODUCTS";
  * A `null` entry means the value has NOT been observed for the Coupon object.
  * Such a branch fails closed; it is never filled with a guess:
  *  - Store / Everyone / Per Store / Dollar Off / Percentage Off / No Discount /
- *    Enabled come from the documented Coupon create example and the operator's
- *    real sandbox Coupon GET (appliesTo "Store", availableTo "Everyone").
- *  - Selected-product `appliesTo` is documented only for the sibling Promotion
- *    object, and Commerce7's public enums have drifted from live tenants (the
- *    live Product security reads "Tag" where the docs say "Group").
- *  - The Customer-tag `availableTo` value has no Coupon evidence at all.
- * To enable a branch, add a redacted sandbox Coupon GET to
+ *    Enabled come from the documented Coupon create example, the operator's
+ *    real sandbox Coupon GET, and live POST /v1/coupon 201s.
+ *  - Selected products: `appliesTo: "Product"` with the exact product IDs in
+ *    `appliesToObjectIds` returned HTTP 201 from the live public API
+ *    (tests/fixtures/commerce7-rewards/live-coupon-create-product-201.json).
+ *  - The Customer-tag `availableTo` value has no Coupon evidence at all, so
+ *    claimant-only coupons stay unverified. Commerce7's public enums have
+ *    drifted from live tenants (Product security reads "Tag" where the docs
+ *    say "Group"), so no analogy is trusted.
+ * To enable a branch, add a redacted sandbox Coupon response to
  * tests/fixtures/commerce7-rewards and set its value here.
  */
 export type CouponContract = {
-  usageLimitType: string; usageLimit: number; shippingDiscountType: string; status: string;
-  productDiscountType: { FIXED_AMOUNT: string; PERCENTAGE: string };
+  /** WRITE (POST /v1/coupon), proven by live 201s: tests/fixtures/commerce7-rewards/live-coupon-create-201.json. */
+  type: string; usageLimitType: string; usageLimit: number; status: string;
+  discountType: { FIXED_AMOUNT: string; PERCENTAGE: string };
+  dollarOffDiscountApplies: string;
+  cartRequirement: { none: string; minimum: string; countType: string };
+  /** READ only: how a coupon GET reports "no shipping discount". Never written. */
+  readNoShippingDiscount: string;
   availableTo: Record<Commerce7RewardEligibility, string | null>;
   appliesTo: Record<Commerce7CouponAppliesTo, string | null>;
 };
 export const COMMERCE7_COUPON_CONTRACT: CouponContract = {
-  usageLimitType: "Per Store", usageLimit: 1, shippingDiscountType: "No Discount", status: "Enabled",
-  productDiscountType: { FIXED_AMOUNT: "Dollar Off", PERCENTAGE: "Percentage Off" },
+  type: "Product", usageLimitType: "Per Store", usageLimit: 1, status: "Enabled",
+  discountType: { FIXED_AMOUNT: "Dollar Off", PERCENTAGE: "Percentage Off" },
+  dollarOffDiscountApplies: "Once Per Order",
+  cartRequirement: { none: "None", minimum: "Minimum Purchase Amount", countType: "All Items" },
+  readNoShippingDiscount: "No Discount",
   availableTo: { ANYONE_WITH_CODE: "Everyone", CLAIMANT_ONLY: null },
-  appliesTo: { ALL_PRODUCTS: "Store", SPECIFIC_PRODUCTS: null },
+  appliesTo: { ALL_PRODUCTS: "Store", SPECIFIC_PRODUCTS: "Product" },
 };
 
 export type CouponScope = { appliesTo: string; appliesToObjectIds: string[] | null; availableTo: string; availableToObjectIds: string[] | null };

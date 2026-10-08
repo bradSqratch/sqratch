@@ -144,6 +144,13 @@ export type CommerceProductPriceRangeRaw = {
   max: string | null;
 };
 
+/**
+ * A provider-reported access restriction on a product, READ verbatim and never written by SQRATCH. Only Commerce7 populates it
+ * today (Product `security`); its `availableTo` value is kept exactly as the live tenant reports it (e.g. "Tag", not the
+ * documented "Group"). Object IDs are provider IDs (a Customer Tag UUID for "Tag"); no customer data is carried.
+ */
+export type CommerceProductAccessSecurity = { availableTo: string; displayOption: string | null; availableToObjectIds: string[] };
+
 export type CommerceProduct = {
   externalId: string;
   title: string;
@@ -190,6 +197,8 @@ export type CommerceProduct = {
    * synthesized fallback URLs pinned to the connection's shop domain.
    */
   hasProviderSuppliedStorefrontUrl?: boolean;
+  /** Read-only provider access restriction (see CommerceProductAccessSecurity). Null when absent or malformed. */
+  accessSecurity?: CommerceProductAccessSecurity | null;
 };
 
 /**

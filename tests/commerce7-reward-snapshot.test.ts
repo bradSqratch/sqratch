@@ -8,9 +8,10 @@ import {
 } from "../src/lib/commerce7-reward-domain";
 import { COMMERCE7_COUPON_CONTRACT, type CouponContract } from "../src/lib/commerce7-coupon-contract";
 import type { NativeCoupon } from "../src/lib/commerce/providers/commerce7-rewards-client";
+import { nativeReadDefaults } from "./commerce7-reward-harness";
 
 // Opaque native values, as a merchant-created tenant template would have supplied to the pre-refinement flow.
-const everyoneTemplate: NativeCoupon = { id: "template", code: "tpl", title: "Template", usageLimitType: "Per Store", usageLimit: 1, appliesTo: "Store", appliesToObjectIds: null, productDiscountType: "Dollar Off", productDiscount: 1000, shippingDiscountType: "No Discount", shippingDiscount: null, startDate: "2026-01-01T00:00:00.000Z", endDate: null, status: "Enabled", minimumCartAmount: null, availableTo: "Everyone", availableToObjectIds: null };
+const everyoneTemplate: NativeCoupon = { ...nativeReadDefaults, id: "template", code: "tpl", title: "Template", usageLimitType: "Per Store", usageLimit: 1, appliesTo: "Store", appliesToObjectIds: null, productDiscountType: "Dollar Off", productDiscount: 1000, shippingDiscountType: "No Discount", shippingDiscount: null, startDate: "2026-01-01T00:00:00.000Z", endDate: null, status: "Enabled", minimumCartAmount: null, availableTo: "Everyone", availableToObjectIds: null };
 const tagTemplate: NativeCoupon = { ...everyoneTemplate, availableTo: "opaque-customer-tag", availableToObjectIds: ["template-tag"] };
 const productTemplate: NativeCoupon = { ...everyoneTemplate, appliesTo: "opaque-product-scope", appliesToObjectIds: ["wine"] };
 const offerRow = { title: "Wine reward", minimumSubtotalCents: 5000, appliesTo: "ALL_PRODUCTS" as const, discountType: "FIXED_AMOUNT" as const, discountAmountCents: 1000, discountPercentageBasisPoints: null };
@@ -44,16 +45,18 @@ test("legacy template-bearing config: ignored where the contract is verified, re
   // Unverified branches keep the real native enums the merchant's template proved, validated against the offer.
   const claimant = buildRewardSnapshot(offerRow, { templateCouponId: "template", template: tagTemplate }, []);
   assert.equal(claimant.eligibilityMode, "CLAIMANT_ONLY"); assert.deepEqual(claimant.legacyTemplate, tagTemplate);
+  // Selected products are now verified (live "Product" 201), so a legacy product template is ignored like the whole-store one.
   const selected = buildRewardSnapshot({ ...offerRow, appliesTo: "SPECIFIC_PRODUCTS" }, { eligibilityMode: "ANYONE_WITH_CODE", templateCouponId: "template", template: productTemplate }, ["wine"]);
-  assert.deepEqual(selected.legacyTemplate, productTemplate);
+  assert.equal(selected.legacyTemplate, null); assert.ok(!JSON.stringify(serializeRewardSnapshot(selected)).includes("template"));
   assert.equal(commerce7SnapshotIssuable(bearer), true); assert.equal(commerce7SnapshotIssuable(claimant), true); assert.equal(commerce7SnapshotIssuable(selected), true);
-  // A legacy template that does not match the offer is never reinterpreted.
+  // A legacy template that does not match the offer is never reinterpreted where it is still the only evidence.
   assert.throws(() => buildRewardSnapshot(offerRow, { templateCouponId: "template", template: everyoneTemplate }, []), { code: "INVALID_OFFER" });
-  assert.throws(() => buildRewardSnapshot({ ...offerRow, appliesTo: "SPECIFIC_PRODUCTS" }, { eligibilityMode: "ANYONE_WITH_CODE", templateCouponId: "template", template: productTemplate }, ["other-wine"]), { code: "INVALID_OFFER" });
+  const claimantProducts = { ...tagTemplate, appliesTo: "opaque-product-scope", appliesToObjectIds: ["wine"] };
+  assert.throws(() => buildRewardSnapshot({ ...offerRow, appliesTo: "SPECIFIC_PRODUCTS" }, { eligibilityMode: "CLAIMANT_ONLY", templateCouponId: "template", template: claimantProducts }, ["other-wine"]), { code: "INVALID_OFFER" });
   // Unverified branch with no template at all builds, but is not issuable.
   const bare = buildRewardSnapshot(offerRow, { eligibilityMode: "CLAIMANT_ONLY" }, []);
   assert.equal(bare.legacyTemplate, null); assert.equal(commerce7SnapshotIssuable(bare), false);
-  assert.equal(commerce7SnapshotIssuable(buildRewardSnapshot({ ...offerRow, appliesTo: "SPECIFIC_PRODUCTS" }, { eligibilityMode: "ANYONE_WITH_CODE" }, ["wine"])), false);
+  assert.equal(commerce7SnapshotIssuable(buildRewardSnapshot({ ...offerRow, appliesTo: "SPECIFIC_PRODUCTS" }, { eligibilityMode: "ANYONE_WITH_CODE" }, ["wine"])), true, "selected products are issuable from the contract alone");
 });
 
 test("historical claim snapshots (pre-refinement shape) still parse, with scope and eligibility derived from their template and no discount terms", () => {
@@ -87,7 +90,7 @@ test("scope resolution: the contract wins where verified; a legacy snapshot's ob
   assert.deepEqual(couponScopeForSnapshot(claimant, "claim-tag"), { ok: true, scope: { appliesTo: "Store", appliesToObjectIds: null, availableTo: "opaque-customer-tag", availableToObjectIds: ["claim-tag"] } });
   assert.deepEqual(couponScopeForSnapshot(claimant, null), { ok: false, unsupported: "INVALID_INPUT" });
   const selected = buildRewardSnapshot({ ...offerRow, appliesTo: "SPECIFIC_PRODUCTS" }, { eligibilityMode: "ANYONE_WITH_CODE", templateCouponId: "t", template: productTemplate }, ["wine"]);
-  assert.deepEqual(couponScopeForSnapshot(selected, null), { ok: true, scope: { appliesTo: "opaque-product-scope", appliesToObjectIds: ["wine"], availableTo: "Everyone", availableToObjectIds: null } });
+  assert.deepEqual(couponScopeForSnapshot(selected, null), { ok: true, scope: { appliesTo: "Product", appliesToObjectIds: ["wine"], availableTo: "Everyone", availableToObjectIds: null } }, "the live-proven value wins over the legacy template's");
   const bare = buildRewardSnapshot(offerRow, { eligibilityMode: "CLAIMANT_ONLY" }, []);
   assert.deepEqual(couponScopeForSnapshot(bare, "claim-tag"), { ok: false, unsupported: "CUSTOMER_TAG_RESTRICTION" });
   const verified: CouponContract = { ...COMMERCE7_COUPON_CONTRACT, availableTo: { ...COMMERCE7_COUPON_CONTRACT.availableTo, CLAIMANT_ONLY: "proven-tag-enum" } };
@@ -104,13 +107,15 @@ test("Brand offer DTO exposes eligibility and discount flags only: no template I
   assert.deepEqual(serializeBrandCommerce7Config({}, "DISCOUNT"), { eligibilityMode: "CLAIMANT_ONLY", discountEnabled: undefined });
   assert.deepEqual(serializeBrandCommerce7Config(null, "DISCOUNT"), { eligibilityMode: "CLAIMANT_ONLY", discountEnabled: undefined });
   assert.deepEqual(serializeBrandCommerce7Config({ eligibilityMode: "invented" }, "DISCOUNT"), { eligibilityMode: null, discountEnabled: undefined });
-  assert.deepEqual(serializeBrandCommerce7Config({ eligibilityMode: "ANYONE_WITH_CODE" }, "EXCLUSIVE_PRODUCT_ACCESS"), { eligibilityMode: "CLAIMANT_ONLY", discountEnabled: undefined });
+  assert.deepEqual(serializeBrandCommerce7Config({ eligibilityMode: "ANYONE_WITH_CODE" }, "EXCLUSIVE_PRODUCT_ACCESS"), { eligibilityMode: "CLAIMANT_ONLY", discountEnabled: undefined, exclusiveTagTitle: null });
+  const exclusive = serializeBrandCommerce7Config({ discountEnabled: false, exclusiveAccess: { productId: "rare", securityAvailableTo: "Tag", securityTagId: "secret-tag-uuid", tagTitle: "Rare Wine Members" } }, "EXCLUSIVE_PRODUCT_ACCESS");
+  assert.deepEqual(exclusive, { eligibilityMode: "CLAIMANT_ONLY", discountEnabled: false, exclusiveTagTitle: "Rare Wine Members" }); assert.ok(!JSON.stringify(exclusive).includes("secret-tag-uuid"));
 });
 
 test("Brand readiness no longer mentions templates and reports exactly which coupon branches can go live", () => {
   const readiness = commerce7RewardReadiness(true);
-  assert.equal(readiness.backendConfigured, true); assert.equal(readiness.exclusiveAccessSupported, false);
-  assert.deepEqual(readiness.couponContract, { eligibility: { ANYONE_WITH_CODE: true, CLAIMANT_ONLY: false }, scope: { ALL_PRODUCTS: true, SPECIFIC_PRODUCTS: false } });
+  assert.equal(readiness.backendConfigured, true); assert.equal(readiness.exclusiveAccessSupported, true); assert.equal(readiness.exclusiveMultiTagAccessVerified, false);
+  assert.deepEqual(readiness.couponContract, { eligibility: { ANYONE_WITH_CODE: true, CLAIMANT_ONLY: false }, scope: { ALL_PRODUCTS: true, SPECIFIC_PRODUCTS: true } });
   assert.deepEqual(readiness.permissions, ["Coupon: Full", "Tag: Full", "Customer: Read", "Product: Read", "Order: Read"]);
   assert.doesNotMatch(JSON.stringify(readiness), /template/i); assert.equal(commerce7RewardReadiness(false).backendConfigured, false);
 });
@@ -126,7 +131,23 @@ test("no legacy-validation failure leaks template wording to a claimant or Brand
     () => parseRewardSnapshot({ ...stored, template: { ...tagTemplate, usageLimit: 2 } }), () => parseRewardSnapshot({ ...stored, template: everyoneTemplate }), () => parseRewardSnapshot({ ...stored, template: null }),
     () => parseRewardSnapshot({ ...stored, eligibilityMode: "ANYONE_WITH_CODE", template: tagTemplate }), () => parseRewardSnapshot({ ...stored, template: { ...productTemplate, availableTo: "x", availableToObjectIds: ["a", "b"] } }),
     () => buildRewardSnapshot(offerRow, { templateCouponId: "template", template: everyoneTemplate }, []),
-    () => buildRewardSnapshot({ ...offerRow, appliesTo: "SPECIFIC_PRODUCTS" }, { eligibilityMode: "ANYONE_WITH_CODE", templateCouponId: "t", template: productTemplate }, ["other"]),
+    () => buildRewardSnapshot({ ...offerRow, appliesTo: "SPECIFIC_PRODUCTS" }, { eligibilityMode: "CLAIMANT_ONLY", templateCouponId: "t", template: { ...tagTemplate, appliesTo: "opaque-product-scope", appliesToObjectIds: ["wine"] } }, ["other"]),
   ];
   for (const failure of failures) assert.throws(failure as () => void, (error: Error) => error.message === "Reward configuration needs review." && !/template/i.test(error.message));
+});
+
+test("exclusive claim snapshots (version 3) freeze the product and the one tag, carry an optional discount, and fail closed on drift", () => {
+  const config = { eligibilityMode: "CLAIMANT_ONLY", discountEnabled: false, exclusiveAccess: { productId: "rare", securityAvailableTo: "Tag", securityTagId: "tag-uuid", tagTitle: "Members" } };
+  const exclusiveOffer = { ...offerRow, rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", appliesTo: "SPECIFIC_PRODUCTS" as const, discountAmountCents: null };
+  const accessOnly = buildRewardSnapshot(exclusiveOffer, config, ["rare"]);
+  assert.deepEqual(serializeRewardSnapshot(accessOnly), { snapshotVersion: 3, eligibilityMode: "CLAIMANT_ONLY", title: "Wine reward", minimumSubtotalCents: null, appliesTo: "SPECIFIC_PRODUCTS", productIds: ["rare"], discount: null, exclusiveAccess: { productId: "rare", tagId: "tag-uuid" } });
+  assert.ok(!JSON.stringify(serializeRewardSnapshot(accessOnly)).includes("Members"), "the display title is not part of the frozen terms");
+  assert.equal(commerce7SnapshotIssuable(accessOnly), true);
+  const withDiscount = buildRewardSnapshot({ ...exclusiveOffer, discountAmountCents: 1500 }, { ...config, discountEnabled: true }, ["rare"]);
+  assert.deepEqual(withDiscount.discount, { type: "FIXED_AMOUNT", amountCents: 1500, percentageBasisPoints: null }); assert.equal(withDiscount.minimumSubtotalCents, 5000);
+  assert.deepEqual(couponScopeForSnapshot(withDiscount, "ignored-claim-tag"), { ok: true, scope: { appliesTo: "Product", appliesToObjectIds: ["rare"], availableTo: "Everyone", availableToObjectIds: null } });
+  assert.deepEqual(parseRewardSnapshot(JSON.parse(JSON.stringify(serializeRewardSnapshot(withDiscount)))), withDiscount, "round-trips through JSON storage");
+  const stored = serializeRewardSnapshot(accessOnly);
+  for (const bad of [{ ...stored, exclusiveAccess: null }, { ...stored, exclusiveAccess: { productId: "rare" } }, { ...stored, productIds: ["other"] }, { ...stored, productIds: ["rare", "other"] }, { ...stored, appliesTo: "ALL_PRODUCTS" }, { ...stored, eligibilityMode: "ANYONE_WITH_CODE" }, { ...stored, minimumSubtotalCents: 100 }, { ...stored, legacyTemplate: tagTemplate }]) assert.throws(() => parseRewardSnapshot(bad), { code: "INVALID_OFFER" }, JSON.stringify(bad));
+  for (const [productIds, frozen] of [[["other"], config], [["rare"], { eligibilityMode: "CLAIMANT_ONLY" }], [["rare"], { ...config, exclusiveAccess: { ...config.exclusiveAccess, securityAvailableTo: "Group" } }]] as const) assert.throws(() => buildRewardSnapshot(exclusiveOffer, frozen as Record<string, unknown>, [...productIds]), { code: "INVALID_OFFER" });
 });

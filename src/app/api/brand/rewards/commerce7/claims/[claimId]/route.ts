@@ -22,6 +22,9 @@ export async function POST(request: NextRequest, context: { params: Promise<{ cl
       const result = await provisionCommerce7Claim(claim.id);
       return NextResponse.json({ data: result ? serializeCommerce7Claim(result) : null });
     }
+    // SQRATCH never removes a Customer Tag membership: Commerce7 deletes every copy of the tag at once (live evidence), which
+    // can revoke access the merchant or another reward granted. Exclusive access is managed by the store in Commerce7.
+    if (body?.action === "REVOKE" && claim.rewardMode === "EXCLUSIVE_PRODUCT_ACCESS") throw new RewardClaimError("INVALID_ACTION", "SQRATCH does not revoke Commerce7 Customer Tag access. If removal is intended, review the customer's tags in Commerce7 first.");
     if (body?.action !== "REVOKE" || claim.status !== "ISSUED" || !claim.externalDiscountId) throw new RewardClaimError("INVALID_ACTION", "This claim cannot be revoked.");
     const connection = await prisma.commerceConnection.findFirst({ where: { id: claim.connectionId ?? "", brandId: claim.brandId, provider: "COMMERCE7", externalAccountId: claim.externalAccountId, status: "CONNECTED", uninstalledAt: null } });
     if (!connection) throw new RewardClaimError("CONNECTION_UNAVAILABLE", "Reconnect the original Commerce7 store.");

@@ -603,8 +603,10 @@ describe("20/21. adapter capabilities and registry wiring", () => {
       "Subphase 2 implemented merchant-configured public destinations",
     );
     assert.equal(capabilities.rewards.customerBoundClaims?.createCoupon, true);
-    assert.equal(capabilities.rewards.customerBoundClaims?.automaticCustomerTagAssignment, false);
-    assert.equal(capabilities.rewards.customerBoundClaims?.exclusiveProductAccess, false);
+    // The merchant's existing Manual Customer Tag is granted by the exclusive saga (live-proven membership write); generic
+    // reward methods below stay unclaimed.
+    assert.equal(capabilities.rewards.customerBoundClaims?.automaticCustomerTagAssignment, true);
+    assert.equal(capabilities.rewards.customerBoundClaims?.exclusiveProductAccess, true);
     for (const [name, value] of Object.entries(capabilities.rewards)) {
       if (name === "customerBoundClaims") continue;
       assert.equal(value, false, `rewards.${name} must not be claimed`);

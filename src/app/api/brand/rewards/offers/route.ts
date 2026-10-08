@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { saveCommerce7Offer } from "@/lib/commerce7-rewards";
+import { serializeCommerce7OfferResponse } from "@/lib/commerce7-reward-domain";
 import { rewardErrorResponse } from "@/lib/commerce7-reward-http";
 import { object } from "@/lib/commerce/providers/commerce7-rewards-client";
 import { GET as commerce7RewardsGET } from "../commerce7/route";
@@ -184,7 +185,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => null);
     const provider = object(body)?.provider;
     if (provider === "COMMERCE7") {
-      try { return NextResponse.json({ data: await saveCommerce7Offer(brand.id, body) }, { status: 201 }); }
+      try { return NextResponse.json({ data: serializeCommerce7OfferResponse(await saveCommerce7Offer(brand.id, body)) }, { status: 201 }); }
       catch (error) { return rewardErrorResponse(error); }
     }
     if (provider != null && provider !== "SHOPIFY") return NextResponse.json({ error: "Unsupported rewards provider." }, { status: 400 });

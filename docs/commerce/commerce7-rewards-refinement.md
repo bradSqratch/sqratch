@@ -1,5 +1,7 @@
 # Commerce7 rewards: template-free refinement after df53568
 
+> **Superseded in part (2026-10-07):** selected-product discounts are now live (`appliesTo: "Product"`, proven by a live 201), Exclusive Wine Access grants the merchant's Customer Tag, and migration `20261009010000_commerce7_exclusive_access` is required. The current design is [commerce7-rewards.md](commerce7-rewards.md); see "Follow-up: selected products and Exclusive Wine Access" below. The sections that follow are kept as the historical record of each round.
+
 Base: deployed `df535687c237c09bbf46c3e675bb8897ff722f2d`, `main`. The operator confirms `20261008010000_commerce7_rewards` is already applied in production. Its migration and the Prisma schema are unchanged. **No migration is needed.** This work performs no Commerce7 or shared-database mutation, commit, push or deployment.
 
 > **For standard Commerce7 discount rewards, no Commerce7 coupon needs to be created manually. Configure the reward in SQRATCH. SQRATCH creates the claim's single-use native Commerce7 coupon when points are redeemed.**
@@ -119,3 +121,39 @@ These tests do not prove live Commerce7 behavior.
 * Confirmation that `POST /coupon` accepts omitted optional fields and `Per Store`/`1` (first sandbox claim), and how dates are stored.
 * A populated order GET showing the coupon identity.
 * A supported Customer tag-membership write, and a Product-security write confirmed against the **live** `Tag` enum (the public docs say `Group`). Exclusive access stays blocked regardless: the Product read is evidence only and no write exists.
+
+## Follow-up after 11f8df8: live create contract, viewer states, enable/disable
+
+Base `11f8df8a25fd2bc38e071f4e7d1e1eb1de0b1d2b`. No migration, no schema change, no provider write, no shared-database access.
+
+**A. Live coupon create (blocked on evidence, not changed).** A direct live probe returned 422: the live API requires `type`, `discountType`, `discount` and rejects `productDiscountType`, `productDiscount`, `shippingDiscountType`. The public Coupons page is stale and shows no value for the three required fields, and neither the repo nor any published spec does. I did not invent them. Added: the exact 422 as a fixture; tests proving that failure is deterministic and refundable (points once, capacity once, no coupon, body never stored or logged), that replays never re-post, and that an ambiguous write stays manual-review; an executable `todo` spec of the acceptance criterion; a "known stale" annotation on the writer; and the operator capture list in the operator guide. The write/read/semantic split is planned there and deliberately not started. The writer is unchanged, so claims still fail at `COUPON_CREATE` and are refunded.
+
+**B. Claimant states.** `GET /api/rewards/commerce7` returns `viewerState` `SIGNED_OUT | LOCKED | READY`. Signed-out and locked responses are built before any private read. See the operator guide for the table.
+
+**C. Enable/disable.** `setCommerce7OfferActive` plus `PATCH { action }`, with full revalidation on Enable. See the operator guide.
+
+| File | Change |
+| --- | --- |
+| `src/lib/commerce7-reward-viewer.ts` | New. Viewer-state helper (applicability check and the only restricted response shape). |
+| `src/app/api/rewards/commerce7/route.ts` | Returns `viewerState`; no 401/403 for signed-out/locked listings. Claim routes untouched. |
+| `src/components/rewards/commerce7-rewards-client.tsx` | Renders the signed-out and locked cards; Log in via `buildLoginPathWithCallback`. |
+| `src/lib/commerce7-rewards.ts` | `setCommerce7OfferActive`; `backendConfigured` dependency. |
+| `src/lib/commerce7-reward-domain.ts` | `storedCommerce7OfferInput`, `serializeCommerce7OfferResponse`. |
+| `src/app/api/brand/rewards/offers/[offerId]/route.ts`, `…/offers/route.ts` | Commerce7 `PATCH` action branch; Commerce7 write responses no longer echo stored provider config. Shopify branch byte-for-byte unchanged. |
+| `src/components/rewards/commerce7-brand-rewards.tsx` | Disable / Enable button. |
+| `src/lib/commerce/providers/commerce7-rewards-client.ts` | Comment only: marks the writer's shape as known stale. |
+| `tests/commerce7-rewards-viewer-state.test.ts`, `…-offer-activation.test.ts`, `…-offer-activation-route.test.ts`, `…-coupon-create-contract.test.ts` | New. |
+| `tests/commerce7-rewards-ux.test.ts`, `…-routes.test.ts`, `tests/commerce7-reward-harness.ts` | Extended. |
+| `tests/fixtures/commerce7-rewards/live-coupon-create-422.json`, `README.md` | New evidence fixture. |
+
+Full suite: **2,986 tests; 2,965 passed, 20 skipped, 1 todo, 0 failed.** Shopify and shared reward suites 640/640. Commerce7 order/refund/reconciliation 291 passed, 3 skipped, 0 failed. `git diff --check`, `tsc`, `lint`, `prisma validate`, `prisma generate` and `build` pass. Five targeted mutations of the new guards (Enable skipping the contract check, the original-connection check or the stored-terms revalidation; the locked-viewer path; the login redirect) were each caught by the new tests.
+
+## Follow-up: live-proven coupon write contract
+
+The writer now sends the shape that returned HTTP 201 in live sandbox probes (`type: "Product"`, `discountType`, `discount`, `dollarOffDiscountApplies: "Once Per Order"` for dollar off, `cartRequirementType` / `cartRequirement` / `cartRequirementCountType` for minimums) and never the rejected `productDiscountType` / `productDiscount` / `shippingDiscountType` / `shippingDiscount` / `minimumCartAmount`. Write (`CouponWriteRequest`) and read (`NativeCoupon`) are separate types, and readback compares normalized semantic terms across the echo and historical GET representations. The former `todo` acceptance test now passes. Draft-only branches are unchanged. See the operator guide's "Live Coupon write contract".
+
+## Follow-up: selected products and Exclusive Wine Access
+
+* **Selected products** go live with the verified `appliesTo: "Product"` + exact `appliesToObjectIds` (live 201, `live-coupon-create-product-201.json`). Claimant-only coupons stay draft-only: the customer-tag `availableTo` value is still unproven.
+* **Exclusive Wine Access** grants one existing Manual Customer Tag the Brand chooses from the product's security tags, through the live-proven `POST /v1/tag-x-object/customer`, verified by `GET /v1/customer/{id}`. Because that POST is not idempotent and its DELETE removes every copy, the grant is sent at most once per claim after verified absence, ownership is recorded durably, and SQRATCH never deletes a membership. Customers who already hold the tag are not charged for access-only rewards. Multi-tag products are draft-only until OR semantics are verified.
+* **Migration `20261009010000_commerce7_exclusive_access`** resolves the pre-existing defect recorded above: an access-only exclusive offer or claim violated `brand_reward_offer_discount_check` / `shopify_reward_redemption_discount_check`. It also lets exclusive offers be active and adds the ownership columns and constraints. It must be applied before the code is deployed; it was replayed only on a disposable local Postgres.

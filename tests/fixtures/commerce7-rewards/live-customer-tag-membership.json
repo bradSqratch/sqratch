@@ -1,0 +1,42 @@
+{
+  "evidence": {
+    "source": "Operator's live sandbox requests through the public https://api.commerce7.com/v1 API with the SQRATCH app's App ID / App Secret Basic auth and tenant header, on 2026-10-07.",
+    "redaction": "Field names, enum strings, status codes, dates and the tag title are exactly as observed. Tenant resource UUIDs are replaced with synthetic ones, consistently across every fixture in this folder (Customer Tag -> ...b1, the secured product -> ...a1 as in operator-sandbox-evidence.json, customer -> ...d1, membership relation -> ...e1).",
+    "notSupplied": "Only the customer's tags array was supplied from the Customer GETs; no other customer field (name, email, address) is stored.",
+    "credentials": "None. No Authorization header, JWT, tenant secret or cookie is stored."
+  },
+  "customerGetBeforeGrant": {
+    "request": { "method": "GET", "path": "/v1/customer/00000000-0000-4000-8000-0000000000d1" },
+    "status": 200,
+    "tags": [
+      { "id": "00000000-0000-4000-8000-0000000000b1", "title": "SQRATCH Rare Wine Test", "objectType": "Customer", "type": "Manual" }
+    ]
+  },
+  "grant": {
+    "request": { "method": "POST", "path": "/v1/tag-x-object/customer", "body": { "objectId": "00000000-0000-4000-8000-0000000000d1", "tagId": "00000000-0000-4000-8000-0000000000b1" } },
+    "status": 201,
+    "response": {
+      "objectId": "00000000-0000-4000-8000-0000000000d1",
+      "tagId": "00000000-0000-4000-8000-0000000000b1",
+      "id": "00000000-0000-4000-8000-0000000000e1",
+      "tagType": "Manual",
+      "updatedAt": "2026-10-07T23:54:05.230Z",
+      "createdAt": "2026-10-07T23:54:05.230Z"
+    },
+    "observed": "The customer ALREADY held this tag before the POST. The POST still returned 201, and the next GET listed the same tag twice. Tag membership creation is not idempotent."
+  },
+  "customerGetAfterGrant": {
+    "status": 200,
+    "tags": [
+      { "id": "00000000-0000-4000-8000-0000000000b1", "title": "SQRATCH Rare Wine Test", "objectType": "Customer", "type": "Manual" },
+      { "id": "00000000-0000-4000-8000-0000000000b1", "title": "SQRATCH Rare Wine Test", "objectType": "Customer", "type": "Manual" }
+    ]
+  },
+  "removal": {
+    "request": { "method": "DELETE", "path": "/v1/tag-x-object/customer/00000000-0000-4000-8000-0000000000b1/00000000-0000-4000-8000-0000000000d1" },
+    "status": 204,
+    "body": "",
+    "observed": "Both identical memberships disappeared, including one SQRATCH did not create. SQRATCH never sends this request."
+  },
+  "customerGetAfterRemoval": { "status": 200, "tags": [] }
+}

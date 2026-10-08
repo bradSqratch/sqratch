@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { saveCommerce7Offer } from "@/lib/commerce7-rewards";
+import { saveCommerce7Offer, setCommerce7OfferActive } from "@/lib/commerce7-rewards";
+import { serializeCommerce7OfferResponse } from "@/lib/commerce7-reward-domain";
 import { rewardErrorResponse } from "@/lib/commerce7-reward-http";
 import { object } from "@/lib/commerce/providers/commerce7-rewards-client";
 import { CommerceProvider } from "@prisma/client";
@@ -69,7 +70,7 @@ export async function PUT(
     const body = await request.json().catch(() => null);
     if (object(body)?.provider != null && object(body)?.provider !== existing.provider) return NextResponse.json({ error: "An offer's provider cannot be changed." }, { status: 409 });
     if (existing.provider === CommerceProvider.COMMERCE7) {
-      try { return NextResponse.json({ data: await saveCommerce7Offer(brand.id, body, offerId) }); }
+      try { return NextResponse.json({ data: serializeCommerce7OfferResponse(await saveCommerce7Offer(brand.id, body, offerId)) }); }
       catch (error) { return rewardErrorResponse(error); }
     }
 
@@ -191,7 +192,7 @@ export async function PUT(
 }
 
 export async function PATCH(
-  _request: NextRequest,
+  request: NextRequest,
   context: { params: Promise<{ offerId: string }> },
 ) {
   try {
@@ -213,6 +214,15 @@ export async function PATCH(
         { error: "Reward offer not found." },
         { status: 404 },
       );
+    }
+
+    if (existing.provider === CommerceProvider.COMMERCE7) {
+      // Explicit, server-validated Enable/Disable. A bodiless PATCH keeps its historical meaning (disable).
+      try {
+        const raw = await request.json().catch(() => null);
+        const action = raw === null ? "DISABLE" : object(raw)?.action;
+        return NextResponse.json({ data: serializeCommerce7OfferResponse(await setCommerce7OfferActive(auth.membership.brand.id, offerId, action)) });
+      } catch (error) { return rewardErrorResponse(error); }
     }
 
     const offer = await prisma.brandRewardOffer.update({

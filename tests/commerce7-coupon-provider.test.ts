@@ -17,7 +17,7 @@ function client(responses: unknown[], seen: { url: string; init?: RequestInit }[
 }
 /** What a provider that echoes our request the way a real tenant reads back would return. */
 function nativeEcho(request: Record<string, unknown>): NativeCoupon {
-  return { id: "native-coupon", appliesToObjectIds: "", availableToObjectIds: "", shippingDiscount: null, usageLimit: null, minimumCartAmount: null, ...request } as unknown as NativeCoupon;
+  return { id: "native-coupon", appliesToObjectIds: "", availableToObjectIds: "", usageLimit: null, ...request } as unknown as NativeCoupon; // synthetic: the 201 response body was not supplied
 }
 
 test("the real sandbox Coupon GET parses: empty object-ID strings and null discounts normalize to null", () => {
@@ -32,23 +32,25 @@ test("the real sandbox Coupon GET parses: empty object-ID strings and null disco
   assert.throws(() => parseNativeCoupon({ ...evidence.coupon, productDiscount: "10" }), { code: "INVALID_PROVIDER_RESPONSE" });
 });
 
-test("direct payload: Per Store single use, whole-store, Everyone, exact integer minor units, optional fields omitted", () => {
+test("direct payload: the live-proven write shape, Per Store single use, whole-store, Everyone, exact minor units", () => {
   const body = build();
   assert.deepEqual(body, {
-    code, title: body.title, status: "Enabled", usageLimitType: "Per Store", usageLimit: 1, appliesTo: "Store",
-    productDiscountType: "Dollar Off", productDiscount: 1000, shippingDiscountType: "No Discount", minimumCartAmount: 5000,
-    availableTo: "Everyone", startDate: "2026-10-10T00:00:00.000Z", endDate: "2026-11-09T00:00:00.000Z",
+    code, title: body.title, type: "Product", status: "Enabled", usageLimitType: "Per Store", usageLimit: 1, appliesTo: "Store", availableTo: "Everyone",
+    discountType: "Dollar Off", discount: 1000, dollarOffDiscountApplies: "Once Per Order",
+    cartRequirementType: "Minimum Purchase Amount", cartRequirement: 5000, cartRequirementCountType: "All Items",
+    startDate: "2026-10-10T00:00:00.000Z", endDate: "2026-11-09T00:00:00.000Z",
   });
-  assert.equal("appliesToObjectIds" in body, false); assert.equal("availableToObjectIds" in body, false); assert.equal("shippingDiscount" in body, false);
-  assert.deepEqual(build({ terms: { ...terms, minimumSubtotalCents: null } }).minimumCartAmount, undefined);
+  for (const key of ["appliesToObjectIds", "availableToObjectIds", "productDiscountType", "productDiscount", "shippingDiscountType", "shippingDiscount", "minimumCartAmount", "cartRequirementMaximum"]) assert.equal(key in body, false, key);
+  const none = build({ terms: { ...terms, minimumSubtotalCents: null } });
+  assert.equal(none.cartRequirementType, "None"); assert.equal("cartRequirement" in none, false); assert.equal("cartRequirementCountType" in none, false);
 });
 
 test("fixed amounts stay integers with no float math; percentages convert whole basis points exactly", () => {
-  for (const cents of [1, 99, 1999, 2147483647]) assert.equal(build({ terms: { ...terms, discountAmountCents: cents } }).productDiscount, cents);
+  for (const cents of [1, 99, 1999, 2147483647]) assert.equal(build({ terms: { ...terms, discountAmountCents: cents } }).discount, cents);
   for (const bad of [0, -1, 1.5, NaN, Infinity, null]) assert.throws(() => build({ terms: { ...terms, discountAmountCents: bad as number } }), { code: "SETUP_INCOMPLETE" });
   const percent = { ...terms, discountType: "PERCENTAGE" as const, discountAmountCents: null };
   const body = build({ terms: { ...percent, discountPercentageBasisPoints: 1500 } });
-  assert.equal(body.productDiscount, 15); assert.equal(body.productDiscountType, "Percentage Off");
+  assert.equal(body.discount, 15); assert.equal(body.discountType, "Percentage Off"); assert.equal("dollarOffDiscountApplies" in body, false);
   for (const basis of [0, 1, 99, 1550, 10001, NaN, Infinity, null]) assert.throws(() => build({ terms: { ...percent, discountPercentageBasisPoints: basis as number } }), { code: "SETUP_INCOMPLETE" });
 });
 
@@ -74,7 +76,7 @@ test("exact readback tolerates only representation differences: empty-ID forms, 
   const body = build();
   assert.ok(couponMatches(parseNativeCoupon(nativeEcho({ ...body })), body));
   assert.ok(couponMatches(parseNativeCoupon(nativeEcho({ ...body, code: code.toLowerCase(), title: "Renamed by an admin", shippingDiscountType: null, startDate: "2026-10-10T00:00:12.900Z", endDate: "2026-11-09T00:00:59.000Z" })), body));
-  for (const change of [{ usageLimit: 2 }, { usageLimit: null }, { usageLimitType: "Unlimited" }, { appliesTo: "Other" }, { appliesToObjectIds: ["x"] }, { productDiscount: 1001 }, { productDiscountType: "Percentage Off" }, { shippingDiscountType: "Free" }, { shippingDiscount: 5 }, { status: "Disabled" }, { minimumCartAmount: 4999 }, { minimumCartAmount: null }, { availableTo: "Other" }, { availableToObjectIds: ["tag"] }, { startDate: "2026-10-10T00:01:00.000Z" }, { endDate: "2026-11-09T00:01:00.000Z" }, { code: "OTHER" }]) {
+  for (const change of [{ usageLimit: 2 }, { usageLimit: null }, { usageLimitType: "Unlimited" }, { appliesTo: "Other" }, { appliesToObjectIds: ["x"] }, { discount: 1001 }, { discountType: "Percentage Off" }, { type: "Shipping" }, { dollarOffDiscountApplies: "Once Per Item" }, { dollarOffDiscountApplies: null }, { shippingDiscountType: "Free" }, { shippingDiscount: 5 }, { status: "Disabled" }, { cartRequirement: 4999 }, { cartRequirementType: "None", cartRequirement: null }, { cartRequirementCountType: "Applicable Items" }, { cartRequirementType: "Minimum Quantity" }, { cartRequirementMaximum: 9000 }, { availableTo: "Other" }, { availableToObjectIds: ["tag"] }, { startDate: "2026-10-10T00:01:00.000Z" }, { endDate: "2026-11-09T00:01:00.000Z" }, { code: "OTHER" }]) {
     assert.equal(couponMatches(parseNativeCoupon(nativeEcho({ ...body, ...change })), body), false, JSON.stringify(change));
   }
   const withIds = build({ scope: { ...store, appliesToObjectIds: ["a", "b"] } });
@@ -113,4 +115,26 @@ test("exact-code recovery finds the single matching coupon among partial matches
   assert.equal(found?.id, "native-coupon");
   assert.equal(await client([{ coupons: [{ ...evidence.coupon, code: "unrelated" }], total: 1 }]).findCoupon(code), null);
   await assert.rejects(client([{ coupons: [nativeEcho({ ...body }), nativeEcho({ ...body, id: "other" })], total: 2 }]).findCoupon(code), { code: "CUSTOMER_AMBIGUOUS" });
+});
+
+test("readback normalizes the create echo and the historical GET representation into the same terms, and never trusts a conflict", () => {
+  const fixed = build(); const percent = build({ terms: { ...terms, discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 1500, minimumSubtotalCents: null } });
+  const { discountType, discount, dollarOffDiscountApplies, cartRequirementType, cartRequirement, cartRequirementCountType, type, ...common } = fixed;
+  void type; void cartRequirementCountType; void cartRequirementType;
+  // Historical GET fields only (productDiscount*, minimumCartAmount), with no per-order report: a dollar-off amount cannot be proven once-per-order, so it fails closed.
+  const historical = { ...common, productDiscountType: discountType, productDiscount: discount, shippingDiscountType: "No Discount", minimumCartAmount: cartRequirement };
+  assert.equal(couponMatches(parseNativeCoupon(nativeEcho(historical)), fixed), false, "a dollar-off coupon without a per-order report is not proven");
+  assert.equal(couponMatches(parseNativeCoupon(nativeEcho({ ...historical, dollarOffDiscountApplies })), fixed), true, "historical names plus the per-order report are sufficient");
+  // Both representations reported: they must agree.
+  assert.equal(couponMatches(parseNativeCoupon(nativeEcho({ ...fixed, productDiscountType: "Dollar Off", productDiscount: 1000, minimumCartAmount: 5000 })), fixed), true);
+  for (const conflict of [{ productDiscount: 999 }, { productDiscountType: "Percentage Off" }, { minimumCartAmount: 1 }]) assert.equal(couponMatches(parseNativeCoupon(nativeEcho({ ...fixed, ...conflict })), fixed), false, JSON.stringify(conflict));
+  // Nothing reported for the discount is never a match; a percentage tolerates only the provider's default per-order echo.
+  const { discountType: _t, discount: _d, ...noDiscount } = fixed; void _t; void _d;
+  assert.equal(couponMatches(parseNativeCoupon(nativeEcho(noDiscount)), fixed), false);
+  assert.equal(couponMatches(parseNativeCoupon(nativeEcho({ ...percent, dollarOffDiscountApplies: "Once Per Order" })), percent), true);
+  assert.equal(couponMatches(parseNativeCoupon(nativeEcho({ ...percent })), percent), true);
+  assert.equal(couponMatches(parseNativeCoupon(nativeEcho({ ...percent, dollarOffDiscountApplies: "Once Per Item" })), percent), false);
+  // An unexpected minimum on a no-minimum coupon is a mismatch, in either representation.
+  assert.equal(couponMatches(parseNativeCoupon(nativeEcho({ ...percent, cartRequirementType: "Minimum Purchase Amount", cartRequirement: 100 })), percent), false);
+  assert.equal(couponMatches(parseNativeCoupon(nativeEcho({ ...percent, minimumCartAmount: 100 })), percent), false);
 });

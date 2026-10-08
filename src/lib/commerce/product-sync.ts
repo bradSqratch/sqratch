@@ -108,10 +108,11 @@
  * ---------------------------------------------------------------------------
  * SANITIZED providerMetadata
  * ---------------------------------------------------------------------------
- * `buildProviderMetadata` whitelists exactly five benign, non-credential
+ * `buildProviderMetadata` whitelists exactly six benign, non-credential
  * fields from the neutral `CommerceProduct` — `status`, `priceText`,
  * `providerCreatedAt` (ISO string), `providerUpdatedAt` (ISO string), and a
- * boolean URL-provenance marker — and
+ * boolean URL-provenance marker, and (Commerce7) the read-only product
+ * `security` block as { availableTo, displayOption, availableToObjectIds } — and
  * NEVER spreads the provider payload or stores a raw provider node, URL with
  * embedded credentials, header, or token. `failureSummary` (on
  * `CommerceProductSyncRun`) is built by `classifySyncFailure` below, which
@@ -838,7 +839,7 @@ function computePrice(
 }
 
 /**
- * Whitelisted, sanitized `providerMetadata`. Only these five fields are ever
+ * Whitelisted, sanitized `providerMetadata`. Only these six fields are ever
  * copied out of the neutral `CommerceProduct` — never the raw provider node,
  * never a token/header/URL. See the file header's providerMetadata section.
  */
@@ -861,7 +862,20 @@ function buildProviderMetadata(product: CommerceProduct): Prisma.JsonObject {
       ? "PROVIDER"
       : "FALLBACK";
   }
+  if (product.accessSecurity) {
+    // Exactly three fields, rebuilt here so nothing else from the provider's security block can be persisted.
+    metadata.security = {
+      availableTo: product.accessSecurity.availableTo,
+      displayOption: product.accessSecurity.displayOption,
+      availableToObjectIds: [...product.accessSecurity.availableToObjectIds],
+    };
+  }
   return metadata;
+}
+
+function jsonSecurityField(value: Prisma.JsonValue | null | undefined): string {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return "null";
+  return JSON.stringify((value as Record<string, Prisma.JsonValue>).security ?? null);
 }
 
 function jsonStringField(
@@ -897,7 +911,7 @@ type ComputedProductFields = {
   providerMetadata: Prisma.JsonObject;
 } & ComputedPrice;
 
-function computeProductFields(
+export function computeProductFields(
   product: CommerceProduct,
   brandCurrencyCode: string | null,
 ): ComputedProductFields {
@@ -953,7 +967,10 @@ function contentChanged(
     jsonStringField(existing.providerMetadata, "status") !==
       jsonStringField(computed.providerMetadata, "status") ||
     jsonStringField(existing.providerMetadata, "storefrontUrlSource") !==
-      jsonStringField(computed.providerMetadata, "storefrontUrlSource")
+      jsonStringField(computed.providerMetadata, "storefrontUrlSource") ||
+    // A security-only change must rewrite the row; otherwise a product made public (or re-tagged) in the provider would keep
+    // stale security metadata and could still look exclusive-eligible.
+    jsonSecurityField(existing.providerMetadata) !== jsonSecurityField(computed.providerMetadata)
   );
 }
 

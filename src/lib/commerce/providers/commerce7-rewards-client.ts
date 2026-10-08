@@ -1,5 +1,7 @@
 import { COMMERCE7_COUPON_CONTRACT, type CouponContract, type CouponScope } from "../../commerce7-coupon-contract";
 import { getCommerce7AppConfig, buildCommerce7AppAuthorizationHeader, normalizeCommerce7Tenant } from "./commerce7";
+import { computeCommerce7Availability, readCommerce7ProductSecurity } from "./commerce7-products";
+import type { CommerceProductAccessSecurity } from "../types";
 import { createHash } from "node:crypto";
 
 export class Commerce7RewardError extends Error {
@@ -13,11 +15,18 @@ export function object(value: unknown): Record<string, unknown> | null {
 function text(value: unknown): value is string { return typeof value === "string" && value.length > 0 && value.length <= 250; }
 export function normalizeRewardEmail(email: string) { return email.trim().toLowerCase(); }
 export function claimTagTitle(claimId: string) { return `SQRATCH-${createHash("sha256").update(claimId).digest("hex").slice(0, 24)}`; }
+/**
+ * The native coupon as READ back (POST 201 echo, GET, list). Deliberately not the write shape: a GET still reports the
+ * historical productDiscountType/productDiscount/minimumCartAmount fields, while the create echo reports the current
+ * type/discountType/discount/cartRequirement* fields. Either may be present; see readCouponTerms.
+ */
 export type NativeCoupon = {
   id: string; code: string; title: string; usageLimitType: string; usageLimit: number | null;
-  appliesTo: string; appliesToObjectIds: string[] | null; productDiscountType: string | null; productDiscount: number | null;
-  shippingDiscountType: string | null; shippingDiscount: number | null; startDate: string; endDate: string | null;
-  status: string; minimumCartAmount: number | null; availableTo: string; availableToObjectIds: string[] | null;
+  appliesTo: string; appliesToObjectIds: string[] | null; startDate: string; endDate: string | null;
+  status: string; availableTo: string; availableToObjectIds: string[] | null;
+  type: string | null; discountType: string | null; discount: number | null; dollarOffDiscountApplies: string | null;
+  cartRequirementType: string | null; cartRequirement: number | null; cartRequirementCountType: string | null; cartRequirementMaximum: number | null;
+  productDiscountType: string | null; productDiscount: number | null; shippingDiscountType: string | null; shippingDiscount: number | null; minimumCartAmount: number | null;
 };
 const keys = ["id", "code", "title", "usageLimitType", "appliesTo", "startDate", "status", "availableTo"] as const;
 /** A real tenant reads an empty object-ID list back as "" (see operator-sandbox-evidence.json); arrays are the populated form. */
@@ -31,11 +40,13 @@ export function parseNativeCoupon(value: unknown): NativeCoupon {
   if (!row || keys.some((key) => !text(row[key]))) throw new Commerce7RewardError("INVALID_PROVIDER_RESPONSE", true);
   // A coupon with no product/shipping discount reads these back as null. Absent and null are the same fact;
   // exact matching below decides whether that coupon is the one SQRATCH requested.
-  for (const key of ["productDiscountType", "shippingDiscountType"] as const) {
+  for (const key of ["productDiscountType", "shippingDiscountType", "type", "discountType", "dollarOffDiscountApplies", "cartRequirementType", "cartRequirementCountType"] as const) {
     if (row[key] != null && !text(row[key])) throw new Commerce7RewardError("INVALID_PROVIDER_RESPONSE", true);
   }
-  if (row.productDiscount != null && (typeof row.productDiscount !== "number" || !Number.isFinite(row.productDiscount))) throw new Commerce7RewardError("INVALID_PROVIDER_RESPONSE", true);
-  for (const key of ["usageLimit", "shippingDiscount", "minimumCartAmount"] as const) {
+  for (const key of ["productDiscount", "discount"] as const) {
+    if (row[key] != null && (typeof row[key] !== "number" || !Number.isFinite(row[key]))) throw new Commerce7RewardError("INVALID_PROVIDER_RESPONSE", true);
+  }
+  for (const key of ["usageLimit", "shippingDiscount", "minimumCartAmount", "cartRequirement", "cartRequirementMaximum"] as const) {
     if (row[key] != null && (!Number.isSafeInteger(row[key]) || Number(row[key]) < 0)) throw new Commerce7RewardError("INVALID_PROVIDER_RESPONSE", true);
   }
   if (!Number.isFinite(Date.parse(String(row.startDate))) || (row.endDate != null && (typeof row.endDate !== "string" || !Number.isFinite(Date.parse(row.endDate))))) throw new Commerce7RewardError("INVALID_PROVIDER_RESPONSE", true);
@@ -47,6 +58,10 @@ export function parseNativeCoupon(value: unknown): NativeCoupon {
     shippingDiscountType: (row.shippingDiscountType as string | null | undefined) ?? null, shippingDiscount: (row.shippingDiscount as number | null | undefined) ?? null,
     startDate: row.startDate as string, endDate: (row.endDate as string | null | undefined) ?? null, status: row.status as string,
     minimumCartAmount: (row.minimumCartAmount as number | null | undefined) ?? null, availableTo: row.availableTo as string, availableToObjectIds: nativeObjectIds(row.availableToObjectIds),
+    type: (row.type as string | null | undefined) ?? null, discountType: (row.discountType as string | null | undefined) ?? null, discount: (row.discount as number | null | undefined) ?? null,
+    dollarOffDiscountApplies: (row.dollarOffDiscountApplies as string | null | undefined) ?? null, cartRequirementType: (row.cartRequirementType as string | null | undefined) ?? null,
+    cartRequirement: (row.cartRequirement as number | null | undefined) ?? null, cartRequirementCountType: (row.cartRequirementCountType as string | null | undefined) ?? null,
+    cartRequirementMaximum: (row.cartRequirementMaximum as number | null | undefined) ?? null,
   };
 }
 export type NativeTag = { id: string; title: string; type: "Manual"; objectType: "Customer" };
@@ -55,7 +70,22 @@ function parseTag(value: unknown): NativeTag {
   if (!row || !text(row.id) || !text(row.title) || row.type !== "Manual" || row.objectType !== "Customer") throw new Commerce7RewardError("INVALID_PROVIDER_RESPONSE", true);
   return { id: row.id, title: row.title, type: row.type, objectType: row.objectType };
 }
+/**
+ * A tag definition exactly as Commerce7 reports it (GET /v1/tag/customer/{id}). `type`/`objectType` are kept verbatim so a
+ * caller can refuse anything but the live-observed "Manual" / "Customer"; the documented Dynamic type is never assignable.
+ */
+export type NativeTagDefinition = { id: string; title: string; type: string; objectType: string };
+function parseTagDefinition(value: unknown): NativeTagDefinition {
+  const row = object(value);
+  if (!row || !text(row.id) || !text(row.title) || !text(row.type) || !text(row.objectType)) throw new Commerce7RewardError("INVALID_PROVIDER_RESPONSE");
+  return { id: row.id, title: row.title, type: row.type, objectType: row.objectType };
+}
+/** A product's live access facts (GET /v1/product/{id}), read with the same parsers product sync uses. Never written. */
+export type NativeProductAccess = { id: string; available: boolean; security: CommerceProductAccessSecurity | null };
+/** `tagIds` keeps duplicates: a live tenant can hold the same tag twice for one customer (see the duplicate-membership evidence). */
 export type NativeCustomer = { id: string; emails: string[]; tagIds: string[] };
+/** How many times the customer holds the tag. 0 = absent; more than 1 = duplicate native memberships. */
+export function customerTagCount(customer: Pick<NativeCustomer, "tagIds">, tagId: string) { return customer.tagIds.filter((id) => id === tagId).length; }
 function parseCustomer(value: unknown): NativeCustomer {
   const row = object(value);
   if (!row || !text(row.id) || !Array.isArray(row.emails) || !Array.isArray(row.tags)) throw new Commerce7RewardError("INVALID_PROVIDER_RESPONSE");
@@ -65,11 +95,18 @@ function parseCustomer(value: unknown): NativeCustomer {
   return { id: row.id, emails: emails.map(normalizeRewardEmail), tagIds: tags };
 }
 export type RewardCouponTerms = { title: string; discountType: "FIXED_AMOUNT" | "PERCENTAGE"; discountAmountCents: number | null; discountPercentageBasisPoints: number | null; minimumSubtotalCents: number | null };
-/** Exactly what SQRATCH POSTs. Optional fields are omitted when empty, as in the documented create example. */
-export type CouponRequest = {
-  code: string; title: string; status: string; usageLimitType: string; usageLimit: number; appliesTo: string; appliesToObjectIds?: string[];
-  productDiscountType: string; productDiscount: number; shippingDiscountType: string; minimumCartAmount?: number;
-  availableTo: string; availableToObjectIds?: string[]; startDate: string; endDate: string;
+/**
+ * The native coupon WRITE request: exactly what SQRATCH POSTs to the public /v1/coupon API. Proven field-by-field by live
+ * sandbox 201s (tests/fixtures/commerce7-rewards/live-coupon-create-201.json); the public docs' productDiscountType/
+ * productDiscount/shippingDiscountType shape is rejected by the live API (live-coupon-create-422.json) and is never sent.
+ * Optional fields are omitted when they do not apply.
+ */
+export type CouponWriteRequest = {
+  code: string; title: string; type: string; status: string; usageLimitType: string; usageLimit: number;
+  appliesTo: string; appliesToObjectIds?: string[]; availableTo: string; availableToObjectIds?: string[];
+  discountType: string; discount: number; dollarOffDiscountApplies?: string;
+  cartRequirementType: string; cartRequirement?: number; cartRequirementCountType?: string;
+  startDate: string; endDate: string;
 };
 /** Bounded, PII-free and secret-free: brand-authored title plus a non-reversible claim reference. Never the coupon code. */
 export function rewardCouponTitle(title: string, claimId: string) {
@@ -78,7 +115,7 @@ export function rewardCouponTitle(title: string, claimId: string) {
 }
 /** Provider dates are minute-aligned; aligning ours keeps retries, recovery and readback byte-stable. */
 export function floorToMinute(date: Date) { return new Date(Math.floor(date.getTime() / 60000) * 60000); }
-export function buildCommerce7RewardCoupon(input: { terms: RewardCouponTerms; scope: CouponScope; code: string; claimId: string; startsAt: Date; endsAt: Date }, contract: CouponContract = COMMERCE7_COUPON_CONTRACT): CouponRequest {
+export function buildCommerce7RewardCoupon(input: { terms: RewardCouponTerms; scope: CouponScope; code: string; claimId: string; startsAt: Date; endsAt: Date }, contract: CouponContract = COMMERCE7_COUPON_CONTRACT): CouponWriteRequest {
   const { terms, scope, code } = input;
   const startsAt = floorToMinute(input.startsAt); const endsAt = floorToMinute(input.endsAt);
   if (!/^SQRA[A-F0-9]{32}$/.test(code) || !input.claimId || !Number.isFinite(startsAt.getTime()) || !Number.isFinite(endsAt.getTime()) || endsAt <= startsAt) throw new Commerce7RewardError("SETUP_INCOMPLETE");
@@ -91,25 +128,63 @@ export function buildCommerce7RewardCoupon(input: { terms: RewardCouponTerms; sc
   if (typeof discount !== "number" || !Number.isSafeInteger(discount) || discount < 1 || discount > max) throw new Commerce7RewardError("SETUP_INCOMPLETE");
   if (terms.minimumSubtotalCents !== null && (!Number.isSafeInteger(terms.minimumSubtotalCents) || terms.minimumSubtotalCents < 1)) throw new Commerce7RewardError("SETUP_INCOMPLETE");
   return {
-    code, title: rewardCouponTitle(terms.title, input.claimId), status: contract.status, usageLimitType: contract.usageLimitType, usageLimit: contract.usageLimit,
+    code, title: rewardCouponTitle(terms.title, input.claimId), type: contract.type, status: contract.status, usageLimitType: contract.usageLimitType, usageLimit: contract.usageLimit,
     appliesTo: scope.appliesTo, ...(scope.appliesToObjectIds ? { appliesToObjectIds: scope.appliesToObjectIds } : {}),
-    productDiscountType: contract.productDiscountType[terms.discountType], productDiscount: discount, shippingDiscountType: contract.shippingDiscountType,
-    ...(terms.minimumSubtotalCents !== null ? { minimumCartAmount: terms.minimumSubtotalCents } : {}),
     availableTo: scope.availableTo, ...(scope.availableToObjectIds ? { availableToObjectIds: scope.availableToObjectIds } : {}),
+    discountType: contract.discountType[terms.discountType], discount,
+    ...(terms.discountType === "FIXED_AMOUNT" ? { dollarOffDiscountApplies: contract.dollarOffDiscountApplies } : {}),
+    ...(terms.minimumSubtotalCents === null
+      ? { cartRequirementType: contract.cartRequirement.none }
+      : { cartRequirementType: contract.cartRequirement.minimum, cartRequirement: terms.minimumSubtotalCents, cartRequirementCountType: contract.cartRequirement.countType }),
     startDate: startsAt.toISOString(), endDate: endsAt.toISOString(),
   };
 }
+/**
+ * The benefit-defining terms of a read-back coupon, normalized from whichever representation the provider used. The create
+ * echo reports type/discountType/discount/cartRequirement*; a GET reports productDiscountType/productDiscount/minimumCartAmount.
+ * Null means "not reported". When both report a term they must agree, and a term no representation reports is unknown.
+ */
+type ReadTerms = { discount: { type: string; amount: number } | null; minimum: { amount: number | null; countType: string | null } | null };
+function readCouponTerms(coupon: NativeCoupon): ReadTerms {
+  const current = coupon.discountType !== null || coupon.discount !== null ? { type: coupon.discountType, amount: coupon.discount } : null;
+  const legacy = coupon.productDiscountType !== null || coupon.productDiscount !== null ? { type: coupon.productDiscountType, amount: coupon.productDiscount } : null;
+  const reported = current ?? legacy;
+  const discount = !reported || reported.type === null || reported.amount === null || (current && legacy && (current.type !== legacy.type || current.amount !== legacy.amount)) ? null : { type: reported.type, amount: reported.amount };
+  const { none, minimum: minimumType } = COMMERCE7_COUPON_CONTRACT.cartRequirement;
+  let currentMinimum: { amount: number | null; countType: string | null } | null | "unknown" = null;
+  if (coupon.cartRequirementType === none) currentMinimum = coupon.cartRequirement ? "unknown" : { amount: null, countType: null };
+  else if (coupon.cartRequirementType === minimumType) currentMinimum = coupon.cartRequirement === null ? "unknown" : { amount: coupon.cartRequirement, countType: coupon.cartRequirementCountType };
+  else if (coupon.cartRequirementType !== null) currentMinimum = "unknown"; // a requirement kind SQRATCH never writes (quantity, for example)
+  const legacyMinimum = coupon.minimumCartAmount !== null ? { amount: coupon.minimumCartAmount, countType: null } : null;
+  const minimum = currentMinimum === "unknown" || (currentMinimum && legacyMinimum && currentMinimum.amount !== legacyMinimum.amount) ? null : currentMinimum ?? legacyMinimum ?? { amount: null, countType: null };
+  return { discount, minimum };
+}
 const sameIds = (actual: string[] | null, expected: string[] | undefined) => JSON.stringify(actual ? [...actual].sort() : null) === JSON.stringify(expected?.length ? [...expected].sort() : null);
 const minuteOf = (value: string | null) => value === null ? null : Math.floor(Date.parse(value) / 60000);
-/** Benefit-defining fields only. Title is cosmetic, and representation differences (empty IDs, null "No Discount", sub-minute dates, code case) are not mismatches. */
-export function couponMatches(coupon: NativeCoupon, expected: CouponRequest) {
+/**
+ * Semantic readback verification. Every benefit-defining term must be reported and equal: code (case-insensitive), usage,
+ * scope, eligibility, status, discount kind and amount, once-per-order for dollar off, minimum and its counting rule, no
+ * cart maximum, no shipping discount, and the minute-aligned window. Tolerated as representation only: the read/echo field
+ * names, null versus "" object IDs, sub-minute date precision, the cosmetic title, and the provider's default
+ * dollarOffDiscountApplies = "Once Per Order" echoed on a percentage coupon.
+ */
+export function couponMatches(coupon: NativeCoupon, expected: CouponWriteRequest) {
+  const { discount, minimum } = readCouponTerms(coupon);
+  const contract = COMMERCE7_COUPON_CONTRACT;
+  const perOrderOk = expected.dollarOffDiscountApplies !== undefined
+    ? coupon.dollarOffDiscountApplies === expected.dollarOffDiscountApplies
+    : coupon.dollarOffDiscountApplies === null || coupon.dollarOffDiscountApplies === contract.dollarOffDiscountApplies;
   return coupon.code.toUpperCase() === expected.code.toUpperCase()
+    && (coupon.type === null || coupon.type === expected.type)
     && coupon.usageLimitType === expected.usageLimitType && coupon.usageLimit === expected.usageLimit
     && coupon.appliesTo === expected.appliesTo && sameIds(coupon.appliesToObjectIds, expected.appliesToObjectIds)
-    && coupon.productDiscountType === expected.productDiscountType && coupon.productDiscount === expected.productDiscount
-    && (coupon.shippingDiscountType ?? COMMERCE7_COUPON_CONTRACT.shippingDiscountType) === expected.shippingDiscountType && coupon.shippingDiscount === null
-    && coupon.status === expected.status && coupon.minimumCartAmount === (expected.minimumCartAmount ?? null)
     && coupon.availableTo === expected.availableTo && sameIds(coupon.availableToObjectIds, expected.availableToObjectIds)
+    && coupon.status === expected.status
+    && discount !== null && discount.type === expected.discountType && discount.amount === expected.discount && perOrderOk
+    && minimum !== null && minimum.amount === (expected.cartRequirement ?? null)
+    && (expected.cartRequirementCountType === undefined || minimum.countType === null || minimum.countType === expected.cartRequirementCountType)
+    && coupon.cartRequirementMaximum === null
+    && (coupon.shippingDiscountType ?? contract.readNoShippingDiscount) === contract.readNoShippingDiscount && coupon.shippingDiscount === null
     && minuteOf(coupon.startDate) === minuteOf(expected.startDate) && minuteOf(coupon.endDate) === minuteOf(expected.endDate);
 }
 
@@ -176,6 +251,34 @@ export class Commerce7RewardsClient {
     }
     throw new Commerce7RewardError("SEARCH_LIMIT");
   }
+  /** Documented "Retrieve a tag". 404 means the tag no longer exists. */
+  async customerTag(id: string): Promise<NativeTagDefinition | null> {
+    let body: unknown;
+    try { body = await this.request(`/tag/customer/${encodeURIComponent(id)}`); }
+    catch (error) { if (error instanceof Commerce7RewardError && error.code === "NOT_FOUND") return null; throw error; }
+    const tag = parseTagDefinition(body);
+    if (tag.id !== id) throw new Commerce7RewardError("INVALID_PROVIDER_RESPONSE");
+    return tag;
+  }
+  /** Live product security and availability (Product: Read). Read-only; SQRATCH never writes product security. */
+  async productAccess(id: string): Promise<NativeProductAccess | null> {
+    let body: unknown;
+    try { body = await this.request(`/product/${encodeURIComponent(id)}`); }
+    catch (error) { if (error instanceof Commerce7RewardError && error.code === "NOT_FOUND") return null; throw error; }
+    const row = object(body);
+    if (!row || row.id !== id) throw new Commerce7RewardError("INVALID_PROVIDER_RESPONSE");
+    return { id, available: computeCommerce7Availability(row).isCatalogAvailable, security: readCommerce7ProductSecurity(row) };
+  }
+  /**
+   * Live-proven POST /v1/tag-x-object/customer (HTTP 201 echoing objectId/tagId plus the relation id). NOT idempotent: the
+   * provider accepted a second POST for a customer who already held the tag and then reported the tag twice. Callers must
+   * prove absence first, persist an attempt marker, and never repeat this after an ambiguous outcome.
+   */
+  async assignCustomerTag(customerId: string, tagId: string): Promise<{ id: string }> {
+    const row = object(await this.request("/tag-x-object/customer", "POST", { objectId: customerId, tagId }));
+    if (!row || row.objectId !== customerId || row.tagId !== tagId || !text(row.id)) throw new Commerce7RewardError("INVALID_PROVIDER_RESPONSE", true);
+    return { id: row.id };
+  }
   async createTag(claimId: string) {
     const tag = parseTag(await this.request("/tag/customer", "POST", { title: claimTagTitle(claimId), type: "Manual" }));
     if (tag.title !== claimTagTitle(claimId)) throw new Commerce7RewardError("INVALID_PROVIDER_RESPONSE", true);
@@ -232,7 +335,7 @@ export class Commerce7RewardsClient {
     }
     throw new Commerce7RewardError("SEARCH_LIMIT");
   }
-  async createCoupon(payload: CouponRequest) {
+  async createCoupon(payload: CouponWriteRequest) {
     const coupon = parseNativeCoupon(await this.request("/coupon", "POST", payload));
     if (!couponMatches(coupon, payload)) throw new Commerce7RewardError("INVALID_PROVIDER_RESPONSE", true);
     return coupon;

@@ -22,7 +22,7 @@ test("explicit product scopes clear IDs or require selection; new/default, store
   assert.throws(() => domain.parseCommerce7Offer({ ...offerBody, eligibilityMode: "invented" }, "CAD"));
   const exclusive = { ...offerBody, rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", isActive: false, eligibilityMode: "ANYONE_WITH_CODE", productIds: ["wine"] };
   assert.equal(domain.parseCommerce7Offer(exclusive, "CAD").eligibilityMode, "CLAIMANT_ONLY");
-  assert.throws(() => domain.parseCommerce7Offer({ ...exclusive, isActive: true }, "CAD"));
+  assert.equal(domain.parseCommerce7Offer({ ...exclusive, isActive: true }, "CAD").eligibilityMode, "CLAIMANT_ONLY", "activation is gated by the verified access saga, and eligibility stays bound");
 });
 
 test("legacy template matrix retains independent eligibility, store/product and one-use/no-shipping checks", () => {

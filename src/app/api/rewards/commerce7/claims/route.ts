@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { resolveSession } from "@/lib/auth-session";
 import { getRewardClaimContext } from "@/lib/reward-access";
-import { reserveCommerce7Claim, provisionCommerce7Claim } from "@/lib/commerce7-rewards";
+import { claimCommerce7Reward } from "@/lib/commerce7-rewards";
 import { serializeCommerce7Claim, requireValue } from "@/lib/commerce7-reward-domain";
 import { object } from "@/lib/commerce/providers/commerce7-rewards-client";
 import { rewardErrorResponse } from "@/lib/commerce7-reward-http";
@@ -16,8 +16,9 @@ export async function POST(request: NextRequest) {
     requireValue(body.campaignId == null || typeof body.campaignId === "string", "Invalid campaign.");
     const context = await getRewardClaimContext({ request, userId: session.user.id, experienceSlug: body.experienceSlug as string | undefined, campaignId: body.campaignId as string | undefined });
     if (!context.ok) return NextResponse.json({ error: context.error }, { status: context.status });
-    const claim = await reserveCommerce7Claim(session.user.id, body.offerId, body.idempotencyKey, context.brandIds);
-    const result = await provisionCommerce7Claim(claim.id, session.user.id);
-    return NextResponse.json({ data: serializeCommerce7Claim(result ?? claim) }, { status: 200 });
+    const result = await claimCommerce7Reward(session.user.id, body.offerId, body.idempotencyKey, context.brandIds);
+    // A customer who already holds an access-only reward's Customer Tag is not charged and no claim is created.
+    if (result.alreadyEligible) return NextResponse.json({ data: { alreadyEligible: true, offerId: body.offerId, message: "Your Commerce7 account already has this access. No points were spent." } }, { status: 200 });
+    return NextResponse.json({ data: serializeCommerce7Claim(result.claim) }, { status: 200 });
   } catch (error) { return rewardErrorResponse(error); }
 }

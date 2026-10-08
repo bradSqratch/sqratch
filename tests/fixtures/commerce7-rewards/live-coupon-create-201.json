@@ -1,0 +1,21 @@
+{
+  "evidence": {
+    "source": "Operator's live sandbox POST https://api.commerce7.com/v1/coupon through the public API (App ID / App Secret Basic Auth). Every request below returned HTTP 201.",
+    "observed": ["For the percentage coupon, the provider echoed dollarOffDiscountApplies = \"Once Per Order\" although the field was not sent."],
+    "notSupplied": "Only the request payloads, status and the observation above were supplied. The 201 response bodies were not, so no response body is stored here; readback tests that need one build a synthetic echo and say so. startDate/endDate values were elided in the evidence; code and title were sent but not shown.",
+    "credentials": "None. No Authorization header, JWT, tenant secret or cookie is stored."
+  },
+  "fixedAmount": {
+    "status": 201,
+    "request": { "type": "Product", "usageLimitType": "Per Store", "usageLimit": 1, "appliesTo": "Store", "discountType": "Dollar Off", "dollarOffDiscountApplies": "Once Per Order", "discount": 1000, "status": "Enabled", "cartRequirementType": "None", "availableTo": "Everyone" }
+  },
+  "percentage": {
+    "status": 201,
+    "request": { "type": "Product", "usageLimitType": "Per Store", "usageLimit": 1, "appliesTo": "Store", "discountType": "Percentage Off", "discount": 15, "status": "Enabled", "cartRequirementType": "None", "availableTo": "Everyone" }
+  },
+  "minimumSubtotal": {
+    "status": 201,
+    "requestFields": { "cartRequirementType": "Minimum Purchase Amount", "cartRequirementCountType": "All Items" },
+    "cartRequirement": "integer minor units (the probe's value was not supplied)"
+  }
+}

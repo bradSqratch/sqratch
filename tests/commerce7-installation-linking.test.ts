@@ -1138,7 +1138,8 @@ describe("provider isolation", () => {
 
     assert.equal(capabilities.products.publicDestinations, true);
     assert.equal(capabilities.rewards.customerBoundClaims?.createCoupon, true);
-    assert.equal(capabilities.rewards.customerBoundClaims?.exclusiveProductAccess, false);
+    // Exclusive Wine Access is offered only through the verified customer-bound saga, never through generic reward methods.
+    assert.equal(capabilities.rewards.customerBoundClaims?.exclusiveProductAccess, true);
     for (const [name, value] of Object.entries(capabilities.rewards)) {
       if (name === "customerBoundClaims") continue;
       assert.equal(

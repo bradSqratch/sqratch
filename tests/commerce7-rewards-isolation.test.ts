@@ -22,19 +22,19 @@ function route(path: string, dependencies: Record<string, unknown>) {
 const errorResponse = { rewardErrorResponse: (error: unknown) => NextResponse.json({ error: "Controlled error" }, { status: error instanceof RewardClaimError ? error.status : 500 }) };
 
 test("claim route forwards only authenticated user, persisted offer key and server-resolved Brands", async () => {
-  let reserved: unknown[] = []; let provisioned: unknown[] = [];
+  let claimed: unknown[] = [];
   const handler = route("src/app/api/rewards/commerce7/claims/route.ts", {
     "@/lib/auth-session": { resolveSession: async () => ({ user: { id: "authenticated-alice" } }) },
     "@/lib/reward-access": { getRewardClaimContext: async () => ({ ok: true, brandIds: ["server-brand"] }) },
-    "@/lib/commerce7-rewards": { reserveCommerce7Claim: async (...args: unknown[]) => { reserved = args; return { id: "reserved-claim" }; }, provisionCommerce7Claim: async (...args: unknown[]) => { provisioned = args; return { id: "reserved-claim" }; } },
+    "@/lib/commerce7-rewards": { claimCommerce7Reward: async (...args: unknown[]) => { claimed = args; return { alreadyEligible: false, claim: { id: "reserved-claim" } }; } },
     "@/lib/commerce7-reward-domain": { requireValue, serializeCommerce7Claim: (value: unknown) => value },
     "@/lib/commerce/providers/commerce7-rewards-client": { object },
     "@/lib/commerce7-reward-http": errorResponse,
   });
   const response = await handler.POST(new NextRequest("https://sqratch.example/api/rewards/commerce7/claims", { method: "POST", body: JSON.stringify({ offerId: "selected-offer", idempotencyKey: "stable-browser-key", userId: "bob", brandId: "foreign-brand", connectionId: "foreign-connection", tenant: "foreign-tenant", email: "bob@example.test", providerCustomerId: "bob", pointsCost: 0, discountAmountCents: 999999, code: "FORGED" }) }));
   assert.equal(response.status, 200);
-  assert.deepEqual(reserved, ["authenticated-alice", "selected-offer", "stable-browser-key", ["server-brand"]]);
-  assert.deepEqual(provisioned, ["reserved-claim", "authenticated-alice"]);
+  // The pre-check, reservation and provisioning all receive only the session user, the offer key and server-resolved Brands.
+  assert.deepEqual(claimed, ["authenticated-alice", "selected-offer", "stable-browser-key", ["server-brand"]]);
 });
 
 test("Brand claim operations reject missing/wrong-role management context before lookup or provider access", async () => {

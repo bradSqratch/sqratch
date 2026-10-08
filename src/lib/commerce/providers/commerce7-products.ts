@@ -21,7 +21,7 @@
 
 import { CommerceProvider } from "@prisma/client";
 import { CommerceProviderApiError } from "../errors";
-import type { CommerceProduct } from "../types";
+import type { CommerceProduct, CommerceProductAccessSecurity } from "../types";
 import {
   buildCommerce7AppAuthorizationHeader,
   getCommerce7AppConfig,
@@ -155,6 +155,25 @@ export type Commerce7Availability = {
 
 function readTrimmed(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/**
+ * Reads a Commerce7 Product's `security` block for SQRATCH's lower-permission Exclusive Wine Access model. The winery configures
+ * security in Commerce7; SQRATCH only reads it, with Product: Read. Keeps exactly three fields, verbatim: `availableTo` (never
+ * translated: a live tenant reports "Tag" where the docs say "Group"), `displayOption`, and `availableToObjectIds` as provider
+ * object IDs. Anything else in the block is dropped. A malformed block returns null, which can never qualify as exclusive.
+ */
+export function readCommerce7ProductSecurity(raw: unknown): CommerceProductAccessSecurity | null {
+  const record = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+  const security = record?.security && typeof record.security === "object" && !Array.isArray(record.security) ? (record.security as Record<string, unknown>) : null;
+  if (!security || typeof security.availableTo !== "string" || !security.availableTo || security.availableTo.length > 64) return null;
+  const ids = security.availableToObjectIds;
+  let availableToObjectIds: string[];
+  if (ids == null || ids === "") availableToObjectIds = [];
+  else if (Array.isArray(ids) && ids.length <= 50 && ids.every((id) => typeof id === "string" && id.length <= 100)) availableToObjectIds = [...(ids as string[])];
+  else return null;
+  const displayOption = typeof security.displayOption === "string" && security.displayOption.length <= 100 ? security.displayOption : null;
+  return { availableTo: security.availableTo, displayOption, availableToObjectIds };
 }
 
 export function computeCommerce7Availability(raw: {
@@ -418,6 +437,7 @@ export function normalizeCommerce7Product(
     providerCreatedAt: readDate(record.createdAt),
     providerUpdatedAt: readDate(record.updatedAt),
     hasProviderStorefrontPublication: destination.isPublic,
+    accessSecurity: readCommerce7ProductSecurity(record),
     // ALWAYS false — see the `hasProviderSuppliedStorefrontUrl` doc comment
     // on `normalizeCommerce7Product` above.
     hasProviderSuppliedStorefrontUrl: false,

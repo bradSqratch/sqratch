@@ -1322,6 +1322,13 @@ model CommerceRewardRedemption {
   providerTagId                 String?
   tagCreateAttempted            Boolean                        @default(false)
   couponCreateAttempted         Boolean                        @default(false)
+  /// Exclusive Wine Access: set durably before the one Customer Tag membership POST; cleared only by a definitive refusal.
+  membershipWriteAttempted      Boolean                        @default(false)
+  /// Who owns the verified native membership. PRE_EXISTING is never SQRATCH's and is never removed for this claim.
+  membershipOwnership           RewardMembershipOwnership?
+  /// The native tag-x-object relation ID from SQRATCH's own HTTP 201, the evidence for SQRATCH_GRANTED.
+  providerMembershipId          String?
+  membershipVerifiedAt          DateTime?
   entitlementEverGranted        Boolean                        @default(false)
   slotReleased                  Boolean                        @default(false)
   rewardConfigSnapshot          Json?
@@ -1358,6 +1365,7 @@ model CommerceRewardRedemption {
   @@index([provider, status, providerLastCheckedAt], map: "reward_provider_pending")
   @@index([offerId, slotReleased], map: "reward_offer_capacity")
   @@index([offerId, userId, slotReleased], map: "reward_offer_user_capacity")
+  @@index([userId, connectionId, providerTagId, status], map: "reward_c7_membership_inflight")
   @@index([userId, createdAt])
   @@index([brandId, createdAt])
   @@index([offerId])
@@ -1733,10 +1741,18 @@ enum CommerceOrderEventStatus {
   FAILED
 }
 
-/// Customer access writes stay unsupported until an atomic native contract is verified.
+/// EXCLUSIVE_PRODUCT_ACCESS grants the merchant's existing Manual Customer Tag (Commerce7 storefront access).
 enum RewardMode {
   DISCOUNT
   EXCLUSIVE_PRODUCT_ACCESS
+}
+
+/// PRE_EXISTING: the customer held the tag before SQRATCH wrote anything. SQRATCH_GRANTED: SQRATCH's own POST returned
+/// 201 for this customer and tag after verified absence. UNVERIFIED: present after an ambiguous SQRATCH write.
+enum RewardMembershipOwnership {
+  PRE_EXISTING
+  SQRATCH_GRANTED
+  UNVERIFIED
 }
 
 enum RewardProvisioningState {

@@ -1,0 +1,33 @@
+{
+  "evidence": {
+    "source": "Operator's live sandbox POST https://api.commerce7.com/v1/coupon through the public API (App ID / App Secret Basic auth), 2026-10-07. HTTP 201.",
+    "redaction": "Every field below is as observed except the coupon UUID, the product UUID and the 20-character probe code, which are replaced with synthetic values of the same shape.",
+    "alsoReported": "The response also contained channels [\"All\"], several exclude fields and additional appliesTo fields reported as null, availableToObjectIds null, and empty clubFrequencies and promotionSets. The exact names of the null exclude/appliesTo fields were not supplied, so they are not stored.",
+    "credentials": "None. No Authorization header, JWT, tenant secret or cookie is stored."
+  },
+  "status": 201,
+  "response": {
+    "id": "00000000-0000-4000-8000-0000000000c2",
+    "code": "SQRD0000000000000000",
+    "title": "SQRATCH API Probe D V1 Product",
+    "type": "Product",
+    "usageLimitType": "Per Store",
+    "usageLimit": 1,
+    "appliesTo": "Product",
+    "appliesToObjectIds": ["00000000-0000-4000-8000-0000000000a2"],
+    "discountType": "Dollar Off",
+    "dollarOffDiscountApplies": "Once Per Order",
+    "discount": 1000,
+    "status": "Enabled",
+    "cartRequirementType": "None",
+    "cartRequirement": null,
+    "availableTo": "Everyone",
+    "availableToObjectIds": null,
+    "channels": ["All"],
+    "clubFrequencies": [],
+    "promotionSets": [],
+    "usageCount": 0,
+    "startDate": "2026-10-07T23:55:00.000Z",
+    "endDate": "2026-11-06T23:55:00.000Z"
+  }
+}

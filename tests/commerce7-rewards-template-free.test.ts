@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { claimTagTitle } from "../src/lib/commerce/providers/commerce7-rewards-client";
-import { fakeTenant, harness, legacyTemplate, offerBody, verifiedContract, verifiedEmail, OPAQUE_CUSTOMER_TAG, OPAQUE_PRODUCT_SCOPE, type Row } from "./commerce7-reward-harness";
+import { fakeTenant, harness, secureForExclusive, legacyTemplate, offerBody, verifiedContract, verifiedEmail, OPAQUE_CUSTOMER_TAG, OPAQUE_PRODUCT_SCOPE, type Row } from "./commerce7-reward-harness";
 
 const couponPosts = (app: ReturnType<typeof harness>) => app.calls.filter((call) => call.method === "POST" && call.path === "/v1/coupon");
 const alice = { id: "alice", email: "alice@example.test" };
@@ -17,13 +17,15 @@ test("a Brand saves an anyone-with-code, all-products discount with no template 
   assert.equal(app.logs.length, 0, "no template/setup stage can be logged");
 });
 
-test("every save path (create, edit, drafts of each branch, selected products) performs zero provider calls", async () => {
-  const app = harness({ appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-a"] });
+test("every discount save path (create, edit, drafts, selected products) performs zero provider calls; an exclusive save only reads its tag", async () => {
+  const app = harness({ appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-a"], tenant: fakeTenant({ tags: [{ id: "synthetic-customer-tag-id", title: "Rare Wine Members" }] }) }); secureForExclusive(app, "wine-a");
   await app.save({ ...offerBody, appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-a", "wine-b"], isActive: false });
+  await app.save({ ...offerBody, appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-a", "wine-b"], isActive: true });
   await app.save({ ...offerBody, isActive: false, eligibilityMode: "CLAIMANT_ONLY" }, "offer");
   await app.save({ ...offerBody, isActive: true, eligibilityMode: "ANYONE_WITH_CODE" }, "offer");
-  await app.save({ ...offerBody, rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", isActive: false, discountEnabled: false, productIds: ["wine-a"], maxTotalRedemptions: 25 }, "offer");
   assert.equal(app.calls.length, 0); assert.equal(app.clientsCreated(), 0);
+  await app.save({ ...offerBody, rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", isActive: false, discountEnabled: false, productIds: ["wine-a"], maxTotalRedemptions: 25 }, "offer");
+  assert.deepEqual(app.calls.map((call) => `${call.method} ${call.path}`), ["GET /v1/tag/customer/synthetic-customer-tag-id"], "one read-only Tag lookup, never a write");
 });
 
 test("save validates selected products against this connection's catalog and never trusts client identity", async () => {
@@ -35,13 +37,12 @@ test("save validates selected products against this connection's catalog and nev
   assert.equal(app.calls.length, 0);
 });
 
-test("branches whose Coupon enums are unproven save as drafts but cannot be activated; nothing is written on rejection", async () => {
+test("the still-unproven claimant-only branch saves as a draft but cannot be activated; selected products now go live; nothing is written on rejection", async () => {
   const app = harness();
-  for (const body of [{ eligibilityMode: "CLAIMANT_ONLY" }, { appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-a"] }]) {
-    await assert.rejects(app.save({ ...offerBody, ...body, isActive: true }), { code: "COUPON_CONTRACT_UNVERIFIED" });
-    const draft = await app.save({ ...offerBody, ...body, isActive: false });
-    assert.equal(draft.isActive, false);
-  }
+  await assert.rejects(app.save({ ...offerBody, eligibilityMode: "CLAIMANT_ONLY", isActive: true }), { code: "COUPON_CONTRACT_UNVERIFIED" });
+  assert.equal((await app.save({ ...offerBody, eligibilityMode: "CLAIMANT_ONLY", isActive: false })).isActive, false);
+  assert.equal((await app.save({ ...offerBody, appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-a"], isActive: true })).isActive, true, "the live 201 proved the Product scope");
+  await assert.rejects(app.save({ ...offerBody, eligibilityMode: "CLAIMANT_ONLY", appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-a"], isActive: true }), { code: "COUPON_CONTRACT_UNVERIFIED" });
   const before = JSON.stringify(app.offer());
   await assert.rejects(app.save({ ...offerBody, eligibilityMode: "CLAIMANT_ONLY", isActive: true }, "offer"), { code: "COUPON_CONTRACT_UNVERIFIED" });
   assert.equal(JSON.stringify(app.offer()), before); assert.equal(app.calls.length, 0);
@@ -81,7 +82,7 @@ test("a claim creates exactly one direct coupon: recovery read, then one POST, w
   assert.equal(issued?.status, "ISSUED"); assert.equal(issued?.provisioningState, "READY"); assert.equal(issued?.entitlementEverGranted, true); assert.equal(issued?.externalDiscountId, "coupon-1");
   assert.deepEqual(app.calls.map((call) => `${call.method} ${new URL(`https://x${call.path}`).pathname}`), ["GET /v1/coupon", "POST /v1/coupon"]);
   const [body] = app.postBodies();
-  assert.deepEqual(body, { code: claim.code, title: body.title, status: "Enabled", usageLimitType: "Per Store", usageLimit: 1, appliesTo: "Store", productDiscountType: "Dollar Off", productDiscount: 1000, shippingDiscountType: "No Discount", minimumCartAmount: 5000, availableTo: "Everyone", startDate: "2026-10-10T00:00:00.000Z", endDate: "2026-11-09T00:00:00.000Z" });
+  assert.deepEqual(body, { code: claim.code, title: body.title, type: "Product", status: "Enabled", usageLimitType: "Per Store", usageLimit: 1, appliesTo: "Store", availableTo: "Everyone", discountType: "Dollar Off", discount: 1000, dollarOffDiscountApplies: "Once Per Order", cartRequirementType: "Minimum Purchase Amount", cartRequirement: 5000, cartRequirementCountType: "All Items", startDate: "2026-10-10T00:00:00.000Z", endDate: "2026-11-09T00:00:00.000Z" });
   assert.match(String(body.code), /^SQRA[A-F0-9]{32}$/); assert.doesNotMatch(String(body.title), /SQRA[A-F0-9]{32}/);
   assert.ok(app.calls.every((call) => !/coupon\/|customer|tag/.test(call.path)), "no template, customer or tag operation for a bearer coupon");
 });
@@ -90,13 +91,14 @@ test("the payload is Per Store / one use, Everyone and whole-store, with no obje
   const app = harness(); const claim = await app.reserve(); await app.provision(claim.id);
   const [body] = app.postBodies();
   assert.equal(body.usageLimitType, "Per Store"); assert.equal(body.usageLimit, 1); assert.equal(body.availableTo, "Everyone"); assert.equal(body.appliesTo, "Store");
-  for (const key of ["availableToObjectIds", "appliesToObjectIds", "shippingDiscount", "minimumCartAmount"]) assert.equal(key in body, false, key);
+  assert.equal(body.cartRequirementType, "None");
+  for (const key of ["availableToObjectIds", "appliesToObjectIds", "shippingDiscount", "shippingDiscountType", "productDiscount", "productDiscountType", "minimumCartAmount", "cartRequirement", "cartRequirementCountType", "cartRequirementMaximum"]) assert.equal(key in body, false, key);
 });
 
 test("fixed amounts map to exact integer cents and whole percentages map exactly; minimums and validity never use float math", async () => {
   for (const [offer, type, value] of [[{ discountAmountCents: 1999 }, "Dollar Off", 1999], [{ discountAmountCents: 1 }, "Dollar Off", 1], [{ discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 1500 }, "Percentage Off", 15], [{ discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 10000 }, "Percentage Off", 100]] as const) {
     const app = harness({ offer: { ...offer, minimumSubtotalCents: 4999 } }); const claim = await app.reserve(); await app.provision(claim.id);
-    const [body] = app.postBodies(); assert.equal(body.productDiscountType, type); assert.equal(body.productDiscount, value); assert.equal(body.minimumCartAmount, 4999);
+    const [body] = app.postBodies(); assert.equal(body.discountType, type); assert.equal(body.discount, value); assert.equal(body.cartRequirement, 4999); assert.equal(body.cartRequirementType, "Minimum Purchase Amount"); assert.equal(body.cartRequirementCountType, "All Items");
   }
 });
 
@@ -188,10 +190,13 @@ test("an expired unissued claim is refunded without any provider call; an expire
 
 // ── Selected products ─────────────────────────────────────────────────────────
 
-test("selected-product coupons are unissuable under the production contract: no points, no claim, no provider traffic", async () => {
+test("selected-product coupons issue under the production contract with the live-proven Product scope; a claimant-only selected offer stays unissuable", async () => {
   const app = harness({ appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-b", "wine-a"] });
-  await assert.rejects(app.reserve(), { code: "COUPON_CONTRACT_UNVERIFIED" });
-  assert.equal(app.claims().length, 0); assert.equal(app.balance(), 500); assert.equal(app.ledger.size, 0); assert.equal(app.offer().reservedClaimCount, 0); assert.equal(app.calls.length, 0);
+  const claim = await app.reserve(); assert.equal((await app.provision(claim.id))?.status, "ISSUED");
+  const [body] = app.postBodies(); assert.equal(body.appliesTo, "Product"); assert.deepEqual(body.appliesToObjectIds, ["wine-a", "wine-b"]); assert.equal(body.availableTo, "Everyone");
+  const claimant = harness({ appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-a"], mode: "CLAIMANT_ONLY", user: verifiedEmail });
+  await assert.rejects(claimant.reserve(), { code: "COUPON_CONTRACT_UNVERIFIED" });
+  assert.equal(claimant.claims().length, 0); assert.equal(claimant.balance(), 500); assert.equal(claimant.ledger.size, 0); assert.equal(claimant.offer().reservedClaimCount, 0); assert.equal(claimant.calls.length, 0);
 });
 
 test("with a proven product-scope enum the mapping is exact and ID-sorted, validated against the catalog at reservation", async () => {
@@ -264,14 +269,21 @@ test("a legacy claimant-only offer still issues with the merchant template's obs
   assert.ok(app.calls.every((call) => !call.path.includes("legacy-template")), "the template is never read");
 });
 
-test("a pre-refinement claim already mid-issuance recovers its existing coupon instead of creating a second one", async () => {
-  const app = harness(); const code = `SQRA${"B".repeat(32)}`; const created = new Date("2026-10-10T00:00:12.345Z");
-  app.tables.commerceRewardRedemption.push({ id: "historic", userId: "user", brandId: "brand", offerId: "offer", provider: "COMMERCE7", connectionId: "connection", externalAccountId: "synthetic-tenant", rewardMode: "DISCOUNT", status: "POINTS_DEBITED", provisioningState: "FAILED_RETRYABLE", code, createdAt: created, expiresAt: new Date("2026-11-09T00:00:12.345Z"), pointsCost: 100, discountType: "FIXED_AMOUNT", discountAmountCents: 1000, discountPercentageBasisPoints: null, currencyCode: "CAD", couponCreateAttempted: true, tagCreateAttempted: false, entitlementEverGranted: false, needsManualReview: false, provisioningOwner: null, providerLastCheckedAt: null, providerCustomerId: null, providerTagId: null, slotReleased: false, reconcileAttempts: 1,
-    rewardConfigSnapshot: { templateCouponId: "legacy-template", template: legacyTemplate("ANYONE_WITH_CODE"), eligibilityMode: "ANYONE_WITH_CODE", title: "Old title", minimumSubtotalCents: null } });
-  // The coupon was created by the pre-refinement build: exact-millisecond dates, the old title, null ID lists.
-  app.tenant.coupons.push({ id: "native-existing", code, title: "Old title", usageLimitType: "Per Store", usageLimit: 1, appliesTo: "Store", appliesToObjectIds: null, productDiscountType: "Dollar Off", productDiscount: 1000, shippingDiscountType: "No Discount", shippingDiscount: null, startDate: created.toISOString(), endDate: "2026-11-09T00:00:12.345Z", status: "Enabled", minimumCartAmount: null, availableTo: "Everyone", availableToObjectIds: null });
-  const result = await app.provision("historic");
-  assert.equal(result?.status, "ISSUED"); assert.equal(result?.externalDiscountId, "native-existing"); assert.equal(couponPosts(app).length, 0);
+test("a pending claim whose coupon already exists is recovered by exact code instead of posting again, from either read representation only when proven", async () => {
+  const code = `SQRA${"B".repeat(32)}`; const created = new Date("2026-10-10T00:00:12.345Z");
+  const historicClaim = { id: "historic", userId: "user", brandId: "brand", offerId: "offer", provider: "COMMERCE7", connectionId: "connection", externalAccountId: "synthetic-tenant", rewardMode: "DISCOUNT", status: "POINTS_DEBITED", provisioningState: "FAILED_RETRYABLE", code, createdAt: created, expiresAt: new Date("2026-11-09T00:00:12.345Z"), pointsCost: 100, discountType: "FIXED_AMOUNT", discountAmountCents: 1000, discountPercentageBasisPoints: null, currencyCode: "CAD", couponCreateAttempted: true, tagCreateAttempted: false, entitlementEverGranted: false, needsManualReview: false, provisioningOwner: null, providerLastCheckedAt: null, providerCustomerId: null, providerTagId: null, slotReleased: false, reconcileAttempts: 1, externalDiscountId: null, canonicalOrderId: null, usedAt: null,
+    rewardConfigSnapshot: { templateCouponId: "legacy-template", template: legacyTemplate("ANYONE_WITH_CODE"), eligibilityMode: "ANYONE_WITH_CODE", title: "Old title", minimumSubtotalCents: null } };
+  const common = { code, title: "Old title", type: "Product", usageLimitType: "Per Store", usageLimit: 1, appliesTo: "Store", appliesToObjectIds: "", status: "Enabled", availableTo: "Everyone", availableToObjectIds: "", startDate: created.toISOString(), endDate: "2026-11-09T00:00:12.345Z" };
+  // Current read representation (as the create echo reports it): proven, so the existing coupon is adopted with no POST.
+  const current = harness(); current.tables.commerceRewardRedemption.push(structuredClone(historicClaim));
+  current.tenant.coupons.push({ id: "native-existing", ...common, discountType: "Dollar Off", discount: 1000, dollarOffDiscountApplies: "Once Per Order", cartRequirementType: "None" });
+  const recovered = await current.provision("historic");
+  assert.equal(recovered?.status, "ISSUED"); assert.equal(recovered?.externalDiscountId, "native-existing"); assert.equal(couponPosts(current).length, 0);
+  // Historical read fields with no once-per-order report cannot prove a dollar-off coupon's terms: review, never re-post or refund.
+  const historical = harness(); historical.tables.commerceRewardRedemption.push(structuredClone(historicClaim));
+  historical.tenant.coupons.push({ id: "native-existing", ...common, type: undefined, productDiscountType: "Dollar Off", productDiscount: 1000, shippingDiscountType: "No Discount", shippingDiscount: null, minimumCartAmount: null });
+  const reviewed = await historical.provision("historic");
+  assert.equal(reviewed?.provisioningState, "MANUAL_REVIEW"); assert.equal(reviewed?.status, "POINTS_DEBITED"); assert.equal(couponPosts(historical).length, 0); assert.equal(historical.balance(), 500);
 });
 
 test("a historical claim whose frozen terms disagree with its columns goes to review instead of issuing", async () => {
@@ -293,13 +305,15 @@ test("claims are bound to their Brand, user and original connection; foreign cal
   await app.provision(claim.id); assert.equal(app.calls.length, 0);
 });
 
-test("exclusive access stays draft-only: it cannot be activated, claimed or provisioned, and never reaches the provider", async () => {
-  const app = harness();
+test("exclusive access activates only after live Tag and Product reads; an unconfigured exclusive offer is refused before any debit", async () => {
+  const tenant = fakeTenant({ tags: [{ id: "synthetic-customer-tag-id", title: "Rare Wine Members" }], products: [{ id: "wine-a", security: { availableTo: "Tag", availableToObjectIds: ["synthetic-customer-tag-id"] } }] });
+  const app = harness({ tenant }); secureForExclusive(app, "wine-a");
   const exclusive = { ...offerBody, rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", discountEnabled: false, productIds: ["wine-a"], maxTotalRedemptions: 25 };
   assert.equal((await app.save({ ...exclusive, isActive: false })).rewardMode, "EXCLUSIVE_PRODUCT_ACCESS");
-  await assert.rejects(app.save({ ...exclusive, isActive: true }), { code: "INVALID_OFFER" });
-  Object.assign(app.offer(), { rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", isActive: true });
-  await assert.rejects(app.reserve(), { code: "UNSUPPORTED_ACCESS" }); assert.equal(app.calls.length, 0); assert.equal(app.balance(), 500);
+  assert.equal((await app.save({ ...exclusive, isActive: true })).isActive, true);
+  assert.ok(app.calls.every((call) => call.method === "GET"), "saving never writes");
+  Object.assign(app.offer(), { rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", isActive: true }); // no frozen exclusive configuration
+  await assert.rejects(app.reserve(), { code: "INVALID_OFFER" }); assert.equal(app.balance(), 500); assert.equal(app.claims().length, 0);
 });
 
 // ── Diagnostics ───────────────────────────────────────────────────────────────

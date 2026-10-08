@@ -1,0 +1,21 @@
+{
+  "evidence": {
+    "source": "Operator's direct live sandbox probe of POST https://api.commerce7.com/v1/coupon. Sanitized by the operator; the body below is exactly what was returned.",
+    "sentButNotFlagged": ["title", "code", "status", "usageLimitType", "usageLimit", "appliesTo", "availableTo", "startDate", "endDate"],
+    "caution": "Not being flagged means the live request schema raised no error for that field. It does not prove the field's semantic effect."
+  },
+  "status": 422,
+  "body": {
+    "statusCode": 422,
+    "type": "validationError",
+    "message": "One or more elements is missing or invalid",
+    "errors": [
+      { "field": "type", "message": "required" },
+      { "field": "discountType", "message": "required" },
+      { "field": "discount", "message": "required" },
+      { "field": "productDiscountType", "message": "invalid additional property" },
+      { "field": "productDiscount", "message": "invalid additional property" },
+      { "field": "shippingDiscountType", "message": "invalid additional property" }
+    ]
+  }
+}
