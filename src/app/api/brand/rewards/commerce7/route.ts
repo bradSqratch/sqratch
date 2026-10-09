@@ -3,7 +3,7 @@ import { NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getBrandManagementContext, getBrandContextFailure } from "@/lib/brand-auth";
 import { getActiveCommerceConnection, isConnectionUsable } from "@/lib/commerce/connection-service";
-import { COMMERCE7_EDIT_SAFE_CLAIM, COMMERCE7_REWARD_CAPABILITIES, commerce7ClaimAccessState, commerce7ExclusiveAccessStatus, commerce7ExclusiveSecurity, commerce7MembershipGuidance, commerce7OfferEditable, commerce7RewardReadiness, frozenExclusiveAccess, safeClaimDiagnostic, serializeBrandCommerce7Config } from "@/lib/commerce7-reward-domain";
+import { COMMERCE7_EDIT_SAFE_CLAIM, COMMERCE7_REWARD_CAPABILITIES, commerce7ClaimAccessState, commerce7OfferEligibility, commerce7ExclusiveAccessStatus, commerce7ExclusiveSecurity, commerce7MembershipGuidance, commerce7OfferEditable, commerce7RewardReadiness, frozenExclusiveAccess, safeClaimDiagnostic, serializeBrandCommerce7Config } from "@/lib/commerce7-reward-domain";
 import { getCommerce7AppConfig } from "@/lib/commerce/providers/commerce7";
 import { claimTagTitle } from "@/lib/commerce/providers/commerce7-rewards-client";
 import { rewardErrorResponse } from "@/lib/commerce7-reward-http";
@@ -31,9 +31,10 @@ export async function GET() {
     // Products whose Product Security has never been read (a catalog list may omit it): a count only, so the picker can say
     // "sync products" instead of "no eligible products".
     const securityUnknownCount = catalog.filter((product) => { const metadata = product.providerMetadata; return !metadata || typeof metadata !== "object" || Array.isArray(metadata) || !("security" in metadata); }).length;
+    const offerProduct = (offer: { products: { externalProductId: string }[] }) => catalog.find((row) => row.externalId === offer.products[0]?.externalProductId) ?? null;
     const exclusiveDetails = (offer: { rewardMode: string; commerce7Config: unknown; products: { externalProductId: string }[] }) => {
       if (offer.rewardMode !== "EXCLUSIVE_PRODUCT_ACCESS") return { exclusiveAccessStatus: null };
-      const product = catalog.find((row) => row.externalId === offer.products[0]?.externalProductId) ?? null;
+      const product = offerProduct(offer);
       const frozen = frozenExclusiveAccess(offer.commerce7Config);
       return {
         exclusiveAccessStatus: commerce7ExclusiveAccessStatus(offer.commerce7Config, product),
@@ -48,7 +49,9 @@ export async function GET() {
     };
     return NextResponse.json({ providers: { SHOPIFY: !!shopify && isConnectionUsable(shopify), COMMERCE7: !!commerce7 && isConnectionUsable(commerce7) }, connection: commerce7 ? { id: commerce7.id, displayName: commerce7.displayName, currencyCode: commerce7.currencyCode, status: commerce7.status } : null, capabilities: COMMERCE7_REWARD_CAPABILITIES,
       readiness: commerce7RewardReadiness(!!getCommerce7AppConfig()),
-      offers: offers.map((offer) => ({ ...offer, commerce7Config: serializeBrandCommerce7Config(offer.commerce7Config, offer.rewardMode), ...exclusiveDetails(offer), editable: commerce7OfferEditable(offer.reservedClaimCount, offer._count.redemptions, safeClaims.find((row) => row.offerId === offer.id)?._count._all ?? 0), totalClaims: offer.reservedClaimCount, issuedCount: counts.filter((count) => count.offerId === offer.id && count.entitlementEverGranted).reduce((sum, count) => sum + count._count._all, 0) })),
+      offers: offers.map((offer) => ({ ...offer, commerce7Config: serializeBrandCommerce7Config(offer.commerce7Config, offer.rewardMode), ...exclusiveDetails(offer),
+        // Stored Active/Inactive (isActive) and current claim eligibility are reported separately; neither changes the other.
+        eligibility: commerce7OfferEligibility(offer, { productIds: offer.products.map((row) => row.externalProductId), exclusiveProduct: offer.rewardMode === "EXCLUSIVE_PRODUCT_ACCESS" ? offerProduct(offer) : null }), editable: commerce7OfferEditable(offer.reservedClaimCount, offer._count.redemptions, safeClaims.find((row) => row.offerId === offer.id)?._count._all ?? 0), totalClaims: offer.reservedClaimCount, issuedCount: counts.filter((count) => count.offerId === offer.id && count.entitlementEverGranted).reduce((sum, count) => sum + count._count._all, 0) })),
       claims: claims.map((claim) => {
         const eligibilityMode = storedCommerce7Eligibility(claim.rewardConfigSnapshot, claim.rewardMode);
         const exclusive = claim.rewardMode === "EXCLUSIVE_PRODUCT_ACCESS";

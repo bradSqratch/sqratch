@@ -21,7 +21,7 @@ test("every discount save path (create, edit, drafts, selected products) perform
   const app = harness({ appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-a"], tenant: fakeTenant({ tags: [{ id: "synthetic-customer-tag-id", title: "Rare Wine Members" }] }) }); secureForExclusive(app, "wine-a");
   await app.save({ ...offerBody, appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-a", "wine-b"], isActive: false });
   await app.save({ ...offerBody, appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-a", "wine-b"], isActive: true });
-  await app.save({ ...offerBody, isActive: false, eligibilityMode: "CLAIMANT_ONLY" }, "offer");
+  await app.save({ ...offerBody, isActive: false, eligibilityMode: "ANYONE_WITH_CODE" }, "offer");
   await app.save({ ...offerBody, isActive: true, eligibilityMode: "ANYONE_WITH_CODE" }, "offer");
   assert.equal(app.calls.length, 0); assert.equal(app.clientsCreated(), 0);
   await app.save({ ...offerBody, rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", isActive: false, discountEnabled: false, productIds: ["wine-a"], maxTotalRedemptions: 25 }, "offer");
@@ -37,33 +37,31 @@ test("save validates selected products against this connection's catalog and nev
   assert.equal(app.calls.length, 0);
 });
 
-test("the still-unproven claimant-only branch saves as a draft but cannot be activated; selected products now go live; nothing is written on rejection", async () => {
+test("a claimant-only discount is refused on every save (draft or active, create or edit); selected products go live; nothing is written on rejection", async () => {
   const app = harness();
-  await assert.rejects(app.save({ ...offerBody, eligibilityMode: "CLAIMANT_ONLY", isActive: true }), { code: "COUPON_CONTRACT_UNVERIFIED" });
-  assert.equal((await app.save({ ...offerBody, eligibilityMode: "CLAIMANT_ONLY", isActive: false })).isActive, false);
+  for (const isActive of [true, false]) await assert.rejects(app.save({ ...offerBody, eligibilityMode: "CLAIMANT_ONLY", isActive }), { code: "CLAIMANT_DISCOUNT_RETIRED" });
   assert.equal((await app.save({ ...offerBody, appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-a"], isActive: true })).isActive, true, "the live 201 proved the Product scope");
-  await assert.rejects(app.save({ ...offerBody, eligibilityMode: "CLAIMANT_ONLY", appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-a"], isActive: true }), { code: "COUPON_CONTRACT_UNVERIFIED" });
+  await assert.rejects(app.save({ ...offerBody, eligibilityMode: "CLAIMANT_ONLY", appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-a"], isActive: true }), { code: "CLAIMANT_DISCOUNT_RETIRED" });
   const before = JSON.stringify(app.offer());
-  await assert.rejects(app.save({ ...offerBody, eligibilityMode: "CLAIMANT_ONLY", isActive: true }, "offer"), { code: "COUPON_CONTRACT_UNVERIFIED" });
+  await assert.rejects(app.save({ ...offerBody, eligibilityMode: "CLAIMANT_ONLY", isActive: true }, "offer"), { code: "CLAIMANT_DISCOUNT_RETIRED" });
   assert.equal(JSON.stringify(app.offer()), before); assert.equal(app.calls.length, 0);
 });
 
-test("once a Coupon enum is proven in the contract, the same branch activates without any template", async () => {
+test("discounts are Anyone with the code only: even a proven customer-tag enum cannot save a claimant-only discount", async () => {
   const app = harness({ contract: verifiedContract });
-  const claimant = await app.save({ ...offerBody, eligibilityMode: "CLAIMANT_ONLY", isActive: true });
-  assert.equal(claimant.isActive, true); assert.deepEqual(claimant.commerce7Config, { eligibilityMode: "CLAIMANT_ONLY", discountEnabled: true });
+  await assert.rejects(app.save({ ...offerBody, eligibilityMode: "CLAIMANT_ONLY", isActive: true }), { code: "CLAIMANT_DISCOUNT_RETIRED" });
   assert.equal((await app.save({ ...offerBody, appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-a"], isActive: true })).appliesTo, "SPECIFIC_PRODUCTS");
   assert.equal(app.calls.length, 0);
 });
 
-test("editing keeps a legacy offer's binding and native evidence when still valid, and drops it when the edit changes the scope", async () => {
+test("a legacy claimant-only discount is never silently made public: only an explicit, confirmed edit changes it", async () => {
   const app = harness({ mode: "CLAIMANT_ONLY", config: "LEGACY_TEMPLATE" });
-  const kept = await app.save({ ...offerBody, title: "Renamed" }, "offer");   // no eligibilityMode: the stored binding is retained
-  const config = kept.commerce7Config as Row;
-  assert.equal(config.eligibilityMode, "CLAIMANT_ONLY"); assert.equal((config.template as Row).availableTo, "legacy-customer-tag"); assert.equal(kept.isActive, true);
-  const moved = await app.save({ ...offerBody, appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-b"], isActive: false, eligibilityMode: "CLAIMANT_ONLY" }, "offer");
-  assert.ok(!("template" in (moved.commerce7Config as Row)));
-  await assert.rejects(app.save({ ...offerBody, appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-b"], isActive: true, eligibilityMode: "CLAIMANT_ONLY" }, "offer"), { code: "COUPON_CONTRACT_UNVERIFIED" });
+  const before = JSON.stringify(app.offer());
+  await assert.rejects(app.save({ ...offerBody, title: "Renamed" }, "offer"), { code: "CLAIMANT_DISCOUNT_RETIRED" }, "no eligibilityMode: the stored binding is retained, so the edit is refused");
+  await assert.rejects(app.save({ ...offerBody, eligibilityMode: "ANYONE_WITH_CODE" }, "offer"), { code: "ELIGIBILITY_CHANGE_UNCONFIRMED" });
+  assert.equal(JSON.stringify(app.offer()), before, "the saved record is unchanged until confirmed");
+  const confirmed = await app.save({ ...offerBody, eligibilityMode: "ANYONE_WITH_CODE", confirmPublicEligibility: true }, "offer");
+  assert.deepEqual(confirmed.commerce7Config, { eligibilityMode: "ANYONE_WITH_CODE", discountEnabled: true }); assert.equal(app.calls.length, 0);
   // A bearer edit of a legacy bearer offer is verified by the contract, so the stored template is dropped, not required.
   const bearer = harness({ config: "LEGACY_TEMPLATE" });
   const saved = await bearer.save({ ...offerBody }, "offer");

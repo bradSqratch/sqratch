@@ -123,9 +123,9 @@ test("tag and coupon recovery require exact unique results and complete search",
 test("redemption reconciliation requires exact order, coupon, customer, tenant/brand and paid version", () => {
   const order = { id: "canonical", provider: "COMMERCE7", brandId: "brand", connectionId: "connection", externalOrderId: "native-order", financialStatus: "PAID", cancelledAt: null, totalMinor: BigInt(1000), providerUpdatedAt: start } as CommerceOrder;
   const claim = { id: "claim", provider: "COMMERCE7", brandId: "brand", connectionId: "connection", providerCustomerId: "alice", externalDiscountId: "coupon", code, status: "ISSUED" } as CommerceRewardRedemption;
-  const raw = { id: "native-order", customerId: "alice", updatedAt: start.toISOString(), coupons: [{ id: "coupon", code }] };
+  const raw = { id: "native-order", customerId: "alice", updatedAt: start.toISOString(), coupons: [{ couponId: "coupon", id: "applied-entry", code }] };
   assert.equal(exactCommerce7RewardOrderMatch(raw, order, claim), true);
-  for (const change of [{ customerId: "bob" }, { id: "other-order" }, { updatedAt: end.toISOString() }, { coupons: [{ code }] }, { coupons: [{ id: "coupon", code: "OTHER" }] }, { coupons: [code] }, { coupons: [{ id: "coupon", code }, { id: "coupon", code }] }]) assert.equal(exactCommerce7RewardOrderMatch({ ...raw, ...change }, order, claim), false);
+  for (const change of [{ customerId: "bob" }, { id: "other-order" }, { updatedAt: end.toISOString() }, { coupons: [{ code }] }, { coupons: [{ id: "coupon", code }] }, { coupons: [{ couponId: "coupon", id: "applied-entry", code: "OTHER" }] }, { coupons: [code] }, { coupons: [{ couponId: "coupon", id: "a", code }, { couponId: "coupon", id: "b", code }] }]) assert.equal(exactCommerce7RewardOrderMatch({ ...raw, ...change }, order, claim), false);
   for (const change of [{ brandId: "other-brand" }, { connectionId: "other-store" }, { financialStatus: "PENDING" }, { cancelledAt: start }, { totalMinor: BigInt(0) }]) assert.equal(exactCommerce7RewardOrderMatch(raw, { ...order, ...change } as CommerceOrder, claim), false);
 });
 test("claim DTO hides native customer/tag IDs, provider diagnostics and unready coupon codes", () => {
@@ -145,7 +145,7 @@ test("tag-filter verification rejects leaked/shared eligibility and validates pi
 test("revoked and expired claims can record a prior purchase without inventing eligibility", () => {
   const order = { provider: "COMMERCE7", brandId: "brand", connectionId: "connection", externalOrderId: "order", financialStatus: "PAID", cancelledAt: null, totalMinor: BigInt(1000), providerUpdatedAt: start, providerCreatedAt: start } as CommerceOrder;
   const claim = { provider: "COMMERCE7", brandId: "brand", connectionId: "connection", providerCustomerId: "alice", externalDiscountId: "coupon", code, status: "CANCELLED", entitlementEverGranted: true, expiresAt: end } as CommerceRewardRedemption;
-  const raw = { id: "order", customerId: "alice", updatedAt: start.toISOString(), coupons: [{ id: "coupon", code }] };
+  const raw = { id: "order", customerId: "alice", updatedAt: start.toISOString(), coupons: [{ couponId: "coupon", id: "applied-entry", code }] };
   assert.equal(exactCommerce7RewardOrderMatch(raw, order, claim), true);
   assert.equal(exactCommerce7RewardOrderMatch(raw, order, { ...claim, entitlementEverGranted: false }), false);
   assert.equal(exactCommerce7RewardOrderMatch(raw, { ...order, providerCreatedAt: new Date(end.getTime() + 1) }, claim), false);

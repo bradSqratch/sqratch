@@ -71,8 +71,8 @@ test("a saved exclusive draft fails closed when the product's security changes o
   assert.equal(domain.commerce7ExclusiveAccessStatus(config, product), "CONFIGURED");
   assert.equal(domain.commerce7ExclusiveAccessStatus(config, null), "PRODUCT_UNAVAILABLE");
   assert.equal(domain.commerce7ExclusiveAccessStatus(config, { ...product, isAvailable: false }), "PRODUCT_UNAVAILABLE");
-  assert.equal(domain.commerce7ExclusiveAccessStatus(config, { ...product, providerMetadata: secured("Tag", [TAG, "second"]) }), "MULTI_TAG_UNVERIFIED", "a second tag keeps it a draft");
-  assert.equal(domain.commerce7ExclusiveAccessStatus(config, { ...product, providerMetadata: secured("Tag", [TAG, "second"]) }, true), "CONFIGURED", "only once multi-tag access is verified");
+  assert.equal(domain.commerce7ExclusiveAccessStatus(config, { ...product, providerMetadata: secured("Tag", [TAG, "second"]) }), "CONFIGURED", "another tag on the product grants access independently (verified OR semantics)");
+  assert.equal(domain.commerce7ExclusiveAccessStatus(config, { ...product, providerMetadata: secured("Tag", [TAG, "second"]) }, false), "MULTI_TAG_UNVERIFIED", "the gate remains for an unverified contract");
   assert.equal(domain.commerce7ExclusiveAccessStatus(config, { ...product, providerMetadata: secured("Tag", ["another-tag"]) }), "TAG_REMOVED");
   for (const providerMetadata of [secured("Public", []), secured("Tag", []), null]) assert.equal(domain.commerce7ExclusiveAccessStatus(config, { ...product, providerMetadata }), "SECURITY_CHANGED");
   assert.equal(domain.commerce7ExclusiveAccessStatus(config, { ...product, externalId: "other" }), "PRODUCT_UNAVAILABLE");
@@ -82,7 +82,7 @@ test("a saved exclusive draft fails closed when the product's security changes o
 // ── Saving an exclusive draft ─────────────────────────────────────────────────
 
 const exclusiveBody = { ...offerBody, rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", isActive: false, discountEnabled: false, maxTotalRedemptions: 25, productIds: ["wine-a"] };
-function securedHarness() { const app = harness({ tenant: fakeTenant({ tags: [{ id: TAG, title: "SQRATCH Rare Wine Test", type: "Manual", objectType: "Customer" }] }) }); app.tables.connectedCommerceProduct.find((p) => p.externalId === "wine-a")!.providerMetadata = secured("Tag", [TAG]); app.tables.connectedCommerceProduct.find((p) => p.externalId === "wine-b")!.providerMetadata = secured("Public", []); return app; }
+function securedHarness(options: { multiTagAccessVerified?: boolean } = {}) { const app = harness({ tenant: fakeTenant({ tags: [{ id: TAG, title: "SQRATCH Rare Wine Test", type: "Manual", objectType: "Customer" }] }), ...options }); app.tables.connectedCommerceProduct.find((p) => p.externalId === "wine-a")!.providerMetadata = secured("Tag", [TAG]); app.tables.connectedCommerceProduct.find((p) => p.externalId === "wine-b")!.providerMetadata = secured("Public", []); return app; }
 
 test("saving an exclusive draft freezes the product and its Customer Tag after one read-only Tag lookup: no write, points, claim, coupon or tag", async () => {
   const app = securedHarness(); const saved = await app.save(exclusiveBody);
@@ -108,8 +108,8 @@ test("an exclusive draft is refused for a public, ambiguous, unavailable or fore
   }
 });
 
-test("a multi-tag exclusive product stays impossible to activate or claim until multi-tag access is verified", async () => {
-  const app = securedHarness(); app.tables.connectedCommerceProduct.find((p) => p.externalId === "wine-a")!.providerMetadata = secured("Tag", [TAG, "second"]);
+test("with an UNVERIFIED multi-tag contract (injected), a multi-tag product cannot be activated or claimed", async () => {
+  const app = securedHarness({ multiTagAccessVerified: false }); app.tables.connectedCommerceProduct.find((p) => p.externalId === "wine-a")!.providerMetadata = secured("Tag", [TAG, "second"]);
   await app.save({ ...exclusiveBody, exclusiveTagId: TAG }); const config = app.tables.brandRewardOffer.at(-1)!.commerce7Config;
   await assert.rejects(app.save({ ...exclusiveBody, exclusiveTagId: TAG, isActive: true }), { code: "MULTI_TAG_UNVERIFIED" });
   Object.assign(app.offer(), { rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", appliesTo: "SPECIFIC_PRODUCTS", isActive: false, discountAmountCents: null, commerce7Config: config });
@@ -204,7 +204,7 @@ function tagOptionsRoute(options: { products?: Row[]; tags?: Record<string, Row 
 
 test("Brand tag options resolve each security tag live by UUID: readable titles, only Manual Customer tags selectable, shared products listed, no preselection for several tags", async () => {
   const app = tagOptionsRoute(); const { status, body } = await app.get("productId=rare");
-  assert.equal(status, 200); assert.equal(body.tagCount, 3); assert.equal(body.multiTagAccessVerified, false); assert.equal(body.preselectedTagId, null);
+  assert.equal(status, 200); assert.equal(body.tagCount, 3); assert.equal(body.multiTagAccessVerified, true); assert.equal(body.preselectedTagId, null, "several tags still need an explicit choice");
   assert.deepEqual(body.tags.map((tag: Row) => [tag.title, tag.selectable, tag.reason]), [["SQRATCH Rare Wine Test", true, null], ["Library Members", true, null], ["Big Spenders", false, "NOT_MANUAL"]]);
   assert.deepEqual(body.tags[0].sharedProductTitles, ["Library Cabernet"]); assert.equal(body.tags[0].sharedProductCount, 1); assert.equal(body.tags[1].sharedProductCount, 0);
   assert.deepEqual(app.reads, ["tenant:synthetic-tenant", `GET tag ${TAG}`, `GET tag ${SECOND}`, `GET tag ${AUTO}`], "read-only, the connection's own tenant");

@@ -46,7 +46,7 @@ test("DISABLE is always available, even when the store is disconnected or the st
 
 test("draft-only branches cannot be enabled: native claimant-only and unconfigured exclusive access stay inactive; selected products now enable", async () => {
   const claimant = harness({ mode: "CLAIMANT_ONLY", offer: { isActive: false } });
-  await assert.rejects(claimant.setActive("ENABLE"), { code: "COUPON_CONTRACT_UNVERIFIED" }); assert.equal(claimant.offer().isActive, false); assert.equal(claimant.offerWrites.length, 0);
+  await assert.rejects(claimant.setActive("ENABLE"), { code: "CLAIMANT_DISCOUNT_RETIRED" }); assert.equal(claimant.offer().isActive, false); assert.equal(claimant.offerWrites.length, 0);
   const selected = harness({ appliesTo: "SPECIFIC_PRODUCTS", productIds: ["wine-a"], offer: { isActive: false } });
   assert.equal((await selected.setActive("ENABLE")).isActive, true, "the live 201 proved the Product scope");
   // An exclusive offer with no frozen product and Customer Tag is never enabled (configured ones: commerce7-exclusive-claims.test.ts).
@@ -55,14 +55,14 @@ test("draft-only branches cannot be enabled: native claimant-only and unconfigur
   for (const app of [claimant, selected, exclusive]) { assert.equal(app.calls.length, 0); assert.equal(app.clientsCreated(), 0); }
 });
 
-test("a legacy offer keeps its observed native evidence and can be re-enabled; a proven contract enables the same branch without a template", async () => {
-  const legacy = harness({ mode: "CLAIMANT_ONLY", config: "LEGACY_TEMPLATE", offer: { isActive: false } });
-  assert.equal((await legacy.setActive("ENABLE")).isActive, true);
-  const proven = harness({ mode: "CLAIMANT_ONLY", contract: verifiedContract, offer: { isActive: false }, user: verifiedEmail });
-  assert.equal((await proven.setActive("ENABLE")).isActive, true); assert.equal(proven.calls.length, 0);
-  const tampered = harness({ mode: "CLAIMANT_ONLY", config: "LEGACY_TEMPLATE", offer: { isActive: false } });
-  (tampered.offer().commerce7Config as Row).template = { not: "a native coupon" };
-  await assert.rejects(tampered.setActive("ENABLE"), { code: "INVALID_OFFER" }); assert.equal(tampered.offer().isActive, false);
+test("a legacy claimant-only discount is never re-enabled, with or without native evidence or a proven contract; a legacy bearer offer still is", async () => {
+  for (const app of [harness({ mode: "CLAIMANT_ONLY", config: "LEGACY_TEMPLATE", offer: { isActive: false } }), harness({ mode: "CLAIMANT_ONLY", contract: verifiedContract, offer: { isActive: false }, user: verifiedEmail })]) {
+    const before = JSON.stringify(app.offer());
+    await assert.rejects(app.setActive("ENABLE"), { code: "CLAIMANT_DISCOUNT_RETIRED" });
+    assert.equal(JSON.stringify(app.offer()), before, "the saved record is unchanged"); assert.equal(app.calls.length, 0);
+  }
+  const bearer = harness({ config: "LEGACY_TEMPLATE", offer: { isActive: false } });
+  assert.equal((await bearer.setActive("ENABLE")).isActive, true);
 });
 
 test("a disconnected, replaced, unusable or mismatched store cannot be used to enable an offer", async () => {

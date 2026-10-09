@@ -1,0 +1,21 @@
+{
+  "evidence": {
+    "source": "Operator's live Commerce7 storefront test, 2026-10-09, with a freshly created customer.",
+    "redaction": "Only the observed outcomes and tag titles the operator reported. No customer, email, tag UUID or credential is stored.",
+    "credentials": "None."
+  },
+  "product": {
+    "title": "Rare - 2015 Chardonnay",
+    "securityAvailableTo": "Tag",
+    "securityTagCount": 3,
+    "securityTagTitles": ["SQRATCH Rare Wine Test", "Employee", "Investor"]
+  },
+  "observed": {
+    "noTagCustomerBlocked": true,
+    "noTagCustomerDetail": "Product visible; Add to Cart unavailable.",
+    "oneTagCustomerCanPurchase": true,
+    "singleTagResults": { "SQRATCH Rare Wine Test": "Add to Cart and checkout work", "Employee": "purchasable", "Investor": "purchasable" },
+    "multipleTagsCanPurchase": true
+  },
+  "conclusion": "Commerce7 applies OR semantics to a product secured to several Manual Customer Tags: holding any one of them is sufficient."
+}

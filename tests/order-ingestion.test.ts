@@ -77,6 +77,8 @@ import {
   type OrderIngestionDeps,
   type OrderIngestionOutcome,
 } from "../src/lib/commerce/order-ingestion";
+import { handleCommerce7OrderWebhook } from "../src/lib/commerce/providers/commerce7-order-webhook";
+import { prepareCommerce7OrderForIngestion } from "../src/lib/commerce/providers/commerce7-order-refund-reconciliation";
 
 const FIXED_NOW = new Date("2026-08-07T12:00:00.000Z");
 
@@ -2631,5 +2633,72 @@ describe("PHASE A: finalizeEvent is a fully injectable dependency", () => {
     assert.equal(finalized.length, 1);
     assert.equal(finalized[0].status, "FAILED");
     assert.equal(finalized[0].failureSummary, "MISSING_EXTERNAL_ORDER_ID");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Commerce7 Order Create followed by Update (the #1006 readiness check)
+// ---------------------------------------------------------------------------
+
+/**
+ * Subscribing Order Create alongside the existing Order Update must never duplicate a canonical order. Both deliveries go
+ * through the REAL webhook handler (Basic auth, tenant resolution, Create/Update acceptance, refund-aware prepare) and the
+ * REAL ingestion service; only persistence is the in-memory store above. The bodies differ (action), so their digests and
+ * event ids differ; the order row is keyed by (connectionId, externalOrderId), and `providerUpdatedAt` decides apply/skip.
+ */
+describe("Commerce7 Order Create followed by Update never duplicates the canonical order", () => {
+  const credentials = { u: process.env.COMMERCE7_ORDER_WEBHOOK_USERNAME, p: process.env.COMMERCE7_ORDER_WEBHOOK_PASSWORD };
+  const auth = `Basic ${Buffer.from("synthetic-hook-user:synthetic-hook-pass", "utf8").toString("base64")}`;
+  const c7Order = (updatedAt: string, extra: Record<string, unknown> = {}) => ({
+    id: "c7-order-1006", orderNumber: 1006, subTotal: 1897, shipTotal: 0, taxTotal: 0, total: 1897, paymentStatus: "Paid", fulfillmentStatus: "Fulfilled",
+    createdAt: "2026-10-07T23:40:00.000Z", updatedAt, items: [{ id: "line-1", productId: "rare-chardonnay", productVariantId: "variant-1", productTitle: "Rare - 2015 Chardonnay", sku: "RARE-15", quantity: 1, price: 1897, originalPrice: 1897, tax: 0 }], ...extra,
+  });
+  function setup() {
+    const store = new FakeOrderStore();
+    store.seedConnection(makeConnection({ id: "conn-c7", brandId: "brand-1", provider: CommerceProvider.COMMERCE7 }));
+    const deps = makeDeps(store, { finalizeEvent: async (eventId, data) => { for (const row of store.events.rows.values()) if (row.id === eventId) { row.status = data.status; row.processedAt = store.events.clock; } } });
+    const deliver = (action: string, order: Record<string, unknown>) => handleCommerce7OrderWebhook(new Request("https://sqratch.example/api/commerce7/webhooks/orders", {
+      method: "POST", headers: { authorization: auth, "content-type": "application/json" },
+      body: JSON.stringify({ object: "Order", action, tenantId: "sqratch-sandbox", user: { id: "synthetic-user" }, payload: order }),
+    }) as never, {
+      findConnectionByTenant: async (tenant) => tenant === "sqratch-sandbox" ? { id: "conn-c7", brandId: "brand-1", currencyCode: "CAD", status: "CONNECTED" } : null,
+      ingestionDeps: deps,
+      prepareOrder: (raw, context, tenant) => prepareCommerce7OrderForIngestion(raw, context, tenant, { loadStoredFinancialState: async () => null }),
+    });
+    return { store, deliver };
+  }
+  const orderRows = (store: FakeOrderStore) => [...store.orders.values()].filter((row) => row.externalOrderId === "c7-order-1006");
+
+  test("Create then Update (same version) then Update (newer): one order, updated once; a byte-identical redelivery is a duplicate", async () => {
+    process.env.COMMERCE7_ORDER_WEBHOOK_USERNAME = "synthetic-hook-user"; process.env.COMMERCE7_ORDER_WEBHOOK_PASSWORD = "synthetic-hook-pass";
+    try {
+      const { store, deliver } = setup();
+      assert.equal((await deliver("Create", c7Order("2026-10-07T23:41:00.000Z"))).status, 200);
+      assert.equal(orderRows(store).length, 1); assert.equal(orderRows(store)[0].orderNumber, "1006");
+      assert.equal((await deliver("Update", c7Order("2026-10-07T23:41:00.000Z"))).status, 200, "same version: settled (stale), never a second row");
+      assert.equal(orderRows(store).length, 1);
+      assert.equal((await deliver("Update", c7Order("2026-10-08T09:00:00.000Z", { fulfillmentStatus: "Fulfilled" }))).status, 200);
+      assert.equal(orderRows(store).length, 1); assert.equal(orderRows(store)[0].providerUpdatedAt?.toISOString(), "2026-10-08T09:00:00.000Z");
+      assert.equal((await deliver("Create", c7Order("2026-10-07T23:41:00.000Z"))).status, 200, "byte-identical redelivery of the Create");
+      assert.equal(orderRows(store).length, 1); assert.equal(orderRows(store)[0].providerUpdatedAt?.toISOString(), "2026-10-08T09:00:00.000Z", "an older version never reverts the newer one");
+      assert.equal(store.orders.size, 1); assert.equal(store.events.rows.size, 3, "three distinct deliveries were recorded; the redelivery reused its row");
+      assert.equal(orderRows(store)[0].totalMinor, BigInt(1897), "real provider totals; nothing fabricated");
+    } finally {
+      if (credentials.u === undefined) delete process.env.COMMERCE7_ORDER_WEBHOOK_USERNAME; else process.env.COMMERCE7_ORDER_WEBHOOK_USERNAME = credentials.u;
+      if (credentials.p === undefined) delete process.env.COMMERCE7_ORDER_WEBHOOK_PASSWORD; else process.env.COMMERCE7_ORDER_WEBHOOK_PASSWORD = credentials.p;
+    }
+  });
+
+  test("an Update that arrives before its Create still yields one order at the newest version", async () => {
+    process.env.COMMERCE7_ORDER_WEBHOOK_USERNAME = "synthetic-hook-user"; process.env.COMMERCE7_ORDER_WEBHOOK_PASSWORD = "synthetic-hook-pass";
+    try {
+      const { store, deliver } = setup();
+      assert.equal((await deliver("Update", c7Order("2026-10-08T09:00:00.000Z"))).status, 200);
+      assert.equal((await deliver("Create", c7Order("2026-10-07T23:41:00.000Z"))).status, 200);
+      assert.equal(orderRows(store).length, 1); assert.equal(orderRows(store)[0].providerUpdatedAt?.toISOString(), "2026-10-08T09:00:00.000Z");
+    } finally {
+      if (credentials.u === undefined) delete process.env.COMMERCE7_ORDER_WEBHOOK_USERNAME; else process.env.COMMERCE7_ORDER_WEBHOOK_USERNAME = credentials.u;
+      if (credentials.p === undefined) delete process.env.COMMERCE7_ORDER_WEBHOOK_PASSWORD; else process.env.COMMERCE7_ORDER_WEBHOOK_PASSWORD = credentials.p;
+    }
   });
 });

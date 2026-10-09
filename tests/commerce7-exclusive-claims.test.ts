@@ -346,15 +346,15 @@ test("a membership removed natively after it was recorded blocks finalization fo
 
 // ── Several security tags ───────────────────────────────────────────────────────
 
-test("a product with two or three security tags is refused for claiming until multi-tag access is verified, before any provider call", async () => {
+test("with an UNVERIFIED multi-tag contract (injected), a product with two or three security tags is refused before any provider call", async () => {
   for (const tags of [[TAG, OTHER_TAG], [OTHER_TAG, TAG, THIRD_TAG]]) {
-    const app = exclusiveApp({ tags });
+    const app = exclusiveApp({ tags, multiTag: false });
     await assert.rejects(app.claim(), { code: "MULTI_TAG_UNVERIFIED" }); assert.deepEqual(app.calls, []); assert.equal(app.ledger.size, 0);
   }
 });
 
-test("once multi-tag access is verified, only the selected tag is granted and the product's other tags are untouched", async () => {
-  const app = exclusiveApp({ tags: [OTHER_TAG, TAG, THIRD_TAG], multiTag: true });
+test("verified OR semantics (default contract): only the selected tag is granted and the product's other tags are untouched", async () => {
+  const app = exclusiveApp({ tags: [OTHER_TAG, TAG, THIRD_TAG] });
   await app.claim();
   assert.equal(app.claims()[0].status, "ISSUED"); assert.deepEqual(grants(app).map((call) => call.body), [{ objectId: CUSTOMER, tagId: TAG }]);
   assert.deepEqual(app.tenant.customers[0].tagIds, [TAG]); assert.deepEqual(app.tenant.products[0].security, security([OTHER_TAG, TAG, THIRD_TAG]), "product security is never written");
@@ -410,11 +410,12 @@ test("save: a single-tag product preselects its tag; the UUID is frozen, the tit
   assert.deepEqual(brandView, { eligibilityMode: "CLAIMANT_ONLY", discountEnabled: false, exclusiveTagTitle: "SQRATCH Rare Wine Test" }); assert.ok(!JSON.stringify(brandView).includes(TAG));
 });
 
-test("save: two or three tags require an explicit choice, freeze only the chosen tag, and stay draft-only", async () => {
+test("save: two or three tags require an explicit choice, freeze only the chosen tag, and can go live (OR semantics verified)", async () => {
   const two = exclusiveApp({ tags: [TAG, OTHER_TAG] });
   await assert.rejects(two.save(exclusiveBody), (error: { code: string; message: string }) => error.code === "INVALID_OFFER" && /several Customer Tags/.test(error.message));
   await two.save({ ...exclusiveBody, exclusiveTagId: OTHER_TAG }); assert.equal(stored(two).securityTagId, OTHER_TAG); assert.equal(stored(two).tagTitle, "Library Wine Members");
-  await assert.rejects(two.save({ ...exclusiveBody, exclusiveTagId: OTHER_TAG, isActive: true }), { code: "MULTI_TAG_UNVERIFIED" });
+  const live = exclusiveApp({ tags: [TAG, OTHER_TAG] }); assert.equal((await live.save({ ...exclusiveBody, exclusiveTagId: TAG, isActive: true })).isActive, true); assert.deepEqual(writes(live), []);
+  const gated = exclusiveApp({ tags: [TAG, OTHER_TAG], multiTag: false }); await assert.rejects(gated.save({ ...exclusiveBody, exclusiveTagId: OTHER_TAG, isActive: true }), { code: "MULTI_TAG_UNVERIFIED" });
   const three = exclusiveApp({ tags: [TAG, OTHER_TAG, THIRD_TAG] }); await three.save({ ...exclusiveBody, exclusiveTagId: THIRD_TAG });
   assert.equal(stored(three).securityTagId, THIRD_TAG);
   assert.deepEqual((three.tables.connectedCommerceProduct.find((p) => p.externalId === PRODUCT)!.providerMetadata as Row).security, security([TAG, OTHER_TAG, THIRD_TAG]), "other tags are preserved");
@@ -442,7 +443,9 @@ test("enable: an exclusive draft is enabled after live reads; drift refuses and 
   const deleted = exclusiveApp({ offer: { isActive: false }, tags_: tenantTags.slice(1) });
   await assert.rejects(deleted.setActive("ENABLE"), { code: "TAG_UNAVAILABLE" }); assert.equal(deleted.offer().isActive, false);
   const multi = exclusiveApp({ offer: { isActive: false }, tags: [TAG, OTHER_TAG] });
-  await assert.rejects(multi.setActive("ENABLE"), { code: "MULTI_TAG_UNVERIFIED" }); assert.deepEqual(multi.calls, []);
+  assert.equal((await multi.setActive("ENABLE")).isActive, true, "a multi-tag product enables once its chosen tag is live"); assert.deepEqual(writes(multi), []);
+  const gated = exclusiveApp({ offer: { isActive: false }, tags: [TAG, OTHER_TAG], multiTag: false });
+  await assert.rejects(gated.setActive("ENABLE"), { code: "MULTI_TAG_UNVERIFIED" }); assert.deepEqual(gated.calls, []);
   const removed = exclusiveApp({ offer: { isActive: false } }); removed.tables.connectedCommerceProduct.find((p) => p.externalId === PRODUCT)!.providerMetadata = { security: security([OTHER_TAG]) };
   await assert.rejects(removed.setActive("ENABLE"), { code: "EXCLUSIVE_REVIEW_REQUIRED" });
   const racing = exclusiveApp({ offer: { isActive: false } });

@@ -40,7 +40,7 @@ const EXCLUSIVE_STATUS_MESSAGES: Record<Exclude<Commerce7ExclusiveAccessStatus, 
   PRODUCT_UNAVAILABLE: "The exclusive product is no longer synchronized and available. Sync products and review this reward.",
   NOT_CONFIGURED: "Choose a product secured to a Customer Tag and the tag SQRATCH should grant.",
 };
-type ExclusiveProviderCheck = { ok: true; tagTitle: string } | { ok: false; code: "TAG_UNAVAILABLE" | "PRODUCT_SECURITY_CHANGED" | "MULTI_TAG_UNVERIFIED"; message: string };
+type ExclusiveProviderCheck = { ok: true; tagTitle: string; securityTagIds: string[] } | { ok: false; code: "TAG_UNAVAILABLE" | "PRODUCT_SECURITY_CHANGED" | "MULTI_TAG_UNVERIFIED"; message: string };
 /**
  * Live, read-only proof that an exclusive grant is still legitimate: the frozen tag still exists as a Manual Customer tag and
  * still secures the available product. Matching is by UUID only. Never inside a database transaction.
@@ -52,8 +52,11 @@ async function verifyExclusiveProvider(client: Commerce7RewardsClient, productId
   const security = product?.security ? commerce7ExclusiveSecurity({ security: product.security }) : null;
   if (!product || !product.available || !security || !security.tagIds.includes(tagId)) return { ok: false, code: "PRODUCT_SECURITY_CHANGED", message: "The exclusive product is no longer available and secured to this reward's Customer Tag in Commerce7. The store must review this reward." };
   if (security.tagIds.length > 1 && !multiTag) return { ok: false, code: "MULTI_TAG_UNVERIFIED", message: EXCLUSIVE_STATUS_MESSAGES.MULTI_TAG_UNVERIFIED };
-  return { ok: true, tagTitle: tag.title };
+  // Every tag that secures the product grants storefront access on its own (verified OR semantics).
+  return { ok: true, tagTitle: tag.title, securityTagIds: security.tagIds };
 }
+/** Whether the customer can already buy the product: holds ANY of its live security tags, not only the one SQRATCH grants. */
+const holdsAnySecurityTag = (customer: NativeCustomer, securityTagIds: string[]) => securityTagIds.some((tagId) => customerTagCount(customer, tagId) > 0);
 type ConnectionSummary = { id: string; externalAccountId: string; currencyCode: string | null };
 /**
  * The Customer Tag an exclusive save will grant: the Brand's explicit choice, or the product's only tag. Resolved from the
@@ -78,6 +81,7 @@ async function resolveExclusiveTag(brandId: string, connection: ConnectionSummar
   }
   return { id: tagId, title: tag.title };
 }
+const CLAIMANT_DISCOUNT_RETIRED_MESSAGE = "Discount rewards are issued to anyone with the code. Claiming customer only is no longer offered for discounts; use Exclusive wine access to reward a specific customer.";
 function unverifiedBranchMessage(eligibilityMode: Commerce7RewardEligibility, appliesTo: Commerce7CouponAppliesTo, contract: CouponContract) {
   if (!isCouponBranchSupported(eligibilityMode, "ALL_PRODUCTS", contract)) return "Claiming-customer-only rewards can be saved as drafts but cannot be activated yet. Choose Anyone with the code to go live.";
   return appliesTo === "SPECIFIC_PRODUCTS" ? "Selected-product rewards can be saved as drafts but cannot be activated yet. Choose All products to go live." : "This reward option cannot be activated yet.";
@@ -107,6 +111,10 @@ export async function saveCommerce7Offer(brandId: string, body: unknown, offerId
     }
     const { productIds, discountEnabled, eligibilityMode, exclusiveTagId, ...fields } = parseCommerce7Offer(inputBody, connection.currencyCode);
     const exclusive = fields.rewardMode === "EXCLUSIVE_PRODUCT_ACCESS";
+    // Discount rewards are bearer coupons only. A legacy claimant-only discount record is never silently made public: the Brand
+    // must re-save it as Anyone with the code AND confirm, and until then the stored record is left exactly as it was.
+    if (!exclusive && eligibilityMode === "CLAIMANT_ONLY") throw new RewardClaimError("CLAIMANT_DISCOUNT_RETIRED", CLAIMANT_DISCOUNT_RETIRED_MESSAGE, 400);
+    if (!exclusive && existing?.rewardMode === "DISCOUNT" && storedCommerce7Eligibility(existing.commerce7Config, existing.rewardMode) === "CLAIMANT_ONLY" && row?.confirmPublicEligibility !== true) throw new RewardClaimError("ELIGIBILITY_CHANGE_UNCONFIRMED", "This saved reward was restricted to the claiming customer. Confirm that its coupons may be redeemed by anyone with the code, then save again.", 400);
     const products = await tx.connectedCommerceProduct.findMany({ where: { brandId, connectionId: connection.id, provider: "COMMERCE7", externalId: { in: productIds }, isAvailable: true }, select: { externalId: true, title: true, providerMetadata: true } });
     requireValue(new Set(products.map((p) => p.externalId)).size === productIds.length, "Select products from this Commerce7 connection's synchronized catalog.");
     requireValue(products.length === productIds.length, "Catalog product identity is ambiguous.");
@@ -122,8 +130,12 @@ export async function saveCommerce7Offer(brandId: string, body: unknown, offerId
     const couponEligibility = exclusive ? "ANYONE_WITH_CODE" : eligibilityMode;
     const supported = isCouponBranchSupported(couponEligibility, fields.appliesTo, contract);
     const retained = !exclusive && !supported && discountEnabled && existing ? retainLegacyTemplate(existing.commerce7Config, eligibilityMode, productIds) : null;
-    if (fields.isActive && discountEnabled && !isDiscountTypeSupported(fields.discountType, contract)) throw new RewardClaimError("COUPON_CONTRACT_UNVERIFIED", COMMERCE7_PERCENTAGE_UNVERIFIED_MESSAGE);
-    if (fields.isActive && discountEnabled && !supported && !retained) throw new RewardClaimError("COUPON_CONTRACT_UNVERIFIED", unverifiedBranchMessage(couponEligibility, fields.appliesTo, contract));
+    // Every unverified option is reported, so a Brand fixing one (for example Claiming customer only) is not surprised by the next.
+    const unverified = [
+      ...(fields.isActive && discountEnabled && !supported && !retained ? [unverifiedBranchMessage(couponEligibility, fields.appliesTo, contract)] : []),
+      ...(fields.isActive && discountEnabled && !isDiscountTypeSupported(fields.discountType, contract) ? [COMMERCE7_PERCENTAGE_UNVERIFIED_MESSAGE] : []),
+    ];
+    if (unverified.length) throw new RewardClaimError("COUPON_CONTRACT_UNVERIFIED", unverified.join(" "));
     // Exclusive offers freeze the one product and the ONE Customer Tag SQRATCH will grant (by UUID; the title is display-only),
     // re-checked here against the synchronized catalog. Nothing is written to Commerce7.
     let exclusiveAccess: { productId: string; securityAvailableTo: string; securityTagId: string; tagTitle: string } | null = null;
@@ -188,6 +200,7 @@ export async function setCommerce7OfferActive(brandId: string, offerId: string, 
   if (active.currencyCode !== offer.currencyCode || storedCurrency !== offer.currencyCode) throw new RewardClaimError("CURRENCY_REVIEW_REQUIRED", "The store currency changed. Review this reward before enabling it.");
   const config = object(offer.commerce7Config);
   requireValue(config && storedCommerce7Eligibility(config, offer.rewardMode), "Reward configuration needs review.");
+  if (offer.rewardMode === "DISCOUNT" && storedCommerce7Eligibility(config, offer.rewardMode) === "CLAIMANT_ONLY") throw new RewardClaimError("CLAIMANT_DISCOUNT_RETIRED", "This discount reward was saved as Claiming customer only, which is no longer offered. Edit it, confirm Anyone with the code, then enable it.");
   const productIds = (await deps.db.brandRewardOfferProduct.findMany({ where: { offerId }, select: { externalProductId: true } })).map((row) => row.externalProductId);
   // Limits, windows, discount, currency and draft-only modes: exactly the editor's validators, run on the stored terms.
   const input = parseCommerce7Offer(storedCommerce7OfferInput(offer, productIds), active.currencyCode);
@@ -196,7 +209,11 @@ export async function setCommerce7OfferActive(brandId: string, offerId: string, 
     requireValue(new Set(products.map((product) => product.externalId)).size === input.productIds.length, "Select products from this Commerce7 connection's synchronized catalog.");
   }
   const snapshot = buildRewardSnapshot(offer, config, productIds, contract);
-  if (!commerce7SnapshotIssuable(snapshot, contract)) throw new RewardClaimError("COUPON_CONTRACT_UNVERIFIED", commerce7SnapshotDiscountBlocked(snapshot, contract) ? COMMERCE7_PERCENTAGE_UNVERIFIED_MESSAGE : unverifiedBranchMessage(snapshot.exclusiveAccess ? "ANYONE_WITH_CODE" : snapshot.eligibilityMode, snapshot.appliesTo, contract));
+  if (!commerce7SnapshotIssuable(snapshot, contract)) {
+    const discountBlocked = commerce7SnapshotDiscountBlocked(snapshot, contract);
+    const branchBlocked = !commerce7SnapshotIssuable({ ...snapshot, discount: snapshot.discount && { ...snapshot.discount, type: "FIXED_AMOUNT" } }, contract);
+    throw new RewardClaimError("COUPON_CONTRACT_UNVERIFIED", [...(branchBlocked ? [unverifiedBranchMessage(snapshot.exclusiveAccess ? "ANYONE_WITH_CODE" : snapshot.eligibilityMode, snapshot.appliesTo, contract)] : []), ...(discountBlocked ? [COMMERCE7_PERCENTAGE_UNVERIFIED_MESSAGE] : [])].join(" "));
+  }
   // Exclusive access: the synchronized product must still match exactly, then live reads prove the tag and product security.
   const exclusiveProduct = (where: Pick<Prisma.TransactionClient, "connectedCommerceProduct">) => snapshot.exclusiveAccess ? where.connectedCommerceProduct.findFirst({ where: { brandId, connectionId: offer.connectionId ?? "", provider: "COMMERCE7", externalId: snapshot.exclusiveAccess.productId }, select: { externalId: true, isAvailable: true, providerMetadata: true } }) : Promise.resolve(null);
   const securityOf = (product: { isAvailable: boolean; providerMetadata: unknown } | null) => JSON.stringify(product ? { available: product.isAvailable, security: object(product.providerMetadata)?.security ?? null } : null);
@@ -257,8 +274,10 @@ export async function precheckCommerce7ExclusiveClaim(userId: string, offerId: s
     throw error;
   }
   if (!customer) return proceed; // reservation waits for a Commerce7 account with the same verified email
+  // Access-only rewards sell nothing but access, so a customer who can already buy the product (through this or any other
+  // security tag) is not charged. A reward with a discount still has value and proceeds.
   const accessOnly = object(offer.commerce7Config)?.discountEnabled !== true;
-  return { alreadyEligible: accessOnly && customerTagCount(customer, frozen.tagId) > 0, providerCustomerId: customer.id };
+  return { alreadyEligible: accessOnly && holdsAnySecurityTag(customer, check.securityTagIds), providerCustomerId: customer.id };
 }
 /** The claim endpoint's whole flow: exclusive pre-check, then the unchanged reservation and provisioning saga. */
 export async function claimCommerce7Reward(userId: string, offerId: string, requestKey: unknown, allowedBrandIds: string[], deps = defaults) {
@@ -385,10 +404,12 @@ export async function provisionCommerce7Claim(claimId: string, userId?: string, 
       // Exclusive Wine Access: grant the merchant's existing Manual Customer Tag at most once, verified by a fresh read.
       const access = snapshot.exclusiveAccess;
       const email = normalizeRewardEmail(user.email!);
+      let securityTagIds: string[] = [];
       if (!claim.membershipWriteAttempted && !claim.membershipOwnership) {
         stage = "ACCESS_VERIFY";
         const check = await verifyExclusiveProvider(client, access.productId, access.tagId, multiTagVerified(deps));
         if (!check.ok) throw new RewardClaimError(check.code, check.message);
+        securityTagIds = check.securityTagIds;
       }
       stage = "CUSTOMER_LOOKUP";
       let customer: NativeCustomer | null;
@@ -420,6 +441,11 @@ export async function provisionCommerce7Claim(claimId: string, userId?: string, 
         // Absent. After an attempted write this is never retried blindly: a repeated POST creates a duplicate membership.
         if (claim.membershipWriteAttempted && claim.providerMembershipId) throw new RewardClaimError("MEMBERSHIP_NOT_CONFIRMED", "Commerce7 accepted the access grant but has not confirmed it yet. Check again shortly.");
         if (claim.membershipWriteAttempted) throw new RewardClaimError("MEMBERSHIP_RESULT_UNKNOWN", "A previous access request needs store review. No duplicate request will be sent.");
+        if (!snapshot.discount && holdsAnySecurityTag(customer, securityTagIds)) {
+          // Already able to buy through another of the product's tags: nothing to grant, so an access-only claim is free.
+          await update({ membershipOwnership: "PRE_EXISTING", membershipVerifiedAt: now });
+          return await rewardTransaction(deps.db, async (tx) => refundUnissuedClaim(tx, await tx.commerceRewardRedemption.findUniqueOrThrow({ where: { id: claimId } }), "Your Commerce7 account already had access to this wine, so your points were returned."));
+        }
         stage = "TAG_ASSIGN";
         await update({ membershipWriteAttempted: true });
         let membership: { id: string };

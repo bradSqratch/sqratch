@@ -1,0 +1,25 @@
+{
+  "evidence": {
+    "source": "Operator-supplied Commerce7 Order Create payload for sandbox order #1007 (2026-10-09), reduced to the fields SQRATCH reads.",
+    "redaction": "Order, coupon and applied-entry UUIDs replaced with synthetic values; the coupon code was not supplied and is replaced with a synthetic SQRA code; no customer field is stored.",
+    "credentials": "None."
+  },
+  "order": {
+    "id": "00000000-0000-4000-8000-000000001007",
+    "orderNumber": 1007,
+    "paymentStatus": "Paid",
+    "total": 16272,
+    "discountTotal": 500,
+    "coupons": [
+      {
+        "couponId": "00000000-0000-4000-8000-00000000c005",
+        "id": "00000000-0000-4000-8000-0000000a1007",
+        "code": "SQRA00000000000000000000000000C005",
+        "inUse": true,
+        "quantityUsed": 1,
+        "totalValue": 500
+      }
+    ]
+  },
+  "conclusion": "An order's coupons[] entry is an APPLIED coupon: `couponId` is the native coupon's id (SQRATCH's externalDiscountId) and `id` is the applied entry's own id. The entry also carries the code."
+}

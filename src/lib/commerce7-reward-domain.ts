@@ -3,6 +3,7 @@ import type { BrandRewardOffer, CommerceRewardRedemption } from "@prisma/client"
 import { storedCommerce7Eligibility, type Commerce7RewardEligibility } from "./commerce7-reward-eligibility";
 import { COMMERCE7_COUPON_CONTRACT, commerce7CouponSupport, isCouponBranchSupported, isDiscountTypeSupported, resolveCouponScope, type Commerce7CouponAppliesTo, type CouponContract, type CouponScopeResult } from "./commerce7-coupon-contract";
 import { object, parseNativeCoupon, type NativeCoupon, type RewardCouponTerms } from "./commerce/providers/commerce7-rewards-client";
+import { commerce7CouponBlockers, type Commerce7ActivationBlocker, type Commerce7OfferEligibility } from "./commerce7-activation";
 
 /**
  * `automaticCustomerTagAssignment` / `exclusiveProductAccess`: Exclusive Wine Access grants the merchant's EXISTING Manual
@@ -320,12 +321,14 @@ export function commerce7OfferEditable(reservedClaimCount: number, totalClaims: 
  * documented "Group") with 1–50 distinct, non-blank tag IDs. The Brand chooses ONE existing Manual Customer Tag for SQRATCH to
  * grant; its UUID, not its title, is authoritative.
  *
- * `multiTagAccessVerified`: whether a customer holding any ONE of several security tags may buy the product (OR) has not been
- * observed. Until it is, a multi-tag product may be configured as a draft but never activated or claimed.
+ * `multiTagAccessVerified`: a customer holding ANY ONE of a product's security tags may buy it (OR). Verified on the live
+ * storefront (tests/fixtures/commerce7-rewards/live-multi-tag-storefront-observation.json): with three Manual Customer Tags,
+ * no tag = cannot add to cart; each single tag, and several tags, = can buy. SQRATCH still grants exactly ONE chosen tag and
+ * never touches the product's other tags, which grant access independently.
  */
 export const COMMERCE7_EXCLUSIVE_ACCESS_CONTRACT = {
   securityAvailableTo: "Tag", tagType: "Manual", tagObjectType: "Customer",
-  membershipGrant: true, multiTagAccessVerified: false,
+  membershipGrant: true, multiTagAccessVerified: true,
 } as const;
 export const COMMERCE7_EXCLUSIVE_SECURITY_AVAILABLE_TO = COMMERCE7_EXCLUSIVE_ACCESS_CONTRACT.securityAvailableTo;
 /** The optional exclusive discount coupon uses the verified bearer eligibility, scoped to the exclusive product. */
@@ -362,6 +365,41 @@ export function commerce7ExclusiveAccessStatus(config: unknown, product: { exter
   if (!security) return "SECURITY_CHANGED";
   if (!security.tagIds.includes(frozen.tagId)) return "TAG_REMOVED";
   return security.tagIds.length > 1 && !multiTagVerified ? "MULTI_TAG_UNVERIFIED" : "CONFIGURED";
+}
+const EXCLUSIVE_STATUS_BLOCKER: Record<Exclude<Commerce7ExclusiveAccessStatus, "CONFIGURED">, Commerce7ActivationBlocker> = {
+  MULTI_TAG_UNVERIFIED: "MULTI_TAG_UNVERIFIED", TAG_REMOVED: "TAG_REMOVED", SECURITY_CHANGED: "SECURITY_CHANGED", PRODUCT_UNAVAILABLE: "PRODUCT_UNAVAILABLE", NOT_CONFIGURED: "EXCLUSIVE_SELECTION_INCOMPLETE",
+};
+type EligibilityOffer = SnapshotOffer & Pick<BrandRewardOffer, "isActive" | "commerce7Config" | "claimStartsAt" | "claimEndsAt" | "reservedClaimCount" | "maxTotalRedemptions"> & { rewardMode: string };
+/**
+ * An offer's current claim eligibility, kept separate from its stored Active/Inactive state. Read-only: it never changes
+ * isActive, claims, snapshots or memberships. Its blockers are the same checks Enable and a new claim enforce (snapshot
+ * issuability under the contract, and the exclusive product's synchronized security), so the Brand's badge and the claimant
+ * listing can never promise a claim the server would refuse.
+ */
+export function commerce7OfferEligibility(offer: EligibilityOffer, input: { productIds: readonly string[]; exclusiveProduct: { externalId: string; isAvailable: boolean; providerMetadata: unknown } | null; contract?: CouponContract; multiTagVerified?: boolean; now?: Date }): Commerce7OfferEligibility {
+  const contract = input.contract ?? COMMERCE7_COUPON_CONTRACT;
+  const config = object(offer.commerce7Config);
+  const exclusive = offer.rewardMode === "EXCLUSIVE_PRODUCT_ACCESS";
+  const blockers: Commerce7ActivationBlocker[] = [];
+  if (exclusive) {
+    const status = commerce7ExclusiveAccessStatus(config, input.exclusiveProduct, input.multiTagVerified ?? COMMERCE7_EXCLUSIVE_ACCESS_CONTRACT.multiTagAccessVerified);
+    if (status !== "CONFIGURED") blockers.push(EXCLUSIVE_STATUS_BLOCKER[status]);
+  }
+  let snapshot: Commerce7RewardSnapshot | null = null;
+  try { snapshot = config ? buildRewardSnapshot(offer, config, input.productIds, contract) : null; } catch { snapshot = null; }
+  if (!snapshot) { if (!blockers.length) blockers.push("CONFIGURATION_REVIEW"); }
+  else {
+    const coupon = commerce7CouponBlockers({ rewardMode: exclusive ? "EXCLUSIVE_PRODUCT_ACCESS" : "DISCOUNT", eligibilityMode: snapshot.eligibilityMode, appliesTo: snapshot.appliesTo, discountEnabled: !!snapshot.discount, discountType: snapshot.discount?.type ?? "FIXED_AMOUNT" }, commerce7CouponSupport(contract));
+    // A legacy offer's observed native template is the only evidence for its scope; its discount kind is still gated.
+    blockers.push(...(snapshot.legacyTemplate ? coupon.filter((blocker) => blocker === "PERCENTAGE_UNVERIFIED" || blocker === "CLAIMANT_DISCOUNT_RETIRED") : coupon));
+  }
+  if (!offer.isActive) return { state: "INACTIVE", blockers };
+  if (blockers.length) return { state: "BLOCKED", blockers };
+  const now = input.now ?? new Date();
+  if (offer.claimStartsAt && offer.claimStartsAt > now) return { state: "NOT_STARTED", blockers };
+  if (offer.claimEndsAt && offer.claimEndsAt <= now) return { state: "ENDED", blockers };
+  if (offer.maxTotalRedemptions === null || offer.reservedClaimCount >= offer.maxTotalRedemptions) return { state: "SOLD_OUT", blockers };
+  return { state: "READY", blockers };
 }
 export type Commerce7MembershipGuidance = "NOT_SQRATCH_OWNED" | "OWNERSHIP_UNVERIFIED" | "SHARED_WITH_OTHER_REWARDS" | "SQRATCH_GRANTED" | null;
 /**

@@ -7,6 +7,7 @@ import * as formatting from "../src/lib/reward-formatting";
 import * as contractModule from "../src/lib/commerce7-coupon-contract";
 import * as safeRedirect from "../src/lib/safe-redirect";
 import * as claimWindow from "../src/lib/reward-claim-window";
+import * as activation from "../src/lib/commerce7-activation";
 type Node = { type: string; props: Record<string, unknown> };
 /** `DateImpl` pins "now" for date defaults; timers are fake and advanced explicitly; effects run React-style cleanups. */
 function harness(path: string, exportName: string, props = {}, env: { DateImpl?: DateConstructor } = {}) {
@@ -36,6 +37,7 @@ function harness(path: string, exportName: string, props = {}, env: { DateImpl?:
       if (name === "@/lib/reward-formatting") return formatting;
       if (name === "@/lib/commerce7-coupon-contract") return contractModule;
       if (name === "@/lib/reward-claim-window") return claimWindow;
+      if (name === "@/lib/commerce7-activation") return activation;
       if (name === "lucide-react") return new Proxy({}, { get: (_target, key) => `Icon:${String(key)}` });
       if (name === "@/components/experience/client-utils") return { fetchJson: (url: string, init?: RequestInit) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })), getErrorMessage: (error: Error) => error.message };
       if (name.startsWith("@/components/ui/")) return new Proxy({}, { get: (_target, key) => String(key) });
@@ -109,12 +111,14 @@ test("a completed claim permits a later intentional claim with a new key; unavai
 
 const brandData = { providers: { COMMERCE7: true, SHOPIFY: false }, connection: { displayName: "Winery", currencyCode: "CAD" }, readiness: { backendConfigured: true, couponContract }, offers: [], claims: [], products: [{ externalId: "wine-id", title: "Rare wine" }, { externalId: "second-wine", title: "Second wine" }], exclusiveProducts: [{ externalId: "wine-id", title: "Rare wine" }, { externalId: "second-wine", title: "Second wine" }] };
 function select(tree: Node, value: string) { const node = nodes(tree).find((node) => node.type === "select" && node.props.value === value); assert.ok(node, value); return node; }
+/** The read-only Eligible customer value (Discount: Anyone with the code; Exclusive: the claiming member). There is no selector. */
+function eligibilityShown(tree: Node) { const label = nodes(tree).find((node) => node.type === "div" && /^Eligible customer/.test(text(node).trim())); assert.ok(label, "eligibility value"); assert.ok(!nodes(label).some((node) => node.type === "select"), "never editable"); return text(label).replace(/^\s*Eligible customer\s*/, "").trim(); }
 function change(node: Node, value: string) { (node.props.onChange as (event: object) => void)({ target: { value } }); }
 function product(tree: Node, title: string) { const label = nodes(tree).find((node) => node.type === "label" && text(node).trim() === title); assert.ok(label, title); const checkbox = nodes(label).find((node) => node.type === "Checkbox"); assert.ok(checkbox); return checkbox; }
 
 test("Brand scope selector hides All products, requires selected products, toggles selection and clears stale IDs on save", async () => {
   const app = harness("src/components/rewards/commerce7-brand-rewards.tsx", "Commerce7BrandRewardsPanel"); app.render(); app.flush(); app.requests[0].resolve(brandData); await settle();
-  let tree = app.render(); assert.equal(nodes(tree).filter((node) => node.type === "Checkbox").length, 0); assert.ok(select(tree, "ANYONE_WITH_CODE"));
+  let tree = app.render(); assert.equal(nodes(tree).filter((node) => node.type === "Checkbox").length, 0); assert.equal(eligibilityShown(tree), "Anyone with the code");
   change(select(tree, "ALL_PRODUCTS"), "SPECIFIC_PRODUCTS"); tree = app.render();
   const submit = () => (nodes(app.render()).find((node) => node.type === "form")!.props.onSubmit as (event: object) => void)({ preventDefault() {} });
   submit(); await settle(); assert.match(text(app.render()), /Select at least one product/); assert.equal(app.requests.length, 1);
@@ -130,13 +134,17 @@ test("Brand edit restores exact product scope and legacy/customer-bound eligibil
   const app = harness("src/components/rewards/commerce7-brand-rewards.tsx", "Commerce7BrandRewardsPanel"); app.render(); app.flush();
   const saved = { ...offer, appliesTo: "SPECIFIC_PRODUCTS", rewardMode: "DISCOUNT", isActive: false, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, totalClaims: 0, issuedCount: 0, _count: { redemptions: 0 }, commerce7Config: { eligibilityMode: "CLAIMANT_ONLY", discountEnabled: true, templateCouponId: "stale-field-from-an-old-api" }, products: [{ externalProductId: "wine-id" }] };
   app.requests[0].resolve({ ...brandData, offers: [saved] }); await settle(); (button(app.render(), "Edit").props.onClick as () => void)();
-  let tree = app.render(); assert.ok(select(tree, "SPECIFIC_PRODUCTS")); assert.ok(select(tree, "CLAIMANT_ONLY")); assert.equal(product(tree, "Rare wine").props.checked, true);
+  let tree = app.render(); assert.ok(select(tree, "SPECIFIC_PRODUCTS")); assert.equal(eligibilityShown(tree), "Anyone with the code"); assert.equal(product(tree, "Rare wine").props.checked, true);
+  assert.match(text(tree), /saved as Claiming customer only, which is no longer offered for discounts/);
   const submit = () => (nodes(app.render()).find((node) => node.type === "form")!.props.onSubmit as (event: object) => void)({ preventDefault() {} });
-  submit(); const edited = JSON.parse(String(app.requests[1].init?.body)); assert.equal(app.requests[1].init?.method, "PUT"); assert.equal(edited.eligibilityMode, "CLAIMANT_ONLY"); assert.deepEqual(edited.productIds, ["wine-id"]);
+  // A legacy restricted draft is never re-saved as public without the explicit confirmation.
+  submit(); await settle(); assert.equal(app.requests.length, 1, "no request without confirmation"); assert.match(text(app.render()), /Tick .Change to Anyone with the code. to save it/);
+  const confirm = nodes(app.render()).find((node) => node.type === "label" && /Change to Anyone with the code/.test(text(node)))!; (nodes(confirm).find((node) => node.type === "input")!.props.onChange as (e: object) => void)({ target: { checked: true } });
+  submit(); const edited = JSON.parse(String(app.requests[1].init?.body)); assert.equal(app.requests[1].init?.method, "PUT"); assert.equal(edited.eligibilityMode, "ANYONE_WITH_CODE"); assert.equal(edited.confirmPublicEligibility, true); assert.deepEqual(edited.productIds, ["wine-id"]);
   assert.ok(!JSON.stringify(edited).includes("template") && !JSON.stringify(edited).includes("stale-field"), "an edit never replays a stored template ID");
   app.requests[1].reject(new Error("stop")); await settle();
-  (button(app.render(), "Cancel edit").props.onClick as () => void)(); tree = app.render(); assert.ok(select(tree, "ALL_PRODUCTS")); assert.ok(select(tree, "ANYONE_WITH_CODE"));
-  change(select(tree, "DISCOUNT"), "EXCLUSIVE_PRODUCT_ACCESS"); tree = app.render(); assert.equal(select(tree, "CLAIMANT_ONLY").props.disabled, true); assert.equal(select(tree, "SPECIFIC_PRODUCTS").props.disabled, true);
+  (button(app.render(), "Cancel edit").props.onClick as () => void)(); tree = app.render(); assert.ok(select(tree, "ALL_PRODUCTS")); assert.equal(eligibilityShown(tree), "Anyone with the code"); assert.doesNotMatch(text(nodes(tree).find((node) => node.type === "form")), /no longer offered for discounts/, "a new reward has no legacy notice");
+  change(select(tree, "DISCOUNT"), "EXCLUSIVE_PRODUCT_ACCESS"); tree = app.render(); assert.match(eligibilityShown(tree), /The claiming member/); assert.equal(select(tree, "SPECIFIC_PRODUCTS").props.disabled, true);
 });
 
 test("bearer claimant UI gives no matching-email or CRM approval requirement", async () => {
@@ -153,18 +161,15 @@ test("a late claim completion cannot invalidate loading rewards in the new campa
   app.requests[2].resolve({ offers: [{ ...offer, title: "New context reward" }], claims: [], points: 400 }); await settle(); assert.match(text(app.render()), /New context reward/);
 });
 
-test("Brand UI keeps unverified coupon branches draft-only: Active is disabled and forced off, with no provider detail", async () => {
-  const app = harness("src/components/rewards/commerce7-brand-rewards.tsx", "Commerce7BrandRewardsPanel"); app.render(); app.flush(); app.requests[0].resolve(brandData); await settle();
+test("Discount rewards offer no eligibility choice; Selected products can go live; the UI fails closed without a readiness payload", async () => {
+  const app = harness("src/components/rewards/commerce7-brand-rewards.tsx", "Commerce7BrandRewardsPanel"); app.render(); app.flush(); app.requests[0].resolve({ ...brandData, readiness: { backendConfigured: true, couponContract: { ...couponContract, scope: { ALL_PRODUCTS: true, SPECIFIC_PRODUCTS: true } } } }); await settle();
   const activeBox = () => { const label = nodes(app.render()).find((node) => node.type === "label" && /Active and open for claims/.test(text(node))); assert.ok(label); const box = nodes(label).find((node) => node.type === "input" && node.props.type === "checkbox"); assert.ok(box); return box; };
+  assert.equal(eligibilityShown(app.render()), "Anyone with the code"); assert.doesNotMatch(text(app.render()), /Claiming customer only/);
   assert.equal(activeBox().props.disabled, false); (activeBox().props.onChange as (event: object) => void)({ target: { checked: true } }); assert.equal(activeBox().props.checked, true);
-  change(select(app.render(), "ANYONE_WITH_CODE"), "CLAIMANT_ONLY");
-  assert.equal(activeBox().props.disabled, true); assert.equal(activeBox().props.checked, false, "switching to an unverified branch clears Active");
-  assert.match(text(app.render()), /saved as a draft/i); assert.doesNotMatch(text(app.render()), /enum|availableTo|appliesTo|Commerce7 API/i);
-  change(select(app.render(), "CLAIMANT_ONLY"), "ANYONE_WITH_CODE"); assert.equal(activeBox().props.disabled, false);
-  change(select(app.render(), "ALL_PRODUCTS"), "SPECIFIC_PRODUCTS"); assert.equal(activeBox().props.disabled, true);
+  change(select(app.render(), "ALL_PRODUCTS"), "SPECIFIC_PRODUCTS"); assert.equal(activeBox().props.disabled, false); assert.doesNotMatch(text(app.render()), /enum|availableTo|appliesTo|Commerce7 API/i);
   // The server stays authoritative: with no readiness payload the UI fails closed for unverified branches.
   const stale = harness("src/components/rewards/commerce7-brand-rewards.tsx", "Commerce7BrandRewardsPanel"); stale.render(); stale.flush(); stale.requests[0].resolve({ ...brandData, readiness: { backendConfigured: true } }); await settle();
-  change(select(stale.render(), "ANYONE_WITH_CODE"), "CLAIMANT_ONLY"); assert.equal((nodes(stale.render()).find((node) => node.type === "input" && node.props.type === "checkbox" && node.props.disabled === true))?.props.disabled, true);
+  change(select(stale.render(), "FIXED_AMOUNT"), "PERCENTAGE"); assert.equal((nodes(stale.render()).find((node) => node.type === "input" && node.props.type === "checkbox" && node.props.disabled === true))?.props.disabled, true);
 });
 
 test("a malformed money field is rejected in the form instead of being serialized as null (which would silently drop a minimum)", async () => {
@@ -274,8 +279,8 @@ async function resolveTags(app: ReturnType<typeof harness>, value: object = oneT
 function submitted(app: ReturnType<typeof harness>) { const before = app.requests.length; (nodes(app.render()).find((node) => node.type === "form")!.props.onSubmit as (event: object) => void)({ preventDefault() {} }); assert.equal(app.requests.length, before + 1, "form submitted"); return JSON.parse(String(app.requests[before].init?.body)); }
 function assertNormalDiscount(app: ReturnType<typeof harness>) {
   const tree = app.render(); const copy = text(tree);
-  assert.equal(modeSelect(app).props.value, "DISCOUNT"); assert.ok(select(tree, "ANYONE_WITH_CODE")); assert.ok(select(tree, "ALL_PRODUCTS"));
-  assert.equal(select(tree, "ANYONE_WITH_CODE").props.disabled, false); assert.equal(select(tree, "ALL_PRODUCTS").props.disabled, false);
+  assert.equal(modeSelect(app).props.value, "DISCOUNT"); assert.equal(eligibilityShown(tree), "Anyone with the code"); assert.ok(select(tree, "ALL_PRODUCTS"));
+  assert.equal(select(tree, "ALL_PRODUCTS").props.disabled, false);
   assert.equal(nodes(tree).filter((node) => node.type === "Checkbox").length, 0, "no product picker"); assert.doesNotMatch(copy, /exclusive product|Include an optional discount|saved as a draft but cannot be activated/i);
   assert.ok(nodes(tree).some((node) => node.type === "label" && /^Amount/.test(text(node).trim())), "discount amount input is shown");
   assert.equal(activeBox(app).props.disabled, false, "Active follows the verified discount branch again");
@@ -290,7 +295,7 @@ test("entering exclusive access forces claimant-only, selected products, inactiv
   (activeBox(app).props.onChange as (e: object) => void)({ target: { checked: true } });
   change(select(app.render(), "ALL_PRODUCTS"), "SPECIFIC_PRODUCTS"); (product(app.render(), "Rare wine").props.onCheckedChange as (v: boolean) => void)(true); (product(app.render(), "Second wine").props.onCheckedChange as (v: boolean) => void)(true);
   setMode(app, "EXCLUSIVE_PRODUCT_ACCESS"); const tree = app.render();
-  assert.equal(select(tree, "CLAIMANT_ONLY").props.disabled, true); assert.equal(select(tree, "SPECIFIC_PRODUCTS").props.disabled, true);
+  assert.match(eligibilityShown(tree), /The claiming member/); assert.equal(select(tree, "SPECIFIC_PRODUCTS").props.disabled, true);
   assert.equal(activeBox(app).props.checked, false); assert.equal(activeBox(app).props.disabled, true);
   assert.equal(product(tree, "Rare wine").props.checked, false, "a multi-product discount selection does not leak into exclusive access"); assert.match(text(tree), /Select exactly one exclusive product/);
   (nodes(app.render()).find((node) => node.type === "form")!.props.onSubmit as (event: object) => void)({ preventDefault() {} }); await settle();
@@ -308,7 +313,6 @@ test("EXCLUSIVE -> DISCOUNT resets every exclusive-only state to the normal disc
 test("DISCOUNT -> EXCLUSIVE -> DISCOUNT returns to a clean discount, keeping the common fields", async () => {
   const app = await brandForm();
   const points = nodes(app.render()).find((node) => node.type === "label" && /^Points cost/.test(text(node).trim()))!; (nodes(points).find((node) => node.type === "Input")!.props.onChange as (e: object) => void)({ target: { value: "250" } });
-  change(select(app.render(), "ANYONE_WITH_CODE"), "CLAIMANT_ONLY");
   setMode(app, "EXCLUSIVE_PRODUCT_ACCESS"); (product(app.render(), "Second wine").props.onCheckedChange as (v: boolean) => void)(true);
   setMode(app, "DISCOUNT"); assertNormalDiscount(app);
   app.requests[1].reject(new Error("stop")); await settle(); assert.equal(submitted(app).pointsCost, 250);
@@ -376,14 +380,14 @@ test("exclusive drafts show their security status in plain words, never a Custom
   const app = await brandForm({ ...catalogData, offers: [draft("ok", "CONFIGURED"), draft("changed", "SECURITY_CHANGED"), draft("gone", "PRODUCT_UNAVAILABLE"), draft("multi", "MULTI_TAG_UNVERIFIED"), draft("removed", "TAG_REMOVED")] });
   const copy = text(app.render());
   assert.match(copy, /secured to the selected Customer Tag in Commerce7/); assert.match(copy, /security changed in Commerce7/i); assert.match(copy, /no longer synchronized/i);
-  assert.match(copy, /several Customer Tags.*stays a draft/); assert.match(copy, /no longer secures this product/);
+  assert.match(copy, /several Customer Tags.*new claims are paused and the reward cannot be activated/); assert.doesNotMatch(copy, /stays a draft/, "an Active offer is never described as a draft"); assert.match(copy, /no longer secures this product/);
   assert.doesNotMatch(copy, /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
   assert.equal(nodes(app.render()).filter((node) => node.type === "Button" && text(node).trim() === "Enable").length, 5, "the button is shown; the server verifies native state before enabling");
 });
 
 // ── Exclusive Wine Access: tag selection, warnings and claim states ──
 const tagSelect = (app: ReturnType<typeof harness>) => nodes(app.render()).find((node) => node.type === "select" && node.props["aria-label"] === "Customer Tag SQRATCH grants");
-const twoTags = { tagCount: 2, multiTagAccessVerified: false, preselectedTagId: null, tags: [
+const twoTags = { tagCount: 2, multiTagAccessVerified: true, preselectedTagId: null, tags: [
   { id: "tag-uuid-1", title: "Rare Wine Members", selectable: true, current: false, reason: null, sharedProductCount: 2, sharedProductTitles: ["Library Cabernet", "Old Vine Zin"] },
   { id: "tag-uuid-2", title: "Club Auto Segment", selectable: false, current: false, reason: "NOT_MANUAL", sharedProductCount: 0, sharedProductTitles: [] },
 ] };
@@ -399,20 +403,22 @@ test("a single-tag product preselects its tag, shows titles never UUIDs, and can
   const body = submitted(app); assert.equal(body.exclusiveTagId, "tag-uuid-1"); assert.equal(body.isActive, true);
 });
 
-test("several tags require an explicit choice, warn that other tags may grant access and that a shared tag may unlock other products, and stay draft-only", async () => {
+test("several tags require an explicit choice of ONE tag, note that the other tags grant access independently, and can go live", async () => {
   const app = await brandForm(catalogData); setMode(app, "EXCLUSIVE_PRODUCT_ACCESS");
   (product(app.render(), "Rare - 2015 Chardonnay").props.onCheckedChange as (v: boolean) => void)(true); await resolveTags(app, twoTags);
   assert.equal(tagSelect(app)?.props.value, "", "no preselection with several tags");
   const options = nodes(tagSelect(app)!).filter((node) => node.type === "option");
   assert.deepEqual(options.map((node) => [node.props.value, node.props.disabled === true]), [["", false], ["tag-uuid-1", false], ["tag-uuid-2", true]]);
   assert.match(text(options[2]), /Club Auto Segment.*not a Manual tag/);
-  let copy = text(app.render()); assert.match(copy, /secured to\s+2\s+Customer Tags/); assert.match(copy, /may not be the only way to access it/); assert.match(copy, /can be saved but not activated/);
+  let copy = text(app.render()); assert.match(copy, /secured to\s+2\s+Customer Tags/); assert.match(copy, /Choose one for SQRATCH to grant; SQRATCH never changes the others/); assert.match(copy, /any of the other tags can already buy it/);
+  assert.doesNotMatch(copy, /Why draft only|one-tag access to this product has not been verified/i, "multi-tag OR access is verified");
   const before = app.requests.length; (nodes(app.render()).find((node) => node.type === "form")!.props.onSubmit as (event: object) => void)({ preventDefault() {} }); await settle();
   assert.equal(app.requests.length, before, "no save without an explicit tag"); assert.match(text(app.render()), /Choose which Customer Tag SQRATCH should grant/);
   change(tagSelect(app)!, "tag-uuid-1"); copy = text(app.render());
   assert.match(copy, /also secures\s+2\s+other product\s*s/); assert.match(copy, /Library Cabernet, Old Vine Zin/); assert.match(copy, /may unlock those products too/);
-  assert.equal(activeBox(app).props.disabled, true, "multi-tag access is unverified: draft only");
-  const body = submitted(app); assert.equal(body.exclusiveTagId, "tag-uuid-1"); assert.equal(body.isActive, false);
+  assert.equal(activeBox(app).props.disabled, false, "one explicitly chosen tag can go live");
+  (activeBox(app).props.onChange as (e: object) => void)({ target: { checked: true } });
+  const body = submitted(app); assert.equal(body.exclusiveTagId, "tag-uuid-1"); assert.equal(body.isActive, true, "exactly one tag is submitted");
 });
 
 test("choosing another exclusive product clears the chosen tag; a failed tag lookup is shown and blocks saving", async () => {
@@ -431,7 +437,7 @@ test("Brand claims show exclusive access state and ownership guidance, never the
   const claim = (id: string, accessState: string, membershipGuidance: string | null) => ({ id, title: `Claim ${id}`, status: accessState === "ACCESS_GRANTED" ? "ISSUED" : "POINTS_DEBITED", provisioningState: accessState === "MANUAL_REVIEW" ? "MANUAL_REVIEW" : "READY", providerCustomerId: "customer-1", providerTagId: null, tagTitle: null, message: null, ownerActive: false, canRevoke: false, canonicalOrderId: null, rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", accessState, membershipGuidance });
   const app = await brandForm({ ...brandData, claims: [claim("granted", "ACCESS_GRANTED", "SQRATCH_GRANTED"), claim("native", "ACCESS_GRANTED", "NOT_SQRATCH_OWNED"), claim("review", "MANUAL_REVIEW", "OWNERSHIP_UNVERIFIED"), claim("shared", "ACCESS_GRANTED", "SHARED_WITH_OTHER_REWARDS")] });
   const copy = text(app.render());
-  assert.match(copy, /Access granted/); assert.match(copy, /SQRATCH granted this tag/); assert.match(copy, /already had this tag before the claim/); assert.match(copy, /cannot prove it created it/); assert.match(copy, /another active SQRATCH reward also relies on it/);
+  assert.match(copy, /Access granted/); assert.match(copy, /SQRATCH granted this tag/); assert.match(copy, /could already buy this wine before the claim \(through this tag or another tag securing the product\)/); assert.match(copy, /cannot prove it created it/); assert.match(copy, /another active SQRATCH reward also relies on it/);
   assert.match(copy, /never removes Customer Tags/); assert.match(copy, /removes every copy of a tag/); assert.doesNotMatch(copy, /add the manual tag/, "the per-claim CRM handoff text is for claimant coupons only");
   assert.ok(!nodes(app.render()).some((node) => node.type === "Button" && /Revoke/.test(text(node))));
 });
@@ -588,14 +594,12 @@ test("when product security has not been read, the picker says so and how to fix
   assert.ok(text(known.render()).includes(noneNote), "with every product's security known, the original guidance stands");
 });
 
-test("a multi-tag product explains exactly why it is draft-only and what sandbox evidence would enable it", async () => {
+test("only an older server that still reports multi-tag access as unverified keeps Active off, with the reason beside it", async () => {
   const app = await brandForm(catalogData); setMode(app, "EXCLUSIVE_PRODUCT_ACCESS");
-  (product(app.render(), "Rare - 2015 Chardonnay").props.onCheckedChange as (v: boolean) => void)(true); await resolveTags(app, twoTags);
-  const copy = text(app.render());
-  assert.match(copy, /Why draft only/); assert.match(copy, /holds only one of several security tags/); assert.match(copy, /To verify/); assert.match(copy, /log in to the storefront/);
-  assert.equal(activeBox(app).props.disabled, true, "the safety gate is unchanged");
+  (product(app.render(), "Rare - 2015 Chardonnay").props.onCheckedChange as (v: boolean) => void)(true); await resolveTags(app, { ...twoTags, multiTagAccessVerified: false });
+  change(tagSelect(app)!, "tag-uuid-1");
+  assert.equal(activeBox(app).props.disabled, true); assert.match(text(blockersNote(app)), /one-tag access to this product has not been verified/);
 });
-
 // ── H: used coupons ──
 test("a used coupon reads 'Coupon used' and never shows a reusable code; the Brand sees purchase-check progress", async () => {
   const app = await claimsCard([{ ...readyClaim("used", "SQRA-SHOULD-NOT-SHOW"), status: "USED", code: null }]);
@@ -625,8 +629,75 @@ test("the editor marks Percentage draft-only while Commerce7 percentage units ar
   const app = await brandForm(gated); (activeBox(app).props.onChange as (e: object) => void)({ target: { checked: true } });
   const discountSelect = select(app.render(), "FIXED_AMOUNT"); assert.match(text(discountSelect), /Percentage\s+\(draft only\)/);
   change(discountSelect, "PERCENTAGE");
-  assert.equal(activeBox(app).props.checked, false); assert.equal(activeBox(app).props.disabled, true); assert.match(text(app.render()), /percentage units are verified/);
-  const paused = { ...offer, id: "pct", title: "Fifteen Percent", appliesTo: "ALL_PRODUCTS", rewardMode: "DISCOUNT", isActive: true, discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 1500, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, totalClaims: 1, issuedCount: 1, _count: { redemptions: 1 }, commerce7Config: { eligibilityMode: "ANYONE_WITH_CODE", discountEnabled: true }, products: [] };
+  assert.equal(activeBox(app).props.checked, false); assert.equal(activeBox(app).props.disabled, true); assert.match(text(app.render()), /no sandbox coupon has confirmed that 1500 shows as 15%/);
+  const paused = { ...offer, id: "pct", title: "Fifteen Percent", appliesTo: "ALL_PRODUCTS", rewardMode: "DISCOUNT", isActive: true, discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 1500, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, totalClaims: 1, issuedCount: 1, _count: { redemptions: 1 }, commerce7Config: { eligibilityMode: "ANYONE_WITH_CODE", discountEnabled: true }, products: [], eligibility: { state: "BLOCKED", blockers: ["PERCENTAGE_UNVERIFIED"] } };
   const list = await brandForm({ ...gated, offers: [paused] });
-  assert.match(text(list.render()), /15% off/); assert.match(text(list.render()), /New percentage coupons are paused/);
+  assert.match(text(list.render()), /15% off/); assert.match(text(list.render()), /New claims are paused\. The reward stays Active; existing claims, issued coupons and granted access are unchanged/);
+});
+
+// ── Final QA: activation reasons beside Active, immediate recalculation, verified percentages, multi-tag drift ──
+const productionContract = { eligibility: { ANYONE_WITH_CODE: true, CLAIMANT_ONLY: false }, scope: { ALL_PRODUCTS: true, SPECIFIC_PRODUCTS: true }, discount: { FIXED_AMOUNT: true, PERCENTAGE: false } };
+const blockersNote = (app: ReturnType<typeof harness>) => nodes(app.render()).find((node) => node.props.id === "commerce7-active-blockers");
+
+test("Active is recalculated on every option change, with the exact blocking reason beside it and no reload", async () => {
+  const app = await brandForm({ ...brandData, readiness: { backendConfigured: true, couponContract: productionContract } }); const requests = app.requests.length;
+  change(select(app.render(), "FIXED_AMOUNT"), "PERCENTAGE");
+  assert.match(text(blockersNote(app)), /Percentage discount:/); assert.equal(activeBox(app).props.disabled, true); assert.equal(activeBox(app).props["aria-describedby"], "commerce7-active-blockers");
+  change(select(app.render(), "PERCENTAGE"), "FIXED_AMOUNT"); assert.equal(blockersNote(app), undefined); assert.equal(activeBox(app).props.disabled, false);
+  (activeBox(app).props.onChange as (e: object) => void)({ target: { checked: true } }); assert.equal(activeBox(app).props.checked, true);
+  change(select(app.render(), "FIXED_AMOUNT"), "PERCENTAGE"); assert.equal(activeBox(app).props.checked, false, "an unverified choice turns Active off at once");
+  change(select(app.render(), "PERCENTAGE"), "FIXED_AMOUNT"); change(select(app.render(), "ALL_PRODUCTS"), "SPECIFIC_PRODUCTS"); assert.equal(activeBox(app).props.disabled, false, "selected products are verified");
+  setMode(app, "EXCLUSIVE_PRODUCT_ACCESS"); assert.match(text(blockersNote(app)), /Choose the exclusive product and the Customer Tag/); assert.match(eligibilityShown(app.render()), /The claiming member/);
+  setMode(app, "DISCOUNT"); assert.equal(blockersNote(app), undefined); assert.equal(activeBox(app).props.disabled, false); assert.equal(eligibilityShown(app.render()), "Anyone with the code");
+  assert.equal(app.requests.length, requests, "recalculated locally: no refresh and no request");
+});
+test("once the server reports percentage units verified, Percentage + Anyone with the code is activatable immediately", async () => {
+  const app = await brandForm({ ...brandData, readiness: { backendConfigured: true, couponContract: { ...productionContract, discount: { FIXED_AMOUNT: true, PERCENTAGE: true } } } });
+  const discountSelect = select(app.render(), "FIXED_AMOUNT"); assert.doesNotMatch(text(discountSelect), /draft only/); change(discountSelect, "PERCENTAGE");
+  assert.equal(blockersNote(app), undefined); assert.equal(activeBox(app).props.disabled, false);
+  (activeBox(app).props.onChange as (e: object) => void)({ target: { checked: true } });
+  const body = submitted(app); assert.equal(body.isActive, true); assert.equal(body.discountType, "PERCENTAGE"); assert.equal(body.discountPercentageBasisPoints, 1500); assert.equal(body.eligibilityMode, "ANYONE_WITH_CODE");
+});
+
+test("editing an Active offer that a gate now blocks explains how to save it as a draft", async () => {
+  const paused = { ...offer, id: "pct", title: "Fifteen Percent", appliesTo: "ALL_PRODUCTS", rewardMode: "DISCOUNT", isActive: true, discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 1500, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, totalClaims: 0, issuedCount: 0, editable: true, _count: { redemptions: 0 }, commerce7Config: { eligibilityMode: "ANYONE_WITH_CODE", discountEnabled: true }, products: [], eligibility: { state: "BLOCKED", blockers: ["PERCENTAGE_UNVERIFIED"] } };
+  const app = await brandForm({ ...brandData, readiness: { backendConfigured: true, couponContract: productionContract }, offers: [paused] });
+  (button(app.render(), "Edit").props.onClick as () => void)();
+  assert.equal(activeBox(app).props.checked, true); assert.equal(activeBox(app).props.disabled, false, "the Brand can uncheck it");
+  assert.match(text(blockersNote(app)), /cannot be saved as Active yet\. Uncheck Active to save it as a draft/);
+  (activeBox(app).props.onChange as (e: object) => void)({ target: { checked: false } }); assert.match(text(blockersNote(app)), /can be saved as a draft but cannot be activated yet/);
+});
+
+test("a multi-tag Active offer shows Active and Open for claims, notes that the other tags grant access independently, and can list them", async () => {
+  const live = { ...offer, id: "rare-access", title: "Rare access", appliesTo: "SPECIFIC_PRODUCTS", rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", isActive: true, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, totalClaims: 1, issuedCount: 1, editable: false, exclusiveAccessStatus: "CONFIGURED", exclusiveTagCount: 3, _count: { redemptions: 1 }, commerce7Config: { eligibilityMode: "CLAIMANT_ONLY", discountEnabled: false, exclusiveTagTitle: "SQRATCH Rare Wine Test" }, products: [{ externalProductId: "rare" }], eligibility: { state: "READY", blockers: [] } };
+  const app = await brandForm({ ...catalogData, offers: [live] });
+  const tree = app.render(); const copy = text(tree);
+  const badges = nodes(tree).filter((node) => node.type === "span" && /rounded-full/.test(String(node.props.className))).map((node) => text(node).trim());
+  assert.deepEqual(badges, ["Active", "Open for claims"], "stored state and current claimability side by side");
+  assert.match(copy, /Other Customer Tags also grant access/); assert.match(copy, /secured to\s+3\s+Customer Tags/); assert.match(copy, /any of the\s+2\s+other tag\s*s\s+can buy it independently/);
+  const card = nodes(tree).find((node) => node.type === "div" && /rounded-xl border p-4 flex/.test(String(node.props.className)) && text(node).includes("Rare access"))!;
+  assert.doesNotMatch(text(card), /draft|paused|cannot be activated/i, "no stale multi-tag restriction"); assert.doesNotMatch(text(card), /coupon valid/, "an access-only reward issues no coupon");
+  (button(tree, "Show Customer Tags").props.onClick as () => void)();
+  const request = app.requests.at(-1)!; assert.match(request.url, /^\/api\/brand\/rewards\/commerce7\/exclusive-tags\?productId=rare&offerId=rare-access$/); assert.equal(request.init, undefined, "a read-only GET");
+  request.resolve({ tagCount: 3, multiTagAccessVerified: true, preselectedTagId: "uuid-a", tags: [{ id: "uuid-a", title: "SQRATCH Rare Wine Test", selectable: true, current: true, reason: null, sharedProductCount: 0, sharedProductTitles: [] }, { id: "uuid-b", title: "Employee", selectable: true, current: false, reason: null, sharedProductCount: 0, sharedProductTitles: [] }, { id: "uuid-c", title: "Investor", selectable: true, current: false, reason: null, sharedProductCount: 0, sharedProductTitles: [] }] }); await settle();
+  const listed = text(app.render()); assert.match(listed, /SQRATCH Rare Wine Test \(granted by this reward\), Employee, Investor/); assert.doesNotMatch(listed, /uuid-/);
+  // Genuine drift (the granted tag removed from the product) still pauses claims beside the Active badge.
+  const drifted = await brandForm({ ...catalogData, offers: [{ ...live, exclusiveAccessStatus: "TAG_REMOVED", eligibility: { state: "BLOCKED", blockers: ["TAG_REMOVED"] } }] });
+  assert.deepEqual(nodes(drifted.render()).filter((node) => node.type === "span" && /rounded-full/.test(String(node.props.className))).map((node) => text(node).trim()), ["Active", "New claims paused"]);
+});
+
+test("a legacy claimant-only discount card says it is no longer offered and Enable is unavailable until a confirmed edit", async () => {
+  const legacy = { ...offer, id: "legacy", title: "Legacy claimant", appliesTo: "ALL_PRODUCTS", rewardMode: "DISCOUNT", isActive: false, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, totalClaims: 0, issuedCount: 0, editable: true, _count: { redemptions: 0 }, commerce7Config: { eligibilityMode: "CLAIMANT_ONLY", discountEnabled: true }, products: [], eligibility: { state: "INACTIVE", blockers: ["CLAIMANT_DISCOUNT_RETIRED"] } };
+  const app = await brandForm({ ...brandData, offers: [legacy] }); const copy = text(app.render());
+  assert.match(copy, /no longer offered for discounts/); assert.match(copy, /confirm Anyone with the code to enable it/);
+  assert.equal(button(app.render(), "Enable").props.disabled, true);
+});
+test("an inactive offer with a blocker shows why Enable is unavailable and disables it; offers from an older server stay enabled", async () => {
+  const blocked = { ...offer, id: "draft-pct", title: "Draft percent", appliesTo: "ALL_PRODUCTS", rewardMode: "DISCOUNT", isActive: false, discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 1500, maxTotalRedemptions: 25, maxRedemptionsPerUser: 1, totalClaims: 0, issuedCount: 0, _count: { redemptions: 0 }, commerce7Config: { eligibilityMode: "ANYONE_WITH_CODE", discountEnabled: true }, products: [], eligibility: { state: "INACTIVE", blockers: ["PERCENTAGE_UNVERIFIED"] } };
+  const legacy = { ...blocked, id: "legacy", title: "Legacy payload", eligibility: undefined };
+  const app = await brandForm({ ...brandData, offers: [blocked, legacy] });
+  const tree = app.render(); const enables = nodes(tree).filter((node) => node.type === "Button" && text(node).trim() === "Enable");
+  assert.equal(enables[0].props.disabled, true); assert.equal(enables[0].props["aria-describedby"], "offer-draft-pct-blockers");
+  assert.equal(enables[1].props.disabled, false, "without an eligibility verdict the server decides");
+  assert.match(text(tree), /Cannot be enabled yet/); assert.match(text(tree), /Enable is unavailable until/);
 });

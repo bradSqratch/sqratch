@@ -67,7 +67,7 @@ test("bearer purchase matching requires exact coupon/paid order/connection, with
   const at = new Date("2026-10-10"); const code = `SQRA${"A".repeat(32)}`;
   const order = { provider: "COMMERCE7", brandId: "brand", connectionId: "connection", externalOrderId: "order", financialStatus: "PAID", cancelledAt: null, totalMinor: BigInt(1000), providerUpdatedAt: at } as CommerceOrder;
   const claim = { provider: "COMMERCE7", brandId: "brand", connectionId: "connection", status: "ISSUED", code, externalDiscountId: "coupon", providerCustomerId: null, rewardConfigSnapshot: { eligibilityMode: "ANYONE_WITH_CODE" } } as unknown as CommerceRewardRedemption;
-  const raw = { id: "order", customerId: "another-customer", updatedAt: at.toISOString(), coupons: [{ id: "coupon", code }] };
+  const raw = { id: "order", customerId: "another-customer", updatedAt: at.toISOString(), coupons: [{ couponId: "coupon", id: "applied-entry", code }] };
   assert.equal(exactCommerce7RewardOrderMatch(raw, order, claim), true);
   for (const change of [{ connectionId: "other" }, { brandId: "other" }, { financialStatus: "PENDING" }, { financialStatus: "PARTIALLY_REFUNDED" }]) assert.equal(exactCommerce7RewardOrderMatch(raw, { ...order, ...change } as CommerceOrder, claim), false);
   assert.equal(exactCommerce7RewardOrderMatch(raw, order, { ...claim, rewardConfigSnapshot: {} }), false);
@@ -79,21 +79,20 @@ test("bearer purchase matching requires exact coupon/paid order/connection, with
 test("a template-free claim is matched to its purchase by the same exact coupon identity", async () => {
   const app = harness(); const claim = await app.reserve(); const issued = await app.provision(claim.id);
   const at = new Date("2026-10-10"); const order = { provider: "COMMERCE7", brandId: "brand", connectionId: "connection", externalOrderId: "order", financialStatus: "PAID", cancelledAt: null, totalMinor: BigInt(1000), providerUpdatedAt: at } as CommerceOrder;
-  const raw = { id: "order", customerId: "any-customer", updatedAt: at.toISOString(), coupons: [{ id: issued?.externalDiscountId, code: issued?.code }] };
+  const raw = { id: "order", customerId: "any-customer", updatedAt: at.toISOString(), coupons: [{ couponId: issued?.externalDiscountId, id: "applied-entry", code: issued?.code }] };
   assert.equal(exactCommerce7RewardOrderMatch(raw, order, issued as CommerceRewardRedemption), true);
-  assert.equal(exactCommerce7RewardOrderMatch({ ...raw, coupons: [{ id: "someone-elses", code: issued?.code }] }, order, issued as CommerceRewardRedemption), false);
+  assert.equal(exactCommerce7RewardOrderMatch({ ...raw, coupons: [{ couponId: "someone-elses", id: "applied-entry", code: issued?.code }] }, order, issued as CommerceRewardRedemption), false);
 });
 
 test("edits without an eligibility field retain the persisted/legacy binding instead of defaulting public, with no provider traffic", async () => {
-  for (const mode of ["ANYONE_WITH_CODE", "CLAIMANT_ONLY"] as const) {
-    const app = harness({ mode, config: "LEGACY_TEMPLATE" });
-    if (mode === "CLAIMANT_ONLY") delete (app.offer().commerce7Config as Row).eligibilityMode;
-    const saved = await app.save(offerBody, "offer");
-    assert.equal((saved.commerce7Config as Row).eligibilityMode, mode);
-    assert.equal(app.calls.length, 0); assert.equal(app.clientsCreated(), 0);
+  const bearer = harness({ mode: "ANYONE_WITH_CODE", config: "LEGACY_TEMPLATE" });
+  assert.equal(((await bearer.save(offerBody, "offer")).commerce7Config as Row).eligibilityMode, "ANYONE_WITH_CODE");
+  assert.equal(bearer.calls.length, 0); assert.equal(bearer.clientsCreated(), 0);
+  // A claimant offer (legacy with no stored mode, or template-free) edited without the field keeps its binding, so the edit is
+  // refused instead of defaulting public; the stored record is untouched.
+  for (const app of [harness({ mode: "CLAIMANT_ONLY", config: "LEGACY_TEMPLATE" }), harness({ mode: "CLAIMANT_ONLY" })]) {
+    delete (app.offer().commerce7Config as Row).eligibilityMode; const before = JSON.stringify(app.offer());
+    for (const isActive of [true, false]) await assert.rejects(app.save({ ...offerBody, isActive }, "offer"), { code: "CLAIMANT_DISCOUNT_RETIRED" });
+    assert.equal(JSON.stringify(app.offer()), before); assert.equal(app.calls.length, 0);
   }
-  // A template-free claimant offer edited without the field stays claimant-only and therefore draft-only.
-  const bare = harness({ mode: "CLAIMANT_ONLY" });
-  await assert.rejects(bare.save(offerBody, "offer"), { code: "COUPON_CONTRACT_UNVERIFIED" });
-  assert.equal((await bare.save({ ...offerBody, isActive: false }, "offer")).isActive, false);
 });

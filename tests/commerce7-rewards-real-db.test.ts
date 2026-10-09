@@ -264,7 +264,7 @@ test("real Postgres: cap 25, duplicate request, point overspend, cancellation an
     const paid = await db.commerceOrder.create({ data: { brandId: brand.id, provider: "COMMERCE7", connectionId: connection.id, externalOrderId: "synthetic-paid-order", currencyCode: "CAD", minorUnitExponent: 2, totalMinor: BigInt(1000), netRevenueMinor: BigInt(1000), financialStatus: "PAID", providerUpdatedAt: paidAt, providerCreatedAt: paidAt } });
     const issued = await db.commerceRewardRedemption.findUniqueOrThrow({ where: { id: saga.claim.id } });
     const beforePoints = await db.pointTransaction.count({ where: { userId: saga.owner.id } });
-    const orderDeps = { db, fetchOrder: async (request: { tenant: string; externalOrderId: string }) => { assert.equal(request.tenant, connection.externalAccountId); return { id: request.externalOrderId, customerId: "exact-customer", coupons: [{ id: issued.externalDiscountId, code: issued.code }], updatedAt: paidAt.toISOString() }; } };
+    const orderDeps = { db, fetchOrder: async (request: { tenant: string; externalOrderId: string }) => { assert.equal(request.tenant, connection.externalAccountId); return { id: request.externalOrderId, customerId: "exact-customer", coupons: [{ couponId: issued.externalDiscountId, id: "applied-entry", code: issued.code }], updatedAt: paidAt.toISOString() }; } };
     assert.equal((await reconcileCommerce7RewardOrders(orderDeps)).linked, 1);
     const used = await db.commerceRewardRedemption.findUniqueOrThrow({ where: { id: saga.claim.id } });
     assert.equal(used.status, "USED"); assert.equal(used.canonicalOrderId, paid.id);
@@ -280,7 +280,7 @@ test("real Postgres: cap 25, duplicate request, point overspend, cancellation an
     const afterFailure = await db.commerceRewardRedemption.findUniqueOrThrow({ where: { id: lostCoupon.claim.id } });
     assert.equal(afterFailure.rewardOrderCheckedAt?.getTime(), failTime.getTime()); assert.equal(afterFailure.rewardOrderCursor, null);
     const revoked = await db.commerceRewardRedemption.update({ where: { id: lostTag.claim.id }, data: { status: "CANCELLED", provisioningState: "REVOKED", rewardOrderCheckedAt: null } });
-    const revokedRaw = { id: paid.externalOrderId, customerId: revoked.providerCustomerId, coupons: [{ id: revoked.externalDiscountId, code: revoked.code }], updatedAt: paidAt.toISOString() };
+    const revokedRaw = { id: paid.externalOrderId, customerId: revoked.providerCustomerId, coupons: [{ couponId: revoked.externalDiscountId, id: "applied-entry", code: revoked.code }], updatedAt: paidAt.toISOString() };
     assert.equal((await reconcileCommerce7RewardOrders({ db, fetchOrder: async () => revokedRaw })).linked, 1);
     const revokedLinked = await db.commerceRewardRedemption.findUniqueOrThrow({ where: { id: revoked.id } });
     assert.equal(revokedLinked.status, "CANCELLED"); assert.equal(revokedLinked.provisioningState, "REVOKED"); assert.equal(revokedLinked.canonicalOrderId, paid.id);

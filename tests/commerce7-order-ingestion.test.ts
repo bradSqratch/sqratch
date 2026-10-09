@@ -742,6 +742,23 @@ describe("51-58. commerce7 order webhook route", () => {
     assert.equal(ingestCalled, false);
   });
 
+  test("52b. a delivery with NO Authorization header (the live Order Create 401) is rejected and diagnosed as a missing header, never ingested", async () => {
+    process.env.COMMERCE7_ORDER_WEBHOOK_USERNAME = "hookuser";
+    process.env.COMMERCE7_ORDER_WEBHOOK_PASSWORD = "hookpass";
+    const warnings: string[] = []; const originalWarn = console.warn; console.warn = (line: string) => { warnings.push(String(line)); };
+    let ingestCalled = false;
+    try {
+      for (const header of [null, "Bearer something", "Basic not-base64-without-separator"]) {
+        const res = await handleCommerce7OrderWebhook(makeRequest(orderWebhookPayload(), header) as never, { findConnectionByTenant: async () => WEBHOOK_CONNECTION, ingest: async () => { ingestCalled = true; throw new Error("must not be called"); } });
+        assert.equal(res.status, 401, String(header));
+      }
+    } finally { console.warn = originalWarn; }
+    assert.equal(ingestCalled, false, "no order event is ever created for an unauthenticated delivery");
+    const first = JSON.parse(warnings[0]);
+    assert.equal(first.event, "commerce7_order_webhook_auth_failed"); assert.equal(first.authorizationHeaderPresent, false); assert.equal(first.configuredUsernamePresent, true); assert.equal(first.configuredPasswordPresent, true);
+    assert.ok(!warnings.join("\n").includes("hookpass") && !warnings.join("\n").includes("aG9va3"), "never logs a credential");
+  });
+
   test("53. object !== 'Order' is a deterministic 200 no-op", async () => {
     let ingestCalled = false;
     const res = await handleCommerce7OrderWebhook(
