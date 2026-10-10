@@ -9,6 +9,7 @@ import { CommerceProvider } from "@prisma/client";
 
 import {
   getBrandCommerceOrderDetail,
+  readRefundAnomaly,
   type OrderDetailRow,
 } from "../src/lib/commerce/order-detail";
 import { brandCommerceOrderDetailGetImpl } from "../src/app/api/brand/commerce/orders/[orderId]/route";
@@ -68,7 +69,7 @@ function orderRow(overrides: Partial<OrderDetailRow> = {}): OrderDetailRow {
 
 describe("getBrandCommerceOrderDetail", () => {
   test("resolves a full detail DTO including line items, money as strings", async () => {
-    const detail = await getBrandCommerceOrderDetail("order-1", "brand-a", {
+    const detail = await getBrandCommerceOrderDetail("order-1", "brand-a", { findLatestAppliedEventNote: async () => null,
       findOrder: async (orderId, brandId) => {
         assert.equal(orderId, "order-1");
         assert.equal(brandId, "brand-a");
@@ -89,14 +90,14 @@ describe("getBrandCommerceOrderDetail", () => {
   });
 
   test("a foreign/nonexistent order resolves to null — the service's own query already scopes by brandId", async () => {
-    const detail = await getBrandCommerceOrderDetail("order-1", "brand-a", {
+    const detail = await getBrandCommerceOrderDetail("order-1", "brand-a", { findLatestAppliedEventNote: async () => null,
       findOrder: async () => null,
     });
     assert.equal(detail, null);
   });
 
   test("null money fields stay null — never coerced to a zero string", async () => {
-    const detail = await getBrandCommerceOrderDetail("order-1", "brand-a", {
+    const detail = await getBrandCommerceOrderDetail("order-1", "brand-a", { findLatestAppliedEventNote: async () => null,
       findOrder: async () =>
         orderRow({
           subtotalMinor: null,
@@ -117,14 +118,14 @@ describe("getBrandCommerceOrderDetail", () => {
 
   test("a BigInt total beyond safe-integer range survives as a string with no precision loss", async () => {
     const huge = BigInt("9007199254740993");
-    const detail = await getBrandCommerceOrderDetail("order-1", "brand-a", {
+    const detail = await getBrandCommerceOrderDetail("order-1", "brand-a", { findLatestAppliedEventNote: async () => null,
       findOrder: async () => orderRow({ totalMinor: huge }),
     });
     assert.equal(detail?.totalMinor, huge.toString());
   });
 
   test("no customer PII field is ever present on the serialized detail", async () => {
-    const detail = await getBrandCommerceOrderDetail("order-1", "brand-a", {
+    const detail = await getBrandCommerceOrderDetail("order-1", "brand-a", { findLatestAppliedEventNote: async () => null,
       findOrder: async () => orderRow(),
     });
     const serialized = JSON.stringify(detail);
@@ -135,13 +136,13 @@ describe("getBrandCommerceOrderDetail", () => {
 
   // PHASE 19 REPAIR (P1-3): the exact persisted exponent, never derived.
   test("minorUnitExponent is passed through exactly, including 0 (JPY) and null (unresolved)", async () => {
-    const jpy = await getBrandCommerceOrderDetail("order-1", "brand-a", {
+    const jpy = await getBrandCommerceOrderDetail("order-1", "brand-a", { findLatestAppliedEventNote: async () => null,
       findOrder: async () => orderRow({ currencyCode: "JPY", minorUnitExponent: 0, totalMinor: BigInt(5000) }),
     });
     assert.equal(jpy?.minorUnitExponent, 0);
     assert.equal(jpy?.totalMinor, "5000");
 
-    const unresolved = await getBrandCommerceOrderDetail("order-1", "brand-a", {
+    const unresolved = await getBrandCommerceOrderDetail("order-1", "brand-a", { findLatestAppliedEventNote: async () => null,
       findOrder: async () => orderRow({ minorUnitExponent: null }),
     });
     assert.equal(unresolved?.minorUnitExponent, null);
@@ -203,6 +204,7 @@ describe("route: brandCommerceOrderDetailGetImpl", () => {
             updatedAt: "2026-01-06T00:00:00.000Z",
             providerUpdatedAt: null,
             lineItems: [],
+            refundAnomaly: null,
           };
         },
       },
@@ -212,5 +214,39 @@ describe("route: brandCommerceOrderDetailGetImpl", () => {
     assert.equal(capturedBrandId, "brand-a");
     const body = await res.json();
     assert.equal(body.data.id, "order-1");
+  });
+});
+
+describe("over-refund warning (Commerce7 #1007)", () => {
+  const overRefunded = orderRow({ orderNumber: "1007", currencyCode: "CAD", financialStatus: "REFUNDED", totalMinor: BigInt(16272), totalRefundedMinor: BigInt(16272), netRevenueMinor: BigInt(0) });
+
+  test("the latest applied event's OVER_REFUND_EXCESS note becomes a durable warning with the excess and the provider's full figure", async () => {
+    const lookups: string[] = [];
+    const detail = await getBrandCommerceOrderDetail("order-1", "brand-a", {
+      findOrder: async () => overRefunded,
+      findLatestAppliedEventNote: async (orderId) => { lookups.push(orderId); return "OVER_REFUND_EXCESS:16272"; },
+    });
+    assert.deepEqual(lookups, ["order-1"], "keyed by the Brand-scoped order's own id");
+    assert.equal(detail?.totalRefundedMinor, "16272"); assert.equal(detail?.netRevenueMinor, "0");
+    assert.deepEqual(detail?.refundAnomaly, { excessRefundMinor: "16272", reportedRefundedMinor: "32544" });
+  });
+
+  test("ordinary orders, other notes and malformed notes carry no warning; a foreign order is never looked up", async () => {
+    for (const note of [null, "WRITE_FAILED", "OVER_REFUND_EXCESS:", "OVER_REFUND_EXCESS:abc", "OVER_REFUND_EXCESS:0", "OVER_REFUND_EXCESS:12 OR 1=1"]) {
+      assert.equal(readRefundAnomaly(note, BigInt(100)), null, String(note));
+    }
+    let looked = false;
+    const missing = await getBrandCommerceOrderDetail("order-1", "brand-b", { findOrder: async () => null, findLatestAppliedEventNote: async () => { looked = true; return "OVER_REFUND_EXCESS:1"; } });
+    assert.equal(missing, null); assert.equal(looked, false);
+  });
+
+  test("the API returns the warning with the order", async () => {
+    const res = await brandCommerceOrderDetailGetImpl({
+      getContext: async () => makeContext(),
+      getOrderDetail: (orderId, brandId) => getBrandCommerceOrderDetail(orderId, brandId, { findOrder: async () => overRefunded, findLatestAppliedEventNote: async () => "OVER_REFUND_EXCESS:16272" }),
+    }, "order-1");
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.deepEqual(body.data.refundAnomaly, { excessRefundMinor: "16272", reportedRefundedMinor: "32544" });
   });
 });

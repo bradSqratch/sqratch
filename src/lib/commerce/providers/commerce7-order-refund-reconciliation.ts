@@ -601,6 +601,38 @@ export function applyRefundDurabilityGuard(
   };
 }
 
+/** The `appliedEventNote` tag for a bounded over-refund: `OVER_REFUND_EXCESS:<excess in minor units>`. */
+export const COMMERCE7_OVER_REFUND_NOTE = "OVER_REFUND_EXCESS";
+
+/**
+ * PURE. Commerce7 can report settled refunds that exceed the sale (live: #1007, CAD 162.72, with two full refund orders
+ * #1008 and #1009, i.e. CAD 325.44 refunded), and its developers confirm this can be legitimate. Such a snapshot used to be
+ * rejected outright (`CONTRADICTORY_FINANCIAL_SNAPSHOT`), so the original sale never reached Order Operations and the
+ * historical checkpoint could never pass it.
+ *
+ * The canonical order now keeps the provider's gross sale, line items and attribution, and counts refunds only up to the
+ * sale (so it is REFUNDED with net 0 and conversion revenue can never go negative). The excess is NOT dropped: it travels as
+ * the closed note `OVER_REFUND_EXCESS:<minor units>` recorded on the ingestion event that applies this snapshot, and Order
+ * Operations shows it as a warning. The provider's refund orders remain the evidence. The shared ingestion invariant is
+ * untouched and still rejects any genuinely incoherent snapshot. Nothing else (points, rewards, retries) reacts to it.
+ */
+export function boundCommerce7OverRefund(order: NormalizedOrderInput): { order: NormalizedOrderInput; excessRefundMinor: bigint | null } {
+  const { totalMinor, totalRefundedMinor } = order;
+  if (totalMinor === null || totalRefundedMinor === null || totalMinor < BigInt(0) || totalRefundedMinor <= totalMinor) {
+    return { order, excessRefundMinor: null };
+  }
+  const excessRefundMinor = totalRefundedMinor - totalMinor;
+  return {
+    order: {
+      ...order,
+      totalRefundedMinor: totalMinor,
+      financialStatus: refineFinancialStatusForRefunds(order.financialStatus, totalMinor, totalMinor),
+      appliedEventNote: `${COMMERCE7_OVER_REFUND_NOTE}:${excessRefundMinor.toString()}`,
+    },
+    excessRefundMinor,
+  };
+}
+
 /**
  * Turns one raw Commerce7 order into a `NormalizedOrderInput` that is always
  * safe to hand to the generic, provider-neutral `ingestNormalizedOrder` —
@@ -641,14 +673,16 @@ export async function prepareCommerce7OrderForIngestion(
           })
         : null;
     const guarded = applyRefundDurabilityGuard(order, stored);
+    // A Refund tender on the order itself can also exceed the sale; it is bounded the same way.
+    const bounded = boundCommerce7OverRefund(guarded.order);
     return {
       outcome: "READY",
-      order: guarded.order,
-      warnings,
+      order: bounded.order,
+      warnings: bounded.excessRefundMinor === null ? warnings : [...warnings, COMMERCE7_OVER_REFUND_NOTE],
       refundReconciliationOutcome: guarded.preserved
         ? "REFUND_STATE_PRESERVED"
         : "NOT_APPLICABLE",
-      refundReconciliationReason: guarded.preserved ? "REFUND_BLIND_PAYLOAD" : null,
+      refundReconciliationReason: guarded.preserved ? "REFUND_BLIND_PAYLOAD" : bounded.excessRefundMinor !== null ? "OVER_REFUND_BOUNDED" : null,
     };
   }
 
@@ -791,12 +825,9 @@ export async function prepareCommerce7OrderForIngestion(
   // own normalized snapshot. `totalMinor` is the root's OWN reported total
   // (from normalizeCommerce7Order, untouched) — reconciliation never
   // rewrites it, only `totalRefundedMinor`/`financialStatus`. An over-refund
-  // (reconciled total exceeding the root's own total) is NOT clamped or
-  // corrected here — it is passed straight through, and
-  // `../order-ingestion.ts`'s existing financial invariant guard is what
-  // rejects that contradictory combination, exactly as it does today for
-  // any other internally-inconsistent snapshot. This module fabricates
-  // nothing and clamps nothing.
+  // (reconciled total exceeding the root's own total) is bounded at the sale
+  // and its excess recorded as an explicit anomaly by `boundCommerce7OverRefund`
+  // below; the provider's figure is never silently discarded.
   //
   // PHASE 26 (P1, monotonicity). Commerce7 documents no "undo refund"
   // semantic, so a reconciled total that is LOWER than what is already
@@ -833,9 +864,7 @@ export async function prepareCommerce7OrderForIngestion(
     reconciled.snapshot.latestEvidenceUpdatedAt,
   );
 
-  return {
-    outcome: "READY",
-    order: {
+  const bounded = boundCommerce7OverRefund({
       ...baseOrder,
       totalRefundedMinor: reconciled.snapshot.totalRefundedMinor,
       financialStatus,
@@ -862,10 +891,13 @@ export async function prepareCommerce7OrderForIngestion(
       // stored one, so an idempotent replay and any attempted decrease both
       // remain STALE.
       sameVersionSettlementRepair: true,
-    },
-    warnings,
+  });
+  return {
+    outcome: "READY",
+    order: bounded.order,
+    warnings: bounded.excessRefundMinor === null ? warnings : [...warnings, COMMERCE7_OVER_REFUND_NOTE],
     refundReconciliationOutcome: "RECONCILED",
-    refundReconciliationReason: null,
+    refundReconciliationReason: bounded.excessRefundMinor === null ? null : "OVER_REFUND_BOUNDED",
   };
 }
 

@@ -1213,7 +1213,9 @@ model CommerceOrderEvent {
   /// without storing any payload content or customer data.
   payloadDigest  String
   /// Short, classified, bounded failure tag. Never an error object, response
-  /// body, URL, or payload excerpt.
+  /// body, URL, or payload excerpt. On a PROCESSED event it may instead carry
+  /// the closed anomaly note the event applied (`OVER_REFUND_EXCESS:<minor>`,
+  /// see commerce7-order-refund-reconciliation.ts).
   failureSummary String?
 
   /// Optional link to the order this event resolved to, when it resolved to

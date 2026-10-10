@@ -621,17 +621,34 @@ describe("prepareCommerce7OrderForIngestion", () => {
     }
   });
 
-  test("Section 7.10: an over-refund is passed through honestly, never clamped — left for the generic invariant guard to reject", async () => {
+  test("Section 7.10: an over-refund is bounded at the sale AND reported as an explicit anomaly — never silently corrected", async () => {
     const overRefund = refundOrder({ tenders: [refundTender({ amountTendered: -99999 })] });
     const result = await prepare(rootOrderWithLink(), {
       fetchOrder: fakeFetchOrder({ "order-1003": overRefund }),
     });
     assert.equal(result.outcome, "READY");
     if (result.outcome === "READY") {
-      // Not clamped to totalMinor, not silently corrected.
-      assert.equal(result.order.totalRefundedMinor, BigInt(99999));
+      const total = result.order.totalMinor!;
+      // The ordinary summary counts refunds only up to the sale: REFUNDED, net 0, never negative.
+      assert.equal(result.order.totalRefundedMinor, total);
       assert.equal(result.order.financialStatus, "REFUNDED");
-      assert.notEqual(result.order.totalRefundedMinor, result.order.totalMinor);
+      // The provider's excess is kept, explicitly, for the event that applies this snapshot.
+      assert.equal(result.order.appliedEventNote, `OVER_REFUND_EXCESS:${BigInt(99999) - total}`);
+      assert.equal(result.refundReconciliationOutcome, "RECONCILED");
+      assert.equal(result.refundReconciliationReason, "OVER_REFUND_BOUNDED");
+      assert.ok(result.warnings.includes("OVER_REFUND_EXCESS"));
+    }
+  });
+
+  test("Section 7.10b: a refund exactly equal to the sale is ordinary — no anomaly note", async () => {
+    const root = rootOrderWithLink();
+    const exact = refundOrder({ tenders: [refundTender({ amountTendered: -Number(root.total) })] });
+    const result = await prepare(root, { fetchOrder: fakeFetchOrder({ "order-1003": exact }) });
+    assert.equal(result.outcome, "READY");
+    if (result.outcome === "READY") {
+      assert.equal(result.order.totalRefundedMinor, result.order.totalMinor);
+      assert.equal(result.order.appliedEventNote, undefined);
+      assert.equal(result.refundReconciliationReason, null);
     }
   });
 });

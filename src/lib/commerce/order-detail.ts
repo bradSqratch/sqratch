@@ -78,6 +78,13 @@ export type BrandCommerceOrderDetail = {
   createdAt: string;
   updatedAt: string;
   lineItems: BrandCommerceOrderDetailLineItem[];
+  /**
+   * The provider reported MORE refunded than the sale (Commerce7 #1007). The summary above counts refunds only up to the
+   * sale; `excessRefundMinor` is the additional amount the provider reported and `reportedRefundedMinor` its full figure.
+   * Read from the note on the latest event that APPLIED this order (`OVER_REFUND_EXCESS:<minor>`), so it is durable and
+   * clears once the provider's data is corrected. `null` for every ordinary order.
+   */
+  refundAnomaly: { excessRefundMinor: string; reportedRefundedMinor: string } | null;
 };
 
 export type OrderDetailRow = {
@@ -116,6 +123,8 @@ export type OrderDetailRow = {
 
 export type BrandCommerceOrderDetailDeps = {
   findOrder(orderId: string, brandId: string): Promise<OrderDetailRow | null>;
+  /** The `failureSummary` of the latest PROCESSED event for this (already Brand-scoped) order, or null. */
+  findLatestAppliedEventNote(orderId: string): Promise<string | null>;
 };
 
 const ORDER_DETAIL_SELECT = {
@@ -165,9 +174,28 @@ async function defaultFindOrder(
   });
 }
 
+async function defaultFindLatestAppliedEventNote(orderId: string): Promise<string | null> {
+  const { default: prisma } = await import("@/lib/prisma");
+  const event = await prisma.commerceOrderEvent.findFirst({
+    where: { orderId, status: "PROCESSED" },
+    orderBy: [{ processedAt: "desc" }, { receivedAt: "desc" }],
+    select: { failureSummary: true },
+  });
+  return event?.failureSummary ?? null;
+}
+
 const DEFAULT_DEPS: BrandCommerceOrderDetailDeps = {
   findOrder: defaultFindOrder,
+  findLatestAppliedEventNote: defaultFindLatestAppliedEventNote,
 };
+
+/** `OVER_REFUND_EXCESS:<minor units>` (see commerce7-order-refund-reconciliation.ts) to the warning shown on the order. */
+export function readRefundAnomaly(note: string | null, totalRefundedMinor: bigint): BrandCommerceOrderDetail["refundAnomaly"] {
+  const match = note ? /^OVER_REFUND_EXCESS:(\d{1,18})$/.exec(note) : null;
+  if (!match) return null;
+  const excess = BigInt(match[1]);
+  return excess > BigInt(0) ? { excessRefundMinor: excess.toString(), reportedRefundedMinor: (totalRefundedMinor + excess).toString() } : null;
+}
 
 function minorToString(value: bigint | null): string | null {
   return value === null ? null : value.toString();
@@ -183,6 +211,8 @@ export async function getBrandCommerceOrderDetail(
   if (!row) {
     return null;
   }
+  // Only after the Brand-scoped read succeeded: the event lookup is keyed by this order's own id.
+  const refundAnomaly = readRefundAnomaly(await resolved.findLatestAppliedEventNote(row.id), row.totalRefundedMinor);
 
   return {
     id: row.id,
@@ -217,5 +247,6 @@ export async function getBrandCommerceOrderDetail(
       externalVariantId: item.externalVariantId,
       connectedProductId: item.connectedProductId,
     })),
+    refundAnomaly,
   };
 }

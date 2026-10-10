@@ -314,7 +314,19 @@ export type NormalizedOrderInput = {
    * any provider's semantics.
    */
   sameVersionSettlementRepair?: boolean;
+
+  /**
+   * An optional, bounded, classified note a provider adapter attaches when it represented an EXCEPTIONAL provider state
+   * safely (today only Commerce7's `OVER_REFUND_EXCESS:<minor units>`). It is recorded in `CommerceOrderEvent.failureSummary`
+   * of the event that APPLIES this snapshot (status PROCESSED) and nowhere else: never on a stale, failed or duplicate
+   * delivery, never as an order column. Only a closed `TAG` or `TAG:<integer>` form is accepted; anything else is dropped.
+   * Shopify never sets it, so its behavior is unchanged.
+   */
+  appliedEventNote?: string | null;
 };
+
+/** Closed form for `appliedEventNote`: an upper-case tag with an optional integer (no payload text can pass). */
+const APPLIED_EVENT_NOTE_PATTERN = /^[A-Z][A-Z_]{2,39}(:\d{1,18})?$/;
 
 /** Identity of the delivery that carried this order. */
 export type OrderIngestionEventInput = {
@@ -1732,12 +1744,16 @@ async function runOrderIngestion(
           ? "FAILED"
           : "PROCESSED";
 
+    const appliedNote =
+      eventStatus === "PROCESSED" && typeof order.appliedEventNote === "string" && APPLIED_EVENT_NOTE_PATTERN.test(order.appliedEventNote)
+        ? order.appliedEventNote
+        : null;
     await resolved.finalizeEvent(
       eventId,
       {
         status: eventStatus,
         orderId: result.orderId,
-        failureSummary: result.status === "FAILED" ? result.reason : null,
+        failureSummary: result.status === "FAILED" ? result.reason : appliedNote,
       },
       now,
     );

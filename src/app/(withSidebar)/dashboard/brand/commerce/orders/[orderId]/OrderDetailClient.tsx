@@ -50,6 +50,8 @@ type OrderDetail = {
   createdAt: string;
   updatedAt: string;
   lineItems: OrderDetailLineItem[];
+  /** The provider reported more refunded than the sale; the summary counts refunds only up to the sale. */
+  refundAnomaly?: { excessRefundMinor: string; reportedRefundedMinor: string } | null;
 };
 
 const PROVIDER_LABELS: Record<CommerceProvider, string> = {
@@ -194,6 +196,20 @@ export function OrderDetailClient({ orderId }: { orderId: string }) {
                 <p className="mt-1 text-sm text-white/80">{formatDateTime(order.updatedAt)}</p>
               </div>
             </div>
+
+            {order.refundAnomaly ? (
+              <div role="note" className="rounded-2xl border border-amber-300/40 bg-amber-300/10 p-4 text-sm text-amber-100">
+                <p className="font-semibold">Over-refund reported by {PROVIDER_LABELS[order.provider] ?? order.provider}</p>
+                <p className="mt-1">
+                  {PROVIDER_LABELS[order.provider] ?? order.provider} reported an additional{" "}
+                  {formatMoneyDisplay(order.refundAnomaly.excessRefundMinor, order.currencyCode, order.minorUnitExponent)} refund
+                  ({formatMoneyDisplay(order.refundAnomaly.reportedRefundedMinor, order.currencyCode, order.minorUnitExponent)} refunded in total
+                  against this {formatMoneyDisplay(order.totalMinor, order.currencyCode, order.minorUnitExponent)} sale). The summary below counts
+                  refunds only up to the sale. Review the extra refund in {PROVIDER_LABELS[order.provider] ?? order.provider}; SQRATCH changes
+                  nothing else because of it.
+                </p>
+              </div>
+            ) : null}
 
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
               <p className="text-sm font-semibold text-white/85">Financial summary</p>

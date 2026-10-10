@@ -152,7 +152,7 @@ class FakeStore {
   events = new Map<string, string>();
   claimedEventIds: string[] = [];
   /** Every finalization the REAL pipeline performed, in order. */
-  finalizedEvents: Array<{ eventId: string; status: string }> = [];
+  finalizedEvents: Array<{ eventId: string; status: string; failureSummary?: string | null; orderId?: string | null }> = [];
 
   seedOrder(row: Partial<StoredOrder> & { externalOrderId: string }): StoredOrder {
     const id = `order-row-${this.nextId++}`;
@@ -222,7 +222,7 @@ class FakeStore {
     eventId: string,
     data: { status: string; orderId?: string | null; failureSummary?: string | null },
   ): Promise<void> {
-    this.finalizedEvents.push({ eventId, status: data.status });
+    this.finalizedEvents.push({ eventId, status: data.status, failureSummary: data.failureSummary ?? null, orderId: data.orderId ?? null });
     this.events.set(eventId, data.status);
   }
 
@@ -836,4 +836,104 @@ describe("missed Commerce7 webhook: ordinary paid root #1004", () => {
       assert.equal(store.linesFor(order.id).length, 1);
     });
   }
+});
+
+// ---------------------------------------------------------------------------
+// Over-refund (#1007) and ordinary multiple refunds (#1010)
+// ---------------------------------------------------------------------------
+
+function sale(id: string, orderNumber: number, total: number, linked: Array<{ id: string; number: number }>, updatedAt: string) {
+  return {
+    id, orderNumber, channel: "Web", purchaseType: "Regular", paymentStatus: "Paid", fulfillmentStatus: "Fulfilled",
+    createdAt: "2026-10-09T13:00:00.000Z", updatedAt, subTotal: total, taxTotal: 0, shipTotal: 0, total,
+    previousOrderId: null, linkedOrders: linked.map((entry) => ({ orderId: entry.id, orderNumber: entry.number, purchaseType: "Refund" })),
+    tenders: [{ id: `sale-tender-${orderNumber}`, chargeType: "Sale", chargeStatus: "Success", amountTendered: total }],
+    items: [
+      { id: `item-a-${orderNumber}`, productId: "prod-rare-2015-chardonnay", productTitle: "Rare - 2015 Chardonnay", sku: "RARE15", quantity: 1, price: Math.floor(total / 2), tax: 0 },
+      { id: `item-b-${orderNumber}`, productId: "prod-2016-rose", productTitle: "Sample - 2016 Rose", sku: "2016R", quantity: 1, price: total - Math.floor(total / 2), tax: 0 },
+    ],
+  };
+}
+function refund(id: string, orderNumber: number, root: { id: string; orderNumber: number }, amount: number, tenderId: string, updatedAt: string) {
+  return {
+    id, orderNumber, purchaseType: "Refund", previousOrderId: root.id, previousOrderNumber: root.orderNumber, paymentStatus: "Paid",
+    subTotal: -amount, taxTotal: 0, total: -amount, createdAt: updatedAt, updatedAt,
+    tenders: [{ id: tenderId, chargeType: "Refund", chargeStatus: "Success", amountTendered: -amount }],
+    items: [{ id: `${id}-line`, productId: "prod-rare-2015-chardonnay", productTitle: "Rare - 2015 Chardonnay", sku: "RARE15", quantity: -1, price: amount, tax: 0 }],
+  };
+}
+const RANGE_1007 = { from: "2026-10-09T00:00:00.000Z", to: "2026-10-10T00:00:00.000Z" };
+
+describe("over-refund #1007: one canonical sale, refunds bounded at the sale, the excess kept as an explicit anomaly", () => {
+  const root = sale("fixture-root-1007", 1007, 16272, [{ id: "fixture-refund-1008", number: 1008 }, { id: "fixture-refund-1009", number: 1009 }], "2026-10-09T13:27:22.513Z");
+  const r1008 = refund("fixture-refund-1008", 1008, { id: root.id, orderNumber: 1007 }, 16272, "refund-tender-1008", "2026-10-09T13:20:00.000Z");
+  const r1009 = refund("fixture-refund-1009", 1009, { id: root.id, orderNumber: 1007 }, 16272, "refund-tender-1009", "2026-10-09T13:25:00.000Z");
+  const provider = { [root.id]: root, [r1008.id]: r1008, [r1009.id]: r1009 };
+
+  test("Custom Range imports #1007 once (gross 16272, refunded 16272, net 0, REFUNDED, both products); #1008/#1009 never become sales; the range completes", async () => {
+    const store = new FakeStore();
+    const result = await runBackfill(store, [root, r1008, r1009], provider, RANGE_1007);
+    assert.equal(result.status, "COMPLETED", "a bounded anomaly no longer blocks the historical checkpoint");
+    assert.equal(store.orders.size, 1);
+    const order = store.find(root.id)!;
+    assert.equal(order.orderNumber, "1007");
+    assert.equal(order.totalMinor, BigInt(16272));
+    assert.equal(order.totalRefundedMinor, BigInt(16272));
+    assert.equal(order.netRevenueMinor, BigInt(0), "ordinary net revenue never goes negative");
+    assert.equal(order.financialStatus, "REFUNDED");
+    assert.deepEqual(store.linesFor(order.id).map((line) => line.sku).sort(), ["2016R", "RARE15"], "the original products, never the refund's negative line");
+    assert.equal(store.find(r1008.id), null); assert.equal(store.find(r1009.id), null);
+    const applied = store.finalizedEvents.filter((event) => event.status === "PROCESSED");
+    assert.equal(applied.length, 1);
+    assert.equal(applied[0].failureSummary, "OVER_REFUND_EXCESS:16272", "the extra CAD 162.72 stays recorded on the event that applied the order");
+    assert.equal(applied[0].orderId, order.id);
+    assert.ok(!store.finalizedEvents.some((event) => event.status === "FAILED"), "no CONTRADICTORY_FINANCIAL_SNAPSHOT");
+  });
+
+  test("replaying the range is idempotent: still one order, no second application, still complete", async () => {
+    const store = new FakeStore();
+    await runBackfill(store, [root, r1008, r1009], provider, RANGE_1007);
+    const before = store.finalizedEvents.length;
+    const again = await runBackfill(store, [root, r1008, r1009], provider, RANGE_1007);
+    assert.equal(again.status, "COMPLETED"); assert.equal(store.orders.size, 1);
+    assert.ok(store.finalizedEvents.slice(before).every((event) => event.status !== "PROCESSED"), "a replay never re-applies");
+    assert.equal(store.find(root.id)!.totalRefundedMinor, BigInt(16272));
+  });
+
+  test("if Commerce7 later voids one refund (newer version), the ordinary refund lands and the anomaly note is not repeated", async () => {
+    const store = new FakeStore();
+    await runBackfill(store, [root, r1008, r1009], provider, RANGE_1007);
+    const corrected = { ...root, updatedAt: "2026-10-09T15:00:00.000Z", linkedOrders: [{ orderId: r1008.id, orderNumber: 1008, purchaseType: "Refund" }] };
+    const before = store.finalizedEvents.length;
+    await runBackfill(store, [corrected], { [root.id]: corrected, [r1008.id]: r1008 }, RANGE_1007);
+    const latest = store.finalizedEvents.slice(before).filter((event) => event.status === "PROCESSED");
+    assert.equal(latest.length, 1); assert.equal(latest[0].failureSummary, null);
+    assert.equal(store.find(root.id)!.totalRefundedMinor, BigInt(16272)); assert.equal(store.orders.size, 1);
+  });
+});
+
+describe("ordinary multiple refunds #1010 are unchanged: 5537 + 2147 = 7684, one canonical order", () => {
+  const root = sale("fixture-root-1010", 1010, 7684, [{ id: "fixture-refund-1011", number: 1011 }, { id: "fixture-refund-1012", number: 1012 }], "2026-10-09T18:00:00.000Z");
+  const r1011 = refund("fixture-refund-1011", 1011, { id: root.id, orderNumber: 1010 }, 5537, "refund-tender-1011", "2026-10-09T17:00:00.000Z");
+  const r1012 = refund("fixture-refund-1012", 1012, { id: root.id, orderNumber: 1010 }, 2147, "refund-tender-1012", "2026-10-09T17:30:00.000Z");
+
+  test("both refunds: refunded 7684, net 0, REFUNDED, both products, no anomaly", async () => {
+    const store = new FakeStore();
+    const result = await runBackfill(store, [root, r1011, r1012], { [root.id]: root, [r1011.id]: r1011, [r1012.id]: r1012 }, RANGE_1007);
+    assert.equal(result.status, "COMPLETED"); assert.equal(store.orders.size, 1);
+    const order = store.find(root.id)!;
+    assert.equal(order.totalMinor, BigInt(7684)); assert.equal(order.totalRefundedMinor, BigInt(7684)); assert.equal(order.netRevenueMinor, BigInt(0));
+    assert.equal(order.financialStatus, "REFUNDED");
+    assert.deepEqual(store.linesFor(order.id).map((line) => line.sku).sort(), ["2016R", "RARE15"]);
+    assert.ok(store.finalizedEvents.every((event) => !event.failureSummary), "an ordinary refund carries no anomaly");
+  });
+
+  test("first refund only, then the second: PARTIALLY_REFUNDED 5537 then REFUNDED 7684 on the same order", async () => {
+    const store = new FakeStore();
+    const first = { ...root, linkedOrders: [{ orderId: r1011.id, orderNumber: 1011, purchaseType: "Refund" }], updatedAt: "2026-10-09T17:05:00.000Z" };
+    await runBackfill(store, [first], { [root.id]: first, [r1011.id]: r1011 }, RANGE_1007);
+    assert.equal(store.find(root.id)!.financialStatus, "PARTIALLY_REFUNDED"); assert.equal(store.find(root.id)!.totalRefundedMinor, BigInt(5537)); assert.equal(store.find(root.id)!.netRevenueMinor, BigInt(2147));
+    await runBackfill(store, [root, r1011, r1012], { [root.id]: root, [r1011.id]: r1011, [r1012.id]: r1012 }, RANGE_1007);
+    assert.equal(store.orders.size, 1); assert.equal(store.find(root.id)!.financialStatus, "REFUNDED"); assert.equal(store.find(root.id)!.totalRefundedMinor, BigInt(7684));
+  });
 });
