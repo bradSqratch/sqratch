@@ -246,6 +246,9 @@ test("real Postgres: cap 25, duplicate request, point overspend, cancellation an
     assert.equal(bearerIssued?.status, "ISSUED"); assert.equal(bearerNative.couponCreates, 1); assert.equal(bearerNative.customerReads, 0); assert.equal(bearerNative.tagCreates, 0);
     assert.equal(bearerNative.lastPayload?.discount, 1999); assert.equal(bearerNative.lastPayload?.discountType, "Dollar Off"); assert.equal(bearerNative.lastPayload?.dollarOffDiscountApplies, "Once Per Order"); assert.equal(bearerNative.lastPayload?.availableTo, "Everyone"); assert.equal(bearerNative.lastPayload?.appliesTo, "Store"); assert.equal(bearerNative.lastPayload?.cartRequirement, 5000); assert.equal(bearerNative.lastPayload?.cartRequirementType, "Minimum Purchase Amount");
     assert.equal(bearerNative.lastPayload?.endDate, bearerClaims[0].expiresAt!.toISOString());
+    // Bearer contract: one native redemption in total, open to anyone holding the code, never tied to a customer or tag.
+    assert.equal(bearerNative.lastPayload?.usageLimitType, "Per Store"); assert.equal(bearerNative.lastPayload?.usageLimit, 1); assert.equal(bearerNative.lastPayload?.availableToObjectIds, undefined);
+    assert.equal((await db.commerceRewardRedemption.findUniqueOrThrow({ where: { id: bearerClaims[0].id } })).providerCustomerId, null);
     await provisionCommerce7Claim(bearerClaims[0].id, bearerUser.id, bearerDeps); assert.equal(bearerNative.couponCreates, 1);
     // A definitive provider rejection refunds once; a lost response keeps the points and never posts twice.
     const rejectedUser = await user(100, false); const rejectedClaim = await reserveCommerce7Claim(rejectedUser.id, bearerOffer.id, "template-free-rejected-key", [brand.id]);
@@ -375,6 +378,83 @@ test("real Postgres: exclusive access grants once, always charges a voluntary cl
     await db.brandRewardOffer.deleteMany({ where: { brandId: brand.id } });
     await db.user.deleteMany({ where: { id: { in: userIds } } });
     await db.connectedCommerceProduct.deleteMany({ where: { connectionId: connection.id } });
+    await db.commerceConnection.delete({ where: { id: connection.id } }); await db.brand.delete({ where: { id: brand.id } }); await db.$disconnect();
+  }
+});
+
+test("real Postgres: a burst of 30 distinct claimants for a 25-claim bearer reward reserves exactly 25, and same-user and retried requests never double-charge", { skip: !enabled && `Disposable DB opt-in required (${decision.reason})` }, async () => {
+  const { default: db } = await import("../src/lib/prisma");
+  const { reserveCommerce7Claim } = await import("../src/lib/commerce7-rewards");
+  const { RewardClaimError } = await import("../src/lib/commerce7-reward-domain");
+  const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const brand = await db.brand.create({ data: { name: "Capacity fixture", slug: `c7-capacity-${unique}` } });
+  const connection = await db.commerceConnection.create({ data: { brandId: brand.id, provider: "COMMERCE7", status: "CONNECTED", externalAccountId: "synthetic-capacity-tenant", displayName: "Synthetic store", providerMetadata: { currencyCode: "CAD" } } });
+  const userIds: string[] = [];
+  async function claimant(index: number, balance = 1000) {
+    const row = await db.user.create({ data: { email: `capacity-${index}-${unique}@example.test`, password: "synthetic-unused", isEmailVerified: true, emailVerifiedAt: new Date() } }); userIds.push(row.id);
+    await db.userPointAccount.create({ data: { userId: row.id, spendablePoints: balance, lifetimeEarnedPoints: balance } }); return row;
+  }
+  async function bearer(cap: number, perUser: number) {
+    return db.brandRewardOffer.create({ data: { brandId: brand.id, provider: "COMMERCE7", connectionId: connection.id, sourceExternalAccountId: connection.externalAccountId, title: "Capacity fixture", isActive: true, pointsCost: 100, discountAmountCents: 1000, currencyCode: "CAD", maxTotalRedemptions: cap, maxRedemptionsPerUser: perUser, commerce7Config: { eligibilityMode: "ANYONE_WITH_CODE", discountEnabled: true } } });
+  }
+  const spends = (userId: string) => db.pointTransaction.count({ where: { userId, type: "SPEND" } });
+  try {
+    const offer = await bearer(25, 1);
+    const users = await Promise.all(Array.from({ length: 30 }, (_, index) => claimant(index)));
+    const key = (index: number) => `burst-request-${index.toString().padStart(4, "0")}`;
+    // Every claimant fires at once on its own connection. Under SERIALIZABLE contention a request may exhaust its conflict
+    // retries; that is a rolled-back, retryable failure, never a partial reservation.
+    const burst = await Promise.allSettled(users.map((row, index) => reserveCommerce7Claim(row.id, offer.id, key(index), [brand.id])));
+    const won = burst.filter((result) => result.status === "fulfilled").length;
+    assert.ok(won <= 25, `never more than the cap (${won})`);
+    assert.equal(await db.commerceRewardRedemption.count({ where: { offerId: offer.id } }), won);
+    assert.equal((await db.brandRewardOffer.findUniqueOrThrow({ where: { id: offer.id } })).reservedClaimCount, won);
+    for (const [index, result] of burst.entries()) {
+      if (result.status === "fulfilled") continue;
+      assert.equal(await spends(users[index].id), 0, "a rejected claimant is never charged");
+      assert.equal(await db.commerceRewardRedemption.count({ where: { userId: users[index].id } }), 0);
+      assert.match(String(result.reason?.code), result.reason instanceof RewardClaimError ? /^(SOLD_OUT|OFFER_CHANGED)$/ : /^P2034$/, "only a sell-out or an exhausted serialization conflict");
+    }
+    // The UI retries a failed request with the SAME key; replaying every request settles to exactly 25 winners.
+    const replay = [];
+    for (const [index, row] of users.entries()) replay.push(await reserveCommerce7Claim(row.id, offer.id, key(index), [brand.id]).then((claim) => ({ index, claim }), (error) => ({ index, error })));
+    const winners = replay.filter((entry) => "claim" in entry);
+    assert.equal(winners.length, 25);
+    for (const entry of replay) if ("error" in entry) assert.equal(entry.error.code, "SOLD_OUT");
+    for (const [index, result] of burst.entries()) if (result.status === "fulfilled") assert.equal((replay[index] as { claim: { id: string } }).claim.id, result.value.id, "a retried winner gets its original claim back");
+    assert.equal(await db.commerceRewardRedemption.count({ where: { offerId: offer.id } }), 25);
+    assert.equal((await db.brandRewardOffer.findUniqueOrThrow({ where: { id: offer.id } })).reservedClaimCount, 25);
+    assert.equal(await db.pointTransaction.count({ where: { userId: { in: userIds }, type: "SPEND" } }), 25, "one debit per reservation, none for a retry");
+    for (const entry of replay) assert.equal(await spends(users[entry.index].id), "claim" in entry ? 1 : 0);
+    // A 26th claimant after sell-out, and a winner asking again with a new key, are both refused without a charge.
+    const late = await claimant(99);
+    await assert.rejects(reserveCommerce7Claim(late.id, offer.id, "late-claimant-request", [brand.id]), { code: "SOLD_OUT" });
+    assert.equal(await spends(late.id), 0);
+
+    // One user, per-user limit 1, two different keys (two tabs) at once: one claim, one debit.
+    const limited = await bearer(25, 1); const twoTabs = await claimant(100);
+    const tabs = await Promise.allSettled(["browser-tab-one-key", "browser-tab-two-key"].map((tab) => reserveCommerce7Claim(twoTabs.id, limited.id, tab, [brand.id])));
+    assert.equal(tabs.filter((result) => result.status === "fulfilled").length, 1);
+    const tabError = (tabs.find((result) => result.status === "rejected") as PromiseRejectedResult).reason;
+    assert.match(String(tabError?.code), tabError instanceof RewardClaimError ? /^(USER_LIMIT|OFFER_CHANGED)$/ : /^P2034$/);
+    assert.equal(await db.commerceRewardRedemption.count({ where: { offerId: limited.id } }), 1); assert.equal(await spends(twoTabs.id), 1);
+    await assert.rejects(reserveCommerce7Claim(twoTabs.id, limited.id, "browser-tab-three-key", [brand.id]), { code: "USER_LIMIT" });
+
+    // Per-user limit 3: a double-click (same key) counts once; distinct keys claim up to the limit and no further.
+    const multi = await bearer(25, 3); const clicker = await claimant(101);
+    const clicks = await Promise.all([1, 2, 3].map(() => reserveCommerce7Claim(clicker.id, multi.id, "double-click-request", [brand.id])));
+    assert.equal(new Set(clicks.map((claim) => claim.id)).size, 1); assert.equal(await spends(clicker.id), 1);
+    await reserveCommerce7Claim(clicker.id, multi.id, "second-claim-request", [brand.id]); await reserveCommerce7Claim(clicker.id, multi.id, "third-claim-request", [brand.id]);
+    await assert.rejects(reserveCommerce7Claim(clicker.id, multi.id, "fourth-claim-request", [brand.id]), { code: "USER_LIMIT" });
+    // A lost response is retried with its key long after: the same claim, still three debits.
+    assert.equal((await reserveCommerce7Claim(clicker.id, multi.id, "double-click-request", [brand.id])).id, clicks[0].id);
+    assert.equal(await spends(clicker.id), 3); assert.equal((await db.userPointAccount.findUniqueOrThrow({ where: { userId: clicker.id } })).spendablePoints, 700);
+    assert.equal((await db.brandRewardOffer.findUniqueOrThrow({ where: { id: multi.id } })).reservedClaimCount, 3);
+  } finally {
+    await db.pointTransaction.deleteMany({ where: { userId: { in: userIds } } });
+    await db.commerceRewardRedemption.deleteMany({ where: { brandId: brand.id } });
+    await db.brandRewardOffer.deleteMany({ where: { brandId: brand.id } });
+    await db.user.deleteMany({ where: { id: { in: userIds } } });
     await db.commerceConnection.delete({ where: { id: connection.id } }); await db.brand.delete({ where: { id: brand.id } }); await db.$disconnect();
   }
 });
