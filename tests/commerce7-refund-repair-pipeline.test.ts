@@ -910,6 +910,37 @@ describe("over-refund #1007: one canonical sale, refunds bounded at the sale, th
     assert.equal(latest.length, 1); assert.equal(latest[0].failureSummary, null);
     assert.equal(store.find(root.id)!.totalRefundedMinor, BigInt(16272)); assert.equal(store.orders.size, 1);
   });
+
+  // Known P3 limitation, pinned on purpose. With the same provider version, a delivery without the over-refund cannot be told
+  // apart from a delayed older one, and the bounded figures are identical either way. Clearing the warning on such a
+  // delivery would let a stale webhook erase a true warning, so it stays until Commerce7 sends a newer version.
+  test("a correction that keeps the same provider version is skipped as stale: figures unchanged, the warning stays", async () => {
+    const store = new FakeStore();
+    await runBackfill(store, [root, r1008, r1009], provider, RANGE_1007);
+    const order = store.find(root.id)!;
+    const sameVersion = { ...root, linkedOrders: [{ orderId: r1008.id, orderNumber: 1008, purchaseType: "Refund" }] };
+    const before = store.finalizedEvents.length;
+    const result = await runBackfill(store, [sameVersion], { [root.id]: sameVersion, [r1008.id]: r1008 }, RANGE_1007);
+    assert.equal(result.status, "COMPLETED", "never blocks the checkpoint");
+    assert.ok(store.finalizedEvents.slice(before).every((event) => event.status !== "PROCESSED"), "no new applied event");
+    const applied = store.finalizedEvents.filter((event) => event.status === "PROCESSED");
+    assert.equal(applied[applied.length - 1].failureSummary, "OVER_REFUND_EXCESS:16272", "the latest applied note, which Order Detail reads, is unchanged");
+    const after = store.find(root.id)!;
+    assert.equal(after.totalRefundedMinor, order.totalRefundedMinor); assert.equal(after.netRevenueMinor, BigInt(0)); assert.equal(after.financialStatus, "REFUNDED");
+  });
+
+  test("an older delivery (before either refund) can never clear the warning or overwrite the bounded order", async () => {
+    const store = new FakeStore();
+    await runBackfill(store, [root, r1008, r1009], provider, RANGE_1007);
+    const older = { ...root, updatedAt: "2026-10-09T13:10:00.000Z", linkedOrders: [] };
+    const before = store.finalizedEvents.length;
+    await runBackfill(store, [older], { [root.id]: older }, RANGE_1007);
+    assert.ok(store.finalizedEvents.slice(before).every((event) => event.status !== "PROCESSED"));
+    const applied = store.finalizedEvents.filter((event) => event.status === "PROCESSED");
+    assert.equal(applied[applied.length - 1].failureSummary, "OVER_REFUND_EXCESS:16272");
+    const order = store.find(root.id)!;
+    assert.equal(order.totalRefundedMinor, BigInt(16272)); assert.equal(order.financialStatus, "REFUNDED"); assert.equal(order.netRevenueMinor, BigInt(0));
+  });
 });
 
 describe("ordinary multiple refunds #1010 are unchanged: 5537 + 2147 = 7684, one canonical order", () => {

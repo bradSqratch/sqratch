@@ -73,9 +73,11 @@ export type BrandCommerceOrderActivityEntry = {
   /**
    * The canonical SQRATCH order this event resolved to, when it resolved to
    * one. `null` is meaningful and common — e.g. an event for a Commerce7
-   * refund child, which by design never becomes a canonical order.
+   * refund child, which by design never becomes a canonical order. Its
+   * currency and exponent (never customer data) let a note's amount be
+   * formatted exactly; `null` when unknown.
    */
-  order: { id: string; orderNumber: string | null } | null;
+  order: { id: string; orderNumber: string | null; currencyCode: string | null; minorUnitExponent: number | null } | null;
 };
 
 export type BrandCommerceOrderActivityPage = {
@@ -131,7 +133,7 @@ export type OrderActivityRow = {
   providerUpdatedAt: Date | null;
   externalOrderRef: string | null;
   failureSummary: string | null;
-  order: { id: string; orderNumber: string | null } | null;
+  order: { id: string; orderNumber: string | null; currencyCode?: string | null; minorUnitExponent?: number | null } | null;
 };
 
 export type BrandCommerceOrderActivityDeps = {
@@ -169,7 +171,7 @@ const ACTIVITY_SELECT = {
   externalOrderRef: true,
   failureSummary: true,
   // Joined in the SAME query — never an N+1 lookup per event.
-  order: { select: { id: true, orderNumber: true } },
+  order: { select: { id: true, orderNumber: true, currencyCode: true, minorUnitExponent: true } },
 } as const;
 
 async function defaultLoadConnection(connectionId: string, brandId: string) {
@@ -261,7 +263,9 @@ export async function getBrandCommerceOrderActivity(
     providerUpdatedAt: row.providerUpdatedAt?.toISOString() ?? null,
     externalOrderRef: row.externalOrderRef,
     failureSummary: row.failureSummary,
-    order: row.order ? { id: row.order.id, orderNumber: row.order.orderNumber } : null,
+    order: row.order
+      ? { id: row.order.id, orderNumber: row.order.orderNumber, currencyCode: row.order.currencyCode ?? null, minorUnitExponent: row.order.minorUnitExponent ?? null }
+      : null,
   }));
 
   const last = page[page.length - 1];

@@ -34,6 +34,7 @@ import {
 } from "../src/lib/commerce/order-operations-summary";
 import { brandCommerceOrderActivityGetImpl } from "../src/app/api/brand/commerce/connections/[connectionId]/orders/activity/route";
 import { parseOrderActivityPage } from "../src/app/(withSidebar)/dashboard/brand/commerce/commerce-response-validation";
+import { describeOrderEventNote, parseOverRefundExcess } from "../src/lib/commerce/order-event-notes";
 import type { BrandAdminContext } from "../src/lib/brand-auth";
 
 function makeContext(brandId = "brand-a"): BrandAdminContext {
@@ -367,7 +368,7 @@ describe("PHASE C — bounded querying", () => {
 
   test("the canonical order is joined in the SAME query — no N+1 per event", () => {
     const source = readFileSync(join(process.cwd(), "src/lib/commerce/order-activity.ts"), "utf8");
-    assert.match(source, /order: \{ select: \{ id: true, orderNumber: true \} \}/);
+    assert.match(source, /order: \{ select: \{ id: true, orderNumber: true, currencyCode: true, minorUnitExponent: true \} \}/);
     // Exactly one event query and one connection lookup — no per-row fetch.
     assert.equal((source.match(/commerceOrderEvent\.findMany/g) ?? []).length, 1);
     assert.doesNotMatch(source, /for \(const .* of .*\) \{[\s\S]*?await prisma/);
@@ -570,5 +571,62 @@ describe("PHASE C — activity UI wiring", () => {
 
   test("the panel validates the response at runtime rather than casting it", () => {
     assert.match(source, /parseOrderActivityPage\(data\)/);
+  });
+});
+
+describe("over-refund note in Order Operations activity (Commerce7 #1007)", () => {
+  const cad = { currencyCode: "CAD", minorUnitExponent: 2 };
+
+  test("the stored note becomes a readable warning with the excess in the order's own currency", () => {
+    const text = describeOrderEventNote("OVER_REFUND_EXCESS:16272", "Commerce7", cad);
+    assert.equal(text, "Over-refund warning: Commerce7 reported CAD 162.72 refunded beyond the sale total. SQRATCH counts refunds only up to the sale; review the extra refund in Commerce7.");
+    assert.doesNotMatch(String(text), /OVER_REFUND_EXCESS|16272/);
+    // The persisted exponent is used exactly (zero-decimal currency), never assumed to be 2.
+    assert.match(String(describeOrderEventNote("OVER_REFUND_EXCESS:16272", "Commerce7", { currencyCode: "JPY", minorUnitExponent: 0 })), /JPY 16,272 refunded/);
+  });
+
+  test("an unknown currency, exponent or order omits the amount instead of guessing it", () => {
+    for (const money of [{ currencyCode: null, minorUnitExponent: 2 }, { currencyCode: "CAD", minorUnitExponent: null }, null]) {
+      const text = String(describeOrderEventNote("OVER_REFUND_EXCESS:16272", "Commerce7", money));
+      assert.match(text, /^Over-refund warning: Commerce7 reported refunds above the sale total\./);
+      assert.doesNotMatch(text, /—|162|16272/);
+    }
+  });
+
+  test("other notes and malformed over-refund notes are shown exactly as before", () => {
+    assert.equal(describeOrderEventNote(null, "Commerce7", cad), null);
+    for (const note of ["WRITE_FAILED", "CONTRADICTORY_FINANCIAL_SNAPSHOT", "OVER_REFUND_EXCESS:", "OVER_REFUND_EXCESS:abc", "OVER_REFUND_EXCESS:0", "OVER_REFUND_EXCESS:-5", "OVER_REFUND_EXCESS:1 extra"]) {
+      assert.equal(describeOrderEventNote(note, "Commerce7", cad), note);
+      assert.equal(parseOverRefundExcess(note), null, note);
+    }
+    assert.equal(parseOverRefundExcess("OVER_REFUND_EXCESS:16272"), BigInt(16272));
+  });
+
+  test("the API keeps the durable note verbatim and adds only the order's currency and exponent", async () => {
+    const page = await getBrandCommerceOrderActivity(
+      { brandId: "brand-a", connectionId: "conn-1", cursor: null, limit: 25 },
+      depsWith([eventRow({ failureSummary: "OVER_REFUND_EXCESS:16272", order: { id: "order-1007", orderNumber: "1007", currencyCode: "CAD", minorUnitExponent: 2 } }), eventRow({ id: "evt-child", order: null })]),
+    );
+    assert.equal(page?.entries[0].failureSummary, "OVER_REFUND_EXCESS:16272");
+    assert.deepEqual(page?.entries[0].order, { id: "order-1007", orderNumber: "1007", currencyCode: "CAD", minorUnitExponent: 2 });
+    assert.equal(page?.entries[1].order, null);
+    const serialized = JSON.stringify(page);
+    for (const forbidden of ["email", "phone", "address", "customer"]) assert.ok(!serialized.toLowerCase().includes(forbidden), forbidden);
+  });
+
+  test("the client parser accepts the new fields, older payloads without them, and rejects malformed ones", () => {
+    const parse = (order: unknown) => parseOrderActivityPage({ entries: [validEntry({ order })], hasNextPage: false, nextCursor: null, limit: 25 });
+    assert.ok(parse({ id: "order-1", orderNumber: "1007", currencyCode: "CAD", minorUnitExponent: 2 }));
+    assert.ok(parse({ id: "order-1", orderNumber: "1007", currencyCode: null, minorUnitExponent: null }));
+    assert.ok(parse({ id: "order-1", orderNumber: "1007" }), "an older server without currency still parses");
+    for (const bad of [{ currencyCode: 12 }, { minorUnitExponent: 1.5 }, { minorUnitExponent: -1 }, { minorUnitExponent: "2" }]) {
+      assert.equal(parse({ id: "order-1", orderNumber: "1007", ...bad }), null, JSON.stringify(bad));
+    }
+  });
+
+  test("the activity panel renders notes through the formatter, never the raw tag", () => {
+    const source = readFileSync(join(process.cwd(), "src/app/(withSidebar)/dashboard/brand/commerce/orders/BrandCommerceOrdersClient.tsx"), "utf8");
+    assert.match(source, /describeOrderEventNote\(entry\.failureSummary,/);
+    assert.doesNotMatch(source, /\{entry\.failureSummary\}/);
   });
 });

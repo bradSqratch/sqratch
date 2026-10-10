@@ -7,6 +7,7 @@ import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatMoneyDisplay } from "@/lib/commerce/money";
+import { describeOrderEventNote } from "@/lib/commerce/order-event-notes";
 // The SERVER owns this bound. Imported rather than re-typed so the input
 // control and the URL seeder can never silently drift from the 400 the API
 // actually returns. `order-list.ts` is safe to pull into a client bundle: its
@@ -776,7 +777,9 @@ function OrderActivityPanel({
                   ) : null}
                 </div>
                 {entry.failureSummary ? (
-                  <p className="mt-1.5 text-[11px] text-amber-200/80">{entry.failureSummary}</p>
+                  <p className="mt-1.5 text-[11px] text-amber-200/80">
+                    {describeOrderEventNote(entry.failureSummary, PROVIDER_LABELS[entry.provider] ?? entry.provider, entry.order ? { currencyCode: entry.order.currencyCode ?? null, minorUnitExponent: entry.order.minorUnitExponent ?? null } : null)}
+                  </p>
                 ) : null}
               </div>
             ))}

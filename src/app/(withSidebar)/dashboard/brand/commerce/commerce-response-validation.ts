@@ -412,7 +412,7 @@ export type OrderActivityEntry = {
   providerUpdatedAt: string | null;
   externalOrderRef: string | null;
   failureSummary: string | null;
-  order: { id: string; orderNumber: string | null } | null;
+  order: { id: string; orderNumber: string | null; currencyCode?: string | null; minorUnitExponent?: number | null } | null;
 };
 
 export type OrderActivityPage = {
@@ -450,6 +450,9 @@ function isOrderActivityEntry(value: unknown): value is OrderActivityEntry {
     const order = entry.order as Record<string, unknown>;
     if (typeof order.id !== "string" || order.id === "") return false;
     if (order.orderNumber !== null && typeof order.orderNumber !== "string") return false;
+    // Optional (older servers omit them); when present they must be exact, or a note's amount could be misformatted.
+    if (order.currencyCode != null && typeof order.currencyCode !== "string") return false;
+    if (order.minorUnitExponent != null && (!Number.isInteger(order.minorUnitExponent) || (order.minorUnitExponent as number) < 0)) return false;
   }
   return true;
 }

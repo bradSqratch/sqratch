@@ -25,6 +25,7 @@ import type {
   CommerceProvider,
 } from "@prisma/client";
 import { resolveDisplayOrderDate } from "./order-list";
+import { parseOverRefundExcess } from "./order-event-notes";
 
 export type BrandCommerceOrderDetailLineItem = {
   id: string;
@@ -191,10 +192,8 @@ const DEFAULT_DEPS: BrandCommerceOrderDetailDeps = {
 
 /** `OVER_REFUND_EXCESS:<minor units>` (see commerce7-order-refund-reconciliation.ts) to the warning shown on the order. */
 export function readRefundAnomaly(note: string | null, totalRefundedMinor: bigint): BrandCommerceOrderDetail["refundAnomaly"] {
-  const match = note ? /^OVER_REFUND_EXCESS:(\d{1,18})$/.exec(note) : null;
-  if (!match) return null;
-  const excess = BigInt(match[1]);
-  return excess > BigInt(0) ? { excessRefundMinor: excess.toString(), reportedRefundedMinor: (totalRefundedMinor + excess).toString() } : null;
+  const excess = parseOverRefundExcess(note);
+  return excess === null ? null : { excessRefundMinor: excess.toString(), reportedRefundedMinor: (totalRefundedMinor + excess).toString() };
 }
 
 function minorToString(value: bigint | null): string | null {
