@@ -219,6 +219,34 @@ describe("POST .../orders/reconcile-range", () => {
     assert.equal(res.status, 200);
   });
 
+  test("the route receives the operator's exact instant: a New York selection reaches reconcileRange unchanged on a UTC server", async () => {
+    const { validateCustomRangeSelection } = await import("../src/app/(withSidebar)/dashboard/brand/commerce/commerce-response-validation");
+    const previous = process.env.TZ;
+    let body: { from: string; to: string };
+    try {
+      process.env.TZ = "America/New_York"; // the browser
+      const selection = validateCustomRangeSelection({ fromValue: "2026-01-01T19:00", toValue: "2026-01-01T21:00", now: new Date("2026-02-01T00:00:00.000Z") });
+      assert.ok(selection.ok); if (!selection.ok) return;
+      body = { from: selection.fromIso, to: selection.toIso };
+      process.env.TZ = "UTC"; // the server (Vercel)
+      let received: { from: Date; to: Date } | null = null;
+      const res = await brandCommerceReconcileRangePostImpl(
+        {
+          getContext: async () => makeContext(),
+          reconcileRange: async (input) => {
+            received = { from: input.from, to: input.to };
+            return { status: "UP_TO_DATE", cursor: null, from: input.from, to: input.to, reachedTarget: true, chunk: null, ordersFetched: 0, ordersProcessed: 0, error: null };
+          },
+        },
+        "conn-1",
+        body,
+      );
+      assert.equal(res.status, 200);
+      assert.equal(received!.from.toISOString(), "2026-01-02T00:00:00.000Z", "19:00 EST is 00:00 UTC the next day");
+      assert.equal(received!.to.toISOString(), "2026-01-02T02:00:00.000Z");
+    } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
+  });
+
   test("a range wider than the maximum window maps to 400 with WINDOW_TOO_WIDE", async () => {
     const from = new Date("2020-01-01T00:00:00.000Z").toISOString();
     const to = new Date("2025-01-01T00:00:00.000Z").toISOString();

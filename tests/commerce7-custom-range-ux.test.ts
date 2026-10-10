@@ -94,11 +94,58 @@ describe("validateCustomRangeSelection", () => {
     const result = validateCustomRangeSelection({ fromValue, toValue: "2026-08-20T05:00", now });
     assert.equal(result.ok, true);
     if (result.ok) {
-      // The correct conversion: parse fromValue as LOCAL time, then format.
+      // The correct conversion, whatever this machine's timezone is: parse as LOCAL time, then serialize as an absolute instant.
+      // (Comparing against `${fromValue}:00.000Z` is meaningless here: on a UTC machine the two are correctly identical.)
       assert.equal(result.fromIso, new Date(fromValue).toISOString());
-      // The WRONG conversion this bug class guards against: naively treating
-      // the local-time string as if it already were UTC.
-      assert.notEqual(result.fromIso, `${fromValue}:00.000Z`);
+      assert.match(result.fromIso, /Z$/, "the server always receives an absolute UTC instant");
+    }
+  });
+
+  // Deterministic timezone coverage: each case pins process.env.TZ (Node re-reads it), so the outcome never depends on the
+  // developer's machine or the CI runner (GitHub Actions runs in UTC).
+  function inTimeZone<T>(timeZone: string, run: () => T): T {
+    const previous = process.env.TZ;
+    process.env.TZ = timeZone;
+    try { return run(); } finally { if (previous === undefined) delete process.env.TZ; else process.env.TZ = previous; }
+  }
+  const select = (fromValue: string, toValue: string) => validateCustomRangeSelection({ fromValue, toValue, now: new Date("2027-01-01T00:00:00.000Z") });
+  for (const [timeZone, from, to] of [
+    ["UTC", "2026-08-20T04:39:00.000Z", "2026-08-20T05:00:00.000Z"],
+    ["America/New_York", "2026-08-20T08:39:00.000Z", "2026-08-20T09:00:00.000Z"], // EDT, UTC-4
+    ["Asia/Kolkata", "2026-08-19T23:09:00.000Z", "2026-08-19T23:30:00.000Z"], // UTC+5:30, previous UTC day
+  ] as const) {
+    test(`6b. in ${timeZone} the operator's local wall time becomes the exact UTC instant`, () => {
+      const result = inTimeZone(timeZone, () => select("2026-08-20T04:39", "2026-08-20T05:00"));
+      assert.equal(result.ok, true);
+      if (result.ok) { assert.equal(result.fromIso, from); assert.equal(result.toIso, to); }
+    });
+  }
+
+  test("6c. America/New_York daylight-saving changes: winter is UTC-5, summer UTC-4, and ranges across a change stay ordered", () => {
+    inTimeZone("America/New_York", () => {
+      const winter = select("2026-01-15T09:00", "2026-01-15T10:00");
+      assert.ok(winter.ok); if (winter.ok) assert.equal(winter.fromIso, "2026-01-15T14:00:00.000Z");
+      // 2026-03-08 02:00 springs forward to 03:00: a range spanning it is one real hour long, not two.
+      const spring = select("2026-03-08T01:30", "2026-03-08T03:30");
+      assert.ok(spring.ok); if (spring.ok) { assert.equal(spring.fromIso, "2026-03-08T06:30:00.000Z"); assert.equal(spring.toIso, "2026-03-08T07:30:00.000Z"); }
+      // 2026-11-01 02:00 falls back to 01:00: the ambiguous 01:30 resolves to a single valid instant, and order is preserved.
+      const fall = select("2026-11-01T00:30", "2026-11-01T03:00");
+      assert.ok(fall.ok); if (fall.ok) { assert.equal(fall.fromIso, "2026-11-01T04:30:00.000Z"); assert.equal(fall.toIso, "2026-11-01T08:00:00.000Z"); }
+      const reversed = select("2026-03-08T03:30", "2026-03-08T01:30");
+      assert.equal(reversed.ok, false, "From after To is still rejected across a DST change");
+    });
+  });
+
+  test("6d. the future-range ceiling compares absolute instants, so it is identical in every timezone", () => {
+    for (const timeZone of ["UTC", "America/New_York", "Asia/Kolkata"]) {
+      inTimeZone(timeZone, () => {
+        const nowInstant = new Date("2026-08-26T16:00:00.000Z");
+        const local = formatDateTimeLocalMax(nowInstant); // the input's max, in this zone's wall time
+        assert.equal(validateCustomRangeSelection({ fromValue: "2026-08-20T00:00", toValue: local, now: nowInstant }).ok, true, `${timeZone}: now itself is allowed`);
+        const oneMinuteLater = formatDateTimeLocalMax(new Date(nowInstant.getTime() + 60000));
+        const late = validateCustomRangeSelection({ fromValue: "2026-08-20T00:00", toValue: oneMinuteLater, now: nowInstant });
+        assert.equal(late.ok, false, `${timeZone}: one minute in the future is refused`);
+      });
     }
   });
 
