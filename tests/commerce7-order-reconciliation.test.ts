@@ -679,3 +679,42 @@ test("INCOMPLETE backfill never advances Catch Up or Custom Range and retries th
   assert.equal(c.status, "FAILED");
   assert.equal(c.cursor?.getTime(), from.getTime());
 });
+
+describe("a contradictory provider order (the over-refunded #1007 case) is isolated and reported accurately", () => {
+  const backfillConnection: Commerce7BackfillConnectionRow = { id: "conn-1", brandId: "brand-a", provider: CommerceProvider.COMMERCE7, status: "CONNECTED", externalAccountId: "tenant-1", providerMetadata: { currencyCode: "CAD" } };
+  const rawOrder = (id: string, orderNumber: number) => ({ id, orderNumber, subTotal: 5000, shipTotal: 0, taxTotal: 0, total: 5000, paymentStatus: "Paid", fulfillmentStatus: "Fulfilled", createdAt: "2026-10-09T12:00:00.000Z", updatedAt: "2026-10-09T13:00:00.000Z", items: [] });
+  function setup(failures: Record<string, "CONTRADICTORY_FINANCIAL_SNAPSHOT" | "WRITE_FAILED">) {
+    const store = new FakeReconciliationStore(); store.connections.set("conn-1", connectionRow());
+    const ingested: string[] = [];
+    const deps: Commerce7ReconciliationDeps = {
+      withRunClaim: async (_owner, run) => run(), runInTransaction: (fn) => store.runInTransaction(fn), now: () => new Date("2026-10-09T14:00:00.000Z"),
+      fetchOrders: (input) => backfillCommerce7Orders(input, {
+        loadConnection: async () => backfillConnection,
+        fetchOrders: async () => ({ orders: [rawOrder("healthy-1006", 1006), rawOrder("contradictory-1007", 1007), rawOrder("healthy-1010", 1010)], total: 3 }),
+        ingest: async (_event, order) => {
+          ingested.push(order.externalOrderId!);
+          const reason = failures[order.externalOrderId!];
+          return reason ? { status: "FAILED", reason, eventId: "evt", orderId: null, lineItemCount: 0, attributionLinked: false, brandIdOverriddenFromConnection: false } : { status: "CREATED", reason: null, eventId: "evt", orderId: `row-${order.externalOrderId}`, lineItemCount: 0, attributionLinked: false, brandIdOverriddenFromConnection: false };
+        },
+      }),
+    };
+    return { store, deps, ingested };
+  }
+  const from = new Date("2026-10-08T00:00:00.000Z"); const to = new Date("2026-10-09T13:30:00.000Z");
+
+  test("healthy orders in the same range are still ingested; the range is not proven, and the message says retrying will not help", async () => {
+    const { store, deps, ingested } = setup({ "contradictory-1007": "CONTRADICTORY_FINANCIAL_SNAPSHOT" });
+    const result = await runCustomRangeStep({ brandId: "brand-a", connectionId: "conn-1", from, to }, deps);
+    assert.deepEqual(ingested, ["healthy-1006", "contradictory-1007", "healthy-1010"], "every order is processed independently");
+    assert.equal(result.status, "FAILED"); assert.equal(result.cursor?.getTime(), from.getTime(), "the verified range never advances past an unsettled order");
+    const state = store.states.get("conn-1")!;
+    assert.equal(state.reconciledThrough, null, "the contiguous Catch Up checkpoint is untouched");
+    assert.match(String(state.lastRunError), /^1 order was rejected because Commerce7 reports refunds larger than the order total \(CONTRADICTORY_FINANCIAL_SNAPSHOT\); 2 other orders were imported\. .*retrying will not change it\.$/);
+  });
+
+  test("when a retryable failure is also present the generic retry message stays", async () => {
+    const { store, deps } = setup({ "contradictory-1007": "CONTRADICTORY_FINANCIAL_SNAPSHOT", "healthy-1010": "WRITE_FAILED" });
+    await runCustomRangeStep({ brandId: "brand-a", connectionId: "conn-1", from, to }, deps);
+    assert.equal(store.states.get("conn-1")!.lastRunError, "Some orders could not be ingested. Retry this reconciliation chunk.");
+  });
+});

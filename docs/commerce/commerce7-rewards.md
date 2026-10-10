@@ -24,7 +24,7 @@ Product scope is independent of eligibility: **Applies to → All products** hid
 Every Commerce7 Coupon enum SQRATCH may send lives in one typed module, `src/lib/commerce7-coupon-contract.ts`. An entry is either observed or `null`; `null` fails closed and is never filled with a guess.
 
 * **Verified** (documented create example, operator sandbox reads and live 201s): `Store`, `Product` (selected products, with the exact IDs in `appliesToObjectIds`), `Everyone`, `Per Store`, `Dollar Off`, `Percentage Off` (the field name; see the unit note below), `No Discount`, `Enabled`.
-* **Percentage units: corrected, not yet verified for issuance.** HTTP 201 for `discount: 15` did not prove semantics: live QA showed that coupon as **0.15%** in Commerce7 Admin and it took CAD 0.03 off CAD 18.97 (`live-coupon-percentage-observation.json`). The native unit is 1/100 of a percent, the same scale as SQRATCH basis points, so 15% is written as `discount: 1500`. `COMMERCE7_COUPON_CONTRACT.percentage.verified` stays `false` until a live coupon created with 1500 is observed as 15%; until then percentage rewards save as drafts only, an already-active percentage offer is shown as paused and refuses new claims before any debit, and a pending percentage claim is refunded before any coupon request.
+* **Percentage units: verified.** HTTP 201 for `discount: 15` did not prove semantics: live QA showed that coupon as **0.15%** (`live-coupon-percentage-observation.json`). The native unit is 1/100 of a percent, the same scale as SQRATCH basis points, so 15% is written as `discount: 1500`; a live 1500 coupon showed "15.00% Off" in Admin and took 15% at checkout (`live-coupon-percentage-1500-observation.json`), so `COMMERCE7_COUPON_CONTRACT.percentage.verified` is true.
 * **Unverified for the Coupon object**: the customer-tag `availableTo` value. The Coupons page publishes no enum table, and live Commerce7 enums have already drifted from the public documentation (a live Product reads `security.availableTo: "Tag"` where the docs say `Group`), so no value is assumed.
 
 An unverified branch can be **saved as a draft but not activated**. The server refuses activation and refuses reservation (before any debit, capacity change or provider call), and the Brand UI shows the option as draft-only. To enable a branch, add a redacted sandbox **Coupon** GET for it to `tests/fixtures/commerce7-rewards/` and set the one value in the contract module. See the fixture README.
@@ -36,7 +36,7 @@ The public [Coupons](https://developer.commerce7.com/docs/coupons) page is **sta
 | Reward | Outgoing fields (plus `code`, `title`, `startDate`, `endDate`) |
 | --- | --- |
 | Fixed amount | `type: "Product"`, `discountType: "Dollar Off"`, `discount: <integer minor units>`, `dollarOffDiscountApplies: "Once Per Order"` |
-| Percentage | `type: "Product"`, `discountType: "Percentage Off"`, `discount: <basis points>` (1500 = 15%; the live probe's 15 was 0.15%), no per-order field. **Issuance gated** until a live 1500 = 15% is observed |
+| Percentage | `type: "Product"`, `discountType: "Percentage Off"`, `discount: <basis points>` (1500 = 15%; the live probe's 15 was 0.15%), no per-order field. Verified live (1500 = 15%) |
 | No minimum | `cartRequirementType: "None"` (no `cartRequirement`, `cartRequirementMaximum` or `cartRequirementCountType`) |
 | Minimum subtotal | `cartRequirementType: "Minimum Purchase Amount"`, `cartRequirement: <integer minor units>`, `cartRequirementCountType: "All Items"` |
 | All products | `appliesTo: "Store"` (no `appliesToObjectIds`) |
@@ -86,10 +86,10 @@ Exclusive-product access has a separate mode, one catalog product, one chosen Cu
 
 **Claim flow** (one saga; no slow work inside a database transaction):
 
-1. **Pre-check, before any debit** (read-only, outside transactions). The route gate requires an authenticated, campaign-unlocked user; then a verified SQRATCH email, an active offer, the current connection and a synchronized product that is still `CONFIGURED`. Live reads then prove the tag is still a Manual Customer tag and still secures the available product. Finally the Commerce7 customer is resolved by a complete, bounded scan and an **exact normalized verified-email match**: fuzzy search is never trusted, zero matches waits, and two or more fail closed. **If that customer already holds the tag and the reward is access-only, no claim is created and no points are spent.**
+1. **Pre-check, before any debit** (read-only, outside transactions). The route gate requires an authenticated, campaign-unlocked user; then a verified SQRATCH email, an active offer, the current connection and a synchronized product that is still `CONFIGURED`. Live reads then prove the tag is still a Manual Customer tag and still secures the available product. Finally the Commerce7 customer is resolved by a complete, bounded scan and an **exact normalized verified-email match**: fuzzy search is never trusted, zero matches waits, and two or more fail closed. The pre-check never decides the price: **a voluntary claim always costs the configured points**, whatever tags the customer already holds.
 2. **Reservation** (the existing serializable transaction): window, caps, per-user limit, frozen snapshot (version 3: `exclusiveAccess { productId, tagId }` and an optional discount), one capacity slot and one ledger debit. Only **one in-flight exclusive claim per member and Customer Tag** may exist, so two concurrent claims can never race the non-idempotent POST.
 3. **Provisioning** (durable owner; provider calls outside transactions). Re-verify the tag and product live, and re-read the pinned customer. Then exactly one of:
-   * Tag already present and SQRATCH never wrote: **`PRE_EXISTING`**. Access-only claims are refunded ("already had this access"); with a discount the member pays for the coupon only. SQRATCH never treats this membership as its own.
+   * Chosen tag already present and SQRATCH never wrote: **`PRE_EXISTING`**. No membership write; the claim completes (access-only claims settle as ISSUED, a discount issues its coupon) and the points stay spent. SQRATCH never treats this membership as its own and never removes it. A definitive coupon refusal before anything of value was issued still returns the points.
    * Tag absent: set `membershipWriteAttempted`, POST once, record the 201 relation ID, confirm with a fresh `GET /v1/customer/{id}`, then **`SQRATCH_GRANTED`** and `entitlementEverGranted`.
    * Tag present after SQRATCH's own attempt but without its 201 evidence: **`UNVERIFIED`** ownership. Access is finalized but never claimed as SQRATCH's.
 4. **Optional discount**: tag first, then one coupon (`Product` scope for the exclusive wine, `Everyone`, single use) through the verified coupon saga with exact-code recovery.
@@ -120,7 +120,7 @@ Exclusive-product access has a separate mode, one catalog product, one chosen Cu
 5. In SQRATCH, **Products → Sync** the Commerce7 catalog.
 6. In **Brand Rewards**, create a reward with **Reward mode: Exclusive wine access**.
 7. Select the wine (only Tag-secured products are listed), then choose **exactly which existing tag SQRATCH should grant** under "Customer Tag SQRATCH grants".
-8. With several tags on the wine, holders of the other tags may also be able to buy it, and claiming stays disabled until multi-tag access is verified. If the tag also secures other products, granting it may unlock those too (SQRATCH lists them). A member who already holds the tag pays nothing for an access-only reward and no claim is created; with a discount they pay for the coupon only, and SQRATCH never takes ownership of their existing tag.
+8. With several tags on the wine, holders of any of the other tags can also buy it (verified OR semantics). If the tag also secures other products, granting it may unlock those too (SQRATCH lists them). Every voluntary claim costs the configured points, even for a member who already holds the chosen tag or another security tag; SQRATCH then writes no duplicate membership and never takes ownership of an existing tag.
 9. Members need a Commerce7 customer account with **the same verified email** they use in SQRATCH, and must **log in to the Commerce7 store** for storefront authorization. Without an account, a claim waits (and can be cancelled for a full refund) until one exists.
 10. Access is a storefront permission; a discount is a separate single-use code. Neither reserves inventory, and POS and inbound carts are not restricted by Customer Tag security.
 
@@ -245,37 +245,16 @@ Evidence for a separate operator decision on Order Create: the ledger contains z
 
 ## Final Commerce7 QA (2026-10-09)
 
-Read-only production state when this was written: #1006 is imported (PAID, CAD 73.45, via Custom Range on 2026-10-09); #1007 is not imported; no Order Update or Order Create event has been recorded since 2026-10-07 05:20 UTC; QA 04, QA 05 and the other QA claims are ISSUED with `PURCHASE_CHECK:*` reasons; both 15% offers are inactive.
-
-| Area | Root cause | Change |
+| Area | Finding | State |
 | --- | --- | --- |
-| Multi-tag Exclusive Wine Access | The draft-only gate assumed unverified semantics. The operator's storefront test (three Manual Customer Tags; no tag = no Add to Cart; each single tag and several tags = purchasable) proves OR semantics | `COMMERCE7_EXCLUSIVE_ACCESS_CONTRACT.multiTagAccessVerified = true` with `live-multi-tag-storefront-observation.json`. The Brand still picks exactly ONE eligible Manual Customer Tag (preselected only for a single-tag product); live checks that the tag exists, is Manual/Customer, secures the product and belongs to the connection's tenant are unchanged. C7 QA 05 is claimable again with no change to its claim, membership or coupon |
-| Pre-existing access | Only the granted tag was checked | For access-only rewards, holding ANY of the product's live security tags means the customer can already buy: no points are charged and nothing is granted (pre-check), or the claim is refunded before any write (provisioning). Rewards that include a discount still issue their coupon |
-| Discount eligibility | Claiming customer only was an unverifiable, draft-only option for discounts | Discounts are Anyone with the code only. The editor shows the value, not a selector. Save rejects claimant-only discounts (`CLAIMANT_DISCOUNT_RETIRED`); Enable refuses a stored claimant-only discount; a legacy claimant draft can only be re-saved with an explicit confirmation (`confirmPublicEligibility`), and stays untouched until then. Exclusive Wine Access is always claimant-bound. Issued claims are unchanged |
-| Coupon USED detection | The reader compared `coupons[].id`, which is the APPLIED entry's id. The live #1007 payload carries the native coupon id in `couponId` | Match exactly one entry whose `couponId` equals the stored `externalDiscountId` AND whose code matches; everything else (paid, current version, uncancelled, same connection, timing, serializable link once) is unchanged. `usedAt` is the order's creation time. An Exclusive reward's coupon is a bearer coupon, so the purchaser need not be the claimant; marking it USED never touches the Customer Tag access, points or membership |
-| Order Create 401 | Not a SQRATCH defect. The webhook code path is unchanged since 2026-10-06 20:50 EDT and an authenticated Update succeeded at 2026-10-07 05:20 UTC. The 401 diagnostics show `authorizationHeaderPresent: false` with both credentials configured, at `www.sqratch.com`; there is no middleware match, redirect, rewrite or `vercel.json` on that path | Authentication unchanged (still 401 without valid Basic auth). Operator steps below |
-| Percentage | Units corrected (15% = native 1500) but not yet observed live | Unchanged gate (`percentage.verified = false`). The probe script was removed; verification is the manual coupon below |
-
-### Order Create / Update 401: operator checklist
-
-The missing header means Commerce7 sent the delivery without Basic credentials. No Update event has arrived since 2026-10-07 either, so check BOTH registrations.
-
-1. Commerce7 Dev Center → SQRATCH app → Version 1 → Step 1. APIs & Webhooks. For **Order / Create** and **Order / Update**: the URL is exactly `https://www.sqratch.com/api/commerce7/webhooks/orders` (https, `www`, no trailing slash); expand **Advanced**, re-enter the **Username** and **Password** (the values of `COMMERCE7_ORDER_WEBHOOK_USERNAME` / `_PASSWORD`), and save the version. Approve the tenant upgrade if Commerce7 asks.
-2. Prove the receiver with a harmless authenticated unsupported event (no order is read or written; expect HTTP 200 and no new `CommerceOrderEvent`):
-   ```bash
-   curl -s -o /dev/null -w "%{http_code}\n" -u "$COMMERCE7_ORDER_WEBHOOK_USERNAME:$COMMERCE7_ORDER_WEBHOOK_PASSWORD" -H "content-type: application/json" -d '{"object":"Customer","action":"Update","tenantId":"sqratch-inc","payload":{}}' https://www.sqratch.com/api/commerce7/webhooks/orders
-   ```
-   Without `-u` the same request must answer 401.
-3. Trigger the next real delivery (any small order or edit in the sandbox). In Vercel logs a `commerce7_order_webhook` line with an ingestion status (not `commerce7_order_webhook_auth_failed`) and a new row in SQL 3 confirm it.
-4. If Commerce7 still delivers without an Authorization header after re-saving, it is a provider-side configuration/delivery issue. Message for Commerce7 support:
-
-   > Our app (SQRATCH, Version 1) has Order/Create and Order/Update webhooks to https://www.sqratch.com/api/commerce7/webhooks/orders with Advanced username/password set. Since 2026-10-07 our endpoint receives these deliveries with no Authorization header at all (for example the Order Create for sandbox order #1007), so they are rejected with 401. Earlier Order Update deliveries carried Basic auth correctly. Could you confirm the saved webhook credentials on the version and that Basic auth is applied to app webhook deliveries?
-
-Until deliveries authenticate, recover orders with **Order Operations → Custom Range** (for #1007: from 2026-10-08 00:00 to now). Never insert orders by hand.
-
-### Percentage: one manual check, then unlock
-
-In Commerce7 Admin, or with one public v1 `POST /coupon`, create a single coupon: `discountType: "Percentage Off"`, `discount: 1500`, `appliesTo: "Store"`, `availableTo: "Everyone"`, `usageLimitType: "Per Store"`, `usageLimit: 1`. Confirm Admin shows **15%** and checkout takes **CA$4.35 off a CA$29.00** item. With that evidence, the reviewed change is: add `tests/fixtures/commerce7-rewards/live-coupon-percentage-1500-observation.json` (fields checked by `tests/commerce7-verification-evidence.test.ts`), set `percentage.verified: true` in `src/lib/commerce7-coupon-contract.ts` (keep `nativeUnitsPerPercent: 100`), and update the two "still gated" assertions. The saved `C7 QA 02 - Fifteen Percent New` draft then enables with **Enable** (no re-edit). The historical 0.15% coupon is never reactivated automatically; remediate it separately.
+| Percentage discounts | Live evidence: `POST /v1/coupon` 201 with `Percentage Off` / `discount: 1500` / `Enabled`; Admin "15.00% Off"; checkout CA$29.00 → CA$4.35 off and CA$39.00 → CA$5.85 off (`live-coupon-percentage-1500-observation.json`) | `percentage.verified = true`, `nativeUnitsPerPercent = 100`. Percentage Discount offers can be activated in the editor and enabled with **Enable**; claims issue the native 1500. Verification activates nothing by itself (both `C7 QA 02` offers stay inactive until the Brand enables one); invalid percentages are still rejected; the historical 0.15% coupon is never rewritten |
+| Multi-tag Exclusive Wine Access | Storefront evidence: any one of the product's Manual Customer Tags grants purchase (OR) | Verified. The Brand picks exactly ONE tag; SQRATCH grants only that tag and never changes the others |
+| Points for Exclusive claims | Operator rule: a voluntary claim always costs the configured points, whether the customer holds no security tag, a different one, or the chosen one | Enforced. No pre-check shortcut and no refund for existing access. With the chosen tag already held, SQRATCH writes no membership, records it as `PRE_EXISTING` (never its own) and completes the claim. Per-user limits, capacity, idempotent replays and the one-in-flight-claim guard are unchanged. Historical claims refunded under the earlier rule still read "points returned" |
+| Discount eligibility | — | Anyone with the code only; legacy claimant-only drafts need an explicit, confirmed edit; Exclusive Wine Access is claimant-bound |
+| QA 04 coupon USED | Read-only check: QA 04 is **USED**, linked to #1006, `usedAt` 2026-10-08 08:47:06 UTC (the order's creation time) | Root cause of the earlier "ISSUED / PURCHASE_CHECK" state: the previous matcher compared the applied entry `id`, not `couponId`. The deployed matcher (couponId + exact code) linked it; `usedAt` equal to the order's creation time is only written by the new code, so production runs it. The leftover `PURCHASE_CHECK:COUPON_IDENTITY_UNCONFIRMED` text on that row is from the earlier pass: the link now clears the reason and records the check time |
+| #1007 over-refund | Commerce7 lists TWO full refund children (#1008 and #1009, each CAD 162.72, different successful refund tenders) for a CAD 162.72 order: cumulative refunds CAD 325.44 | Every delivery and backfill of #1007 fails `CONTRADICTORY_FINANCIAL_SNAPSHOT` by design (refunds may never exceed the total; nothing is clamped, ignored or deduplicated by amount). Webhook HTTP 200 only acknowledges a non-retryable rejection; nothing is persisted. Other orders in the same range are still imported; the range and the Catch Up checkpoint stay unproven, and the Order Operations error now says so instead of inviting a retry. This is provider data to correct in Commerce7 (void one refund) or to keep as a known anomalous sandbox fixture. #1002 (9831 gross, 3277 refunded, 6554 net, PARTIALLY_REFUNDED) is unchanged |
+| QA 05 coupon | Its only purchase is #1007 | Stays ISSUED. A claim is marked USED only from a canonical order that is currently PAID and uncancelled; an order first seen refunded (or rejected) is never linked automatically, and SQRATCH never pretends an over-refunded order is PAID. QA 05's Customer Tag access is not affected by the coupon or the refund |
+| Webhook authentication | Resolved by reinstalling the test app; Order Create/Update now deliver with Basic auth | Unchanged receiver (401 without valid credentials) |
 
 ### Read-only diagnostic SQL (physical names)
 
@@ -337,16 +316,15 @@ WHERE provider = 'COMMERCE7'
 ORDER BY title;
 ```
 
-### Browser QA (reuse QA 04, QA 05, #1006, #1007)
+### Browser QA (reuse existing offers and orders)
 
-1. **Deploy, then Products → Sync.** SQL 7: Rare - 2015 Chardonnay `tagCount` 3.
-2. **QA 05 (multi-tag).** Brand Rewards: badges **Active** + **Open for claims**; note "Other Customer Tags also grant access"; **Show Customer Tags** lists `SQRATCH Rare Wine Test (granted by this reward), Employee, Investor`. No "draft-only" or "paused" text. The existing claimant still sees "Access granted".
-3. **Access already held.** As a second verified member whose Commerce7 customer holds only `Employee`, open the shop card for an access-only Rare wine reward and claim: "Already eligible", no points spent, no tag added (create one access-only reward for this check if needed; no purchase).
-4. **Discount editor.** Create reward → Discount: "Eligible customer: Anyone with the code" (no selector). Exclusive wine access: "The claiming member…". Changing Discount → Percentage turns Active off with the percentage reason beside it; back to Fixed re-enables it.
-5. **#1006 → QA 04.** Within about an hour of deployment (one observer pass per issued claim), SQL 5 shows QA 04 `USED`, `linkedOrderNumber` 1006; Brand claims show "Coupon used. Purchase linked…"; the member's shop card shows "Coupon used" and no code.
-6. **#1007 → QA 05.** After fixing the webhook (or Custom Range from 2026-10-08 00:00 to now), SQL 2 shows 1007 once; then SQL 5 shows QA 05 `USED`, `linkedOrderNumber` 1007, `membershipOwnership` unchanged; the shop card shows "Access granted" and "Coupon used. Your Commerce7 access stays active…".
-7. **Webhook.** Steps 2–3 of the checklist above.
-8. **Percentage.** The manual check above; until then both 15% offers show "Cannot be enabled yet".
+1. **Percentage.** Brand Rewards → `C7 QA 02 - Fifteen Percent New` shows **Inactive** with no "Cannot be enabled yet" badge → **Enable** → **Active** + **Open for claims**. As a member, claim it once: the coupon shows 15% in Commerce7 Admin. (Leave `C7 QA 02 - Fifteen Percent` inactive; its issued 0.15% coupon needs separate remediation.)
+2. **Editor.** Create reward → Discount → Percentage: Active is enabled; no "draft only" label.
+3. **QA 04.** Brand claims: "Coupon used. Purchase linked to SQRATCH order …"; member shop card: "Coupon used", no code. SQL 5: `USED`, `linkedOrderNumber` 1006.
+4. **QA 05.** Brand: **Active** + **Open for claims**; claim stays ISSUED (its order #1007 is rejected as contradictory); the member still has access.
+5. **Points rule.** C7 QA 05 allows one claim per member and has one of two slots left. Sign in as a second SQRATCH member whose verified email matches a Commerce7 customer that already holds `SQRATCH Rare Wine Test`: the button reads "Claim access for 1 point"; after claiming, 1 point is spent, the claim is ISSUED with the $5 code, Brand Rewards shows "The customer already had this tag before the claim…", and Commerce7 still lists the tag once (no new membership). A repeat click or refresh does not spend again.
+6. **Loading spinner.** Create reward → Exclusive wine access → tick Rare - 2015 Chardonnay: a small spinner with "Loading Customer Tags…" appears at once, then the tag selector; quickly ticking another product shows only that product's tags.
+7. **#1007.** Order Operations shows the last error "1 order was rejected because Commerce7 reports refunds larger than the order total…"; SQL 3 shows `CONTRADICTORY_FINANCIAL_SNAPSHOT` for `cf8351cd-…`; SQL 2 does not list 1007. Correct it in Commerce7 (void one of #1008/#1009) or leave it as a known anomaly.
 
 ## Merchant setup and readiness
 
@@ -459,8 +437,8 @@ Rollback: disable new C7 offers first. Preserve and service existing claims, poi
 7. Simulate read failure and lost tag/coupon response in a controlled test environment. Retry recovers existing exact resources; unknown absence does not create a duplicate or blindly refund. Check durable owner recovery only after stopping its invocation.
 8. Exclusive access: secure a sandbox wine to one Manual Customer Tag, sync, create an access-only reward and choose the tag.
    * Claim as a member whose Commerce7 email matches. Expect one `POST /tag-x-object/customer`, the tag listed once on the customer, 100 points spent, and the claim showing "Access granted". Log in to the storefront and buy the wine.
-   * Claim again with a new request: "already eligible", no points.
-   * Claim as a member who already had the tag: no points, no claim, the tag still listed once.
+   * Claim again with a new request (per-user limit permitting): 100 more points, no second `POST`, the tag still listed once.
+   * Claim as a member who already had the tag: 100 points, an ISSUED claim, no `POST`, the tag still listed once.
    * With an optional 15% discount: one tag grant plus one `Product`-scoped single-use coupon.
    * Secure a second wine to two tags: the reward saves as a draft and cannot be activated.
    * Delete or change the tag, make the wine public, or remove the tag from the wine: claims are refused before any debit.

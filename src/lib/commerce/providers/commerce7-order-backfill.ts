@@ -83,6 +83,8 @@ export type Commerce7OrderBackfillOutcome = {
   ordersFetched: number;
   ordersProcessed: number;
   outcomes: OrderIngestionOutcome[];
+  /** Unsettled gaps WITHOUT an ingestion outcome (transient refund read, missing id/version, partial provider page); a retry can settle them. */
+  ordersSkipped?: number;
 };
 
 export type Commerce7OrderBackfillDeps = {
@@ -245,7 +247,8 @@ export async function backfillCommerce7Orders(
   // A provider-side partial response cannot prove coverage, even if its
   // client-filtered slice is small. Test/injected pages can omit `complete`
   // only when their reported count equals the provided list.
-  let incomplete = !(page.complete ?? page.total === page.orders.length);
+  const pagePartial = !(page.complete ?? page.total === page.orders.length);
+  let incomplete = pagePartial;
   // A backfill window can legitimately contain BOTH a root order and one or
   // more of its own linked refund orders — the realistic repair case this
   // round exists for (see the round's brief, Part 20). Each such entry
@@ -258,6 +261,7 @@ export async function backfillCommerce7Orders(
   // orders that actually went through refund reconciliation, so an ordinary
   // (never-refunded) order's behavior is completely unaffected.
   const reconciledRootIds = new Set<string>();
+  let skipped = 0;
 
   for (const raw of ordersToProcess) {
     const prepared: PrepareCommerce7OrderForIngestionResult = await resolved.prepareOrder(
@@ -276,7 +280,7 @@ export async function backfillCommerce7Orders(
       // refund-blind guess. A later Catch Up / Custom Range run retries
       // it — the same self-healing property the rest of this backfill
       // entrypoint already relies on.
-      incomplete = true;
+      incomplete = true; skipped += 1;
       continue;
     }
 
@@ -285,7 +289,7 @@ export async function backfillCommerce7Orders(
     if (!order.externalOrderId || !order.providerUpdatedAt) {
       // Cannot form a stable dedup key without both — skip rather than
       // guess at an event id (see file header's IDEMPOTENCY section).
-      incomplete = true;
+      incomplete = true; skipped += 1;
       continue;
     }
 
@@ -341,5 +345,7 @@ export async function backfillCommerce7Orders(
     ordersFetched: page.orders.length,
     ordersProcessed: outcomes.length,
     outcomes,
+    // A partial provider page is an unsettled gap too: a retry can complete it.
+    ordersSkipped: skipped + (pagePartial ? 1 : 0),
   };
 }

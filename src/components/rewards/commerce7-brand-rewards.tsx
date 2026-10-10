@@ -1,6 +1,6 @@
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { Loader2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -69,12 +69,12 @@ const EXCLUSIVE_STATUS_TEXT = {
   NOT_CONFIGURED: "Choose a product secured to a Customer Tag in Commerce7 and the tag SQRATCH should grant.",
 } as const;
 const ACCESS_STATE_TEXT: Record<AccessState, string> = {
-  ACCESS_GRANTED: "Access granted: the customer holds the Customer Tag in Commerce7.", ALREADY_ELIGIBLE: "Already eligible in Commerce7: no points were kept and SQRATCH did not change the customer's tags.",
+  ACCESS_GRANTED: "Access granted: the customer holds the Customer Tag in Commerce7.", ALREADY_ELIGIBLE: "Closed under an earlier rule: the customer already held the tag, so the points were returned. Claims are now always charged.",
   WAITING_FOR_CUSTOMER: "Waiting for a Commerce7 customer with the claimant's verified email.", CONFIRMATION_PENDING: "Commerce7 accepted the grant; waiting for it to confirm the tag.",
   PROCESSING: "Being processed.", MANUAL_REVIEW: "Store review needed. Check the customer's tags in Commerce7, then use Check provider result. SQRATCH never sends a second grant after an unclear result.", FAILED: "Closed without access. Any points were returned.",
 };
 const MEMBERSHIP_GUIDANCE_TEXT = {
-  NOT_SQRATCH_OWNED: "The customer could already buy this wine before the claim (through this tag or another tag securing the product). SQRATCH granted nothing; do not remove a tag on account of this reward.",
+  NOT_SQRATCH_OWNED: "The customer already had this tag before the claim. It is not SQRATCH's; do not remove it on account of this reward.",
   OWNERSHIP_UNVERIFIED: "The tag is present, but SQRATCH cannot prove it created it (its request had an unclear result). Treat it as the store's.",
   SHARED_WITH_OTHER_REWARDS: "SQRATCH granted this tag, and another active SQRATCH reward also relies on it for this customer.",
   SQRATCH_GRANTED: "SQRATCH granted this tag.",
@@ -89,7 +89,7 @@ export function Commerce7BrandRewardsPanel() {
   const [data, setData] = useState<Commerce7BrandRewardData | null>(null);
   const [form, setForm] = useState<Form>(newRewardForm); const [editing, setEditing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null); const [message, setMessage] = useState<string | null>(null); const [busy, setBusy] = useState(false);
-  const [tagOptions, setTagOptions] = useState<TagOptions | null>(null); const [tagError, setTagError] = useState<string | null>(null); const tagSequence = useRef(0);
+  const [tagOptions, setTagOptions] = useState<TagOptions | null>(null); const [tagFailure, setTagFailure] = useState<{ productId: string; message: string } | null>(null); const tagSequence = useRef(0);
   // Customer Tag titles securing an offer's exclusive product, read live on request (read-only; titles only, never UUIDs).
   const [offerTags, setOfferTags] = useState<Record<string, { loading?: boolean; error?: string; tags?: { title: string; current: boolean }[] }>>({});
   async function load() { const sequence = ++loadSequence.current; try { const value = await fetchJson<Commerce7BrandRewardData>("/api/brand/rewards/commerce7"); if (sequence === loadSequence.current) setData(value); } catch (e) { if (sequence === loadSequence.current) setError(getErrorMessage(e, "Could not load Commerce7 rewards.")); } }
@@ -111,7 +111,8 @@ export function Commerce7BrandRewardsPanel() {
   async function save() {
     await action(async () => {
       if (form.appliesTo === "SPECIFIC_PRODUCTS" && !form.productIds.length) throw new Error("Select at least one product.");
-      if (form.rewardMode === "EXCLUSIVE_PRODUCT_ACCESS" && !form.exclusiveTagId) throw new Error("Choose which Customer Tag SQRATCH should grant.");
+      if (form.rewardMode === "EXCLUSIVE_PRODUCT_ACCESS" && !form.exclusiveTagId) throw new Error(form.productIds.length && !tagsLoaded ? "Wait for this product's Customer Tags to load, then choose one." : "Choose which Customer Tag SQRATCH should grant.");
+      if (form.rewardMode === "EXCLUSIVE_PRODUCT_ACCESS" && !selectedTag) throw new Error("Choose a valid Customer Tag for this product.");
       if (form.rewardMode === "DISCOUNT" && form.legacyClaimant && !form.confirmPublic) throw new Error("This reward was saved as Claiming customer only. Tick “Change to Anyone with the code” to save it, or cancel the edit.");
       const windowError = claimWindowError(form.starts, form.ends);
       if (windowError) throw new Error(windowError);
@@ -140,7 +141,7 @@ export function Commerce7BrandRewardsPanel() {
   const exclusiveProductId = exclusive ? form.productIds[0] ?? null : null;
   // The chosen product's Customer Tags, resolved live by the server. A later product choice wins over a late response.
   useEffect(() => {
-    const sequence = ++tagSequence.current; setTagOptions(null); setTagError(null);
+    const sequence = ++tagSequence.current; setTagOptions(null); setTagFailure(null);
     if (!exclusiveProductId) return;
     const query = new URLSearchParams({ productId: exclusiveProductId }); if (editing) query.set("offerId", editing);
     fetchJson<Omit<TagOptions, "productId">>(`/api/brand/rewards/commerce7/exclusive-tags?${query}`).then((value) => {
@@ -148,9 +149,11 @@ export function Commerce7BrandRewardsPanel() {
       setTagOptions({ ...value, productId: exclusiveProductId });
       // A single-tag product (or an edited offer's current tag) is preselected; several tags always need an explicit choice.
       setForm((current) => current.productIds[0] === exclusiveProductId && !current.exclusiveTagId && value.preselectedTagId ? { ...current, exclusiveTagId: value.preselectedTagId } : current);
-    }).catch((e) => { if (sequence === tagSequence.current) setTagError(getErrorMessage(e, "Could not load this product's Customer Tags.")); });
+    }).catch((e) => { if (sequence === tagSequence.current) setTagFailure({ productId: exclusiveProductId, message: getErrorMessage(e, "Could not load this product's Customer Tags.") }); });
   }, [exclusiveProductId, editing]);
+  // Both results are keyed to the product they were requested for, so a switch never shows another product's tags or error.
   const tagsLoaded = tagOptions?.productId === exclusiveProductId ? tagOptions : null;
+  const tagError = tagFailure?.productId === exclusiveProductId ? tagFailure.message : null;
   const selectedTag = tagsLoaded?.tags.find((tag) => tag.id === form.exclusiveTagId && tag.selectable) ?? null;
   const multiTagBlocked = !!tagsLoaded && tagsLoaded.tagCount > 1 && !tagsLoaded.multiTagAccessVerified;
   // Everything that keeps THIS form from going live, in display order; shown beside Active and enforced again by the server.
@@ -161,7 +164,7 @@ export function Commerce7BrandRewardsPanel() {
   if (!data) return <p role="status">{error ?? "Loading Commerce7 rewards…"}</p>;
   return <div className="space-y-6 p-4 md:p-6">
     <div><h1 className="text-2xl font-semibold">Commerce7 rewards</h1><p className="mt-2 text-sm text-muted-foreground">{data.connection?.displayName ?? "Connect Commerce7 to get started"} · {data.connection?.currencyCode ?? "Currency needs sync"}</p></div>
-    <div className="rounded-xl border p-4 text-sm space-y-2"><p>For standard Commerce7 discount rewards, no Commerce7 coupon needs to be created manually. Configure the reward here. SQRATCH creates the claim’s single-use native Commerce7 coupon when points are redeemed.</p><p>Anyone with the code: fully automatic. A unique, single-use coupon with no Commerce7 account matching, Customer tag or CRM setup.</p><p>Discount rewards are always Anyone with the code. To reward one specific member, use Exclusive wine access.</p><p>Coupon: Full is required. Exclusive wine access also needs Tag: Full and Customer: Read. Product: Read and Order: Read support catalog validation and purchase reconciliation.</p>{!data.readiness.backendConfigured && <p className="text-destructive">Commerce7 backend credentials are missing. Rewards cannot be issued.</p>}<p>Selected products: the coupon is limited to the exact synchronized products you choose.</p><p>Exclusive wine access grants Commerce7 storefront access: when a member claims it, SQRATCH adds one existing Manual Customer Tag (the one you choose) to the member&apos;s Commerce7 customer with the same verified email. The member then logs in to your Commerce7 store to buy. SQRATCH never changes product security, never creates or deletes tags, and never removes a tag from a customer. Any of the product&apos;s security tags grants access on its own, so a customer who already holds one of them is not charged for an access-only reward. Commerce7 product security applies to website purchases; POS and inbound carts are not restricted by a Customer Tag. Claiming does not reserve inventory or purchase wine, and a coupon is not required to buy the secured wine.</p></div>
+    <div className="rounded-xl border p-4 text-sm space-y-2"><p>For standard Commerce7 discount rewards, no Commerce7 coupon needs to be created manually. Configure the reward here. SQRATCH creates the claim’s single-use native Commerce7 coupon when points are redeemed.</p><p>Anyone with the code: fully automatic. A unique, single-use coupon with no Commerce7 account matching, Customer tag or CRM setup.</p><p>Discount rewards are always Anyone with the code. To reward one specific member, use Exclusive wine access.</p><p>Coupon: Full is required. Exclusive wine access also needs Tag: Full and Customer: Read. Product: Read and Order: Read support catalog validation and purchase reconciliation.</p>{!data.readiness.backendConfigured && <p className="text-destructive">Commerce7 backend credentials are missing. Rewards cannot be issued.</p>}<p>Selected products: the coupon is limited to the exact synchronized products you choose.</p><p>Exclusive wine access grants Commerce7 storefront access: when a member claims it, SQRATCH adds one existing Manual Customer Tag (the one you choose) to the member&apos;s Commerce7 customer with the same verified email. The member then logs in to your Commerce7 store to buy. SQRATCH never changes product security, never creates or deletes tags, and never removes a tag from a customer. Every claim costs the reward&apos;s points, even when the customer can already buy the wine; SQRATCH never adds a tag the customer already holds. Commerce7 product security applies to website purchases; POS and inbound carts are not restricted by a Customer Tag. Claiming does not reserve inventory or purchase wine, and a coupon is not required to buy the secured wine.</p></div>
     {error && <p role="alert" className="text-destructive">{error}</p>}{message && <p role="status">{message}</p>}
     <form onSubmit={(event) => { event.preventDefault(); void save(); }} className="rounded-xl border p-4 space-y-4">
       <h2 className="text-lg font-medium">{editing ? "Edit reward" : "Create reward"}</h2>
@@ -196,7 +199,7 @@ export function Commerce7BrandRewardsPanel() {
         {exclusive && pickerProducts.length > 0 && securityUnknown > 0 && <p className="text-sm" role="note">Product Security has not been read yet for {securityUnknown} more synchronized product{securityUnknown === 1 ? "" : "s"}; sync products again to check them.</p>}
         {exclusive && <p className="text-sm">Select exactly one exclusive product.</p>}
         {exclusive && exclusiveProductId && <div className="space-y-2">
-          {!tagsLoaded && !tagError && <p className="text-sm" role="status">Loading this product&apos;s Customer Tags from Commerce7…</p>}
+          {!tagsLoaded && !tagError && <p className="flex items-center gap-2 text-sm" role="status" aria-live="polite"><Loader2 aria-hidden="true" className="h-4 w-4 animate-spin" />Loading Customer Tags…</p>}
           {tagError && <p className="text-sm text-destructive" role="alert">{tagError}</p>}
           {tagsLoaded && <label className="block">Customer Tag SQRATCH grants<select aria-label="Customer Tag SQRATCH grants" className="w-full rounded border p-2" value={form.exclusiveTagId} onChange={(e) => setForm((current) => ({ ...current, exclusiveTagId: e.target.value, isActive: false }))}><option value="">Choose a Customer Tag</option>{tagsLoaded.tags.map((tag) => <option key={tag.id} value={tag.id} disabled={!tag.selectable}>{tag.title ?? "Unnamed tag"}{tag.reason ? ` (${TAG_REASON_TEXT[tag.reason]})` : ""}</option>)}</select></label>}
           {tagsLoaded && tagsLoaded.tagCount > 1 && <p className="text-sm" role="note">This product is secured to {tagsLoaded.tagCount} Customer Tags. Choose one for SQRATCH to grant; SQRATCH never changes the others. Customers who hold any of the other tags can already buy it in Commerce7.</p>}

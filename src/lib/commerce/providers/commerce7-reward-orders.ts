@@ -85,7 +85,9 @@ export async function reconcileCommerce7RewardOrders(deps: Partial<Commerce7Rewa
           if (!current || !exactCommerce7RewardOrderMatch(raw, current, claim)) return;
           // Revocation does not erase a purchase made before the deletion.
           // Keep its closed state while recording the historical purchase.
-          const result = await tx.commerceRewardRedemption.updateMany({ where: { id: claim.id, provider: "COMMERCE7", status: claim.status, entitlementEverGranted: true, canonicalOrderId: null, connectionId: current.connectionId, providerCustomerId: claim.providerCustomerId, externalDiscountId: claim.externalDiscountId }, data: { status: claim.status === "CANCELLED" ? "CANCELLED" : "USED", usedAt: current.providerCreatedAt ?? current.providerUpdatedAt, canonicalOrderId: current.id, externalUsageCount: 1 } });
+          const result = await tx.commerceRewardRedemption.updateMany({ where: { id: claim.id, provider: "COMMERCE7", status: claim.status, entitlementEverGranted: true, canonicalOrderId: null, connectionId: current.connectionId, providerCustomerId: claim.providerCustomerId, externalDiscountId: claim.externalDiscountId }, data: { status: claim.status === "CANCELLED" ? "CANCELLED" : "USED", usedAt: current.providerCreatedAt ?? current.providerUpdatedAt, canonicalOrderId: current.id, externalUsageCount: 1,
+            // The link is the result of this check: clear the earlier pass's PURCHASE_CHECK reason so it never lingers on a USED claim.
+            lastReconcileReason: null, rewardOrderCheckedAt: now, rewardOrderCursor: null } });
           linked += result.count;
         }, { isolationLevel: "Serializable" });
       }

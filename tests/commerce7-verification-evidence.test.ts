@@ -27,10 +27,13 @@ test("percentage issuance is enabled only with live evidence that 1500 is 15% in
   assert.ok(existsSync(fixture(file)), `percentage.verified requires ${file}`);
   const evidence = read(file);
   assert.equal(evidence.request.discountType, "Percentage Off"); assert.equal(evidence.request.discount, 1500); assert.ok([200, 201].includes(evidence.status));
-  assert.equal(String(evidence.observed.commerce7AdminCouponEditorDiscount).replace(/\s/g, ""), "15%");
-  const { productPriceMinor, discountMinor } = evidence.observed.checkout;
-  assert.ok(Number.isSafeInteger(productPriceMinor) && Number.isSafeInteger(discountMinor));
-  assert.ok(Math.abs(discountMinor - Math.round((productPriceMinor * 15) / 100)) <= 1, "checkout took 15% of the item price");
+  assert.equal(Number.parseFloat(String(evidence.observed.commerce7AdminCouponEditorDiscount)), 15, "Admin shows 15% (e.g. \"15.00% Off\")");
+  assert.ok(Array.isArray(evidence.observed.checkouts) && evidence.observed.checkouts.length >= 1);
+  for (const { productPriceMinor, discountMinor, totalMinor } of evidence.observed.checkouts) {
+    assert.ok(Number.isSafeInteger(productPriceMinor) && Number.isSafeInteger(discountMinor));
+    assert.ok(Math.abs(discountMinor - Math.round((productPriceMinor * 15) / 100)) <= 1, "checkout took 15% of the item price");
+    if (totalMinor !== undefined) assert.equal(totalMinor, productPriceMinor - discountMinor);
+  }
   assert.equal(COMMERCE7_COUPON_CONTRACT.percentage.nativeUnitsPerPercent * 15, evidence.request.discount, "the unit the evidence proves is the unit the writer uses");
 });
 
@@ -54,8 +57,8 @@ test("multi-tag exclusive access is enabled only with storefront evidence that o
   assert.ok(evidence.product.securityTagCount >= 2); assert.equal(evidence.observed.oneTagCustomerCanPurchase, true); assert.equal(evidence.observed.noTagCustomerBlocked, true);
 });
 
-test("today: multi-tag OR access is verified with evidence; percentage units and claimant-bound coupons are still gated", () => {
-  assert.equal(COMMERCE7_COUPON_CONTRACT.percentage.verified, false);
+test("today: multi-tag OR access and percentage units are verified with evidence; claimant-bound discount coupons stay unsupported", () => {
+  assert.equal(COMMERCE7_COUPON_CONTRACT.percentage.verified, true);
   assert.equal(COMMERCE7_COUPON_CONTRACT.availableTo.CLAIMANT_ONLY, null);
   assert.equal(COMMERCE7_EXCLUSIVE_ACCESS_CONTRACT.multiTagAccessVerified, true);
   assert.equal(read("live-coupon-percentage-observation.json").request.discount, 15);

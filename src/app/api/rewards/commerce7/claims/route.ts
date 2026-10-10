@@ -17,8 +17,6 @@ export async function POST(request: NextRequest) {
     const context = await getRewardClaimContext({ request, userId: session.user.id, experienceSlug: body.experienceSlug as string | undefined, campaignId: body.campaignId as string | undefined });
     if (!context.ok) return NextResponse.json({ error: context.error }, { status: context.status });
     const result = await claimCommerce7Reward(session.user.id, body.offerId, body.idempotencyKey, context.brandIds);
-    // A customer who already holds an access-only reward's Customer Tag is not charged and no claim is created.
-    if (result.alreadyEligible) return NextResponse.json({ data: { alreadyEligible: true, offerId: body.offerId, message: "Your Commerce7 account already has this access. No points were spent." } }, { status: 200 });
     return NextResponse.json({ data: serializeCommerce7Claim(result.claim) }, { status: 200 });
   } catch (error) { return rewardErrorResponse(error); }
 }

@@ -49,7 +49,7 @@ test("real Postgres: cap 25, duplicate request, point overspend, cancellation an
     const createdOffer = await saveCommerce7Offer(brand.id, offerInput, undefined, offerDeps);
     assert.equal(createdOffer.brandId, brand.id); assert.equal(createdOffer.connectionId, connection.id); assert.equal(createdOffer.currencyCode, "CAD");
     assert.deepEqual(createdOffer.commerce7Config, { eligibilityMode: "ANYONE_WITH_CODE", discountEnabled: true });
-    await assert.rejects(saveCommerce7Offer(brand.id, { ...offerInput, eligibilityMode: "CLAIMANT_ONLY" }, undefined, offerDeps), { code: "COUPON_CONTRACT_UNVERIFIED" });
+    await assert.rejects(saveCommerce7Offer(brand.id, { ...offerInput, eligibilityMode: "CLAIMANT_ONLY" }, undefined, offerDeps), { code: "CLAIMANT_DISCOUNT_RETIRED" }, "discount rewards are Anyone with the code only");
     const editedOffer = await saveCommerce7Offer(brand.id, { ...offerInput, isActive: false, discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 1500 }, createdOffer.id, offerDeps);
     assert.equal(editedOffer.discountPercentageBasisPoints, 1500); assert.equal(editedOffer.isActive, false);
     await assert.rejects(saveCommerce7Offer(brand.id, offerInput, "foreign-offer", offerDeps), { code: "NOT_FOUND" });
@@ -299,7 +299,7 @@ test("real Postgres: cap 25, duplicate request, point overspend, cancellation an
   }
 });
 
-test("real Postgres: exclusive access grants once, never charges an already-eligible customer, enforces ownership constraints and one in-flight claim per tag", { skip: !enabled && `Disposable DB opt-in required (${decision.reason})` }, async () => {
+test("real Postgres: exclusive access grants once, always charges a voluntary claim (even with the tag already held), enforces ownership constraints and one in-flight claim per tag", { skip: !enabled && `Disposable DB opt-in required (${decision.reason})` }, async () => {
   const { default: db } = await import("../src/lib/prisma");
   const { claimCommerce7Reward, reserveCommerce7Claim, provisionCommerce7Claim } = await import("../src/lib/commerce7-rewards");
   const { Commerce7RewardsClient } = await import("../src/lib/commerce/providers/commerce7-rewards-client");
@@ -334,16 +334,24 @@ test("real Postgres: exclusive access grants once, never charges an already-elig
     assert.equal(granted.claim?.discountAmountCents, null, "Postgres accepts an access-only claim (relaxed discount CHECK)"); assert.equal(tenant.grants, 1); assert.equal(await points(alice.id), 900);
     await provisionCommerce7Claim(granted.claim!.id, alice.id, deps); assert.equal(tenant.grants, 1, "a replay never re-posts");
 
+    // Bob already holds the chosen tag: his voluntary claim is still charged, SQRATCH writes no membership and never owns his.
     const bob = await member("bob"); tenant.customers.push({ id: "c7-bob", email: bob.email, tagIds: [TAG] });
-    assert.equal((await claimCommerce7Reward(bob.id, offer.id, "bob-exclusive-request", [brand.id], deps)).alreadyEligible, true);
-    assert.equal(await db.commerceRewardRedemption.count({ where: { userId: bob.id } }), 0); assert.equal(await db.pointTransaction.count({ where: { userId: bob.id } }), 0); assert.equal(await points(bob.id), 1000);
+    const bobClaim = (await claimCommerce7Reward(bob.id, offer.id, "bob-exclusive-request", [brand.id], deps)).claim;
+    assert.equal(bobClaim?.status, "ISSUED"); assert.equal(bobClaim?.membershipOwnership, "PRE_EXISTING"); assert.equal(bobClaim?.membershipWriteAttempted, false);
+    assert.equal(await db.commerceRewardRedemption.count({ where: { userId: bob.id } }), 1); assert.equal(await db.pointTransaction.count({ where: { userId: bob.id } }), 1); assert.equal(await points(bob.id), 900); assert.equal(tenant.grants, 1);
 
     const carol = await member("carol"); tenant.customers.push({ id: "c7-carol", email: carol.email, tagIds: [] });
     const reserved = await reserveCommerce7Claim(carol.id, offer.id, "carol-exclusive-request", [brand.id], deps);
     tenant.customers.find((c) => c.id === "c7-carol")!.tagIds.push(TAG); // granted natively before SQRATCH's grant
     const returned = await provisionCommerce7Claim(reserved.id, carol.id, deps);
-    assert.equal(returned?.status, "REFUNDED"); assert.equal(returned?.membershipOwnership, "PRE_EXISTING"); assert.equal(returned?.slotReleased, true); assert.equal(await points(carol.id), 1000); assert.equal(tenant.grants, 1);
-    assert.equal((await db.brandRewardOffer.findUniqueOrThrow({ where: { id: offer.id } })).reservedClaimCount, 1, "only Alice's grant consumes capacity");
+    assert.equal(returned?.status, "ISSUED"); assert.equal(returned?.membershipOwnership, "PRE_EXISTING"); assert.equal(returned?.slotReleased, false); assert.equal(await points(carol.id), 900, "no refund for existing access"); assert.equal(tenant.grants, 1);
+    assert.equal((await db.brandRewardOffer.findUniqueOrThrow({ where: { id: offer.id } })).reservedClaimCount, 3, "every voluntary claim consumes capacity");
+
+    // Erin already holds the chosen tag and sends the SAME request twice concurrently: one claim, one debit, no membership write.
+    const erin = await member("erin"); tenant.customers.push({ id: "c7-erin", email: erin.email, tagIds: [TAG] });
+    const twice = await Promise.allSettled([claimCommerce7Reward(erin.id, offer.id, "erin-exclusive-request", [brand.id], deps), claimCommerce7Reward(erin.id, offer.id, "erin-exclusive-request", [brand.id], deps)]);
+    assert.ok(twice.some((result) => result.status === "fulfilled"));
+    assert.equal(await db.commerceRewardRedemption.count({ where: { userId: erin.id } }), 1); assert.equal(await db.pointTransaction.count({ where: { userId: erin.id } }), 1); assert.equal(await points(erin.id), 900); assert.equal(tenant.grants, 1);
 
     // Two concurrent claims for the same tag by one member under real SERIALIZABLE isolation: exactly one reservation and debit.
     await db.brandRewardOffer.update({ where: { id: offer.id }, data: { maxRedemptionsPerUser: 2 } }); // so only the in-flight guard can refuse

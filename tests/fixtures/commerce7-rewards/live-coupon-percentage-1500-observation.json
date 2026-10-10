@@ -1,0 +1,18 @@
+{
+  "evidence": {
+    "source": "Operator's live sandbox verification on 2026-10-09: one native coupon created through the public POST /v1/coupon, then checked in Commerce7 Admin and at checkout.",
+    "redaction": "Only the facts below were supplied. No coupon code, coupon id, customer, order or credential is stored.",
+    "credentials": "None."
+  },
+  "request": { "discountType": "Percentage Off", "discount": 1500, "appliesTo": "Store", "availableTo": "Everyone", "usageLimitType": "Per Store", "usageLimit": 1 },
+  "status": 201,
+  "createEcho": { "discountType": "Percentage Off", "discount": 1500, "status": "Enabled" },
+  "observed": {
+    "commerce7AdminCouponEditorDiscount": "15.00% Off",
+    "checkouts": [
+      { "currency": "CAD", "productPriceMinor": 2900, "discountMinor": 435, "totalMinor": 2465 },
+      { "currency": "CAD", "productPriceMinor": 3900, "discountMinor": 585, "totalMinor": 3315 }
+    ]
+  },
+  "conclusion": "A native Percentage Off `discount` of 1500 is 15%: the native unit is 1/100 of a percent, the same scale as SQRATCH basis points."
+}

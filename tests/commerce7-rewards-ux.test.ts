@@ -167,8 +167,8 @@ test("Discount rewards offer no eligibility choice; Selected products can go liv
   assert.equal(eligibilityShown(app.render()), "Anyone with the code"); assert.doesNotMatch(text(app.render()), /Claiming customer only/);
   assert.equal(activeBox().props.disabled, false); (activeBox().props.onChange as (event: object) => void)({ target: { checked: true } }); assert.equal(activeBox().props.checked, true);
   change(select(app.render(), "ALL_PRODUCTS"), "SPECIFIC_PRODUCTS"); assert.equal(activeBox().props.disabled, false); assert.doesNotMatch(text(app.render()), /enum|availableTo|appliesTo|Commerce7 API/i);
-  // The server stays authoritative: with no readiness payload the UI fails closed for unverified branches.
-  const stale = harness("src/components/rewards/commerce7-brand-rewards.tsx", "Commerce7BrandRewardsPanel"); stale.render(); stale.flush(); stale.requests[0].resolve({ ...brandData, readiness: { backendConfigured: true } }); await settle();
+  // The server stays authoritative: a readiness payload without the discount matrix (an older server) fails closed for percentages.
+  const stale = harness("src/components/rewards/commerce7-brand-rewards.tsx", "Commerce7BrandRewardsPanel"); stale.render(); stale.flush(); stale.requests[0].resolve({ ...brandData, readiness: { backendConfigured: true, couponContract } }); await settle();
   change(select(stale.render(), "FIXED_AMOUNT"), "PERCENTAGE"); assert.equal((nodes(stale.render()).find((node) => node.type === "input" && node.props.type === "checkbox" && node.props.disabled === true))?.props.disabled, true);
 });
 
@@ -395,7 +395,7 @@ const twoTags = { tagCount: 2, multiTagAccessVerified: true, preselectedTagId: n
 test("a single-tag product preselects its tag, shows titles never UUIDs, and can be activated", async () => {
   const app = await brandForm(catalogData); setMode(app, "EXCLUSIVE_PRODUCT_ACCESS");
   (product(app.render(), "Rare - 2015 Chardonnay").props.onCheckedChange as (v: boolean) => void)(true);
-  assert.match(text(app.render()), /Loading this product.s Customer Tags/); assert.equal(activeBox(app).props.disabled, true, "no activation before a tag is chosen");
+  assert.match(text(app.render()), /Loading Customer Tags…/); assert.equal(activeBox(app).props.disabled, true, "no activation before a tag is chosen");
   await resolveTags(app);
   assert.equal(tagSelect(app)?.props.value, "tag-uuid-1"); const copy = text(app.render());
   assert.match(copy, /Rare Wine Members/); assert.doesNotMatch(copy, /tag-uuid/, "the UUID is only an option value"); assert.match(copy, /same verified email/);
@@ -437,23 +437,24 @@ test("Brand claims show exclusive access state and ownership guidance, never the
   const claim = (id: string, accessState: string, membershipGuidance: string | null) => ({ id, title: `Claim ${id}`, status: accessState === "ACCESS_GRANTED" ? "ISSUED" : "POINTS_DEBITED", provisioningState: accessState === "MANUAL_REVIEW" ? "MANUAL_REVIEW" : "READY", providerCustomerId: "customer-1", providerTagId: null, tagTitle: null, message: null, ownerActive: false, canRevoke: false, canonicalOrderId: null, rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", accessState, membershipGuidance });
   const app = await brandForm({ ...brandData, claims: [claim("granted", "ACCESS_GRANTED", "SQRATCH_GRANTED"), claim("native", "ACCESS_GRANTED", "NOT_SQRATCH_OWNED"), claim("review", "MANUAL_REVIEW", "OWNERSHIP_UNVERIFIED"), claim("shared", "ACCESS_GRANTED", "SHARED_WITH_OTHER_REWARDS")] });
   const copy = text(app.render());
-  assert.match(copy, /Access granted/); assert.match(copy, /SQRATCH granted this tag/); assert.match(copy, /could already buy this wine before the claim \(through this tag or another tag securing the product\)/); assert.match(copy, /cannot prove it created it/); assert.match(copy, /another active SQRATCH reward also relies on it/);
+  assert.match(copy, /Access granted/); assert.match(copy, /SQRATCH granted this tag/); assert.match(copy, /already had this tag before the claim/); assert.match(copy, /cannot prove it created it/); assert.match(copy, /another active SQRATCH reward also relies on it/);
   assert.match(copy, /never removes Customer Tags/); assert.match(copy, /removes every copy of a tag/); assert.doesNotMatch(copy, /add the manual tag/, "the per-claim CRM handoff text is for claimant coupons only");
   assert.ok(!nodes(app.render()).some((node) => node.type === "Button" && /Revoke/.test(text(node))));
 });
 
 const exclusiveOffer = { ...offer, id: "exclusive", title: "Rare Chardonnay access", rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", accessOnly: true, productTitles: ["Rare - 2015 Chardonnay"], discountAmountCents: null, eligibilityMode: "CLAIMANT_ONLY", minimumSubtotalCents: null };
-test("claimant exclusive card explains Commerce7 storefront access; an already-eligible customer sees a no-charge notice and no claim", async () => {
+test("claimant exclusive card explains Commerce7 storefront access and that a claim always spends the points shown", async () => {
   const app = harness("src/components/rewards/commerce7-rewards-client.tsx", "Commerce7RewardsClient", { experienceSlug: "wine" }); app.render(); app.flush();
   app.requests[0].resolve({ viewerState: "READY", offers: [exclusiveOffer], claims: [], points: 500 }); await settle();
   let copy = text(app.render());
-  assert.match(copy, /Exclusive access\s*:\s*Rare - 2015 Chardonnay/); assert.doesNotMatch(copy, /store must approve your Customer tag/, "no manual CRM approval for exclusive access"); assert.match(copy, /Commerce7 customer account with the same verified email/); assert.match(copy, /Log in to the store.s Commerce7 online shop to buy/); assert.match(copy, /already has this access, no points are spent/);
+  assert.match(copy, /Exclusive access\s*:\s*Rare - 2015 Chardonnay/); assert.doesNotMatch(copy, /store must approve your Customer tag/, "no manual CRM approval for exclusive access"); assert.match(copy, /Commerce7 customer account with the same verified email/); assert.match(copy, /Log in to the store.s Commerce7 online shop to buy/); assert.match(copy, /Claiming spends the points shown, even if your account already has this access/); assert.doesNotMatch(copy, /no points are spent|No points were spent/);
   assert.doesNotMatch(copy, /\$10\.00 off|valid for 30 days|Minimum subtotal/, "an access-only reward shows no coupon terms"); assert.doesNotMatch(copy, /coupon is required|reserve(d)? inventory for you/i);
-  (button(app.render(), "Claim access for").props.onClick as () => void)();
+  const claimButton = button(app.render(), "Claim access for"); assert.match(text(claimButton), /Claim access for\s+100\s+points/, "the button shows the configured cost");
+  (claimButton.props.onClick as () => void)();
   const key = JSON.parse(String(app.requests[1].init?.body)).idempotencyKey;
-  app.requests[1].resolve({ alreadyEligible: true, offerId: "exclusive", message: "Your Commerce7 account already has this access. No points were spent." }); await settle();
-  app.requests[2].resolve({ viewerState: "READY", offers: [exclusiveOffer], claims: [], points: 500 }); await settle();
-  copy = text(app.render()); assert.match(copy, /already has this access. No points were spent/);
+  app.requests[1].resolve({ id: "claim", offerId: "exclusive", status: "ISSUED", provisioningState: "READY", rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", accessState: "ACCESS_GRANTED", accessGranted: true, code: null }); await settle();
+  app.requests[2].resolve({ viewerState: "READY", offers: [exclusiveOffer], claims: [{ id: "claim", offerId: "exclusive", title: "Rare Chardonnay access", status: "ISSUED", provisioningState: "READY", code: null, expiresAt: null, canRetry: false, canCancel: false, message: null, rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", accessState: "ACCESS_GRANTED", accessGranted: true }], points: 400 }); await settle();
+  copy = text(app.render()); assert.match(copy, /Access granted/); assert.doesNotMatch(copy, /No points were spent/);
   assert.equal(app.storage.get("sqratch:c7-claim:exclusive"), undefined, "the request key is released"); assert.ok(key);
 });
 
@@ -466,7 +467,7 @@ test("claimant exclusive claim states: waiting for account, confirmation pending
     claim("discount", "ACCESS_GRANTED", { status: "ISSUED", canRetry: false, accessGranted: true, code: "SQRA-EXCLUSIVE", expiresAt: "2027-01-01T00:00:00.000Z" }),
   ] }); await settle();
   const copy = text(app.render());
-  for (const label of ["Waiting for your Commerce7 account", "Waiting for Commerce7 to confirm your access", "Access granted", "Already eligible: no points spent", "Store review needed", "Claim closed"]) assert.ok(copy.includes(label), label);
+  for (const label of ["Waiting for your Commerce7 account", "Waiting for Commerce7 to confirm your access", "Access granted", "Points returned: your account already had this access", "Store review needed", "Claim closed"]) assert.ok(copy.includes(label), label);
   assert.match(copy, /verified SQRATCH email, then check again/); assert.match(copy, /will not be requested twice/); assert.match(copy, /Your Commerce7 access is active/, "access granted while the discount is under review");
   assert.match(copy, /SQRA-EXCLUSIVE/); assert.match(copy, /Single-use discount for this wine/); assert.match(copy, /keep it private/);
   assert.equal(nodes(app.render()).filter((node) => node.type === "Button" && /Cancel and return points/.test(text(node))).length, 1, "only the waiting claim, where nothing was written, can be cancelled");
@@ -700,4 +701,41 @@ test("an inactive offer with a blocker shows why Enable is unavailable and disab
   assert.equal(enables[0].props.disabled, true); assert.equal(enables[0].props["aria-describedby"], "offer-draft-pct-blockers");
   assert.equal(enables[1].props.disabled, false, "without an eligibility verdict the server decides");
   assert.match(text(tree), /Cannot be enabled yet/); assert.match(text(tree), /Enable is unavailable until/);
+});
+
+// ── Customer Tags loading spinner ──
+const tagsUrl = (app: ReturnType<typeof harness>) => app.requests.filter((entry) => entry.url.startsWith("/api/brand/rewards/commerce7/exclusive-tags?"));
+const spinner = (app: ReturnType<typeof harness>) => nodes(app.render()).find((node) => node.props.role === "status" && /Loading Customer Tags…/.test(text(node)));
+
+test("choosing an exclusive product shows a small accessible spinner until its tags load, then the selector; Save and Active wait", async () => {
+  const app = await brandForm(catalogData); setMode(app, "EXCLUSIVE_PRODUCT_ACCESS");
+  (product(app.render(), "Rare - 2015 Chardonnay").props.onCheckedChange as (v: boolean) => void)(true);
+  const loading = spinner(app); assert.ok(loading, "visible immediately after selection, before any response");
+  assert.equal(loading.props["aria-live"], "polite"); assert.ok(nodes(loading).some((node) => node.type === "Icon:Loader2" && /animate-spin/.test(String(node.props.className)) && node.props["aria-hidden"] === "true"));
+  assert.equal(tagSelect(app), undefined); assert.equal(activeBox(app).props.disabled, true);
+  app.render(); app.flush(); const requests = tagsUrl(app).length; assert.equal(requests, 1, "one request; the spinner adds none");
+  const before = app.requests.length; (nodes(app.render()).find((node) => node.type === "form")!.props.onSubmit as (event: object) => void)({ preventDefault() {} }); await settle();
+  assert.equal(app.requests.length, before, "no save while tags load"); assert.match(text(app.render()), /Wait for this product.s Customer Tags to load/);
+  tagsUrl(app)[0].resolve(oneTag); await settle();
+  assert.equal(spinner(app), undefined); assert.ok(tagSelect(app)); assert.equal(activeBox(app).props.disabled, false);
+});
+
+test("a failed tag request replaces the spinner with the actionable error, never an endless spinner", async () => {
+  const app = await brandForm(catalogData); setMode(app, "EXCLUSIVE_PRODUCT_ACCESS");
+  (product(app.render(), "Rare - 2015 Chardonnay").props.onCheckedChange as (v: boolean) => void)(true); app.render(); app.flush();
+  tagsUrl(app)[0].reject(new Error("Commerce7 rewards are not configured on the server. Contact SQRATCH support.")); await settle();
+  assert.equal(spinner(app), undefined); assert.match(text(app.render()), /not configured on the server/); assert.equal(activeBox(app).props.disabled, true);
+});
+
+test("switching products quickly never shows the earlier product's tags or error; the spinner stays until the current product settles", async () => {
+  const app = await brandForm(); setMode(app, "EXCLUSIVE_PRODUCT_ACCESS");
+  (product(app.render(), "Rare wine").props.onCheckedChange as (v: boolean) => void)(true); app.render(); app.flush();
+  (product(app.render(), "Second wine").props.onCheckedChange as (v: boolean) => void)(true); app.render(); app.flush();
+  const [first, second] = tagsUrl(app); assert.match(first.url, /productId=wine-id/); assert.match(second.url, /productId=second-wine/);
+  first.reject(new Error("stale failure for the first product")); await settle();
+  assert.doesNotMatch(text(app.render()), /stale failure/); assert.ok(spinner(app), "still loading the current product");
+  first.resolve({ ...oneTag, tags: [{ ...oneTag.tags[0], id: "stale-tag", title: "Stale Tag" }] }); await settle();
+  assert.doesNotMatch(text(app.render()), /Stale Tag/);
+  second.resolve({ ...oneTag, preselectedTagId: "second-tag", tags: [{ ...oneTag.tags[0], id: "second-tag", title: "Second Wine Members" }] }); await settle();
+  assert.equal(spinner(app), undefined); assert.match(text(app.render()), /Second Wine Members/); assert.doesNotMatch(text(app.render()), /Stale Tag/); assert.equal(tagSelect(app)?.props.value, "second-tag");
 });

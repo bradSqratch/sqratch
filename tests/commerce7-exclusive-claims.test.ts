@@ -87,7 +87,7 @@ test("the client parses the live customer tag entry, the tag definition, the 201
 test("access-only: verified absence, exactly one membership POST, a fresh GET confirms it, then READY with no coupon or code", async () => {
   const app = exclusiveApp();
   const result = await app.claim();
-  assert.equal(result.alreadyEligible, false);
+  assert.equal(result.claim?.id, app.claims()[0].id);
   const claim = app.claims()[0];
   assert.equal(claim.status, "ISSUED"); assert.equal(claim.provisioningState, "READY");
   assert.equal(claim.membershipOwnership, "SQRATCH_GRANTED"); assert.equal(claim.providerMembershipId, "membership-1"); assert.equal(claim.entitlementEverGranted, true);
@@ -115,38 +115,76 @@ test("with an optional discount: the tag is granted first, then one single-use c
   assert.equal(view(claim).code, claim.code); assert.equal(app.balance(), 400);
 });
 
-// ── Already eligible: never charged for access, never owned ─────────────────────
+// ── A voluntary claim always costs the configured points (operator rule) ─────────
 
-test("a customer who already holds the tag is not charged for an access-only reward and no claim is created", async () => {
-  const app = exclusiveApp({ customerTags: [TAG] });
-  assert.deepEqual(plain(await app.claim()), { alreadyEligible: true, claim: null });
-  assert.equal(app.claims().length, 0); assert.equal(app.ledger.size, 0); assert.equal(app.balance(), 500); assert.equal(app.offer().reservedClaimCount, 0);
-  assert.deepEqual(writes(app), []);
+test("charged exactly once in every tag state, with and without a discount; only the chosen tag is ever granted, never duplicated", async () => {
+  for (const discount of [false, true]) for (const state of ["no tag", "a different security tag", "the chosen tag"] as const) {
+    const label = `${state} / ${discount ? "with" : "without"} discount`;
+    const customerTags = state === "a different security tag" ? [OTHER_TAG] : state === "the chosen tag" ? [TAG] : [];
+    const app = exclusiveApp({ discount, tags: [TAG, OTHER_TAG], customerTags });
+    const result = await app.claim();
+    const claim = app.claims()[0];
+    assert.equal(result.claim?.status, "ISSUED", label); assert.equal(app.claims().length, 1, label);
+    assert.equal(app.balance(), 400, `${label}: the configured 100 points are spent`); assert.equal(app.ledger.size, 1, label); assert.equal(app.offer().reservedClaimCount, 1, label);
+    if (state === "the chosen tag") {
+      assert.deepEqual(grants(app), [], `${label}: no membership write`); assert.deepEqual(app.tenant.customers[0].tagIds, [TAG], `${label}: no duplicate tag`);
+      assert.equal(claim.membershipOwnership, "PRE_EXISTING", `${label}: never claimed as SQRATCH's`); assert.equal(claim.membershipWriteAttempted, false); assert.equal(claim.providerMembershipId, null);
+      assert.equal(domain.commerce7MembershipGuidance(String(claim.membershipOwnership), 0), "NOT_SQRATCH_OWNED");
+    } else {
+      assert.deepEqual(grants(app).map((call) => call.body), [{ objectId: CUSTOMER, tagId: TAG }], `${label}: exactly the chosen tag`);
+      assert.deepEqual(app.tenant.customers[0].tagIds, [...customerTags, TAG], `${label}: other tags untouched`);
+      assert.equal(claim.membershipOwnership, "SQRATCH_GRANTED", label);
+    }
+    assert.deepEqual(app.postBodies().length, discount ? 1 : 0, `${label}: the configured coupon only`);
+    assert.equal(claim.entitlementEverGranted, true, label); assert.equal(view(claim).accessState, "ACCESS_GRANTED", label); assert.equal(view(claim).accessGranted, true, label);
+    assert.equal(view(claim).code, discount ? claim.code : null, label);
+    // Replaying the same request (same idempotency key) never debits, reserves or writes again.
+    const writesBefore = writes(app).length; await app.claim();
+    assert.equal(app.claims().length, 1, `${label}: replay`); assert.equal(app.balance(), 400, `${label}: replay`); assert.equal(writes(app).length, writesBefore, `${label}: replay`);
+  }
 });
 
-test("duplicate native memberships still count as already eligible, and SQRATCH never adds another", async () => {
+test("a second request while one claim is in flight is refused; a replayed request is the same claim (true concurrency: commerce7-rewards-real-db.test.ts)", async () => {
+  // The in-memory harness restores whole tables on rollback, so interleaved transactions are exercised against real Postgres instead.
+  for (const customerTags of [[], [TAG]]) {
+    const other = exclusiveApp({ customers: [], customerTags });
+    await other.claim("first-request-key-0001"); assert.equal(other.claims()[0].provisioningState, "AWAITING_CUSTOMER");
+    await assert.rejects(other.claim("second-request-key-002"), { code: "CLAIM_IN_PROGRESS" }); assert.equal(other.claims().length, 1); assert.equal(other.balance(), 400);
+    await other.claim("first-request-key-0001"); assert.equal(other.claims().length, 1, "a replay is the same claim"); assert.equal(other.balance(), 400);
+  }
+});
+
+test("already having the chosen tag never lifts the per-user limit or capacity", async () => {
+  const perUser = exclusiveApp({ customerTags: [TAG], offer: { maxRedemptionsPerUser: 1 } });
+  await perUser.claim("first-request-key-0001"); assert.equal(perUser.balance(), 400);
+  await assert.rejects(perUser.claim("second-request-key-002"), { code: "USER_LIMIT" }); assert.equal(perUser.balance(), 400); assert.equal(perUser.claims().length, 1);
+  const full = exclusiveApp({ customerTags: [TAG], offer: { maxTotalRedemptions: 1, reservedClaimCount: 1 } });
+  await assert.rejects(full.claim(), { code: "SOLD_OUT" }); assert.equal(full.balance(), 500); assert.equal(full.claims().length, 0);
+});
+
+test("duplicate native memberships are left alone: charged once, no new membership, the merchant keeps ownership", async () => {
   const app = exclusiveApp({ customerTags: [TAG, TAG] });
-  assert.equal((await app.claim()).alreadyEligible, true); assert.deepEqual(writes(app), []); assert.deepEqual(app.tenant.customers[0].tagIds, [TAG, TAG]);
+  await app.claim();
+  assert.equal(app.claims()[0].status, "ISSUED"); assert.equal(app.balance(), 400); assert.deepEqual(writes(app), []); assert.deepEqual(app.tenant.customers[0].tagIds, [TAG, TAG]);
+  assert.equal(app.claims()[0].membershipOwnership, "PRE_EXISTING");
 });
 
-test("if the tag appears natively between the pre-check and the grant, the points are returned and the membership is recorded as pre-existing", async () => {
+test("if the chosen tag appears natively between the pre-check and the grant, the claim completes, stays charged and is recorded as pre-existing", async () => {
   const app = exclusiveApp(); const reserved = await app.reserve(); assert.equal(app.balance(), 400);
   app.tenant.assignTag(CUSTOMER, TAG); // the merchant grants it in Commerce7 meanwhile
   await app.provision(String(reserved.id));
   const claim = app.claims()[0];
-  assert.equal(claim.status, "REFUNDED"); assert.equal(claim.membershipOwnership, "PRE_EXISTING"); assert.equal(claim.membershipWriteAttempted, false); assert.equal(claim.slotReleased, true);
-  assert.equal(app.balance(), 500); assert.equal(app.ledger.get(`c7-reward-refund:${claim.id}`), "REFUND"); assert.equal(grants(app).length, 0); assert.equal(app.offer().reservedClaimCount, 0);
-  assert.equal(view(claim).accessState, "ALREADY_ELIGIBLE"); assert.match(String(claim.errorMessage), /already had this access/);
-  assert.ok(domain.commerce7ClaimAllowsOfferEdit(claim), "an already-eligible refund is provably dead");
+  assert.equal(claim.status, "ISSUED"); assert.equal(claim.membershipOwnership, "PRE_EXISTING"); assert.equal(claim.membershipWriteAttempted, false); assert.equal(claim.slotReleased, false);
+  assert.equal(app.balance(), 400, "no refund for existing access"); assert.equal(grants(app).length, 0); assert.equal(app.offer().reservedClaimCount, 1);
+  assert.equal(view(claim).accessState, "ACCESS_GRANTED"); assert.deepEqual(app.tenant.customers[0].tagIds, [TAG]);
 });
 
-test("with a discount, an already-eligible customer pays for the coupon only; the membership stays the merchant's", async () => {
+test("a definitive failure before the entitlement exists still refunds; with a discount the pre-existing tag does not change that", async () => {
+  // The chosen tag is already held and the coupon is definitively refused: nothing of value was issued, so the points return.
   const app = exclusiveApp({ discount: true, customerTags: [TAG] });
-  assert.equal((await app.claim()).alreadyEligible, false);
-  const claim = app.claims()[0];
-  assert.equal(claim.status, "ISSUED"); assert.equal(claim.membershipOwnership, "PRE_EXISTING"); assert.equal(claim.membershipWriteAttempted, false); assert.equal(grants(app).length, 0);
-  assert.deepEqual(writes(app), ["POST /v1/coupon"]); assert.equal(app.balance(), 400);
-  assert.equal(domain.commerce7MembershipGuidance(String(claim.membershipOwnership), 0), "NOT_SQRATCH_OWNED");
+  app.tenant.failures.push({ when: (path, method) => method === "POST" && path === "/v1/coupon", respond: () => Response.json({ message: "synthetic validation error" }, { status: 422 }) });
+  await app.claim();
+  assert.equal(app.claims()[0].status, "REFUNDED"); assert.equal(app.balance(), 500); assert.deepEqual(app.tenant.customers[0].tagIds, [TAG], "the merchant's tag is never removed");
 });
 
 // ── Partial failures: coupon vs. tag ────────────────────────────────────────────
@@ -253,13 +291,14 @@ test("a second claim for the same Customer Tag is refused before any debit while
   assert.equal(app.claims().length, 1); assert.equal(app.ledger.size, 1); assert.equal(app.offer().reservedClaimCount, 1);
 });
 
-test("after a grant completes, a later claim for the same access is already eligible and costs nothing", async () => {
+test("after a grant completes, a later voluntary claim for the same access is charged again, with no second membership write", async () => {
   const app = exclusiveApp();
   await app.claim("first-request-key-0001"); assert.equal(app.claims()[0].status, "ISSUED");
-  assert.equal((await app.claim("second-request-key-002")).alreadyEligible, true);
-  assert.equal(app.claims().length, 1); assert.equal(app.balance(), 400); assert.equal(grants(app).length, 1);
+  await app.claim("second-request-key-002");
+  assert.equal(app.claims().length, 2); assert.equal(app.balance(), 300); assert.equal(grants(app).length, 1);
+  assert.equal(app.claims()[1].membershipOwnership, "PRE_EXISTING", "the second claim found the tag already present and never claims it");
+  assert.equal(app.claims()[0].membershipOwnership, "SQRATCH_GRANTED", "the first claim keeps its evidence-backed ownership");
 });
-
 test("capacity: a full offer refuses before any debit or provider write; a returned claim frees its slot", async () => {
   const app = exclusiveApp({ offer: { maxTotalRedemptions: 1, maxRedemptionsPerUser: 1 }, customers: [{ id: CUSTOMER, email: "alice@example.test" }, { id: "customer-bob", email: "bob@example.test" }] });
   app.tables.user.push({ id: "bob", email: "bob@example.test", isActive: true, isEmailVerified: true, emailVerifiedAt: new Date("2026-10-01T00:00:00.000Z") });

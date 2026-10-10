@@ -72,12 +72,14 @@ function fakeDb(options: { claims: CommerceRewardRedemption[]; orders: CommerceO
 const NOW = () => new Date("2026-10-09T13:00:00.000Z");
 
 test("#1006 imported by Custom Range: QA 04 becomes USED once, linked to the order, with the purchase time; a second pass changes nothing", async () => {
-  const fake = fakeDb({ claims: [qa04()], orders: [order1006()] }); const fetched: string[] = [];
+  // Production state before the corrected matcher ran: an earlier pass had recorded COUPON_IDENTITY_UNCONFIRMED.
+  const fake = fakeDb({ claims: [qa04({ lastReconcileReason: "PURCHASE_CHECK:COUPON_IDENTITY_UNCONFIRMED", rewardOrderCheckedAt: new Date("2026-10-09T13:40:01.376Z") })], orders: [order1006()] }); const fetched: string[] = [];
   const deps = { db: fake.db as never, now: NOW, fetchOrder: async (request: { externalOrderId: string }) => { fetched.push(request.externalOrderId); return native1006([qa04Entry]); } };
   assert.deepEqual(await reconcileCommerce7RewardOrders(deps), { checked: 1, linked: 1, failed: 0 });
   const claim = fake.claims[0];
   assert.equal(claim.status, "USED"); assert.equal(claim.canonicalOrderId, "order-1006"); assert.equal((claim.usedAt as Date).toISOString(), "2026-10-08T08:47:06.199Z", "the order's creation time, not the import time");
   assert.deepEqual(fetched, ["native-order-1006"]);
+  assert.equal(claim.lastReconcileReason, null, "the stale purchase-check reason is cleared by the link"); assert.equal((claim.rewardOrderCheckedAt as Date).toISOString(), NOW().toISOString());
   assert.deepEqual(await reconcileCommerce7RewardOrders(deps), { checked: 0, linked: 0, failed: 0 }, "a linked claim is never re-linked or double-counted");
   const view = serializeCommerce7Claim({ ...claim, provisioningOwner: null, needsManualReview: false, couponCreateAttempted: true, membershipWriteAttempted: false, membershipVerifiedAt: null, membershipOwnership: null, providerMembershipId: null, pointsCost: 100, issuedAt: new Date(), errorMessage: null } as never);
   assert.equal(view.status, "USED"); assert.equal(view.code, null, "a used coupon's code is never shown again");

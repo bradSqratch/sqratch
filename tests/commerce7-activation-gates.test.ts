@@ -13,11 +13,13 @@ import { fakeTenant, harness, offerBody, verifiedContract, verifiedEmail, type H
  * gate; current claim eligibility is reported beside it.
  */
 const percentVerified: CouponContract = { ...COMMERCE7_COUPON_CONTRACT, percentage: { ...COMMERCE7_COUPON_CONTRACT.percentage, verified: true } };
+// Production is verified (live 1500 = 15%); the gate mechanism stays covered with an explicitly unverified contract.
+const percentUnverified: CouponContract = { ...COMMERCE7_COUPON_CONTRACT, percentage: { ...COMMERCE7_COUPON_CONTRACT.percentage, verified: false } };
 const percentOffer = { discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 1500 };
 const rejectsWith = (code: string, pattern: RegExp) => (error: { code: string; message: string }) => error.code === code && pattern.test(error.message);
 
 test("discount blockers: a legacy claimant-only discount is retired; an unverified percentage is a separate reason; exclusive is unaffected", () => {
-  const gated = commerce7CouponSupport();
+  const gated = commerce7CouponSupport(percentUnverified);
   const options = (overrides: object = {}) => ({ rewardMode: "DISCOUNT" as const, eligibilityMode: "ANYONE_WITH_CODE" as const, appliesTo: "ALL_PRODUCTS" as const, discountEnabled: true, discountType: "FIXED_AMOUNT" as const, ...overrides });
   assert.deepEqual(commerce7CouponBlockers(options(), gated), []);
   assert.deepEqual(commerce7CouponBlockers(options({ discountType: "PERCENTAGE" }), gated), ["PERCENTAGE_UNVERIFIED"]);
@@ -34,7 +36,7 @@ test("discount blockers: a legacy claimant-only discount is retired; an unverifi
   for (const text of Object.values(COMMERCE7_ACTIVATION_BLOCKER_TEXT)) assert.doesNotMatch(text, /availableTo|appliesTo|discountType|enum/, "plain words only");
 });
 test("the offer badge and the server agree: no blockers exactly when the claim snapshot is issuable, for every combination", () => {
-  const contracts = [COMMERCE7_COUPON_CONTRACT, percentVerified, verifiedContract, { ...verifiedContract, percentage: { ...verifiedContract.percentage, verified: true } }];
+  const contracts = [COMMERCE7_COUPON_CONTRACT, percentUnverified, verifiedContract, { ...verifiedContract, percentage: { ...verifiedContract.percentage, verified: false } }];
   for (const contract of contracts) for (const eligibilityMode of ["ANYONE_WITH_CODE"]) for (const appliesTo of ["ALL_PRODUCTS", "SPECIFIC_PRODUCTS"]) for (const discountType of ["FIXED_AMOUNT", "PERCENTAGE"]) {
     const offer = { ...offerBody, isActive: true, reservedClaimCount: 0, claimStartsAt: null, claimEndsAt: null, rewardMode: "DISCOUNT", appliesTo, discountType, discountAmountCents: discountType === "FIXED_AMOUNT" ? 1000 : null, discountPercentageBasisPoints: discountType === "PERCENTAGE" ? 1500 : null, commerce7Config: { eligibilityMode, discountEnabled: true } } as never;
     const productIds = appliesTo === "SPECIFIC_PRODUCTS" ? ["wine-a"] : [];
@@ -47,10 +49,10 @@ test("the offer badge and the server agree: no blockers exactly when the claim s
   }
 });
 
-test("Percentage + Anyone with the code: refused on save and Enable while unverified, live immediately once verified", async () => {
-  const gated = harness();
+test("Percentage + Anyone with the code: refused under an unverified contract, live under the verified production contract", async () => {
+  const gated = harness({ contract: percentUnverified });
   await assert.rejects(gated.save({ ...offerBody, ...percentOffer, eligibilityMode: "ANYONE_WITH_CODE", isActive: true }), rejectsWith("COUPON_CONTRACT_UNVERIFIED", /percentage units are verified/));
-  const verified = harness({ contract: percentVerified });
+  const verified = harness();
   // Edit the harness's claimable offer in place, so the claim below uses exactly the saved terms.
   const saved = await verified.save({ ...offerBody, ...percentOffer, eligibilityMode: "ANYONE_WITH_CODE", isActive: true }, "offer");
   assert.equal(saved.isActive, true); assert.equal(saved.discountPercentageBasisPoints, 1500);
@@ -58,24 +60,25 @@ test("Percentage + Anyone with the code: refused on save and Enable while unveri
   assert.equal(verified.claims()[0].status, "ISSUED"); assert.equal(verified.postBodies()[0].discount, 1500, "15% is written as the native 1500");
 });
 
-test("a saved percentage draft, and a formerly active offer paused by the gate, enable only once percentage units are verified", async () => {
-  for (const contract of [undefined, percentVerified]) {
+test("a saved percentage draft, and a formerly active offer paused by the gate, enable only once percentage units are verified (as they now are)", async () => {
+  for (const contract of [percentUnverified, undefined]) {
     const draft = harness({ offer: { ...percentOffer, isActive: false }, ...(contract ? { contract } : {}) });
-    if (!contract) { await assert.rejects(draft.setActive("ENABLE"), rejectsWith("COUPON_CONTRACT_UNVERIFIED", /percentage/i)); assert.equal(draft.offer().isActive, false); }
+    assert.equal(draft.offer().isActive, false, "verification never activates an offer by itself");
+    if (contract) { await assert.rejects(draft.setActive("ENABLE"), rejectsWith("COUPON_CONTRACT_UNVERIFIED", /percentage/i)); assert.equal(draft.offer().isActive, false); }
     else assert.equal((await draft.setActive("ENABLE")).isActive, true);
     // Created active before the gate existed: stays Active (never silently disabled), refuses claims, and after Disable can be
     // re-enabled only when verified.
     const paused = harness({ offer: percentOffer, ...(contract ? { contract } : {}) });
     assert.equal(paused.offer().isActive, true); assert.deepEqual(paused.offerWrites, []);
     assert.equal((await paused.setActive("DISABLE")).isActive, false);
-    if (!contract) { await assert.rejects(paused.setActive("ENABLE"), { code: "COUPON_CONTRACT_UNVERIFIED" }); assert.equal(paused.offer().isActive, false); }
+    if (contract) { await assert.rejects(paused.setActive("ENABLE"), { code: "COUPON_CONTRACT_UNVERIFIED" }); assert.equal(paused.offer().isActive, false); }
     else assert.equal((await paused.setActive("ENABLE")).isActive, true);
     assert.deepEqual([...draft.calls, ...paused.calls].filter((call) => call.method !== "GET"), [], "enabling never writes to Commerce7");
   }
 });
 
 test("API bypass: a direct claimant-only discount save or Enable is refused server-side with no write; an unverified percentage too", async () => {
-  const both = harness();
+  const both = harness({ contract: percentUnverified });
   await assert.rejects(both.save({ ...offerBody, ...percentOffer, eligibilityMode: "CLAIMANT_ONLY", isActive: true }), { code: "CLAIMANT_DISCOUNT_RETIRED" });
   await assert.rejects(both.save({ ...offerBody, ...percentOffer, isActive: true }), rejectsWith("COUPON_CONTRACT_UNVERIFIED", /percentage/i));
   assert.equal(both.offerWrites.length, 0);
@@ -110,7 +113,7 @@ const eligibilityOf = (app: Harness) => commerce7OfferEligibility(app.offer() as
 
 test("multi-tag OR access (verified): an Active offer whose product gains two more tags stays claimable; existing access is untouched", async () => {
   const app = exclusiveApp();
-  const granted = await app.claim(); assert.equal(granted.alreadyEligible, false); assert.equal(app.claims()[0].status, "ISSUED");
+  const granted = await app.claim(); assert.equal(granted.claim?.status, "ISSUED"); assert.equal(app.claims()[0].status, "ISSUED");
   const issued = structuredClone(app.claims()[0]);
   // The winery later secures the same product to two more Manual Customer Tags; product sync records all three.
   app.tenant.products[0].security = security([TAG, EMPLOYEE, INVESTOR]);
@@ -120,32 +123,33 @@ test("multi-tag OR access (verified): an Active offer whose product gains two mo
   assert.deepEqual(JSON.parse(JSON.stringify(app.claims()[0])), JSON.parse(JSON.stringify(issued)), "the granted claim is untouched");
   assert.deepEqual(app.calls.filter((call) => call.method === "DELETE"), [], "SQRATCH never revokes a membership");
   assert.deepEqual(app.tenant.products[0].security, security([TAG, EMPLOYEE, INVESTOR]), "product security is never written");
-  // The same customer already holds the granted tag: an access-only re-claim charges nothing.
-  const again = await app.claim("second-request-key-0001"); assert.equal(again.alreadyEligible, true); assert.equal(app.claims().length, 1);
+  // The same customer already holds the granted tag: a voluntary re-claim is still charged, with no second membership write.
+  await app.claim("second-request-key-0001"); assert.equal(app.claims().length, 2); assert.equal(app.balance(), 300);
+  assert.equal(app.calls.filter((call) => call.method === "POST").length, 1); assert.equal(app.claims()[1].membershipOwnership, "PRE_EXISTING");
 });
 
-test("access-only: a customer who can already buy through ANY of the product's security tags is not charged and gets no grant", async () => {
+test("operator rule: a voluntary claim is charged even when another security tag (Employee) already gives access; only the chosen tag is granted", async () => {
   const app = exclusiveApp(); app.tenant.customers[0].tagIds.push(EMPLOYEE);
   app.tenant.products[0].security = security([TAG, EMPLOYEE, INVESTOR]);
   app.tables.connectedCommerceProduct.find((row) => row.externalId === PRODUCT)!.providerMetadata = { security: security([TAG, EMPLOYEE, INVESTOR]) };
   const result = await app.claim();
-  assert.equal(result.alreadyEligible, true); assert.equal(app.claims().length, 0); assert.equal(app.ledger.size, 0, "no points spent");
-  assert.deepEqual(app.calls.filter((call) => call.method !== "GET"), [], "no tag granted"); assert.deepEqual(app.tenant.customers[0].tagIds, [EMPLOYEE]);
-  // A customer holding an unrelated tag (not on this product) still needs the grant.
-  const unrelated = exclusiveApp(); unrelated.tenant.customers[0].tagIds.push(EMPLOYEE);
-  const claimed = await unrelated.claim(); assert.equal(claimed.alreadyEligible, false); assert.equal(unrelated.claims()[0].status, "ISSUED");
-  assert.deepEqual(unrelated.tenant.customers[0].tagIds, [EMPLOYEE, TAG], "exactly one selected tag granted");
+  assert.equal(result.claim?.status, "ISSUED", "no free claim for a different access tag");
+  assert.equal(app.claims().length, 1); assert.equal(app.claims()[0].status, "ISSUED"); assert.equal(app.balance(), 400, "the configured 100 points were spent once");
+  assert.deepEqual(app.calls.filter((call) => call.method === "POST").map((call) => call.body), [{ objectId: "c7-alice", tagId: TAG }], "exactly the one chosen tag");
+  assert.deepEqual(app.tenant.customers[0].tagIds, [EMPLOYEE, TAG], "Employee is untouched");
+  // The same request key never charges twice.
+  await app.claim(); assert.equal(app.claims().length, 1); assert.equal(app.balance(), 400);
 });
 
-test("access-only: if access via another product tag appears before provisioning, the claim is refunded without a grant", async () => {
+test("operator rule: access through another tag that appears before provisioning never refunds; the chosen tag is granted", async () => {
   const app = exclusiveApp({ customersFirst: [] });
-  await app.claim(); assert.equal(app.claims()[0].provisioningState, "AWAITING_CUSTOMER");
+  await app.claim(); assert.equal(app.claims()[0].provisioningState, "AWAITING_CUSTOMER"); assert.equal(app.balance(), 400);
   app.tenant.customers.push({ id: "c7-alice", email: "alice@example.test", tagIds: [INVESTOR] });
   app.tenant.products[0].security = security([TAG, INVESTOR]);
   app.tables.connectedCommerceProduct.find((row) => row.externalId === PRODUCT)!.providerMetadata = { security: security([TAG, INVESTOR]) };
   app.advance(10 * 60000); await app.provision(String(app.claims()[0].id));
-  assert.equal(app.claims()[0].status, "REFUNDED"); assert.equal(app.claims()[0].membershipOwnership, "PRE_EXISTING"); assert.equal(app.balance(), 500);
-  assert.deepEqual(app.calls.filter((call) => call.method !== "GET"), [], "no tag granted");
+  assert.equal(app.claims()[0].status, "ISSUED"); assert.equal(app.claims()[0].membershipOwnership, "SQRATCH_GRANTED"); assert.equal(app.balance(), 400, "no refund");
+  assert.deepEqual(app.tenant.customers[0].tagIds, [INVESTOR, TAG]);
 });
 
 test("stored state and eligibility are separate: schedule and capacity states never hide a blocker", () => {
@@ -157,6 +161,7 @@ test("stored state and eligibility are separate: schedule and capacity states ne
   assert.equal(state({ claimEndsAt: new Date("2026-10-08T00:00:00.000Z") }), "ENDED");
   assert.equal(state({ reservedClaimCount: 25 }), "SOLD_OUT");
   assert.equal(state({ isActive: false }), "INACTIVE");
-  assert.equal(state({ ...percentOffer, reservedClaimCount: 25 }), "BLOCKED", "a blocker outranks schedule and capacity");
+  assert.equal(state({ commerce7Config: { eligibilityMode: "CLAIMANT_ONLY", discountEnabled: true }, reservedClaimCount: 25 }), "BLOCKED", "a blocker outranks schedule and capacity");
+  assert.equal(state({ ...percentOffer }), "READY", "a verified percentage offer is open for claims");
   assert.equal(state({ commerce7Config: { eligibilityMode: "UNKNOWN_MODE" } }), "BLOCKED");
 });

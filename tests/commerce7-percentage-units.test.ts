@@ -12,6 +12,8 @@ import { harness, offerBody, type Row } from "./commerce7-reward-harness";
  */
 const observation = JSON.parse(readFileSync(new URL("./fixtures/commerce7-rewards/live-coupon-percentage-observation.json", import.meta.url), "utf8"));
 const verifiedPercent: CouponContract = { ...COMMERCE7_COUPON_CONTRACT, percentage: { ...COMMERCE7_COUPON_CONTRACT.percentage, verified: true } };
+// The gate mechanism stays testable with an explicitly unverified contract; production is verified (see the evidence test).
+const unverifiedPercent: CouponContract = { ...COMMERCE7_COUPON_CONTRACT, percentage: { ...COMMERCE7_COUPON_CONTRACT.percentage, verified: false } };
 const percentOffer = { discountType: "PERCENTAGE", discountAmountCents: null, discountPercentageBasisPoints: 1500 };
 const code = `SQRA${"A".repeat(32)}`;
 const start = new Date("2026-10-08T08:16:00.000Z"); const end = new Date("2026-10-15T08:16:00.000Z");
@@ -52,32 +54,32 @@ test("readback recovery never adopts a coupon created with the old 0.15% value f
   assert.equal(couponMatches(echo(10000), expected), false, "100% is not 15%");
 });
 
-test("production gate: percentage units are not yet verified live, so percentage rewards stay draft-only and the Brand sees why", () => {
-  assert.equal(COMMERCE7_COUPON_CONTRACT.percentage.verified, false);
-  assert.deepEqual(commerce7CouponSupport().discount, { FIXED_AMOUNT: true, PERCENTAGE: false });
-  assert.deepEqual(commerce7CouponSupport(verifiedPercent).discount, { FIXED_AMOUNT: true, PERCENTAGE: true });
+test("production: percentage units are verified live (1500 = 15%), so percentage rewards can go live; the unit stays 100 per percent", () => {
+  assert.equal(COMMERCE7_COUPON_CONTRACT.percentage.verified, true); assert.equal(COMMERCE7_COUPON_CONTRACT.percentage.nativeUnitsPerPercent, 100);
+  assert.deepEqual(commerce7CouponSupport().discount, { FIXED_AMOUNT: true, PERCENTAGE: true });
+  assert.deepEqual(commerce7CouponSupport(unverifiedPercent).discount, { FIXED_AMOUNT: true, PERCENTAGE: false });
 });
 
-test("gated: an active percentage offer cannot be saved or enabled, and a draft saves with no provider call", async () => {
-  const app = harness();
+test("gated (unverified contract): an active percentage offer cannot be saved or enabled, and a draft saves with no provider call", async () => {
+  const app = harness({ contract: unverifiedPercent });
   await assert.rejects(app.save({ ...offerBody, ...percentOffer, isActive: true }), (error: { code: string; message: string }) => error.code === "COUPON_CONTRACT_UNVERIFIED" && /percentage/i.test(error.message));
   const draft = await app.save({ ...offerBody, ...percentOffer, isActive: false });
   assert.equal(draft.isActive, false); assert.equal(draft.discountPercentageBasisPoints, 1500, "SQRATCH still stores 1,500 basis points");
-  const paused = harness({ offer: { ...percentOffer, isActive: false } });
+  const paused = harness({ offer: { ...percentOffer, isActive: false }, contract: unverifiedPercent });
   await assert.rejects(paused.setActive("ENABLE"), (error: { code: string; message: string }) => error.code === "COUPON_CONTRACT_UNVERIFIED" && /percentage/i.test(error.message));
   assert.equal(paused.offer().isActive, false); assert.deepEqual([...app.calls, ...paused.calls], []);
 });
 
-test("gated: an already-active percentage offer refuses new claims before any debit or provider call", async () => {
-  const app = harness({ offer: percentOffer });
+test("gated (unverified contract): an already-active percentage offer refuses new claims before any debit or provider call", async () => {
+  const app = harness({ offer: percentOffer, contract: unverifiedPercent });
   await assert.rejects(app.reserve(), { code: "COUPON_CONTRACT_UNVERIFIED" });
   assert.equal(app.claims().length, 0); assert.equal(app.ledger.size, 0); assert.equal(app.offer().reservedClaimCount, 0); assert.deepEqual(app.calls, []);
 });
 
-test("gated: a pending percentage claim (current or legacy snapshot) is refunded before any coupon request", async () => {
+test("gated (unverified contract): a pending percentage claim (current or legacy snapshot) is refunded before any coupon request", async () => {
   for (const snapshotDiscount of [{ type: "PERCENTAGE", amountCents: null, percentageBasisPoints: 1500 }, "LEGACY"] as const) {
     const verified = harness({ offer: percentOffer, contract: verifiedPercent }); const claim = await verified.reserve();
-    const app = harness({ offer: percentOffer }); app.tables.commerceRewardRedemption.push(structuredClone(verified.claims()[0])); (app.offer() as Row).reservedClaimCount = 1;
+    const app = harness({ offer: percentOffer, contract: unverifiedPercent }); app.tables.commerceRewardRedemption.push(structuredClone(verified.claims()[0])); (app.offer() as Row).reservedClaimCount = 1;
     if (snapshotDiscount === "LEGACY") (app.claims()[0] as Row).rewardConfigSnapshot = { eligibilityMode: "ANYONE_WITH_CODE", templateCouponId: "legacy-template", template: { id: "legacy-template", code: "legacy-template", title: "Merchant template", usageLimitType: "Per Store", usageLimit: 1, appliesTo: "Store", appliesToObjectIds: null, productDiscountType: "Percentage Off", productDiscount: 15, shippingDiscountType: "No Discount", shippingDiscount: null, startDate: "2026-01-01T00:00:00.000Z", endDate: null, status: "Enabled", minimumCartAmount: null, availableTo: "Everyone", availableToObjectIds: null }, title: "Old", minimumSubtotalCents: null };
     else assert.deepEqual(JSON.parse(JSON.stringify((app.claims()[0] as Row).rewardConfigSnapshot)).discount, snapshotDiscount);
     await app.provision(String(claim.id));

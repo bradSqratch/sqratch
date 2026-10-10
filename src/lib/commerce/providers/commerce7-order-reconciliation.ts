@@ -331,6 +331,20 @@ function assertOwnedConnectedCommerce7(
 }
 
 /** Sanitized classification only — never a raw provider message/body. */
+/**
+ * Why a chunk stayed incomplete. Every order in the chunk is still ingested on its own; the chunk (and so the checkpoint) is
+ * not proven while any order is unsettled. A CONTRADICTORY_FINANCIAL_SNAPSHOT rejection is deterministic: retrying cannot
+ * settle it until Commerce7's data changes, so the message says so instead of inviting a retry.
+ */
+function incompleteChunkError(outcome: Commerce7OrderBackfillOutcome): string {
+  const contradictory = outcome.outcomes.filter((result) => result.status === "FAILED" && result.reason === "CONTRADICTORY_FINANCIAL_SNAPSHOT").length;
+  const settled = outcome.outcomes.filter((result) => result.status !== "FAILED" && result.status !== "IN_FLIGHT").length;
+  if (contradictory && contradictory === outcome.outcomes.length - settled && !outcome.ordersSkipped) {
+    return `${contradictory} order${contradictory === 1 ? " was" : "s were"} rejected because Commerce7 reports refunds larger than the order total (CONTRADICTORY_FINANCIAL_SNAPSHOT); ${settled} other order${settled === 1 ? " was" : "s were"} imported. This range stays incomplete until Commerce7 corrects the order; retrying will not change it.`;
+  }
+  return "Some orders could not be ingested. Retry this reconciliation chunk.";
+}
+
 function classifyChunkError(error: unknown): string {
   if (error instanceof CommerceProviderApiError) {
     return error.message;
@@ -394,7 +408,7 @@ export async function processOneChunk(
       return {
         achievedThrough: null,
         outcome: "FAILED",
-        error: "Some orders could not be ingested. Retry this reconciliation chunk.",
+        error: incompleteChunkError(outcome),
         ordersFetched: totalFetched,
         ordersProcessed: totalProcessed,
         chunk: { from: input.from, to: chunkTo },

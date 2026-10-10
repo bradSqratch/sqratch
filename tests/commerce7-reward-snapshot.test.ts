@@ -115,7 +115,7 @@ test("Brand offer DTO exposes eligibility and discount flags only: no template I
 test("Brand readiness no longer mentions templates and reports exactly which coupon branches can go live", () => {
   const readiness = commerce7RewardReadiness(true);
   assert.equal(readiness.backendConfigured, true); assert.equal(readiness.exclusiveAccessSupported, true); assert.equal(readiness.exclusiveMultiTagAccessVerified, true, "OR semantics verified on the live storefront");
-  assert.deepEqual(readiness.couponContract, { eligibility: { ANYONE_WITH_CODE: true, CLAIMANT_ONLY: false }, scope: { ALL_PRODUCTS: true, SPECIFIC_PRODUCTS: true }, discount: { FIXED_AMOUNT: true, PERCENTAGE: false } });
+  assert.deepEqual(readiness.couponContract, { eligibility: { ANYONE_WITH_CODE: true, CLAIMANT_ONLY: false }, scope: { ALL_PRODUCTS: true, SPECIFIC_PRODUCTS: true }, discount: { FIXED_AMOUNT: true, PERCENTAGE: true } });
   assert.deepEqual(readiness.permissions, ["Coupon: Full", "Tag: Full", "Customer: Read", "Product: Read", "Order: Read"]);
   assert.doesNotMatch(JSON.stringify(readiness), /template/i); assert.equal(commerce7RewardReadiness(false).backendConfigured, false);
 });

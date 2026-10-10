@@ -35,8 +35,8 @@ test("production contract holds only live-proven values and never guesses scope 
 });
 
 test("support matrix reports exactly the verified eligibility and scope branches", () => {
-  assert.deepEqual(commerce7CouponSupport(), { eligibility: { ANYONE_WITH_CODE: true, CLAIMANT_ONLY: false }, scope: { ALL_PRODUCTS: true, SPECIFIC_PRODUCTS: true }, discount: { FIXED_AMOUNT: true, PERCENTAGE: false } });
-  assert.deepEqual(commerce7CouponSupport(verified), { eligibility: { ANYONE_WITH_CODE: true, CLAIMANT_ONLY: true }, scope: { ALL_PRODUCTS: true, SPECIFIC_PRODUCTS: true }, discount: { FIXED_AMOUNT: true, PERCENTAGE: false } });
+  assert.deepEqual(commerce7CouponSupport(), { eligibility: { ANYONE_WITH_CODE: true, CLAIMANT_ONLY: false }, scope: { ALL_PRODUCTS: true, SPECIFIC_PRODUCTS: true }, discount: { FIXED_AMOUNT: true, PERCENTAGE: true } });
+  assert.deepEqual(commerce7CouponSupport(verified), { eligibility: { ANYONE_WITH_CODE: true, CLAIMANT_ONLY: true }, scope: { ALL_PRODUCTS: true, SPECIFIC_PRODUCTS: true }, discount: { FIXED_AMOUNT: true, PERCENTAGE: true } });
   for (const scope of ["ALL_PRODUCTS", "SPECIFIC_PRODUCTS"] as const) assert.equal(isCouponBranchSupported("ANYONE_WITH_CODE", scope), true);
   for (const scope of ["ALL_PRODUCTS", "SPECIFIC_PRODUCTS"] as const) assert.equal(isCouponBranchSupported("CLAIMANT_ONLY", scope), false);
 });

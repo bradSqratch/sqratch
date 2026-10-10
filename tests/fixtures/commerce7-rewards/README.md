@@ -18,7 +18,9 @@
 
 `live-customer-tag-membership.json` holds the operator's live Customer Tag membership requests: the customer's `tags` entries (`GET /v1/customer/{id}`), the `POST /v1/tag-x-object/customer` 201 that succeeded for a customer who already held the tag and then listed it twice, and the `DELETE /v1/tag-x-object/customer/{tagId}/{customerId}` 204 that removed both copies. Only the customer's `tags` array is stored; no other customer field. SQRATCH uses the POST (once, after verified absence) and never the DELETE.
 
-Still missing, and therefore still fail-closed: a live 15% coupon observation (`percentage.verified`) and the live `GET /v1/tag/customer/{id}` shape. A Customer-tag restricted **Coupon** is no longer needed: discount rewards are Anyone with the code only.
+`live-coupon-percentage-1500-observation.json` records the 2026-10-09 live check that a native `discount: 1500` coupon is 15% (Admin "15.00% Off"; CA$29.00 → CA$4.35 and CA$39.00 → CA$5.85 off), which sets `percentage.verified`.
+
+Still missing, and therefore still fail-closed: the live `GET /v1/tag/customer/{id}` shape. A Customer-tag restricted **Coupon** is no longer needed: discount rewards are Anyone with the code only.
 
 `live-order-coupons-1007.json` is the operator-supplied Order Create payload for #1007, reduced to the fields SQRATCH reads, with synthetic UUIDs and a synthetic code. It proves an order `coupons[]` entry carries the native coupon id in `couponId` (the entry's own id is `id`) plus the code; purchase linking matches `couponId` + code.
 

@@ -27,10 +27,11 @@ export type CouponContract = {
   type: string; usageLimitType: string; usageLimit: number; status: string;
   discountType: { FIXED_AMOUNT: string; PERCENTAGE: string };
   /**
-   * Native "Percentage Off" `discount` units per whole percent. Live QA proved a native 15 is 0.15% in Commerce7 Admin and at
-   * checkout (tests/fixtures/commerce7-rewards/live-coupon-percentage-observation.json), so the unit is 1/100 of a percent and
-   * 15% is written as 1500. `verified` stays false until a live coupon created with 1500 is observed as 15%; until then new
-   * percentage rewards cannot be activated, claimed or issued.
+   * Native "Percentage Off" `discount` units per whole percent: 1/100 of a percent, the same scale as SQRATCH basis points.
+   * Live evidence: a native 15 was 0.15% (live-coupon-percentage-observation.json), and a native 1500 is 15%: HTTP 201,
+   * Admin "15.00% Off", checkout CA$29.00 → CA$4.35 off and CA$39.00 → CA$5.85 off
+   * (tests/fixtures/commerce7-rewards/live-coupon-percentage-1500-observation.json). `verified` therefore lets percentage
+   * rewards be activated, claimed and issued; it never activates an offer by itself and never rewrites an issued coupon.
    */
   percentage: { nativeUnitsPerPercent: number; verified: boolean };
   dollarOffDiscountApplies: string;
@@ -43,7 +44,7 @@ export type CouponContract = {
 export const COMMERCE7_COUPON_CONTRACT: CouponContract = {
   type: "Product", usageLimitType: "Per Store", usageLimit: 1, status: "Enabled",
   discountType: { FIXED_AMOUNT: "Dollar Off", PERCENTAGE: "Percentage Off" },
-  percentage: { nativeUnitsPerPercent: 100, verified: false },
+  percentage: { nativeUnitsPerPercent: 100, verified: true },
   dollarOffDiscountApplies: "Once Per Order",
   cartRequirement: { none: "None", minimum: "Minimum Purchase Amount", countType: "All Items" },
   readNoShippingDiscount: "No Discount",
