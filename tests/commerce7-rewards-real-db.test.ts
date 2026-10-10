@@ -382,10 +382,14 @@ test("real Postgres: exclusive access grants once, always charges a voluntary cl
   }
 });
 
-test("real Postgres: a burst of 30 distinct claimants for a 25-claim bearer reward reserves exactly 25, and same-user and retried requests never double-charge", { skip: !enabled && `Disposable DB opt-in required (${decision.reason})` }, async () => {
+test("real Postgres: a burst of 30 distinct claimants for a 25-claim bearer reward issues exactly 25 coupons, labels contention as a retryable 503, and same-user and retried requests never double-charge", { skip: !enabled && `Disposable DB opt-in required (${decision.reason})` }, async (t) => {
   const { default: db } = await import("../src/lib/prisma");
-  const { reserveCommerce7Claim } = await import("../src/lib/commerce7-rewards");
+  const { claimCommerce7Reward, reserveCommerce7Claim } = await import("../src/lib/commerce7-rewards");
   const { RewardClaimError } = await import("../src/lib/commerce7-reward-domain");
+  const { rewardErrorResponse } = await import("../src/lib/commerce7-reward-http");
+  const { Commerce7RewardsClient, parseNativeCoupon } = await import("../src/lib/commerce/providers/commerce7-rewards-client");
+  type NativeCoupon = import("../src/lib/commerce/providers/commerce7-rewards-client").NativeCoupon;
+  type CouponWriteRequest = import("../src/lib/commerce/providers/commerce7-rewards-client").CouponWriteRequest;
   const unique = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const brand = await db.brand.create({ data: { name: "Capacity fixture", slug: `c7-capacity-${unique}` } });
   const connection = await db.commerceConnection.create({ data: { brandId: brand.id, provider: "COMMERCE7", status: "CONNECTED", externalAccountId: "synthetic-capacity-tenant", displayName: "Synthetic store", providerMetadata: { currencyCode: "CAD" } } });
@@ -397,32 +401,56 @@ test("real Postgres: a burst of 30 distinct claimants for a 25-claim bearer rewa
   async function bearer(cap: number, perUser: number) {
     return db.brandRewardOffer.create({ data: { brandId: brand.id, provider: "COMMERCE7", connectionId: connection.id, sourceExternalAccountId: connection.externalAccountId, title: "Capacity fixture", isActive: true, pointsCost: 100, discountAmountCents: 1000, currencyCode: "CAD", maxTotalRedemptions: cap, maxRedemptionsPerUser: perUser, commerce7Config: { eligibilityMode: "ANYONE_WITH_CODE", discountEnabled: true } } });
   }
+  /** Synthetic tenant: every native coupon POST is counted; a coupon is found again by its exact code. No network. */
+  class CountingNative extends Commerce7RewardsClient {
+    coupons = new Map<string, NativeCoupon>(); creates = 0;
+    async findCoupon(code: string) { return this.coupons.get(code) ?? null; }
+    async createCoupon(payload: CouponWriteRequest) { this.creates++; const created = parseNativeCoupon({ id: `native-coupon-${this.creates}`, appliesToObjectIds: null, availableToObjectIds: null, shippingDiscount: null, minimumCartAmount: null, ...payload }); this.coupons.set(payload.code, created); return created; }
+  }
+  const native = new CountingNative(connection.externalAccountId);
+  let clock = Date.now();
+  const deps = { db, client: () => native, now: () => new Date(clock) };
   const spends = (userId: string) => db.pointTransaction.count({ where: { userId, type: "SPEND" } });
   try {
     const offer = await bearer(25, 1);
     const users = await Promise.all(Array.from({ length: 30 }, (_, index) => claimant(index)));
     const key = (index: number) => `burst-request-${index.toString().padStart(4, "0")}`;
-    // Every claimant fires at once on its own connection. Under SERIALIZABLE contention a request may exhaust its conflict
-    // retries; that is a rolled-back, retryable failure, never a partial reservation.
-    const burst = await Promise.allSettled(users.map((row, index) => reserveCommerce7Claim(row.id, offer.id, key(index), [brand.id])));
+    const claim = (index: number) => claimCommerce7Reward(users[index].id, offer.id, key(index), [brand.id], deps);
+    // Every claimant fires the full claim flow at once, each on its own connection, exactly as the claim route does.
+    const burst = await Promise.allSettled(users.map((_, index) => claim(index)));
     const won = burst.filter((result) => result.status === "fulfilled").length;
+    const outcomes: Record<string, number> = {};
     assert.ok(won <= 25, `never more than the cap (${won})`);
     assert.equal(await db.commerceRewardRedemption.count({ where: { offerId: offer.id } }), won);
     assert.equal((await db.brandRewardOffer.findUniqueOrThrow({ where: { id: offer.id } })).reservedClaimCount, won);
+    assert.ok(native.creates <= won, "a coupon is only ever created for a reservation");
     for (const [index, result] of burst.entries()) {
-      if (result.status === "fulfilled") continue;
+      if (result.status === "fulfilled") { outcomes.CLAIMED = (outcomes.CLAIMED ?? 0) + 1; continue; }
       assert.equal(await spends(users[index].id), 0, "a rejected claimant is never charged");
       assert.equal(await db.commerceRewardRedemption.count({ where: { userId: users[index].id } }), 0);
-      assert.match(String(result.reason?.code), result.reason instanceof RewardClaimError ? /^(SOLD_OUT|OFFER_CHANGED)$/ : /^P2034$/, "only a sell-out or an exhausted serialization conflict");
+      // What the claim route would answer: a labelled domain refusal or a retryable busy, never an unexplained 500.
+      assert.ok(result.reason instanceof RewardClaimError, `a labelled outcome, not ${String(result.reason?.code ?? result.reason)}`);
+      assert.match(result.reason.code, /^(SOLD_OUT|OFFER_CHANGED|REWARD_BUSY)$/);
+      const response = rewardErrorResponse(result.reason);
+      assert.equal(response.status, result.reason.code === "REWARD_BUSY" ? 503 : 409);
+      if (response.status === 503) assert.equal(response.headers.get("Retry-After"), "1");
+      outcomes[result.reason.code] = (outcomes[result.reason.code] ?? 0) + 1;
     }
-    // The UI retries a failed request with the SAME key; replaying every request settles to exactly 25 winners.
+    t.diagnostic(`first-attempt outcomes: ${JSON.stringify(outcomes)}`);
+    // The UI retries with the SAME key; replaying every request settles at exactly 25 issued coupons. The clock moves past
+    // the 30 s provisioning cooldown so a claim whose final write was busy is checked again (and found, never re-created).
+    clock += 60000;
     const replay = [];
-    for (const [index, row] of users.entries()) replay.push(await reserveCommerce7Claim(row.id, offer.id, key(index), [brand.id]).then((claim) => ({ index, claim }), (error) => ({ index, error })));
+    for (const index of users.keys()) replay.push(await claim(index).then((result) => ({ index, claim: result.claim }), (error) => ({ index, error })));
     const winners = replay.filter((entry) => "claim" in entry);
     assert.equal(winners.length, 25);
     for (const entry of replay) if ("error" in entry) assert.equal(entry.error.code, "SOLD_OUT");
-    for (const [index, result] of burst.entries()) if (result.status === "fulfilled") assert.equal((replay[index] as { claim: { id: string } }).claim.id, result.value.id, "a retried winner gets its original claim back");
-    assert.equal(await db.commerceRewardRedemption.count({ where: { offerId: offer.id } }), 25);
+    for (const [index, result] of burst.entries()) if (result.status === "fulfilled") assert.equal((replay[index] as { claim: { id: string } }).claim.id, result.value.claim.id, "a retried winner gets its original claim back");
+    const issued = await db.commerceRewardRedemption.findMany({ where: { offerId: offer.id }, select: { status: true, externalDiscountId: true, code: true } });
+    assert.equal(issued.length, 25);
+    assert.ok(issued.every((row) => row.status === "ISSUED"), "every reservation ends with its coupon issued");
+    assert.equal(new Set(issued.map((row) => row.externalDiscountId)).size, 25); assert.equal(new Set(issued.map((row) => row.code)).size, 25);
+    assert.equal(native.creates, 25, "exactly one native coupon per reservation, none for a retry or a loser");
     assert.equal((await db.brandRewardOffer.findUniqueOrThrow({ where: { id: offer.id } })).reservedClaimCount, 25);
     assert.equal(await db.pointTransaction.count({ where: { userId: { in: userIds }, type: "SPEND" } }), 25, "one debit per reservation, none for a retry");
     for (const entry of replay) assert.equal(await spends(users[entry.index].id), "claim" in entry ? 1 : 0);
@@ -436,7 +464,7 @@ test("real Postgres: a burst of 30 distinct claimants for a 25-claim bearer rewa
     const tabs = await Promise.allSettled(["browser-tab-one-key", "browser-tab-two-key"].map((tab) => reserveCommerce7Claim(twoTabs.id, limited.id, tab, [brand.id])));
     assert.equal(tabs.filter((result) => result.status === "fulfilled").length, 1);
     const tabError = (tabs.find((result) => result.status === "rejected") as PromiseRejectedResult).reason;
-    assert.match(String(tabError?.code), tabError instanceof RewardClaimError ? /^(USER_LIMIT|OFFER_CHANGED)$/ : /^P2034$/);
+    assert.ok(tabError instanceof RewardClaimError); assert.match(tabError.code, /^(USER_LIMIT|OFFER_CHANGED|REWARD_BUSY)$/);
     assert.equal(await db.commerceRewardRedemption.count({ where: { offerId: limited.id } }), 1); assert.equal(await spends(twoTabs.id), 1);
     await assert.rejects(reserveCommerce7Claim(twoTabs.id, limited.id, "browser-tab-three-key", [brand.id]), { code: "USER_LIMIT" });
 

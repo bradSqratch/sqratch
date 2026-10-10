@@ -95,6 +95,26 @@ test("late reward responses cannot cross experience/campaign context", async () 
   app.requests[0].resolve({ offers: [{ ...offer, title: "Old campaign offer" }], claims: [], points: 100 }); await settle();
   const tree = app.render(); assert.match(text(tree), /New campaign offer/); assert.doesNotMatch(text(tree), /Old campaign offer/);
 });
+test("a busy (503) claim shows the retry message, is not retried automatically, and the retry reuses the same key until it completes", async () => {
+  const app = harness("src/components/rewards/commerce7-rewards-client.tsx", "Commerce7RewardsClient"); app.render(); app.flush();
+  app.requests[0].resolve({ offers: [offer], claims: [], points: 500 }); await settle();
+  (button(app.render(), "Claim for").props.onClick as () => void)();
+  const key = JSON.parse(String(app.requests[1].init?.body)).idempotencyKey;
+  assert.equal(app.storage.get(`sqratch:c7-claim:${offer.id}`), key, "the key survives a reload while the request is unresolved");
+  // fetchJson surfaces the route's safe message for the REWARD_BUSY 503.
+  app.requests[1].reject(new Error("The reward is busy. Please try again.")); await settle();
+  const tree = app.render(); assert.match(text(tree), /The reward is busy\. Please try again\./); assert.doesNotMatch(text(tree), /P2034|Prisma|serializ/i);
+  app.advance(60000); await settle(); assert.equal(app.requests.length, 2, "no automatic retry");
+  assert.equal(button(tree, "Claim for").props.disabled, false);
+  for (const attempt of [2, 3]) {
+    (button(app.render(), "Claim for").props.onClick as () => void)();
+    assert.equal(JSON.parse(String(app.requests[attempt].init?.body)).idempotencyKey, key, "a retry never creates a second intended claim");
+    if (attempt === 2) { app.requests[2].reject(new Error("The reward is busy. Please try again.")); await settle(); }
+  }
+  app.requests[3].resolve({ id: "claim", offerId: offer.id, status: "ISSUED" }); await settle();
+  assert.equal(app.storage.get(`sqratch:c7-claim:${offer.id}`), undefined, "the key is released only once the claim completed");
+});
+
 test("a completed claim permits a later intentional claim with a new key; unavailable offers explain the limit", async () => {
   const app = harness("src/components/rewards/commerce7-rewards-client.tsx", "Commerce7RewardsClient"); app.render(); app.flush();
   app.requests[0].resolve({ offers: [offer], claims: [], points: 500 }); await settle();
@@ -610,6 +630,12 @@ test("a used coupon reads 'Coupon used' and never shows a reusable code; the Bra
   const brandCopy = text(brand.render());
   assert.match(brandCopy, /No imported Commerce7 order uses this coupon yet/); assert.match(brandCopy, /Custom Range/);
   assert.match(brandCopy, /coupon identity could not be confirmed/); assert.match(brandCopy, /Last checked/); assert.match(brandCopy, /Coupon used/);
+  // QA 04 in production: linked before the link cleared the reason, so the row still carries the old diagnostic. It is
+  // historical only: a linked claim shows its purchase, never a stale "not marked used" explanation.
+  const historical = await brandForm({ ...brandData, claims: [claim("qa04", "PURCHASE_CHECK:COUPON_IDENTITY_UNCONFIRMED", { status: "USED", canonicalOrderId: "order-1006", canRevoke: false })] });
+  const historicalCopy = text(historical.render());
+  assert.match(historicalCopy, /Coupon used/); assert.match(historicalCopy, /order-1006/);
+  assert.doesNotMatch(historicalCopy, /coupon identity could not be confirmed|Purchase check:/);
 });
 
 // ── I: status badges ──
