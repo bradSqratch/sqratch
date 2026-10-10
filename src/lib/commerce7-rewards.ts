@@ -19,12 +19,48 @@ const defaults: Commerce7RewardDeps = { db: prisma, client: (tenant) => new Comm
 const backendReady = (deps: Commerce7RewardDeps) => (deps.backendConfigured ?? (() => !!getCommerce7AppConfig()))();
 const multiTagVerified = (deps: Commerce7RewardDeps) => deps.multiTagAccessVerified ?? COMMERCE7_EXCLUSIVE_ACCESS_CONTRACT.multiTagAccessVerified;
 const SERIALIZABLE = { isolationLevel: Prisma.TransactionIsolationLevel.Serializable, timeout: 10000 };
-export async function rewardTransaction<T>(db: Db, work: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
-  for (let attempt = 0; ; attempt++) {
+/** Whole-transaction attempts, and the backoff between serialization conflicts (at most ~0.3 s of waiting in total). */
+export const REWARD_TRANSACTION_ATTEMPTS = 5;
+const REWARD_RETRY_BASE_MS = 20;
+const REWARD_RETRY_MAX_MS = 250;
+export const REWARD_BUSY_MESSAGE = "The reward is busy. Please try again.";
+export type RewardRetryTiming = { sleep: (ms: number) => Promise<void>; random: () => number };
+const realTiming: RewardRetryTiming = { sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)), random: Math.random };
+/** Exponential backoff with jitter in [cap/2, cap], so simultaneous losers do not collide again in lockstep. */
+export function rewardRetryDelayMs(retry: number, random: () => number) {
+  const cap = Math.min(REWARD_RETRY_MAX_MS, REWARD_RETRY_BASE_MS * 2 ** retry);
+  return Math.round(cap / 2 + random() * (cap / 2));
+}
+/**
+ * A Postgres serialization failure or deadlock (40001/40P01). Prisma reports it as P2034, or, when the conflict surfaces
+ * at COMMIT through the pg driver adapter, as a DriverAdapterError of kind TransactionWriteConflict (matched by shape; the
+ * adapter's utility package is not a direct dependency).
+ */
+function isSerializationConflict(error: unknown) {
+  if (error instanceof Prisma.PrismaClientKnownRequestError) return error.code === "P2034";
+  return error instanceof Error && error.name === "DriverAdapterError" && (error as { cause?: { kind?: unknown } }).cause?.kind === "TransactionWriteConflict";
+}
+/**
+ * Runs `work` as one SERIALIZABLE transaction and re-runs the WHOLE transaction when Postgres aborts it. Each attempt
+ * starts from scratch, so a ledger write is never replayed on its own. `work` holds only database calls (provider requests
+ * stay outside every reward transaction), so a retry never repeats a Commerce7 write. The wait happens after the rollback,
+ * never inside an open transaction.
+ *
+ * - A serialization conflict is transient contention: back off and retry. If it is still conflicting after the last
+ *   attempt, throw REWARD_BUSY (HTTP 503). Nothing was committed, so retrying the same request is safe.
+ * - P2002 (unique violation) means a concurrent request with the same idempotency key committed first. Re-running reads
+ *   its row, so it is retried immediately. It is never reported as busy: if it persists, the original error is rethrown.
+ * - Anything else is rethrown at once.
+ */
+export async function rewardTransaction<T>(db: Db, work: (tx: Prisma.TransactionClient) => Promise<T>, timing: RewardRetryTiming = realTiming): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
     try { return await db.$transaction(work, SERIALIZABLE); }
     catch (error) {
-      if (attempt < 3 && error instanceof Prisma.PrismaClientKnownRequestError && (error.code === "P2034" || error.code === "P2002")) continue;
-      throw error;
+      const more = attempt < REWARD_TRANSACTION_ATTEMPTS;
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002" && more) continue;
+      if (!isSerializationConflict(error)) throw error;
+      if (!more) throw new RewardClaimError("REWARD_BUSY", REWARD_BUSY_MESSAGE, 503);
+      await timing.sleep(rewardRetryDelayMs(attempt - 1, timing.random));
     }
   }
 }
