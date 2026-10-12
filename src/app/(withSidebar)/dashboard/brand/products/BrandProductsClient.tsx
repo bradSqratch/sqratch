@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Package, RefreshCw } from "lucide-react";
 import { BrandPageShell } from "@/components/brand/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
+import { brandProductLinks } from "@/lib/commerce/product-link-display";
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -48,6 +49,10 @@ type ProductRow = {
   images: string[];
   sku: string | null;
   status: string | null;
+  /** Commerce7 secures this product (login / Customer Tag). Never carries the tag ids. */
+  accessRestricted?: boolean;
+  /** Brand-Admin-only "Open in Commerce7" store preview; never a public or attribution destination. */
+  adminPreviewUrl?: string | null;
   isAvailable: boolean;
   lastSeenAt: string;
   unavailableSince: string | null;
@@ -809,6 +814,34 @@ export function BrandProductsClient() {
             {products.map((product) => {
               const draft = drafts[product.id] ?? draftFromSelection(product.selection);
               const state = rowState[product.id];
+              // Only a validated absolute HTTPS public URL is clickable. An empty
+              // productUrl (e.g. a Customer-Tag-restricted Commerce7 wine) would
+              // otherwise make the anchor reload SQRATCH itself.
+              const links = brandProductLinks(product);
+              const thumbnail = product.imageUrl ? (
+                <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-white/5">
+                  {/* PHASE 23 — PART 1: provider product images (e.g.
+                      Commerce7 wine bottle shots) legitimately vary in
+                      aspect ratio and are not guaranteed square.
+                      `object-contain` inside a fixed canvas shows the
+                      entire source image with no cropping/stretching,
+                      while every row keeps the same thumbnail
+                      footprint. Source-image whitespace is the
+                      provider/merchant's responsibility, not ours to
+                      trim. */}
+                  <Image
+                    src={product.imageUrl}
+                    alt={product.title}
+                    fill
+                    sizes="112px"
+                    className="object-contain p-2"
+                  />
+                </div>
+              ) : (
+                <div className="flex h-28 w-28 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white/35">
+                  <Package className="h-6 w-6" />
+                </div>
+              );
 
               return (
                 <div
@@ -816,48 +849,28 @@ export function BrandProductsClient() {
                   className="rounded-3xl border border-white/10 bg-black/20 p-5"
                 >
                   <div className="flex flex-col gap-4 lg:flex-row">
-                    <a
-                      href={product.productUrl}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="shrink-0"
-                    >
-                      {product.imageUrl ? (
-                        <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-white/5">
-                          {/* PHASE 23 — PART 1: provider product images (e.g.
-                              Commerce7 wine bottle shots) legitimately vary in
-                              aspect ratio and are not guaranteed square.
-                              `object-contain` inside a fixed canvas shows the
-                              entire source image with no cropping/stretching,
-                              while every row keeps the same thumbnail
-                              footprint. Source-image whitespace is the
-                              provider/merchant's responsibility, not ours to
-                              trim. */}
-                          <Image
-                            src={product.imageUrl}
-                            alt={product.title}
-                            fill
-                            sizes="112px"
-                            className="object-contain p-2"
-                          />
-                        </div>
-                      ) : (
-                        <div className="flex h-28 w-28 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white/35">
-                          <Package className="h-6 w-6" />
-                        </div>
-                      )}
-                    </a>
+                    {links.publicUrl ? (
+                      <a href={links.publicUrl} target="_blank" rel="noopener noreferrer" className="shrink-0">
+                        {thumbnail}
+                      </a>
+                    ) : (
+                      <div className="shrink-0">{thumbnail}</div>
+                    )}
 
                     <div className="min-w-0 flex-1 space-y-2">
                       <div className="flex flex-wrap items-center gap-3">
-                        <a
-                          href={product.productUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="text-lg font-semibold text-white hover:underline"
-                        >
-                          {product.title}
-                        </a>
+                        {links.publicUrl ? (
+                          <a
+                            href={links.publicUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-lg font-semibold text-white hover:underline"
+                          >
+                            {product.title}
+                          </a>
+                        ) : (
+                          <span className="text-lg font-semibold text-white">{product.title}</span>
+                        )}
                         <span
                           title="Active means this product was present and active in the latest successful product sync."
                           className={`rounded-full border px-3 py-1 text-xs ${
@@ -869,6 +882,25 @@ export function BrandProductsClient() {
                           {product.isAvailable ? "Active" : "Inactive"}
                         </span>
                       </div>
+                      {links.note ? (
+                        <p className="text-sm text-white/55">
+                          {links.note}
+                          {links.previewUrl ? (
+                            <>
+                              {" "}
+                              <a
+                                href={links.previewUrl}
+                                target="_blank"
+                                rel="noopener noreferrer nofollow"
+                                className="text-sky-300 underline underline-offset-2"
+                                title="Store preview for you as the merchant. Commerce7 still requires customers to log in with the right access."
+                              >
+                                Open in Commerce7
+                              </a>
+                            </>
+                          ) : null}
+                        </p>
+                      ) : null}
                       <p className="text-sm text-white/55">
                         SKU: {product.sku || "—"}
                       </p>

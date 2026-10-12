@@ -605,6 +605,21 @@ export function applyRefundDurabilityGuard(
 export const COMMERCE7_OVER_REFUND_NOTE = "OVER_REFUND_EXCESS";
 
 /**
+ * Event-identity version for a snapshot applied through `boundCommerce7OverRefund`. Before bounding existed, the same
+ * unchanged provider snapshot was rejected as CONTRADICTORY_FINANCIAL_SNAPSHOT and its event finalized FAILED. A FAILED
+ * event is reclaimable, so re-deriving that identity would rewrite the historical failure in place. Mixing this version
+ * into the backfill key and the webhook id gives the new interpretation its own deterministic identity: the old rows stay
+ * untouched, the repair lands beside them, and a replay of the bounded snapshot still deduplicates. Ordinary refund
+ * reconciliation keeps `refund-v2`, and ordinary orders keep their unversioned ids.
+ */
+export const COMMERCE7_OVER_REFUND_SEMANTICS_VERSION = "over-refund-v1";
+
+/** True only when this prepared snapshot was bounded at the sale (its refunds exceeded the order total). */
+export function isCommerce7OverRefundBounded(prepared: PrepareCommerce7OrderForIngestionResult): boolean {
+  return prepared.outcome === "READY" && prepared.refundReconciliationReason === "OVER_REFUND_BOUNDED";
+}
+
+/**
  * PURE. Commerce7 can report settled refunds that exceed the sale (live: #1007, CAD 162.72, with two full refund orders
  * #1008 and #1009, i.e. CAD 325.44 refunded), and its developers confirm this can be legitimate. Such a snapshot used to be
  * rejected outright (`CONTRADICTORY_FINANCIAL_SNAPSHOT`), so the original sale never reached Order Operations and the

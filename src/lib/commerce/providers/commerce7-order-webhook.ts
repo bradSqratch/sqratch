@@ -61,6 +61,8 @@ import { normalizeCommerce7Tenant } from "./commerce7";
 import { verifyCommerce7OrderWebhookAuth } from "./commerce7-order-webhook-auth";
 import type { Commerce7OrderNormalizationContext } from "./commerce7-order-normalizer";
 import {
+  COMMERCE7_OVER_REFUND_SEMANTICS_VERSION,
+  isCommerce7OverRefundBounded,
   prepareCommerce7OrderForIngestion,
   type PrepareCommerce7OrderForIngestionResult,
 } from "./commerce7-order-refund-reconciliation";
@@ -287,12 +289,20 @@ async function runCommerce7OrderWebhook(
     return new NextResponse(null, { status: 500 });
   }
 
+  // 4c. A snapshot bounded at the sale (over-refund) gets a versioned id. The
+  // pre-bounding code finalized this same body as FAILED, and a FAILED event is
+  // reclaimable: reusing the bare digest would rewrite that historical failure.
+  // Byte-identical redeliveries still derive the same id and deduplicate.
+  const eventId = isCommerce7OverRefundBounded(prepared)
+    ? `${providerEventId}:${COMMERCE7_OVER_REFUND_SEMANTICS_VERSION}`
+    : providerEventId;
+
   // 5. Ingest (idempotent). No `expandProductKeyCandidates` override —
   // Commerce7's catalog and order APIs both report the same UUID product-id
   // format, so the generic `providerProductKeyCandidates` default suffices.
   const outcome = await resolved.ingest(
     {
-      providerEventId,
+      providerEventId: eventId,
       topic: `commerce7:order:${action}`,
       payloadDigest,
       connectionId: connection.id,

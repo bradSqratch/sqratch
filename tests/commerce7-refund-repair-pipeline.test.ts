@@ -52,6 +52,9 @@ import {
   type OrderIngestionConnection,
 } from "../src/lib/commerce/order-ingestion";
 import { CommerceProviderApiError } from "../src/lib/commerce/errors";
+import { createHash } from "node:crypto";
+import * as backfillModule from "../src/lib/commerce/providers/commerce7-order-backfill";
+import { handleCommerce7OrderWebhook } from "../src/lib/commerce/providers/commerce7-order-webhook";
 
 // ---------------------------------------------------------------------------
 // The verified production chronology.
@@ -966,5 +969,120 @@ describe("ordinary multiple refunds #1010 are unchanged: 5537 + 2147 = 7684, one
     assert.equal(store.find(root.id)!.financialStatus, "PARTIALLY_REFUNDED"); assert.equal(store.find(root.id)!.totalRefundedMinor, BigInt(5537)); assert.equal(store.find(root.id)!.netRevenueMinor, BigInt(2147));
     await runBackfill(store, [root, r1011, r1012], { [root.id]: root, [r1011.id]: r1011, [r1012.id]: r1012 }, RANGE_1007);
     assert.equal(store.orders.size, 1); assert.equal(store.find(root.id)!.financialStatus, "REFUNDED"); assert.equal(store.find(root.id)!.totalRefundedMinor, BigInt(7684));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #1007 production repair. Live state: no canonical order; four FAILED webhook events (Oct 9) and one FAILED
+// `commerce7:order:backfill` event (Oct 10), all CONTRADICTORY_FINANCIAL_SNAPSHOT, recorded by the code that predated
+// over-refund bounding. A FAILED event is RECLAIMABLE, so re-deriving the same `refund-v2` identity would REWRITE that
+// historical row in place. The over-refund interpretation therefore gets its own deterministic identity: the history stays
+// untouched and the repair lands beside it.
+// ---------------------------------------------------------------------------
+
+/** The documented backfill key, derived independently of the production helper. */
+function backfillId(connectionId: string, externalOrderId: string, providerUpdatedAt: string, version: string | null) {
+  const key = version ? `${connectionId}:${externalOrderId}:${providerUpdatedAt}:${version}` : `${connectionId}:${externalOrderId}:${providerUpdatedAt}`;
+  return `backfill:${createHash("sha256").update(key, "utf8").digest("hex")}`;
+}
+
+describe("#1007 repair: historical FAILED refund-v2 events are left intact and the bounded interpretation is applied once", () => {
+  const LIVE_ROOT_ID = "cf8351cd-ff10-4d09-874a-02a34504b280";
+  const UPDATED = "2026-10-09T09:27:22.513Z";
+  const root = sale(LIVE_ROOT_ID, 1007, 16272, [{ id: "live-refund-1008", number: 1008 }, { id: "live-refund-1009", number: 1009 }], UPDATED);
+  const r1008 = refund("live-refund-1008", 1008, { id: LIVE_ROOT_ID, orderNumber: 1007 }, 16272, "refund-tender-1008", "2026-10-09T09:20:00.000Z");
+  const r1009 = refund("live-refund-1009", 1009, { id: LIVE_ROOT_ID, orderNumber: 1007 }, 16272, "refund-tender-1009", "2026-10-09T09:25:00.000Z");
+  const provider = { [root.id]: root, [r1008.id]: r1008, [r1009.id]: r1009 };
+  const historicalBackfillId = backfillId(CONNECTION_ID, LIVE_ROOT_ID, UPDATED, "refund-v2");
+
+  test("the live FAILED event id is exactly the refund-v2 derivation, and the over-refund identity differs from it", () => {
+    assert.equal(
+      backfillModule.backfillProviderEventId("cmt6rlm8s000004lau73kfc50", LIVE_ROOT_ID, UPDATED, COMMERCE7_REFUND_RECONCILIATION_SEMANTICS_VERSION),
+      "backfill:6a531bacb921a85c877a1ea788de566f8b95d712ce44113bde99994a80abb7dd",
+    );
+    assert.equal(COMMERCE7_REFUND_RECONCILIATION_SEMANTICS_VERSION, "refund-v2", "ordinary refund reconciliation keeps its version");
+    assert.notEqual(backfillModule.COMMERCE7_OVER_REFUND_SEMANTICS_VERSION, COMMERCE7_REFUND_RECONCILIATION_SEMANTICS_VERSION);
+    assert.notEqual(
+      backfillModule.backfillProviderEventId("cmt6rlm8s000004lau73kfc50", LIVE_ROOT_ID, UPDATED, backfillModule.COMMERCE7_OVER_REFUND_SEMANTICS_VERSION),
+      "backfill:6a531bacb921a85c877a1ea788de566f8b95d712ce44113bde99994a80abb7dd",
+    );
+  });
+
+  test("Custom Range: the FAILED refund-v2 row is never reclaimed or rewritten; #1007 is applied once under the over-refund identity", async () => {
+    const store = new FakeStore();
+    store.events.set(historicalBackfillId, "FAILED");
+    const result = await runBackfill(store, [root, r1008, r1009], provider, RANGE_1007);
+    assert.equal(result.status, "COMPLETED", "the range succeeds and can advance");
+    assert.equal(store.events.get(historicalBackfillId), "FAILED", "historical failure preserved");
+    assert.ok(!store.claimedEventIds.includes(historicalBackfillId), "the old identity is never even claimed");
+    const repairId = backfillId(CONNECTION_ID, LIVE_ROOT_ID, UPDATED, backfillModule.COMMERCE7_OVER_REFUND_SEMANTICS_VERSION);
+    assert.deepEqual(store.claimedEventIds, [repairId]);
+    assert.equal(store.orders.size, 1, "one canonical #1007; #1008/#1009 never become orders");
+    const order = store.find(LIVE_ROOT_ID)!;
+    assert.equal(order.orderNumber, "1007"); assert.equal(order.totalMinor, BigInt(16272)); assert.equal(order.totalRefundedMinor, BigInt(16272));
+    assert.equal(order.netRevenueMinor, BigInt(0)); assert.equal(order.financialStatus, "REFUNDED");
+    assert.deepEqual(store.linesFor(order.id).map((line) => line.sku).sort(), ["2016R", "RARE15"]);
+    assert.deepEqual(store.finalizedEvents, [{ eventId: repairId, status: "PROCESSED", failureSummary: "OVER_REFUND_EXCESS:16272", orderId: order.id }]);
+  });
+
+  test("a second Custom Range replay deduplicates: same identity, no new applied event, still one order", async () => {
+    const store = new FakeStore();
+    store.events.set(historicalBackfillId, "FAILED");
+    await runBackfill(store, [root, r1008, r1009], provider, RANGE_1007);
+    const finalized = store.finalizedEvents.length;
+    const again = await runBackfill(store, [root, r1008, r1009], provider, RANGE_1007);
+    assert.equal(again.status, "COMPLETED"); assert.equal(again.outcomes[0].status, "ALREADY_PROCESSED");
+    assert.equal(store.finalizedEvents.length, finalized, "nothing re-applied or re-finalized");
+    assert.equal(store.orders.size, 1); assert.equal(store.events.get(historicalBackfillId), "FAILED");
+  });
+
+  test("ordinary refunds keep their refund-v2 identity (#1010 full, and a regular order keeps the unversioned id)", async () => {
+    const store = new FakeStore();
+    const sale1010 = sale("fixture-root-1010", 1010, 7684, [{ id: "fixture-refund-1011", number: 1011 }, { id: "fixture-refund-1012", number: 1012 }], "2026-10-09T18:00:00.000Z");
+    const r1011 = refund("fixture-refund-1011", 1011, { id: sale1010.id, orderNumber: 1010 }, 5537, "refund-tender-1011", "2026-10-09T17:00:00.000Z");
+    const r1012 = refund("fixture-refund-1012", 1012, { id: sale1010.id, orderNumber: 1010 }, 2147, "refund-tender-1012", "2026-10-09T17:30:00.000Z");
+    const paid = sale("fixture-root-1013", 1013, 5000, [], "2026-10-09T19:00:00.000Z");
+    await runBackfill(store, [sale1010, r1011, r1012, paid], { [sale1010.id]: sale1010, [r1011.id]: r1011, [r1012.id]: r1012, [paid.id]: paid }, RANGE_1007);
+    assert.deepEqual(store.claimedEventIds, [
+      backfillId(CONNECTION_ID, sale1010.id, "2026-10-09T18:00:00.000Z", "refund-v2"),
+      backfillId(CONNECTION_ID, paid.id, "2026-10-09T19:00:00.000Z", null),
+    ]);
+    assert.equal(store.find(sale1010.id)!.totalRefundedMinor, BigInt(7684)); assert.ok(store.finalizedEvents.every((event) => !event.failureSummary));
+  });
+
+  test("webhook: a re-sent Update for #1007 is applied bounded under its own identity; the old FAILED webhook row is untouched; an identical redelivery deduplicates", async () => {
+    const saved = { user: process.env.COMMERCE7_ORDER_WEBHOOK_USERNAME, pass: process.env.COMMERCE7_ORDER_WEBHOOK_PASSWORD };
+    process.env.COMMERCE7_ORDER_WEBHOOK_USERNAME = "hookuser"; process.env.COMMERCE7_ORDER_WEBHOOK_PASSWORD = "hookpass";
+    try {
+      const store = new FakeStore();
+      const body = JSON.stringify({ object: "Order", action: "Update", tenantId: TENANT, payload: root });
+      const oldDigestId = `digest:${createHash("sha256").update(body, "utf8").digest("hex")}`;
+      store.events.set(oldDigestId, "FAILED");
+      const deliver = () => handleCommerce7OrderWebhook(
+        new Request("https://sqratch.example/api/commerce7/webhooks/orders", { method: "POST", headers: { "content-type": "application/json", authorization: `Basic ${Buffer.from("hookuser:hookpass").toString("base64")}` }, body }) as never,
+        {
+          findConnectionByTenant: async () => ({ id: CONNECTION_ID, brandId: BRAND_ID, currencyCode: "CAD", status: "CONNECTED" }),
+          prepareOrder: (raw, context, tenant) => prepareCommerce7OrderForIngestion(raw, context, tenant, {
+            fetchOrder: async ({ externalOrderId }) => provider[externalOrderId],
+            loadStoredFinancialState: async ({ externalOrderId }) => { const row = store.find(externalOrderId); return row ? { totalRefundedMinor: row.totalRefundedMinor, financialStatus: row.financialStatus } : null; },
+          }),
+          ingest: ingestNormalizedOrder,
+          ingestionDeps: { claimEvent: async (input) => store.claim(input.providerEventId), loadConnection: async () => CONNECTION, runTransaction: async (fn) => fn(store.tx()), finalizeEvent: (eventId, data) => store.finalizeEvent(eventId, data) },
+        },
+      );
+      assert.equal((await deliver()).status, 200);
+      assert.equal(store.events.get(oldDigestId), "FAILED", "the historical webhook failure is preserved");
+      assert.ok(!store.claimedEventIds.includes(oldDigestId));
+      const order = store.find(LIVE_ROOT_ID)!;
+      assert.equal(order.totalRefundedMinor, BigInt(16272)); assert.equal(order.netRevenueMinor, BigInt(0)); assert.equal(order.financialStatus, "REFUNDED");
+      assert.equal(store.finalizedEvents.length, 1); assert.equal(store.finalizedEvents[0].failureSummary, "OVER_REFUND_EXCESS:16272");
+      assert.equal((await deliver()).status, 200);
+      assert.equal(store.finalizedEvents.length, 1, "an identical redelivery is a duplicate, not a second application");
+      assert.equal(store.orders.size, 1);
+    } finally {
+      for (const [key, value] of [["COMMERCE7_ORDER_WEBHOOK_USERNAME", saved.user], ["COMMERCE7_ORDER_WEBHOOK_PASSWORD", saved.pass]] as const) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+    }
   });
 });

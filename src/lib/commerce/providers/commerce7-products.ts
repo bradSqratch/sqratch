@@ -257,6 +257,38 @@ export type Commerce7StorefrontConfig = {
   productRoute: string | null;
 };
 
+/** True when the synced Commerce7 security limits who may buy the product (anything but "Public"). Reads only `availableTo`. */
+export function isCommerce7AccessRestricted(productMetadata: unknown): boolean {
+  if (!productMetadata || typeof productMetadata !== "object" || Array.isArray(productMetadata)) return false;
+  const security = (productMetadata as Record<string, unknown>).security;
+  if (!security || typeof security !== "object" || Array.isArray(security)) return false;
+  const availableTo = readTrimmed((security as Record<string, unknown>).availableTo);
+  return availableTo !== null && availableTo !== "Public";
+}
+
+/**
+ * Brand-Admin-only "Open in Commerce7" link for an available product that Commerce7 secures (e.g. a Customer-Tag wine),
+ * which therefore has no public `productUrl`. Built exactly like a public destination: the merchant-confirmed storefront
+ * origin and product route, re-validated, plus the product's own slug, pinned to that origin. Verified on the sandbox
+ * storefront: an anonymous visitor sees "only available for select customers. Please log in to purchase" with no price
+ * or Add to Cart, so the store's own login and Customer Tag rules still decide access. It is a preview for the merchant,
+ * never persisted, and never a public, campaign or attribution destination; `null` whenever any input fails.
+ */
+export function buildCommerce7AdminPreviewUrl(input: {
+  isAvailable: boolean;
+  productUrl: string;
+  slug: string | null;
+  productMetadata: unknown;
+  storefront: Commerce7StorefrontConfig | null;
+}): string | null {
+  if (!input.isAvailable || input.productUrl || !input.slug || !input.storefront) return null;
+  if (!isCommerce7AccessRestricted(input.productMetadata)) return null;
+  const storefront = validateCommerce7StorefrontUrl(input.storefront.storefrontUrl ?? "");
+  const route = validateCommerce7ProductRoute(input.storefront.productRoute ?? "");
+  if (!storefront.ok || !route.ok) return null;
+  return buildCommerce7ProductDestinationUrl(storefront.value, route.value, input.slug);
+}
+
 /**
  * PHASE 16 BIG ROUND / SUBPHASE 2 — computes a Commerce7 product's public
  * destination from MERCHANT-CONFIRMED config (never provider-supplied, never
