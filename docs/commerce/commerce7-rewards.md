@@ -457,7 +457,21 @@ When the settled refund documents linked to a sale add up to more than the sale 
 
 * Corrected later (a newer provider version whose refunds fit): that event carries no note, so the warning clears.
 * Known limitation (P3, pinned by tests): a provider correction that keeps the same version is skipped as stale, so the warning remains until Commerce7 sends a newer version. At an equal version, a delivery without the over-refund cannot be told apart from a delayed older one, and the bounded figures are identical. Clearing on it would let a stale webhook erase a true warning, so this is deliberately not changed. An older delivery can never clear the warning or overwrite the order.
-* After deployment, the earlier FAILED events for #1007 stay as history. The next Update webhook, or a Custom Range covering the order, imports it.
+* **Reprocessing #1007 (2026-10-12).** Production holds no canonical #1007. It has four FAILED webhook events (Oct 9) and one FAILED `commerce7:order:backfill` event (Oct 10, `backfill:6a531bac…`, the `refund-v2` key), all CONTRADICTORY_FINANCIAL_SNAPSHOT from the code before bounding.
+  * The problem: a FAILED event is reclaimable, not a duplicate. Re-deriving the same `refund-v2` identity would rewrite that historical row in place.
+  * The fix: a bounded snapshot now gets its own deterministic identity, `COMMERCE7_OVER_REFUND_SEMANTICS_VERSION = "over-refund-v1"`. The backfill key becomes `connectionId:externalOrderId:providerUpdatedAt:over-refund-v1`, and the webhook id becomes `digest:<sha256>:over-refund-v1`.
+  * The result: the old rows are never claimed or changed, the repair lands beside them as one PROCESSED event with `OVER_REFUND_EXCESS:16272`, and replays deduplicate.
+  * Ordinary refund reconciliation keeps `refund-v2`, and ordinary orders keep their unversioned ids. No provider timestamp or refund data is altered.
+  * To repair production: run a Custom Range covering 2026-10-09 (or wait for the next Update webhook for #1007).
+  * Commerce7 diagnostics still list the Oct 9 failure as the latest failed webhook event until a newer failure occurs; that is accurate history.
+
+### Restricted products on Brand Products (2026-10-12)
+Product sync leaves `productUrl` empty for anything Commerce7 secures, for example "Rare - 2015 Chardonnay" (`availableTo: Tag`, "Display Product / Show Login", three Customer Tags). This stays exactly as it is: restricted inventory never gets a public URL.
+* The Brand Products page used to render `<a href="">` for such a row, which reloaded SQRATCH. Now only a validated absolute HTTPS URL is clickable (`src/lib/commerce/product-link-display.ts`). Otherwise the title and image are plain, with "Restricted in Commerce7 — no public product link."
+* For an available, restricted Commerce7 product, the Brand-Admin-only API adds `adminPreviewUrl`: the store's own product page, built from the merchant-confirmed `storefrontUrl` and `productRoute` (re-validated, origin-pinned) plus the product slug. It is labelled "Open in Commerce7".
+  * Verified on the sandbox storefront: an anonymous visitor sees "only available for select customers. Please log in to purchase", with no price and no Add to Cart. A public product shows its price and Add to Cart.
+  * The preview is never persisted, never a public, campaign or attribution destination, and the API exposes only a boolean `accessRestricted` (no Customer Tag ids or metadata).
+* Not verified here: the signed-in behaviour for tagged and untagged customer accounts (operator QA).
 
 ### Capacity and concurrency (Test 6)
 On a disposable Postgres, 30 distinct users run the full claim flow (reserve, then issue through a synthetic Commerce7 tenant) for a 25-claim bearer reward at the same moment. Every outcome is safe: never more than 25 reservations, the counter always equals the reservations, and a rejected claimant has no claim and no debit. Replaying every request with its original key settles at exactly 25 claims, 25 debits and 25 native coupons. The other five, and a later 26th claimant, receive SOLD_OUT with no charge. The suite also covers: two tabs (different keys) racing a per-user limit of 1; double clicks and a late lost-response retry on a per-user limit of 3; and the bearer coupon payload (Everyone, Per Store, usage limit 1, no customer or tag).
