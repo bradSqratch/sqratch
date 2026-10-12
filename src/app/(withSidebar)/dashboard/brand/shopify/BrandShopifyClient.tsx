@@ -8,6 +8,7 @@ import { fetchJson, getErrorMessage } from "@/components/experience/client-utils
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { safeExternalProductUrl } from "@/lib/commerce/product-link-display";
 
 type BrandProfileResponse = {
   id: string;
@@ -534,14 +535,18 @@ export function BrandShopifyClient({
                 <p className="mt-2 text-xs text-white/45">
                   {product.variantIds.length} variants
                 </p>
-                <a
-                  href={product.productUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="mt-4 inline-flex text-sm text-sky-300 underline"
-                >
-                  Open product
-                </a>
+                {safeExternalProductUrl(product.productUrl) ? (
+                  <a
+                    href={safeExternalProductUrl(product.productUrl) ?? undefined}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="mt-4 inline-flex text-sm text-sky-300 underline"
+                  >
+                    Open product
+                  </a>
+                ) : (
+                  <p className="mt-4 text-sm text-white/45">No public product link.</p>
+                )}
               </div>
             ))}
           </div>

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import type { Prisma } from "@prisma/client";
+import type { CommerceProvider, Prisma } from "@prisma/client";
 import {
   getBrandContextFailure,
   getBrandManagementContext,
@@ -20,6 +20,8 @@ import {
   normalizeAvailabilityFilter,
   normalizeSelectionFilter,
 } from "@/lib/commerce/product-catalog-api";
+import { extractProductRouteFromProviderMetadata } from "@/lib/commerce/connection-resolver";
+import { buildCommerce7AdminPreviewUrl, isCommerce7AccessRestricted } from "@/lib/commerce/providers/commerce7-products";
 
 /**
  * `GET /api/brand/products` — the persisted catalog (`ConnectedCommerceProduct`)
@@ -53,6 +55,9 @@ export type BrandProductRow = {
   priceMaxMinor: number | null;
   priceMinorUnitExponent: number | null;
   providerMetadata: Prisma.JsonValue | null;
+  /** Server-only inputs for the Commerce7 access flag and admin preview link; never serialized. */
+  provider?: CommerceProvider;
+  connection?: { storefrontUrl: string | null; providerMetadata: Prisma.JsonValue | null } | null;
   brandSelections: Array<{
     isVisibleInShop: boolean;
     isCampaignEligible: boolean;
@@ -130,6 +135,8 @@ async function defaultFindProducts(args: FindProductsArgs): Promise<BrandProduct
       priceMaxMinor: true,
       priceMinorUnitExponent: true,
       providerMetadata: true,
+      provider: true,
+      connection: { select: { storefrontUrl: true, providerMetadata: true } },
       brandSelections: {
         where: { brandId: args.brandId },
         take: 1,
@@ -168,10 +175,23 @@ const DEFAULT_DEPS: BrandProductsListDeps = {
  * Maps a persisted row to the wire shape. ONLY the fields listed in the
  * type below are ever included — `providerMetadata` (raw JSON) is consumed
  * ONLY to extract the whitelisted `status` string via `extractProviderStatus`
- * and is never itself serialized.
+ * and the boolean `accessRestricted`, and is never itself serialized (no
+ * Customer Tag id ever leaves the server). The connection's storefront
+ * config is read only to build `adminPreviewUrl`.
  */
 function serializeProduct(row: BrandProductRow) {
   const selection = row.brandSelections[0] ?? null;
+  const commerce7 = row.provider === "COMMERCE7";
+  const accessRestricted = commerce7 && isCommerce7AccessRestricted(row.providerMetadata);
+  const adminPreviewUrl = commerce7 && row.connection
+    ? buildCommerce7AdminPreviewUrl({
+        isAvailable: row.isAvailable,
+        productUrl: row.productUrl,
+        slug: row.handle,
+        productMetadata: row.providerMetadata,
+        storefront: { storefrontUrl: row.connection.storefrontUrl, productRoute: extractProductRouteFromProviderMetadata(row.connection.providerMetadata) },
+      })
+    : null;
 
   return {
     id: row.id,
@@ -183,6 +203,8 @@ function serializeProduct(row: BrandProductRow) {
     images: row.images,
     sku: row.sku,
     status: extractProviderStatus(row.providerMetadata),
+    accessRestricted,
+    adminPreviewUrl,
     isAvailable: row.isAvailable,
     lastSeenAt: row.lastSeenAt,
     unavailableSince: row.unavailableSince,
