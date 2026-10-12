@@ -263,3 +263,73 @@ test(
     }
   },
 );
+
+test(
+  "real Postgres — #1007: a Custom Range applies the bounded over-refund once beside the historical FAILED refund-v2 event, which stays byte-identical; a replay deduplicates",
+  { skip: !ENABLED && SKIP_REASON },
+  async () => {
+    const { default: prisma } = await import("../src/lib/prisma");
+    const { runCustomRangeStep } = await import("../src/lib/commerce/providers/commerce7-order-reconciliation");
+    const { backfillCommerce7Orders, backfillProviderEventId, COMMERCE7_OVER_REFUND_SEMANTICS_VERSION, COMMERCE7_REFUND_RECONCILIATION_SEMANTICS_VERSION } = await import("../src/lib/commerce/providers/commerce7-order-backfill");
+    const { prepareCommerce7OrderForIngestion } = await import("../src/lib/commerce/providers/commerce7-order-refund-reconciliation");
+    const { brand, connection } = await makeBrandAndConnection(prisma);
+    await prisma.commerceConnection.update({ where: { id: connection.id }, data: { providerMetadata: { currencyCode: "CAD" } } });
+    // Synthetic provider documents with the live #1007 shape (no customer data).
+    const ROOT = "cf8351cd-ff10-4d09-874a-02a34504b280"; const UPDATED = "2026-10-09T09:27:22.513Z";
+    const refundDoc = (id: string, number: number, at: string) => ({
+      id, orderNumber: number, purchaseType: "Refund", previousOrderId: ROOT, previousOrderNumber: 1007, paymentStatus: "Paid", subTotal: -16272, taxTotal: 0, total: -16272, createdAt: at, updatedAt: at,
+      tenders: [{ id: `tender-${number}`, chargeType: "Refund", chargeStatus: "Success", amountTendered: -16272 }],
+      items: [{ id: `${id}-line`, productId: "prod-rare", productTitle: "Rare - 2015 Chardonnay", sku: "RARE15", quantity: -1, price: 16272, tax: 0 }],
+    });
+    const root = {
+      id: ROOT, orderNumber: 1007, channel: "Web", purchaseType: "Regular", paymentStatus: "Paid", fulfillmentStatus: "Fulfilled",
+      createdAt: "2026-10-09T09:00:00.000Z", updatedAt: UPDATED, subTotal: 16272, taxTotal: 0, shipTotal: 0, total: 16272, previousOrderId: null,
+      linkedOrders: [{ orderId: "refund-1008", orderNumber: 1008, purchaseType: "Refund" }, { orderId: "refund-1009", orderNumber: 1009, purchaseType: "Refund" }],
+      tenders: [{ id: "sale-tender", chargeType: "Sale", chargeStatus: "Success", amountTendered: 16272 }],
+      items: [
+        { id: "line-a", productId: "prod-rare", productTitle: "Rare - 2015 Chardonnay", sku: "RARE15", quantity: 1, price: 8136, tax: 0 },
+        { id: "line-b", productId: "prod-rose", productTitle: "Sample - 2016 Rose", sku: "2016R", quantity: 1, price: 8136, tax: 0 },
+      ],
+    };
+    const provider: Record<string, unknown> = { [ROOT]: root, "refund-1008": refundDoc("refund-1008", 1008, "2026-10-09T09:20:00.000Z"), "refund-1009": refundDoc("refund-1009", 1009, "2026-10-09T09:25:00.000Z") };
+    const historicalId = backfillProviderEventId(connection.id, ROOT, UPDATED, COMMERCE7_REFUND_RECONCILIATION_SEMANTICS_VERSION);
+    const repairId = backfillProviderEventId(connection.id, ROOT, UPDATED, COMMERCE7_OVER_REFUND_SEMANTICS_VERSION);
+    const backfill = (input: Parameters<typeof backfillCommerce7Orders>[0]) => backfillCommerce7Orders(input, {
+      fetchOrders: async () => ({ orders: [root, provider["refund-1008"], provider["refund-1009"]] as never, total: 3 }),
+      prepareOrder: (raw, context, tenant) => prepareCommerce7OrderForIngestion(raw, context, tenant, { fetchOrder: async ({ externalOrderId }) => provider[externalOrderId] as never }),
+    });
+    try {
+      const historical = await prisma.commerceOrderEvent.create({ data: {
+        provider: CommerceProvider.COMMERCE7, providerEventId: historicalId, topic: "commerce7:order:backfill", payloadDigest: "historical-digest",
+        connectionId: connection.id, brandId: brand.id, externalOrderRef: ROOT, providerUpdatedAt: new Date(UPDATED),
+        status: "FAILED", failureSummary: "CONTRADICTORY_FINANCIAL_SNAPSHOT", receivedAt: new Date("2026-10-10T04:40:28.037Z"), processedAt: new Date("2026-10-10T04:40:28.037Z"),
+      } });
+      const range = { brandId: brand.id, connectionId: connection.id, from: new Date("2026-10-06T00:00:00.000Z"), to: new Date("2026-10-10T00:00:00.000Z") };
+      const first = await runCustomRangeStep(range, { fetchOrders: backfill as never });
+      assert.equal(first.status, "PROGRESS", first.error ?? "");
+      assert.deepEqual(await prisma.commerceOrderEvent.findUniqueOrThrow({ where: { id: historical.id } }), historical, "the historical FAILED event is never reclaimed or rewritten");
+      const orders = await prisma.commerceOrder.findMany({ where: { connectionId: connection.id }, include: { lineItems: true } });
+      assert.equal(orders.length, 1, "one canonical #1007; the refund documents never become orders");
+      const [order] = orders;
+      assert.equal(order.orderNumber, "1007"); assert.equal(order.totalMinor, BigInt(16272)); assert.equal(order.totalRefundedMinor, BigInt(16272));
+      assert.equal(order.netRevenueMinor, BigInt(0)); assert.equal(order.financialStatus, "REFUNDED");
+      assert.deepEqual(order.lineItems.map((line) => line.sku).sort(), ["2016R", "RARE15"]);
+      const repair = await prisma.commerceOrderEvent.findUniqueOrThrow({ where: { provider_providerEventId: { provider: CommerceProvider.COMMERCE7, providerEventId: repairId } } });
+      assert.equal(repair.status, "PROCESSED"); assert.equal(repair.failureSummary, "OVER_REFUND_EXCESS:16272"); assert.equal(repair.orderId, order.id);
+      const state = await prisma.commerceOrderReconciliationState.findUniqueOrThrow({ where: { connectionId: connection.id } });
+      assert.equal(state.lastRunOutcome, "SUCCEEDED");
+
+      // A second run of the same range (fresh sequence) deduplicates: no new event, no new order, history intact.
+      const eventsBefore = await prisma.commerceOrderEvent.count({ where: { connectionId: connection.id } });
+      const again = await runCustomRangeStep({ ...range, from: new Date("2026-10-05T00:00:00.000Z") }, { fetchOrders: backfill as never });
+      assert.equal(again.status, "PROGRESS", again.error ?? "");
+      assert.equal(await prisma.commerceOrderEvent.count({ where: { connectionId: connection.id } }), eventsBefore);
+      assert.equal(await prisma.commerceOrder.count({ where: { connectionId: connection.id } }), 1);
+      assert.deepEqual(await prisma.commerceOrderEvent.findUniqueOrThrow({ where: { id: repair.id } }), repair);
+      assert.deepEqual(await prisma.commerceOrderEvent.findUniqueOrThrow({ where: { id: historical.id } }), historical);
+    } finally {
+      await prisma.commerceOrderLineItem.deleteMany({ where: { order: { connectionId: connection.id } } });
+      await cleanup(prisma, brand.id, connection.id);
+    }
+  },
+);

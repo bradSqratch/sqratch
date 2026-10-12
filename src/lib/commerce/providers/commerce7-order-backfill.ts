@@ -56,6 +56,8 @@ import {
   type Commerce7Fetch,
 } from "./commerce7-orders";
 import {
+  COMMERCE7_OVER_REFUND_SEMANTICS_VERSION,
+  isCommerce7OverRefundBounded,
   prepareCommerce7OrderForIngestion,
   type PrepareCommerce7OrderForIngestionResult,
 } from "./commerce7-order-refund-reconciliation";
@@ -168,6 +170,7 @@ const DEFAULT_DEPS: Commerce7OrderBackfillDeps = {
  * way that should re-open already-terminal events for the same snapshot.
  */
 export const COMMERCE7_REFUND_RECONCILIATION_SEMANTICS_VERSION = "refund-v2";
+export { COMMERCE7_OVER_REFUND_SEMANTICS_VERSION };
 
 /**
  * Deterministic backfill dedup key — see file header.
@@ -180,7 +183,7 @@ export const COMMERCE7_REFUND_RECONCILIATION_SEMANTICS_VERSION = "refund-v2";
  * against the same unchanged snapshot still derives the same id and still
  * deduplicates.
  */
-function backfillProviderEventId(
+export function backfillProviderEventId(
   connectionId: string,
   externalOrderId: string,
   providerUpdatedAt: string,
@@ -311,9 +314,16 @@ export async function backfillCommerce7Orders(
       // previously-terminal event recorded under the OLD interpretation
       // cannot block the repair. Every ordinary order keeps its exact
       // pre-Phase-27 id and deduplicates exactly as before.
-      prepared.refundReconciliationOutcome === "RECONCILED"
-        ? COMMERCE7_REFUND_RECONCILIATION_SEMANTICS_VERSION
-        : null,
+      //
+      // A snapshot bounded at the sale (over-refund, e.g. #1007) gets its own
+      // version instead: the old interpretation recorded it as FAILED, and a
+      // FAILED event is reclaimable, so reusing that identity would rewrite
+      // the historical failure. See COMMERCE7_OVER_REFUND_SEMANTICS_VERSION.
+      isCommerce7OverRefundBounded(prepared)
+        ? COMMERCE7_OVER_REFUND_SEMANTICS_VERSION
+        : prepared.refundReconciliationOutcome === "RECONCILED"
+          ? COMMERCE7_REFUND_RECONCILIATION_SEMANTICS_VERSION
+          : null,
     );
     const payloadDigest = crypto
       .createHash("sha256")
