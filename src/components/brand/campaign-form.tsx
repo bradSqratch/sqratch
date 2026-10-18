@@ -132,7 +132,7 @@ export function BrandCampaignForm({
         <Button
           asChild
           variant="outline"
-          className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+          className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
         >
           <Link href="/dashboard/brand/campaigns">Back to campaigns</Link>
         </Button>
@@ -140,12 +140,12 @@ export function BrandCampaignForm({
     >
       <PageCard>
         {loading ? (
-          <p className="text-sm text-white/65">Loading campaign...</p>
+          <p className="text-sm text-copy-65">Loading campaign...</p>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="grid gap-5 lg:grid-cols-2">
               <div className="space-y-2">
-                <label className="text-sm text-white/70">Name</label>
+                <label className="text-sm text-copy-70">Name</label>
                 <Input
                   value={form.name}
                   onChange={(event) => {
@@ -156,11 +156,11 @@ export function BrandCampaignForm({
                       slug: slugTouched ? current.slug : slugifyValue(name),
                     }));
                   }}
-                  className="border-white/10 bg-black/20 text-white"
+                  className="border-edge/10 bg-inset/20 text-ink"
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-sm text-white/70">Slug</label>
+                <label className="text-sm text-copy-70">Slug</label>
                 <Input
                   value={form.slug}
                   onChange={(event) => {
@@ -170,13 +170,13 @@ export function BrandCampaignForm({
                       slug: slugifyValue(event.target.value),
                     }));
                   }}
-                  className="border-white/10 bg-black/20 text-white"
+                  className="border-edge/10 bg-inset/20 text-ink"
                 />
               </div>
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm text-white/70">Description</label>
+              <label className="text-sm text-copy-70">Description</label>
               <Textarea
                 value={form.description}
                 onChange={(event) =>
@@ -185,11 +185,11 @@ export function BrandCampaignForm({
                     description: event.target.value,
                   }))
                 }
-                className="min-h-[150px] border-white/10 bg-black/20 text-white"
+                className="min-h-[150px] border-edge/10 bg-inset/20 text-ink"
               />
             </div>
 
-            <label className="flex items-center gap-3 text-sm text-white/70">
+            <label className="flex items-center gap-3 text-sm text-copy-70">
               <input
                 type="checkbox"
                 checked={form.isActive}
@@ -204,18 +204,18 @@ export function BrandCampaignForm({
             </label>
 
             {mode === "edit" && (
-              <div className="space-y-3 rounded-xl border border-white/10 bg-black/20 p-4">
+              <div className="space-y-3 rounded-xl border border-edge/10 bg-inset/20 p-4">
                 <span>
-                  <span className="block font-medium text-white">
+                  <span className="block font-medium text-ink">
                     Campaign product catalog
                   </span>
-                  <span className="mt-1 block text-white/55">
+                  <span className="mt-1 block text-copy-55">
                     Creators can attach only this campaign&rsquo;s active,
                     eligible products. An empty assignment list intentionally
                     shows no products.
                   </span>
                 </span>
-                <Button asChild type="button" variant="outline" className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10">
+                <Button asChild type="button" variant="outline" className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10">
                   <Link href={`/dashboard/brand/campaigns/${campaignId}/products`}>
                     Manage campaign products
                   </Link>
@@ -223,7 +223,7 @@ export function BrandCampaignForm({
               </div>
             )}
 
-            {error && <p className="text-sm text-red-300">{error}</p>}
+            {error && <p className="text-sm text-red-700 dark:text-red-300">{error}</p>}
 
             <Button
               type="submit"
@@ -232,7 +232,7 @@ export function BrandCampaignForm({
                 !form.name.trim() ||
                 !form.slug.trim()
               }
-              className="rounded-full border border-white bg-white text-black"
+              className="rounded-full border border-edge bg-primary text-primary-foreground"
             >
               {saving ? (
                 <span className="flex items-center gap-2">

@@ -94,17 +94,17 @@ export default function ShopifyInstallPage() {
         ) : (
           <div className="space-y-5">
             <div>
-              <p className="text-sm text-white/55">Shopify store</p>
+              <p className="text-sm text-copy-55">Shopify store</p>
               <p className="mt-1 text-lg font-semibold">{data?.shop}</p>
             </div>
 
             {data?.brands.length ? (
               <div className="space-y-2">
-                <label className="text-sm text-white/70">Brand</label>
+                <label className="text-sm text-copy-70">Brand</label>
                 <select
                   value={selectedBrandId}
                   onChange={(event) => setSelectedBrandId(event.target.value)}
-                  className="flex h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+                  className="flex h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
                 >
                   {data.brands.map((brand) => (
                     <option key={brand.id} value={brand.id}>
@@ -115,10 +115,10 @@ export default function ShopifyInstallPage() {
               </div>
             ) : null}
 
-            {error ? <p className="text-sm text-red-300">{error}</p> : null}
+            {error ? <p className="text-sm text-red-700 dark:text-red-300">{error}</p> : null}
 
             {!data?.brands.length ? (
-              <p className="text-sm text-white/65">
+              <p className="text-sm text-copy-65">
                 No eligible brand was found for your account. Brand access is
                 granted through the SQRATCH approval workflow — contact your
                 SQRATCH administrator before connecting this Shopify store.
@@ -128,7 +128,7 @@ export default function ShopifyInstallPage() {
                 type="button"
                 onClick={() => void linkInstall()}
                 disabled={saving || !selectedBrandId}
-                className="rounded-full border border-white bg-white text-black"
+                className="rounded-full border border-edge bg-primary text-primary-foreground"
               >
                 {saving ? "Connecting..." : "Connect Shopify"}
               </Button>

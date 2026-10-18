@@ -420,14 +420,15 @@ describe("static source assertions", () => {
     assert.ok(canvasStart > -1, "expected a fixed-size relative canvas wrapping the thumbnail Image");
     const canvasBlock = clientSource.slice(canvasStart, canvasStart + 200);
     assert.match(canvasBlock, /rounded-xl/);
-    assert.match(canvasBlock, /border border-white\/10/);
+    assert.match(canvasBlock, /border border-edge\/10/);
+    assert.match(canvasBlock, /bg-glass-5/);
     assert.match(canvasBlock, /overflow-hidden/);
   });
 
-  test("no-image fallback is preserved unchanged (Package icon in a matching h-28 w-28 box)", () => {
+  test("no-image fallback uses theme-aware colors in a matching h-28 w-28 box", () => {
     assert.match(
       clientSource,
-      /flex h-28 w-28 items-center justify-center rounded-xl border border-white\/10 bg-white\/5 text-white\/35/,
+      /flex h-28 w-28 items-center justify-center rounded-xl border border-edge\/10 bg-glass-5 text-copy-35/,
     );
     assert.match(clientSource, /<Package className="h-6 w-6" \/>/);
   });

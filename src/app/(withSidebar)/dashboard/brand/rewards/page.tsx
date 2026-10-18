@@ -179,21 +179,21 @@ function formatDate(value: string | null) {
 
 function getAvailabilityBadgeClass(status: RewardOffer["computedAvailability"]["status"]) {
   if (status === "CLAIMABLE") {
-    return "border-emerald-300/30 bg-emerald-300/10 text-emerald-100";
+    return "border-emerald-300/30 bg-emerald-300/10 text-emerald-700 dark:text-emerald-100";
   }
 
   if (status === "SHOPIFY_DISCONNECTED" || status === "LIMIT_REACHED") {
-    return "border-amber-300/25 bg-amber-300/10 text-amber-100";
+    return "border-amber-300/25 bg-amber-300/10 text-amber-700 dark:text-amber-100";
   }
 
-  return "border-white/10 bg-white/5 text-white/60";
+  return "border-edge/10 bg-glass-5 text-copy-60";
 }
 
 const compatibilityBadgeClasses = {
-  danger: "border-red-300/25 bg-red-300/10 text-red-200",
-  warn: "border-amber-300/25 bg-amber-300/10 text-amber-100",
-  ok: "border-emerald-300/30 bg-emerald-300/10 text-emerald-100",
-  muted: "border-white/10 bg-white/5 text-white/50",
+  danger: "border-red-300/25 bg-red-300/10 text-red-700 dark:text-red-200",
+  warn: "border-amber-300/25 bg-amber-300/10 text-amber-700 dark:text-amber-100",
+  ok: "border-emerald-300/30 bg-emerald-300/10 text-emerald-700 dark:text-emerald-100",
+  muted: "border-edge/10 bg-glass-5 text-copy-50",
 };
 
 function getCompatibilityBadges(
@@ -551,12 +551,12 @@ function ShopifyBrandRewardsPanel() {
     >
       <PageCard>
         {loading ? (
-          <p className="text-sm text-white/65">Loading rewards...</p>
+          <p className="text-sm text-copy-65">Loading rewards...</p>
         ) : (
           <div className="space-y-5">
             <div className="grid gap-4 md:grid-cols-3">
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <p className="text-sm text-white/55">Shopify status</p>
+              <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+                <p className="text-sm text-copy-55">Shopify status</p>
                 <p className="mt-2 text-2xl font-semibold">
                   {isConnected
                     ? "Connected"
@@ -565,27 +565,27 @@ function ShopifyBrandRewardsPanel() {
                       : "Not connected"}
                 </p>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <p className="text-sm text-white/55">Shop domain</p>
-                <p className="mt-2 text-sm text-white/80">
+              <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+                <p className="text-sm text-copy-55">Shop domain</p>
+                <p className="mt-2 text-sm text-copy-80">
                   {brand?.shopifyShopDomain || "Not set"}
                 </p>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <p className="text-sm text-white/55">Offers</p>
+              <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+                <p className="text-sm text-copy-55">Offers</p>
                 <p className="mt-2 text-2xl font-semibold">{offers.length}</p>
               </div>
             </div>
 
             {!isConnected ? (
-              <div className="rounded-2xl border border-amber-300/20 bg-amber-300/10 p-4 text-sm text-amber-100">
+              <div className="rounded-2xl border border-amber-300/20 bg-amber-300/10 p-4 text-sm text-amber-700 dark:text-amber-100">
                 Reconnect Shopify before creating or enabling reward offers.
               </div>
             ) : null}
 
-            {error ? <p className="text-sm text-red-300">{error}</p> : null}
+            {error ? <p className="text-sm text-red-700 dark:text-red-300">{error}</p> : null}
             {message ? (
-              <p className="text-sm text-emerald-300">{message}</p>
+              <p className="text-sm text-emerald-700 dark:text-emerald-300">{message}</p>
             ) : null}
           </div>
         )}
@@ -597,7 +597,7 @@ function ShopifyBrandRewardsPanel() {
             <h2 className="text-xl font-semibold">
               {editingOfferId ? "Edit reward offer" : "Create reward offer"}
             </h2>
-            <p className="mt-1 text-sm text-white/55">
+            <p className="mt-1 text-sm text-copy-55">
               Codes are single-use globally and manually copied into Shopify
               checkout. Active means enabled by Brand Admin; Claimable means
               users can currently redeem it.
@@ -608,7 +608,7 @@ function ShopifyBrandRewardsPanel() {
               type="button"
               variant="outline"
               onClick={resetForm}
-              className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+              className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
             >
               Cancel edit
             </Button>
@@ -616,16 +616,16 @@ function ShopifyBrandRewardsPanel() {
         </div>
 
         <div className="mt-6 grid gap-4 lg:grid-cols-2">
-          <label className="space-y-2 text-sm text-white/70">
+          <label className="space-y-2 text-sm text-copy-70">
             <span>Title</span>
             <Input
               value={form.title}
               onChange={(event) => updateForm("title", event.target.value)}
               placeholder="100 points = CAD $10 off"
-              className="border-white/10 bg-black/20 text-white"
+              className="border-edge/10 bg-inset/20 text-ink"
             />
           </label>
-          <label className="space-y-2 text-sm text-white/70">
+          <label className="space-y-2 text-sm text-copy-70">
             <span>Discount type</span>
             <select
               value={form.discountType}
@@ -635,18 +635,18 @@ function ShopifyBrandRewardsPanel() {
                   event.target.value as OfferFormState["discountType"],
                 )
               }
-              className="h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+              className="h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
             >
               <option value="FIXED_AMOUNT">Fixed amount</option>
               <option value="PERCENTAGE">Percentage</option>
             </select>
           </label>
-          <label className="space-y-2 text-sm text-white/70">
+          <label className="space-y-2 text-sm text-copy-70">
             <span>Currency</span>
             <select
               value={form.currencyCode}
               disabled
-              className="h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white/50 cursor-not-allowed"
+              className="h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-copy-50 cursor-not-allowed"
             >
               <option value="CAD">CAD</option>
               <option value="USD">USD</option>
@@ -654,13 +654,13 @@ function ShopifyBrandRewardsPanel() {
                 <option value={form.currencyCode}>{form.currencyCode}</option>
               )}
             </select>
-            <p className="text-xs text-white/45 mt-1">
+            <p className="text-xs text-copy-45 mt-1">
               Fixed discounts use your Shopify store currency.
             </p>
           </label>
 
           {editingNeedsCurrencyReview && brand?.shopifyCurrencyCode ? (
-            <div className="lg:col-span-2 rounded-2xl border border-amber-300/25 bg-amber-300/10 p-4 text-sm text-amber-100">
+            <div className="lg:col-span-2 rounded-2xl border border-amber-300/25 bg-amber-300/10 p-4 text-sm text-amber-700 dark:text-amber-100">
               <p className="font-semibold">Needs currency review</p>
               <p className="mt-1">
                 This reward was configured for {editingOffer?.currencyCode}, but
@@ -675,12 +675,12 @@ function ShopifyBrandRewardsPanel() {
                   Use {brand.shopifyCurrencyCode} for this offer
                 </Button>
               ) : (
-                <p className="mt-3 text-emerald-200">
+                <p className="mt-3 text-emerald-700 dark:text-emerald-200">
                   Currency set to {form.currencyCode}. Save this offer, then
                   activate it in a separate step.
                 </p>
               )}
-              <details className="mt-3 text-xs text-amber-200/80">
+              <details className="mt-3 text-xs text-amber-700 dark:text-amber-200/80">
                 <summary className="cursor-pointer select-none">
                   Why is this needed?
                 </summary>
@@ -691,7 +691,7 @@ function ShopifyBrandRewardsPanel() {
                 </p>
               </details>
               {editingOffer && form.title.includes(editingOffer.currencyCode) ? (
-                <p className="mt-3 text-amber-200">
+                <p className="mt-3 text-amber-700 dark:text-amber-200">
                   The reward title still mentions {editingOffer.currencyCode}.
                   Review the title before saving.
                 </p>
@@ -700,7 +700,7 @@ function ShopifyBrandRewardsPanel() {
           ) : null}
 
           {form.discountType === "FIXED_AMOUNT" ? (
-            <label className="space-y-2 text-sm text-white/70">
+            <label className="space-y-2 text-sm text-copy-70">
               <span>Discount amount</span>
               <div className="relative flex items-center">
                 <Input
@@ -712,13 +712,13 @@ function ShopifyBrandRewardsPanel() {
                     updateForm("discountAmount", event.target.value)
                   }
                   placeholder="10.00"
-                  className="border-white/10 bg-black/20 text-white pr-12 w-full"
+                  className="border-edge/10 bg-inset/20 text-ink pr-12 w-full"
                 />
-                <span className="absolute right-3 text-white/45 text-sm pointer-events-none">{form.currencyCode}</span>
+                <span className="absolute right-3 text-copy-45 text-sm pointer-events-none">{form.currencyCode}</span>
               </div>
             </label>
           ) : (
-            <label className="space-y-2 text-sm text-white/70">
+            <label className="space-y-2 text-sm text-copy-70">
               <span>Discount percentage</span>
               <div className="relative flex items-center">
                 <Input
@@ -731,18 +731,18 @@ function ShopifyBrandRewardsPanel() {
                     updateForm("discountPercentage", event.target.value)
                   }
                   placeholder="15"
-                  className="border-white/10 bg-black/20 text-white pr-8 w-full"
+                  className="border-edge/10 bg-inset/20 text-ink pr-8 w-full"
                 />
-                <span className="absolute right-3 text-white/45 text-sm pointer-events-none">%</span>
+                <span className="absolute right-3 text-copy-45 text-sm pointer-events-none">%</span>
               </div>
             </label>
           )}
           {form.discountType === "FIXED_AMOUNT" && form.currencyCode !== "CAD" && form.currencyCode !== "USD" && (
-            <div className="rounded-2xl border border-red-300/20 bg-red-300/10 p-3 text-sm text-red-200 lg:col-span-2">
+            <div className="rounded-2xl border border-red-300/20 bg-red-300/10 p-3 text-sm text-red-700 dark:text-red-200 lg:col-span-2">
               Fixed rewards currently support CAD and USD stores only. Please choose Percentage discount type or connect a CAD/USD store.
             </div>
           )}
-          <label className="space-y-2 text-sm text-white/70 lg:col-span-2">
+          <label className="space-y-2 text-sm text-copy-70 lg:col-span-2">
             <span>Description</span>
             <Textarea
               value={form.description}
@@ -750,20 +750,20 @@ function ShopifyBrandRewardsPanel() {
                 updateForm("description", event.target.value)
               }
               placeholder="Reward details shown to users."
-              className="min-h-24 border-white/10 bg-black/20 text-white"
+              className="min-h-24 border-edge/10 bg-inset/20 text-ink"
             />
           </label>
-          <label className="space-y-2 text-sm text-white/70">
+          <label className="space-y-2 text-sm text-copy-70">
             <span>Points cost</span>
             <Input
               type="number"
               min="1"
               value={form.pointsCost}
               onChange={(event) => updateForm("pointsCost", event.target.value)}
-              className="border-white/10 bg-black/20 text-white"
+              className="border-edge/10 bg-inset/20 text-ink"
             />
           </label>
-          <label className="space-y-2 text-sm text-white/70">
+          <label className="space-y-2 text-sm text-copy-70">
             <span>Claim starts at</span>
             <Input
               type="datetime-local"
@@ -771,19 +771,19 @@ function ShopifyBrandRewardsPanel() {
               onChange={(event) =>
                 updateForm("claimStartsAt", event.target.value)
               }
-              className="border-white/10 bg-black/20 text-white"
+              className="border-edge/10 bg-inset/20 text-ink"
             />
           </label>
-          <label className="space-y-2 text-sm text-white/70">
+          <label className="space-y-2 text-sm text-copy-70">
             <span>Claim ends at</span>
             <Input
               type="datetime-local"
               value={form.claimEndsAt}
               onChange={(event) => updateForm("claimEndsAt", event.target.value)}
-              className="border-white/10 bg-black/20 text-white"
+              className="border-edge/10 bg-inset/20 text-ink"
             />
           </label>
-          <label className="space-y-2 text-sm text-white/70">
+          <label className="space-y-2 text-sm text-copy-70">
             <span>Code valid days after claim</span>
             <Input
               type="number"
@@ -793,10 +793,10 @@ function ShopifyBrandRewardsPanel() {
               onChange={(event) =>
                 updateForm("codeValidDays", event.target.value)
               }
-              className="border-white/10 bg-black/20 text-white"
+              className="border-edge/10 bg-inset/20 text-ink"
             />
           </label>
-          <label className="space-y-2 text-sm text-white/70">
+          <label className="space-y-2 text-sm text-copy-70">
             <span>Applies to</span>
             <select
               value={form.appliesTo}
@@ -806,13 +806,13 @@ function ShopifyBrandRewardsPanel() {
                   event.target.value as OfferFormState["appliesTo"],
                 )
               }
-              className="h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+              className="h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
             >
               <option value="ALL_PRODUCTS">All products</option>
               <option value="SPECIFIC_PRODUCTS">Selected products</option>
             </select>
           </label>
-          <label className="space-y-2 text-sm text-white/70">
+          <label className="space-y-2 text-sm text-copy-70">
             <span>Minimum subtotal</span>
             <Input
               type="number"
@@ -823,19 +823,19 @@ function ShopifyBrandRewardsPanel() {
                 updateForm("minimumSubtotal", event.target.value)
               }
               placeholder="Optional"
-              className="border-white/10 bg-black/20 text-white"
+              className="border-edge/10 bg-inset/20 text-ink"
             />
           </label>
-          <label className="space-y-2 text-sm text-white/70">
+          <label className="space-y-2 text-sm text-copy-70">
             <span>Code prefix</span>
             <Input
               value={form.codePrefix}
               onChange={(event) => updateForm("codePrefix", event.target.value)}
               placeholder="SQRATCH"
-              className="border-white/10 bg-black/20 text-white"
+              className="border-edge/10 bg-inset/20 text-ink"
             />
           </label>
-          <label className="space-y-2 text-sm text-white/70">
+          <label className="space-y-2 text-sm text-copy-70">
             <span>Max total redemptions</span>
             <Input
               type="number"
@@ -845,10 +845,10 @@ function ShopifyBrandRewardsPanel() {
                 updateForm("maxTotalRedemptions", event.target.value)
               }
               placeholder="Optional"
-              className="border-white/10 bg-black/20 text-white"
+              className="border-edge/10 bg-inset/20 text-ink"
             />
           </label>
-          <label className="space-y-2 text-sm text-white/70">
+          <label className="space-y-2 text-sm text-copy-70">
             <span>Max redemptions per user</span>
             <Input
               type="number"
@@ -858,20 +858,20 @@ function ShopifyBrandRewardsPanel() {
                 updateForm("maxRedemptionsPerUser", event.target.value)
               }
               placeholder="Optional"
-              className="border-white/10 bg-black/20 text-white"
+              className="border-edge/10 bg-inset/20 text-ink"
             />
           </label>
-          <label className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-white/70 lg:col-span-2">
+          <label className="flex items-center gap-3 rounded-2xl border border-edge/10 bg-inset/20 p-4 text-sm text-copy-70 lg:col-span-2">
             <Checkbox
               checked={form.isActive}
               onCheckedChange={(checked) => updateForm("isActive", checked === true)}
               disabled={(!isConnected && !form.isActive) || activeDisabledByCompatibility}
-              className="border-white/30 data-[state=checked]:border-emerald-300 data-[state=checked]:bg-emerald-400"
+              className="border-edge/30 data-[state=checked]:border-emerald-300 data-[state=checked]:bg-emerald-400"
             />
             <span>
               Active offer
               {activeDisabledByCompatibility ? (
-                <span className="mt-1 block text-xs text-white/45">
+                <span className="mt-1 block text-xs text-copy-45">
                   Save the compatibility fix above first, then come back and
                   activate this offer in a separate step.
                 </span>
@@ -881,9 +881,9 @@ function ShopifyBrandRewardsPanel() {
         </div>
 
         {form.appliesTo === "SPECIFIC_PRODUCTS" ? (
-          <div className="mt-6 rounded-3xl border border-white/10 bg-black/20 p-4">
+          <div className="mt-6 rounded-3xl border border-edge/10 bg-inset/20 p-4">
             {editingNeedsProductReselection ? (
-              <div className="mb-4 rounded-2xl border border-amber-300/25 bg-amber-300/10 p-4 text-sm text-amber-100">
+              <div className="mb-4 rounded-2xl border border-amber-300/25 bg-amber-300/10 p-4 text-sm text-amber-700 dark:text-amber-100">
                 <p className="font-semibold">Product reselection required</p>
                 <p className="mt-1">
                   {editingHasUnknownSource
@@ -894,14 +894,14 @@ function ShopifyBrandRewardsPanel() {
                 </p>
                 {editingOffer && editingOffer.products.length > 0 ? (
                   <div className="mt-3">
-                    <p className="text-xs uppercase tracking-wide text-amber-200/70">
+                    <p className="text-xs uppercase tracking-wide text-amber-700 dark:text-amber-200/70">
                       Previous selections (unavailable)
                     </p>
                     <div className="mt-2 flex flex-wrap gap-2">
                       {editingOffer.products.map((product) => (
                         <span
                           key={product.shopifyProductGid}
-                          className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/40 line-through"
+                          className="rounded-full border border-edge/10 bg-glass-5 px-3 py-1 text-xs text-copy-40 line-through"
                         >
                           {product.title || product.shopifyProductGid}
                         </span>
@@ -915,7 +915,7 @@ function ShopifyBrandRewardsPanel() {
             <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
               <div>
                 <h3 className="font-semibold">Selected Shopify products</h3>
-                <p className="mt-1 text-sm text-white/55">
+                <p className="mt-1 text-sm text-copy-55">
                   Select products by Shopify product GID.
                 </p>
               </div>
@@ -924,7 +924,7 @@ function ShopifyBrandRewardsPanel() {
                 variant="outline"
                 onClick={() => void loadProducts()}
                 disabled={loadingProducts || !isConnected}
-                className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
               >
                 <RefreshCw className="h-4 w-4" />
                 {loadingProducts ? "Loading..." : "Refresh products"}
@@ -933,21 +933,21 @@ function ShopifyBrandRewardsPanel() {
 
             <div className="mt-4 grid max-h-[520px] gap-3 overflow-y-auto pr-1 lg:grid-cols-2">
               {products.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-white/10 p-4 text-sm text-white/55">
+                <div className="rounded-2xl border border-dashed border-edge/10 p-4 text-sm text-copy-55">
                   No Shopify products loaded.
                 </div>
               ) : (
                 products.map((product) => (
                   <label
                     key={product.shopifyProductGid}
-                    className="flex cursor-pointer gap-4 rounded-2xl border border-white/10 bg-[#111528] p-3"
+                    className="flex cursor-pointer gap-4 rounded-2xl border border-edge/10 bg-card dark:bg-[#111528] p-3"
                   >
                     <Checkbox
                       checked={selectedProductSet.has(product.shopifyProductGid)}
                       onCheckedChange={(checked) =>
                         toggleProduct(product, checked === true)
                       }
-                      className="mt-1 border-white/30 data-[state=checked]:border-emerald-300 data-[state=checked]:bg-emerald-400"
+                      className="mt-1 border-edge/30 data-[state=checked]:border-emerald-300 data-[state=checked]:bg-emerald-400"
                     />
                     {product.imageUrl ? (
                       <Image
@@ -958,7 +958,7 @@ function ShopifyBrandRewardsPanel() {
                         className="h-16 w-16 rounded-xl object-cover"
                       />
                     ) : (
-                      <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-white/8 text-white/35">
+                      <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-glass-8 text-copy-35">
                         <Package className="h-5 w-5" />
                       </div>
                     )}
@@ -966,7 +966,7 @@ function ShopifyBrandRewardsPanel() {
                       <span className="block truncate text-sm font-medium">
                         {product.title}
                       </span>
-                      <span className="mt-1 block truncate text-xs text-white/45">
+                      <span className="mt-1 block truncate text-xs text-copy-45">
                         {product.shopifyProductGid}
                       </span>
                     </span>
@@ -986,7 +986,7 @@ function ShopifyBrandRewardsPanel() {
               (!isConnected && (!editingOfferId || form.isActive)) ||
               saveDisabledByCompatibility
             }
-            className="rounded-full border border-white bg-white text-black hover:bg-white/90"
+            className="rounded-full border border-edge bg-primary text-primary-foreground hover:bg-primary/90"
           >
             <Gift className="h-4 w-4" />
             {saving
@@ -1000,21 +1000,21 @@ function ShopifyBrandRewardsPanel() {
 
       <PageCard>
         <h2 className="text-xl font-semibold">Reward offers</h2>
-        <p className="mt-1 text-sm text-white/55">
+        <p className="mt-1 text-sm text-copy-55">
           Disable offers when they should no longer be claimable. Active means
           enabled by Brand Admin; Claimable means users can currently redeem it.
         </p>
 
         <div className="mt-6 space-y-4">
           {offers.length === 0 ? (
-            <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-5 text-sm text-white/55">
+            <div className="rounded-2xl border border-dashed border-edge/10 bg-inset/20 p-5 text-sm text-copy-55">
               No reward offers created yet.
             </div>
           ) : (
             offers.map((offer) => (
               <div
                 key={offer.id}
-                className="rounded-3xl border border-white/10 bg-black/20 p-5"
+                className="rounded-3xl border border-edge/10 bg-inset/20 p-5"
               >
                 <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
                   <div>
@@ -1029,7 +1029,7 @@ function ShopifyBrandRewardsPanel() {
                       </span>
                       {offer.isActive &&
                       offer.computedAvailability.status !== "CLAIMABLE" ? (
-                        <span className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/45">
+                        <span className="rounded-full border border-edge/10 bg-glass-5 px-3 py-1 text-xs text-copy-45">
                           Active
                         </span>
                       ) : null}
@@ -1045,25 +1045,25 @@ function ShopifyBrandRewardsPanel() {
                         </span>
                       ))}
                     </div>
-                    <p className="mt-2 text-sm text-white/55">
+                    <p className="mt-2 text-sm text-copy-55">
                       {offer.pointsCost} points for{" "}
                       {offer.discountType === "PERCENTAGE"
                         ? `${formatRewardPercentage(offer.discountPercentageBasisPoints)} off`
                         : `${formatRewardMoney(offer.discountAmountCents, offer.currencyCode)} off`}
                     </p>
                     {offer.computedCompatibility.reasons.includes("CURRENCY_REVIEW_REQUIRED") && (
-                      <p className="mt-2 text-sm font-semibold text-red-400">
+                      <p className="mt-2 text-sm font-semibold text-red-700 dark:text-red-400">
                         Currency mismatch: store is{" "}
                         {offer.computedCompatibility.currentStoreCurrency}, offer
                         is {offer.currencyCode}. Redemptions are blocked. Edit
                         this offer to review the currency.
                       </p>
                     )}
-                    <p className="mt-2 text-sm text-white/45">
+                    <p className="mt-2 text-sm text-copy-45">
                       Claim by {formatDate(offer.claimEndsAt)}. Code expires{" "}
                       {offer.codeValidDays} days after claim.
                     </p>
-                    <p className="mt-2 text-xs uppercase tracking-[0.18em] text-white/35">
+                    <p className="mt-2 text-xs uppercase tracking-[0.18em] text-copy-35">
                       {offer.appliesTo === "ALL_PRODUCTS"
                         ? "All products"
                         : `${offer.products.length} selected products`}
@@ -1071,26 +1071,26 @@ function ShopifyBrandRewardsPanel() {
                   </div>
 
                   <div className="grid min-w-[280px] grid-cols-2 gap-3 text-sm">
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                      <p className="text-white/45">Issued</p>
+                    <div className="rounded-2xl border border-edge/10 bg-glass-5 p-3">
+                      <p className="text-copy-45">Issued</p>
                       <p className="mt-1 text-xl font-semibold">
                         {offer.stats?.totalIssued || 0}
                       </p>
                     </div>
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                      <p className="text-white/45">Used</p>
+                    <div className="rounded-2xl border border-edge/10 bg-glass-5 p-3">
+                      <p className="text-copy-45">Used</p>
                       <p className="mt-1 text-xl font-semibold">
                         {offer.stats?.usedCount || 0}
                       </p>
                     </div>
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                      <p className="text-white/45">Expired</p>
+                    <div className="rounded-2xl border border-edge/10 bg-glass-5 p-3">
+                      <p className="text-copy-45">Expired</p>
                       <p className="mt-1 text-xl font-semibold">
                         {offer.stats?.expiredCount || 0}
                       </p>
                     </div>
-                    <div className="rounded-2xl border border-white/10 bg-white/5 p-3">
-                      <p className="text-white/45">Failed</p>
+                    <div className="rounded-2xl border border-edge/10 bg-glass-5 p-3">
+                      <p className="text-copy-45">Failed</p>
                       <p className="mt-1 text-xl font-semibold">
                         {offer.stats?.failedCount || 0}
                       </p>
@@ -1103,7 +1103,7 @@ function ShopifyBrandRewardsPanel() {
                     type="button"
                     variant="outline"
                     onClick={() => editOffer(offer)}
-                    className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                    className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
                   >
                     <Pencil className="h-4 w-4" />
                     Edit

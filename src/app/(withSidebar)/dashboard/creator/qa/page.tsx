@@ -114,7 +114,7 @@ export default function CreatorQAPage() {
           <select
             value={selectedExperienceId}
             onChange={(event) => setSelectedExperienceId(event.target.value)}
-            className="flex h-10 rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+            className="flex h-10 rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
           >
             <option value="">All experiences</option>
             {data?.experiences.map((experience) => (
@@ -128,26 +128,26 @@ export default function CreatorQAPage() {
 
       {error && (
         <PageCard>
-          <p className="text-sm text-red-300">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         </PageCard>
       )}
 
       {!data ? (
         <PageCard>
-          <p className="text-sm text-white/65">Loading questions...</p>
+          <p className="text-sm text-copy-65">Loading questions...</p>
         </PageCard>
       ) : data.questions.length === 0 ? (
         <PageCard>
-          <p className="text-sm text-white/65">No unanswered questions.</p>
+          <p className="text-sm text-copy-65">No unanswered questions.</p>
         </PageCard>
       ) : (
         <div className="space-y-5">
           {data.questions.map((question) => (
             <PageCard key={question.id}>
-              <p className="text-xs uppercase tracking-[0.24em] text-white/45">
+              <p className="text-xs uppercase tracking-[0.24em] text-copy-45">
                 {question.experience.title} • {question.askedBy.name}
               </p>
-              <p className="mt-4 text-sm leading-7 text-white/80">
+              <p className="mt-4 text-sm leading-7 text-copy-80">
                 {question.body}
               </p>
               <Textarea
@@ -159,13 +159,13 @@ export default function CreatorQAPage() {
                   }))
                 }
                 placeholder="Write an answer"
-                className="mt-5 min-h-[140px] border-white/10 bg-black/20 text-white placeholder:text-white/35"
+                className="mt-5 min-h-[140px] border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
               />
               <Button
                 type="button"
                 onClick={() => void answerQuestion(question.id)}
                 disabled={savingId === question.id || !drafts[question.id]?.trim()}
-                className="mt-4 rounded-full border border-white bg-white text-black"
+                className="mt-4 rounded-full border border-edge bg-primary text-primary-foreground"
               >
                 {savingId === question.id ? "Sending..." : "Answer question"}
               </Button>
@@ -175,9 +175,9 @@ export default function CreatorQAPage() {
       )}
 
       <PageCard>
-        <p className="text-sm font-semibold text-white">Answered questions</p>
+        <p className="text-sm font-semibold text-ink">Answered questions</p>
         {!data?.answeredQuestions || data.answeredQuestions.length === 0 ? (
-          <p className="mt-3 text-sm text-white/65">No answered questions yet.</p>
+          <p className="mt-3 text-sm text-copy-65">No answered questions yet.</p>
         ) : (
           <div className="mt-4 space-y-4">
             {data.answeredQuestions.map((question) => {
@@ -185,17 +185,17 @@ export default function CreatorQAPage() {
               return (
                 <div
                   key={question.id}
-                  className="rounded-2xl border border-white/10 bg-black/20 p-4"
+                  className="rounded-2xl border border-edge/10 bg-inset/20 p-4"
                 >
-                  <p className="text-xs uppercase tracking-[0.24em] text-white/45">
+                  <p className="text-xs uppercase tracking-[0.24em] text-copy-45">
                     {question.experience.title} • {question.askedBy.name}
                   </p>
-                  <p className="mt-3 text-sm leading-6 text-white/80">
+                  <p className="mt-3 text-sm leading-6 text-copy-80">
                     {question.body}
                   </p>
                   {latestAnswer && (
                     <div className="mt-3 rounded-xl border border-emerald-400/25 bg-emerald-500/10 p-3">
-                      <p className="text-xs uppercase tracking-[0.2em] text-emerald-200/80">
+                      <p className="text-xs uppercase tracking-[0.2em] text-emerald-700 dark:text-emerald-200/80">
                         Answered by {latestAnswer.answeredBy.name}
                       </p>
                       <p className="mt-2 text-sm leading-6 text-emerald-50/90">

@@ -64,15 +64,15 @@ export default function AdminBrandsPage() {
     >
       {loading ? (
         <PageCard>
-          <p className="text-sm text-white/65">Loading brands...</p>
+          <p className="text-sm text-copy-65">Loading brands...</p>
         </PageCard>
       ) : error ? (
         <PageCard>
-          <p className="text-sm text-red-300">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         </PageCard>
       ) : brands.length === 0 ? (
         <PageCard>
-          <p className="text-sm text-white/65">No brands found.</p>
+          <p className="text-sm text-copy-65">No brands found.</p>
         </PageCard>
       ) : (
         <div className="space-y-5">
@@ -82,22 +82,22 @@ export default function AdminBrandsPage() {
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center gap-3">
                     <h2 className="text-2xl font-semibold">{brand.name}</h2>
-                    <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/65">
+                    <span className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-65">
                       {brand.isActive ? "Active" : "Inactive"}
                     </span>
                     {brand.shopifyShopDomain && (
-                      <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">
+                      <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-700 dark:text-emerald-200">
                         Shopify connected
                       </span>
                     )}
                   </div>
-                  <p className="text-sm text-white/55">/{brand.slug}</p>
+                  <p className="text-sm text-copy-55">/{brand.slug}</p>
                   {brand.bio && (
-                    <p className="max-w-3xl text-sm leading-6 text-white/70">
+                    <p className="max-w-3xl text-sm leading-6 text-copy-70">
                       {brand.bio}
                     </p>
                   )}
-                  <div className="space-y-1 text-sm text-white/55">
+                  <div className="space-y-1 text-sm text-copy-55">
                     {brand.websiteUrl && <p>Website: {brand.websiteUrl}</p>}
                     {brand.shopifyShopDomain && (
                       <p>Shop: {brand.shopifyShopDomain}</p>
@@ -109,26 +109,26 @@ export default function AdminBrandsPage() {
                 </div>
 
                 <div className="grid gap-5 xl:min-w-[420px] xl:grid-cols-2">
-                  <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
-                    <p className="text-xs uppercase tracking-[0.24em] text-white/45">
+                  <div className="rounded-3xl border border-edge/10 bg-inset/20 p-5">
+                    <p className="text-xs uppercase tracking-[0.24em] text-copy-45">
                       Members
                     </p>
                     <div className="mt-4 space-y-3">
                       {brand.members.length === 0 ? (
-                        <p className="text-sm text-white/55">No members.</p>
+                        <p className="text-sm text-copy-55">No members.</p>
                       ) : (
                         brand.members.map((member) => (
                           <div
                             key={member.id}
-                            className="rounded-2xl border border-white/10 px-4 py-3"
+                            className="rounded-2xl border border-edge/10 px-4 py-3"
                           >
                             <p className="text-sm font-medium">
                               {member.user.name || member.user.email}
                             </p>
-                            <p className="mt-1 text-xs text-white/55">
+                            <p className="mt-1 text-xs text-copy-55">
                               {member.user.email}
                             </p>
-                            <p className="mt-2 text-xs text-white/55">
+                            <p className="mt-2 text-xs text-copy-55">
                               {member.role} • {member.user.role} •{" "}
                               {member.user.isActive ? "Active" : "Disabled"}
                             </p>
@@ -138,26 +138,26 @@ export default function AdminBrandsPage() {
                     </div>
                   </div>
 
-                  <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
-                    <p className="text-xs uppercase tracking-[0.24em] text-white/45">
+                  <div className="rounded-3xl border border-edge/10 bg-inset/20 p-5">
+                    <p className="text-xs uppercase tracking-[0.24em] text-copy-45">
                       Campaigns
                     </p>
                     <div className="mt-4 space-y-3">
                       {brand.campaigns.length === 0 ? (
-                        <p className="text-sm text-white/55">No campaigns.</p>
+                        <p className="text-sm text-copy-55">No campaigns.</p>
                       ) : (
                         brand.campaigns.map((campaign) => (
                           <div
                             key={campaign.id}
-                            className="rounded-2xl border border-white/10 px-4 py-3"
+                            className="rounded-2xl border border-edge/10 px-4 py-3"
                           >
                             <p className="text-sm font-medium">
                               {campaign.name}
                             </p>
-                            <p className="mt-1 text-xs text-white/55">
+                            <p className="mt-1 text-xs text-copy-55">
                               /{campaign.slug}
                             </p>
-                            <p className="mt-2 text-xs text-white/55">
+                            <p className="mt-2 text-xs text-copy-55">
                               {campaign.isActive ? "Active" : "Inactive"}
                             </p>
                           </div>

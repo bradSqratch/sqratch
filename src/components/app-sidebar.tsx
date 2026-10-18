@@ -22,7 +22,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { signOut, useSession } from "next-auth/react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 
 import {
   Sidebar,
@@ -62,32 +62,45 @@ function Section({
   items: NavItem[];
   role: Role;
 }) {
+  const pathname = usePathname();
   const visible = items.filter((i) => canSee(role, i));
   if (visible.length === 0) return null;
 
   return (
     <SidebarGroup className="mt-4">
-      <SidebarGroupLabel className="text-white/70 text-xs font-semibold uppercase tracking-wider px-3 py-2">
+      <SidebarGroupLabel className="text-copy-70 text-xs font-semibold uppercase tracking-wider px-3 py-2">
         {label}
       </SidebarGroupLabel>
       <SidebarGroupContent>
         <SidebarMenu className="space-y-1">
-          {visible.map((item) => (
-            <SidebarMenuItem key={item.title}>
-              <SidebarMenuButton
-                asChild
-                className="text-white/90 hover:text-white hover:bg-blue-950/10 hover:backdrop-blur-sm hover:border hover:border-white/20 hover:shadow-lg hover:shadow-blue-600/20 rounded-lg transition-all duration-200 group"
-              >
-                <a
-                  href={item.url}
-                  className="flex items-center gap-3 px-3 py-2"
+          {visible.map((item) => {
+            const isActive =
+              pathname === item.url ||
+              (item.url !== "/dashboard" && pathname.startsWith(`${item.url}/`));
+
+            return (
+              <SidebarMenuItem key={item.title}>
+                <SidebarMenuButton
+                  asChild
+                  isActive={isActive}
+                  className="group rounded-lg border border-transparent text-copy-90 transition-[background-color,color,border-color,box-shadow] duration-200 hover:border-sidebar-border hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:ring-offset-2 focus-visible:ring-offset-sidebar data-[active=true]:border-sidebar-border motion-reduce:transition-none dark:hover:border-edge/20 dark:hover:bg-blue-950/10 dark:hover:backdrop-blur-sm dark:hover:shadow-lg dark:hover:shadow-blue-600/20"
                 >
-                  <item.icon className="w-5 h-5 group-hover:scale-110 transition-transform duration-200" />
-                  <span className="font-medium">{item.title}</span>
-                </a>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-          ))}
+                  <a
+                    href={item.url}
+                    aria-current={
+                      isActive
+                        ? pathname === item.url ? "page" : "location"
+                        : undefined
+                    }
+                    className="flex items-center gap-3 px-3 py-2"
+                  >
+                    <item.icon className="w-5 h-5 transition-transform duration-200 dark:group-hover:scale-110 motion-reduce:transition-none motion-reduce:transform-none" />
+                    <span className="font-medium">{item.title}</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            );
+          })}
         </SidebarMenu>
       </SidebarGroupContent>
     </SidebarGroup>
@@ -238,29 +251,29 @@ export function AppSidebar() {
   };
 
   return (
-    <Sidebar className="border-r border-white/10 bg-[#070A1A]/75 backdrop-blur-xl">
+    <Sidebar className="border-r border-sidebar-border bg-sidebar dark:bg-[#070A1A]/75 backdrop-blur-xl">
       <SidebarHeader
         onClick={() => router.push("/dashboard")}
-        className="transition-all duration-200 text-white bg-transparent cursor-pointer hover:bg-white/5 rounded-lg mx-2 mt-2"
+        className="text-ink bg-transparent cursor-pointer rounded-lg mx-2 mt-2"
       >
         <NavUser user={data.user} />
       </SidebarHeader>
 
-      <SidebarContent className="text-white bg-transparent px-2">
+      <SidebarContent className="text-ink bg-transparent px-2">
         <Section label="Common" items={common} role={role} />
         <Section label="Creator" items={creator} role={role} />
         <Section label="Brand" items={brand} role={role} />
         <Section label="Admin" items={adminNew} role={role} />
       </SidebarContent>
 
-      <SidebarFooter className="text-white bg-transparent px-2 pb-4">
+      <SidebarFooter className="text-ink bg-transparent px-2 pb-4">
         <SidebarMenu>
           <SidebarMenuItem key="logout">
             <SidebarMenuButton
               onClick={logout}
-              className="text-red-300 hover:text-red-100 hover:bg-red-500/20 hover:backdrop-blur-sm hover:border hover:border-red-400/30 hover:shadow-lg hover:shadow-red-500/20 rounded-lg transition-all duration-200 cursor-pointer group"
+              className="group rounded-lg border border-transparent text-red-700 transition-[background-color,color,border-color,box-shadow] duration-200 hover:border-red-700/20 hover:bg-red-500/10 hover:text-red-900 focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none dark:text-red-300 dark:hover:border-red-400/30 dark:hover:bg-red-500/20 dark:hover:text-red-100 dark:hover:backdrop-blur-sm dark:hover:shadow-lg dark:hover:shadow-red-500/20 cursor-pointer"
             >
-              <LogOut className="w-5 h-5 group-hover:scale-110 transition-transform duration-200" />
+              <LogOut className="w-5 h-5 transition-transform duration-200 dark:group-hover:scale-110 motion-reduce:transition-none motion-reduce:transform-none" />
               <span className="font-medium">Logout</span>
             </SidebarMenuButton>
           </SidebarMenuItem>

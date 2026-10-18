@@ -12,7 +12,7 @@ export function LoadingState({
   return (
     <div
       className={cn(
-        "inline-flex items-center gap-2 rounded-xl border border-white/10 bg-black/20 px-3 py-2 text-sm text-white/70",
+        "inline-flex items-center gap-2 rounded-xl border border-edge/10 bg-inset/20 px-3 py-2 text-sm text-copy-70",
         className,
       )}
       role="status"

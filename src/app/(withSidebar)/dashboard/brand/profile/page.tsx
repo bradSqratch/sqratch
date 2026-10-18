@@ -188,12 +188,12 @@ export default function BrandProfilePage() {
     >
       <PageCard>
         {loading ? (
-          <p className="text-sm text-white/65">Loading brand profile...</p>
+          <p className="text-sm text-copy-65">Loading brand profile...</p>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="grid gap-5 lg:grid-cols-2">
               <div className="space-y-2">
-                <label className="text-sm text-white/70">Brand name</label>
+                <label className="text-sm text-copy-70">Brand name</label>
                 <Input
                   value={form.name}
                   onChange={(event) => {
@@ -204,11 +204,11 @@ export default function BrandProfilePage() {
                       slug: slugTouched ? current.slug : slugifyValue(name),
                     }));
                   }}
-                  className="border-white/10 bg-black/20 text-white"
+                  className="border-edge/10 bg-inset/20 text-ink"
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-sm text-white/70">Slug</label>
+                <label className="text-sm text-copy-70">Slug</label>
                 <Input
                   value={form.slug}
                   onChange={(event) => {
@@ -218,14 +218,14 @@ export default function BrandProfilePage() {
                       slug: slugifyValue(event.target.value),
                     }));
                   }}
-                  className="border-white/10 bg-black/20 text-white"
+                  className="border-edge/10 bg-inset/20 text-ink"
                 />
               </div>
             </div>
 
             <div className="grid gap-5 lg:grid-cols-2">
               <div className="space-y-2">
-                <label className="text-sm text-white/70">Website</label>
+                <label className="text-sm text-copy-70">Website</label>
                 <Input
                   value={form.websiteUrl}
                   onChange={(event) =>
@@ -234,13 +234,13 @@ export default function BrandProfilePage() {
                       websiteUrl: event.target.value,
                     }))
                   }
-                  className="border-white/10 bg-black/20 text-white"
+                  className="border-edge/10 bg-inset/20 text-ink"
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-sm text-white/70">Logo</label>
-                <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/5">
-                  <div className="flex h-28 items-center justify-center bg-black/25">
+                <label className="text-sm text-copy-70">Logo</label>
+                <div className="overflow-hidden rounded-2xl border border-edge/10 bg-glass-5">
+                  <div className="flex h-28 items-center justify-center bg-inset/25">
                     {logoPreview || form.logoUrl ? (
                       <>
                         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -251,10 +251,10 @@ export default function BrandProfilePage() {
                         />
                       </>
                     ) : (
-                      <span className="text-xs text-white/45">No logo</span>
+                      <span className="text-xs text-copy-45">No logo</span>
                     )}
                   </div>
-                  <div className="space-y-3 border-t border-white/10 p-4">
+                  <div className="space-y-3 border-t border-edge/10 p-4">
                     <input
                       ref={logoInputRef}
                       type="file"
@@ -278,11 +278,11 @@ export default function BrandProfilePage() {
                         variant="outline"
                         onClick={() => logoInputRef.current?.click()}
                         disabled={saving}
-                        className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                        className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
                       >
                         {logoFile ? "Logo selected" : "Upload logo"}
                       </Button>
-                      <p className="text-xs text-white/45">
+                      <p className="text-xs text-copy-45">
                         PNG, JPG, JPEG, WEBP up to 5 MB.
                       </p>
                     </div>
@@ -299,7 +299,7 @@ export default function BrandProfilePage() {
                           logoUrl: event.target.value,
                         }));
                       }}
-                      className="border-white/10 bg-black/20 text-white"
+                      className="border-edge/10 bg-inset/20 text-ink"
                     />
                   </div>
                 </div>
@@ -307,9 +307,9 @@ export default function BrandProfilePage() {
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm text-white/70">Cover image</label>
-              <div className="overflow-hidden rounded-2xl border border-white/10 bg-white/5">
-                <div className="aspect-[16/6] bg-black/25">
+              <label className="text-sm text-copy-70">Cover image</label>
+              <div className="overflow-hidden rounded-2xl border border-edge/10 bg-glass-5">
+                <div className="aspect-[16/6] bg-inset/25">
                   {coverPreview || form.coverImageUrl ? (
                     <>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -320,12 +320,12 @@ export default function BrandProfilePage() {
                       />
                     </>
                   ) : (
-                    <div className="flex h-full items-center justify-center text-xs text-white/45">
+                    <div className="flex h-full items-center justify-center text-xs text-copy-45">
                       No cover image
                     </div>
                   )}
                 </div>
-                <div className="space-y-3 border-t border-white/10 p-4">
+                <div className="space-y-3 border-t border-edge/10 p-4">
                   <input
                     ref={coverInputRef}
                     type="file"
@@ -349,11 +349,11 @@ export default function BrandProfilePage() {
                       variant="outline"
                       onClick={() => coverInputRef.current?.click()}
                       disabled={saving}
-                      className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                      className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
                     >
                       {coverFile ? "Cover selected" : "Upload cover"}
                     </Button>
-                    <p className="text-xs text-white/45">
+                    <p className="text-xs text-copy-45">
                       PNG, JPG, JPEG, WEBP up to 5 MB.
                     </p>
                   </div>
@@ -370,14 +370,14 @@ export default function BrandProfilePage() {
                         coverImageUrl: event.target.value,
                       }));
                     }}
-                    className="border-white/10 bg-black/20 text-white"
+                    className="border-edge/10 bg-inset/20 text-ink"
                   />
                 </div>
               </div>
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm text-white/70">Description</label>
+              <label className="text-sm text-copy-70">Description</label>
               <Textarea
                 value={form.description}
                 onChange={(event) =>
@@ -386,16 +386,16 @@ export default function BrandProfilePage() {
                     description: event.target.value,
                   }))
                 }
-                className="min-h-[160px] border-white/10 bg-black/20 text-white"
+                className="min-h-[160px] border-edge/10 bg-inset/20 text-ink"
               />
             </div>
 
-            {error && <p className="text-sm text-red-300">{error}</p>}
+            {error && <p className="text-sm text-red-700 dark:text-red-300">{error}</p>}
 
             <Button
               type="submit"
               disabled={saving || !form.name.trim() || !form.slug.trim()}
-              className="rounded-full border border-white bg-white text-black"
+              className="rounded-full border border-edge bg-primary text-primary-foreground"
             >
               {saving ? "Saving..." : exists ? "Save profile" : "Create profile"}
             </Button>

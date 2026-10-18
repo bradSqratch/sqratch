@@ -355,7 +355,7 @@ export default function CreatorCourseLessonsPage({
     >
       <PageCard>
         <h2 className="text-xl font-semibold">Add lesson</h2>
-        <p className="mt-2 text-sm text-white/60">
+        <p className="mt-2 text-sm text-copy-60">
           Lessons are attached to this course. Create them here and control
           their display order inside the course.
         </p>
@@ -373,17 +373,17 @@ export default function CreatorCourseLessonsPage({
 
       {error ? (
         <PageCard>
-          <p className="text-sm text-red-300">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         </PageCard>
       ) : null}
 
       {!data ? (
         <PageCard>
-          <p className="text-sm text-white/65">Loading lessons...</p>
+          <p className="text-sm text-copy-65">Loading lessons...</p>
         </PageCard>
       ) : data.lessons.length === 0 ? (
         <PageCard>
-          <p className="text-sm text-white/65">No lessons created yet.</p>
+          <p className="text-sm text-copy-65">No lessons created yet.</p>
         </PageCard>
       ) : (
         <div className="space-y-5">
@@ -477,7 +477,7 @@ function EditableLessonCard({
               variant="outline"
               onClick={() => void onDelete(lesson.id)}
               disabled={disabled}
-              className="rounded-full border-red-400/45 bg-red-500/10 px-4 text-red-200 hover:border-red-300/70 hover:bg-red-500/20 hover:text-red-100 sm:px-6"
+              className="rounded-full border-red-400/45 bg-red-500/10 px-4 text-red-700 dark:text-red-200 hover:border-red-300/70 hover:bg-red-500/20 hover:text-red-100 sm:px-6"
             >
               {deleting ? "Deleting..." : "Delete lesson"}
             </Button>
@@ -518,7 +518,7 @@ function LessonEditor({
     <div className="space-y-4">
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="space-y-2">
-          <p className="text-sm text-white/70">Lesson title</p>
+          <p className="text-sm text-copy-70">Lesson title</p>
           <Input
             value={draft.title}
             disabled={busy}
@@ -526,11 +526,11 @@ function LessonEditor({
               onChange({ ...draft, title: event.target.value })
             }
             placeholder="Lesson title"
-            className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+            className="border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
           />
         </div>
         <div className="space-y-2">
-          <p className="text-sm text-white/70">Display order</p>
+          <p className="text-sm text-copy-70">Display order</p>
           <Input
             type="number"
             value={draft.sortOrder}
@@ -542,12 +542,12 @@ function LessonEditor({
               })
             }
             placeholder="Display order"
-            className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+            className="border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
           />
-          <p className="text-xs text-white/45">Lower numbers appear first.</p>
+          <p className="text-xs text-copy-45">Lower numbers appear first.</p>
         </div>
         <div className="space-y-2">
-          <p className="text-sm text-white/70">Lesson completion points</p>
+          <p className="text-sm text-copy-70">Lesson completion points</p>
           <Input
             type="number"
             min={0}
@@ -561,9 +561,9 @@ function LessonEditor({
               })
             }
             placeholder="0"
-            className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+            className="border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
           />
-          <p className="text-xs text-white/45">
+          <p className="text-xs text-copy-45">
             Awarded once when a user completes this lesson. Use 0 for no reward.
           </p>
         </div>
@@ -576,7 +576,7 @@ function LessonEditor({
           onChange({ ...draft, description: event.target.value })
         }
         placeholder="Lesson description"
-        className="min-h-[120px] border-white/10 bg-black/20 text-white placeholder:text-white/35"
+        className="min-h-[120px] border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
       />
 
       <div className="grid gap-4 lg:grid-cols-2">
@@ -600,7 +600,7 @@ function LessonEditor({
               file: null,
             })
           }
-          className="flex h-10 rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+          className="flex h-10 rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
         >
           <option value="YOUTUBE">YouTube</option>
           <option value="UPLOAD">Uploaded video</option>
@@ -614,7 +614,7 @@ function LessonEditor({
               onChange({ ...draft, youtubeUrl: event.target.value })
             }
             placeholder="https://youtube.com/watch?v=..."
-            className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+            className="border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
           />
         ) : (
           <div className="space-y-2">
@@ -638,13 +638,13 @@ function LessonEditor({
                 onValidationError(null);
                 onChange({ ...draft, file });
               }}
-              className="border-white/10 bg-black/20 text-white file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-black"
+              className="border-edge/10 bg-inset/20 text-ink file:mr-4 file:rounded-full file:border-0 file:bg-primary file:px-4 file:py-2 file:text-primary-foreground"
             />
-            <p className="text-xs text-white/45">
+            <p className="text-xs text-copy-45">
               MP4, MOV, WEBM, MPEG, M4V up to 250 MB.
             </p>
             {draft.file ? (
-              <p className="text-sm text-white/65">
+              <p className="text-sm text-copy-65">
                 Selected: {draft.file.name} ({formatFileSize(draft.file.size)})
               </p>
             ) : null}
@@ -654,9 +654,9 @@ function LessonEditor({
 
       {draft.videoSource === "UPLOAD" && draft.videoAssetUrl ? (
         <div className="space-y-2">
-          <p className="text-sm text-white/55">Uploaded video preview</p>
+          <p className="text-sm text-copy-55">Uploaded video preview</p>
           <video
-            className="max-h-80 w-full rounded-2xl border border-white/10 bg-black object-contain"
+            className="max-h-80 w-full rounded-2xl border border-edge/10 bg-black object-contain"
             src={draft.videoAssetUrl}
             controls
             playsInline
@@ -666,9 +666,9 @@ function LessonEditor({
       ) : null}
 
       {operation ? (
-        <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+        <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
           <div className="flex items-center justify-between gap-4 text-sm">
-            <span className="text-white/70">
+            <span className="text-copy-70">
               {operation.phase === "PREPARING"
                 ? "Preparing upload"
                 : operation.phase === "UPLOADING"
@@ -682,14 +682,14 @@ function LessonEditor({
                 type="button"
                 variant="outline"
                 onClick={onCancelUpload}
-                className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
               >
                 Cancel upload
               </Button>
             ) : null}
           </div>
           {operation.phase === "UPLOADING" ? (
-            <div className="mt-3 h-2 overflow-hidden rounded-full bg-white/10">
+            <div className="mt-3 h-2 overflow-hidden rounded-full bg-glass-10">
               <div
                 className="h-full rounded-full bg-[#c73484] transition-[width]"
                 style={{ width: `${operation.progress}%` }}
@@ -711,7 +711,7 @@ function LessonEditor({
               !draft.videoAssetUrl.trim() &&
               !draft.file)
           }
-          className="rounded-full border border-white bg-white px-4 text-black sm:px-6"
+          className="rounded-full border border-edge bg-primary px-4 text-primary-foreground sm:px-6"
         >
           {submitLabel}
         </Button>

@@ -116,11 +116,11 @@ export function UserHomeClient() {
   }, []);
 
   return (
-    <div className="relative min-h-screen overflow-hidden bg-[#020015] text-white">
+    <div className="relative min-h-screen overflow-hidden bg-page text-ink">
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute inset-0 bg-[radial-gradient(1100px_600px_at_50%_10%,rgba(99,102,241,0.30),rgba(2,0,21,0)_70%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(900px_520px_at_50%_55%,rgba(99,102,241,0.13),rgba(2,0,21,0)_65%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(900px_600px_at_10%_90%,rgba(236,72,153,0.10),rgba(2,0,21,0)_65%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(1100px_600px_at_50%_10%,rgba(var(--glow-primary-rgb),0.30),rgba(var(--scene-rgb),0)_70%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(900px_520px_at_50%_55%,rgba(var(--glow-primary-rgb),0.13),rgba(var(--scene-rgb),0)_65%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(900px_600px_at_10%_90%,rgba(var(--glow-secondary-rgb),0.10),rgba(var(--scene-rgb),0)_65%)]" />
       </div>
 
       <div className="relative z-10 flex min-h-screen flex-col">
@@ -130,27 +130,27 @@ export function UserHomeClient() {
           {loading ? (
             <div className="flex flex-1 items-center justify-center">
               <div className="flex flex-col items-center gap-4">
-                <div className="h-12 w-12 animate-spin rounded-full border-4 border-white border-t-transparent" />
-                <p className="text-white/80">Loading your home...</p>
+                <div className="h-12 w-12 animate-spin rounded-full border-4 border-edge border-t-transparent" />
+                <p className="text-copy-80">Loading your home...</p>
               </div>
             </div>
           ) : error ? (
             <div className="flex flex-1 items-center justify-center">
               <PageCard className="w-full max-w-lg">
-                <p className="text-red-300">{error}</p>
+                <p className="text-red-700 dark:text-red-300">{error}</p>
               </PageCard>
             </div>
           ) : (
             <>
               <section className="grid gap-4 lg:grid-cols-[1.3fr_0.7fr]">
                 <PageCard>
-                  <p className="text-xs uppercase tracking-[0.28em] text-white/45">
+                  <p className="text-xs uppercase tracking-[0.28em] text-copy-45">
                     User Home
                   </p>
                   <h1 className="mt-3 text-4xl font-bold tracking-[-0.03em] sm:text-5xl">
                     Welcome back{me?.name ? `, ${me.name}` : ""}.
                   </h1>
-                  <p className="mt-4 max-w-3xl text-sm leading-7 text-white/70">
+                  <p className="mt-4 max-w-3xl text-sm leading-7 text-copy-70">
                     Your unlocked campaigns, accessible experiences, and active
                     lessons live here.
                   </p>
@@ -158,11 +158,11 @@ export function UserHomeClient() {
 
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
                   <PageCard>
-                    <p className="text-sm text-white/55">Unlocked campaigns</p>
+                    <p className="text-sm text-copy-55">Unlocked campaigns</p>
                     <p className="mt-2 text-4xl font-semibold">{unlocks.length}</p>
                   </PageCard>
                   <PageCard>
-                    <p className="text-sm text-white/55">Continue watching</p>
+                    <p className="text-sm text-copy-55">Continue watching</p>
                     <p className="mt-2 text-4xl font-semibold">
                       {progress?.summary.continueWatchingCount || 0}
                     </p>
@@ -175,7 +175,7 @@ export function UserHomeClient() {
                   <div className="flex items-center justify-between gap-4">
                     <div>
                       <h2 className="text-2xl font-semibold">Unlocked Campaigns</h2>
-                      <p className="mt-2 text-sm text-white/65">
+                      <p className="mt-2 text-sm text-copy-65">
                         Every unlocked campaign exposes the experiences attached to
                         it.
                       </p>
@@ -184,33 +184,33 @@ export function UserHomeClient() {
 
                   <div className="mt-6 space-y-5">
                     {unlocks.length === 0 ? (
-                      <div className="rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/65">
+                      <div className="rounded-3xl border border-edge/10 bg-inset/20 p-6 text-sm text-copy-65">
                         No campaigns unlocked yet. Scan a SQRATCH code to start.
                       </div>
                     ) : (
                       unlocks.map((unlock) => (
                         <div
                           key={unlock.unlockId}
-                          className="rounded-3xl border border-white/10 bg-black/20 p-6"
+                          className="rounded-3xl border border-edge/10 bg-inset/20 p-6"
                         >
                           <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                             <div>
                               <h3 className="text-xl font-semibold">
                                 {unlock.campaign.name}
                               </h3>
-                              <p className="mt-2 text-sm text-white/55">
+                              <p className="mt-2 text-sm text-copy-55">
                                 {unlock.campaign.brand
                                   ? `by ${unlock.campaign.brand.name}`
                                   : "Unlocked campaign"}
                               </p>
                               {unlock.campaign.description && (
-                                <p className="mt-3 max-w-2xl text-sm leading-6 text-white/70">
+                                <p className="mt-3 max-w-2xl text-sm leading-6 text-copy-70">
                                   {unlock.campaign.description}
                                 </p>
                               )}
                             </div>
 
-                            <div className="text-sm text-white/50">
+                            <div className="text-sm text-copy-50">
                               Unlocked {formatDate(unlock.unlockedAt)}
                             </div>
                           </div>
@@ -219,22 +219,22 @@ export function UserHomeClient() {
                             {unlock.campaign.experiences.map((experience) => (
                               <div
                                 key={experience.id}
-                                className="rounded-3xl border border-white/10 bg-white/5 p-5"
+                                className="rounded-3xl border border-edge/10 bg-glass-5 p-5"
                               >
                                 <h4 className="text-lg font-semibold">
                                   {experience.title}
                                 </h4>
                                 {experience.description && (
-                                  <p className="mt-2 text-sm leading-6 text-white/65">
+                                  <p className="mt-2 text-sm leading-6 text-copy-65">
                                     {experience.description}
                                   </p>
                                 )}
-                                <p className="mt-4 text-xs uppercase tracking-[0.24em] text-white/45">
+                                <p className="mt-4 text-xs uppercase tracking-[0.24em] text-copy-45">
                                   {experience.courseCount} courses
                                 </p>
                                 <Button
                                   asChild
-                                  className="mt-5 rounded-full border border-white bg-white text-black"
+                                  className="mt-5 rounded-full border border-edge bg-primary text-primary-foreground"
                                 >
                                   <Link href={`/x/${experience.slug}`}>
                                     Open Experience
@@ -251,7 +251,7 @@ export function UserHomeClient() {
 
                 <PageCard>
                   <h2 className="text-2xl font-semibold">Continue Watching</h2>
-                  <p className="mt-2 text-sm text-white/65">
+                  <p className="mt-2 text-sm text-copy-65">
                     Pick up where you left off across all unlocked experiences.
                   </p>
 
@@ -260,19 +260,19 @@ export function UserHomeClient() {
                       progress.continueWatching.map((item) => (
                         <div
                           key={item.progressId}
-                          className="rounded-3xl border border-white/10 bg-black/20 p-5"
+                          className="rounded-3xl border border-edge/10 bg-inset/20 p-5"
                         >
-                          <p className="text-xs uppercase tracking-[0.24em] text-white/45">
+                          <p className="text-xs uppercase tracking-[0.24em] text-copy-45">
                             {item.experience.title}
                             {item.campaign?.name ? ` • ${item.campaign.name}` : ""}
                           </p>
                           <h3 className="mt-2 text-lg font-semibold">
                             {item.lesson.title}
                           </h3>
-                          <p className="mt-1 text-sm text-white/55">
+                          <p className="mt-1 text-sm text-copy-55">
                             {item.course.title}
                           </p>
-                          <p className="mt-3 text-sm text-white/65">
+                          <p className="mt-3 text-sm text-copy-65">
                             Resume at {item.lastPositionSeconds}s • last watched{" "}
                             {formatDate(item.updatedAt)}
                           </p>
@@ -284,7 +284,7 @@ export function UserHomeClient() {
                           </div>
                           <Button
                             asChild
-                            className="mt-5 rounded-full border border-white bg-white text-black"
+                            className="mt-5 rounded-full border border-edge bg-primary text-primary-foreground"
                           >
                             <Link
                               href={`/x/${item.experience.slug}/lessons/${item.lessonId}`}
@@ -295,7 +295,7 @@ export function UserHomeClient() {
                         </div>
                       ))
                     ) : (
-                      <div className="rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/65">
+                      <div className="rounded-3xl border border-edge/10 bg-inset/20 p-6 text-sm text-copy-65">
                         No in-progress lessons yet. Start a course from one of
                         your unlocked experiences.
                       </div>

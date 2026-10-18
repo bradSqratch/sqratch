@@ -63,7 +63,7 @@ export function Commerce7LinkConfirmForm({
         }}
       >
         <h2 style={{ fontSize: "16px", margin: "0 0 6px" }}>Store connected</h2>
-        <p style={{ margin: 0, color: "#52525b" }}>
+        <p style={{ margin: 0, color: "var(--muted-foreground)" }}>
           <strong>{tenantId}</strong> is now connected
           {connectedBrand ? ` to ${connectedBrand}` : ""}. You can close this tab
           and return to Commerce7.
@@ -86,9 +86,11 @@ export function Commerce7LinkConfirmForm({
         onChange={(event) => setBrandId(event.target.value)}
         style={{
           width: "100%",
+          background: "var(--card)",
+          color: "var(--card-foreground)",
           padding: "10px",
           borderRadius: "8px",
-          border: "1px solid #d4d4d8",
+          border: "1px solid var(--border)",
           marginBottom: "16px",
         }}
       >
@@ -100,7 +102,7 @@ export function Commerce7LinkConfirmForm({
       </select>
 
       {error ? (
-        <p style={{ color: "#dc2626", marginTop: 0 }} role="alert">
+        <p style={{ color: "var(--destructive)", marginTop: 0 }} role="alert">
           {error}
         </p>
       ) : null}
@@ -109,8 +111,8 @@ export function Commerce7LinkConfirmForm({
         type="submit"
         disabled={status === "working" || !brandId}
         style={{
-          background: "#111827",
-          color: "#ffffff",
+          background: "var(--primary)",
+          color: "var(--primary-foreground)",
           padding: "10px 16px",
           borderRadius: "8px",
           border: "none",

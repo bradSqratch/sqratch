@@ -167,7 +167,7 @@ function FlipCard({
                 className={[
                   "mx-auto block w-fit",
                   "rounded-full px-6 py-2.5",
-                  "border border-white bg-white text-black",
+                  "border border-white bg-primary text-primary-foreground",
                   "backdrop-blur-md",
                   "transition",
                 ].join(" ")}

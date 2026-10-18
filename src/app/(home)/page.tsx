@@ -8,12 +8,14 @@ import WaitlistInline from "@/components/WaitlistInline";
 import { motion } from "framer-motion";
 import CommonNavbar from "@/components/commonNavbar";
 import SiteFooter from "@/components/home/site-footer";
+import { LightHeroCubes } from "@/components/home/light-hero-cubes";
+import "@/components/home/light-hero.css";
 
 export default function HomePage() {
   return (
-    <div className="relative min-h-screen bg-[#020015] text-white">
+    <div className="relative min-h-screen bg-page text-ink">
       {/* ================= HERO SECTION ================= */}
-      <section className="relative min-h-screen flex flex-col overflow-x-hidden">
+      <section className="pastel-hero relative min-h-screen flex flex-col overflow-x-hidden">
         {/* Video background wrapper */}
         <div className="absolute inset-x-0 top-0 h-screen overflow-hidden">
           {/* Background video */}
@@ -27,24 +29,24 @@ export default function HomePage() {
           />
           {/* Gradient overlay – applies ONLY to video */}
           <div
-            className="pointer-events-none absolute inset-0"
+            className="pastel-hero-tint pointer-events-none absolute inset-0"
             style={{
-              backgroundColor: "#020043",
+              backgroundColor: "var(--hero-overlay)",
               opacity: 0.8,
             }}
           />
-          <div className="absolute bottom-0 h-62 w-full bg-linear-to-b from-transparent to-[#020121]" />
+          <div className="absolute bottom-0 h-62 w-full bg-linear-to-b from-transparent to-section" />
         </div>
 
         {/* Figma Background: radial gradient + image, blend lighten, flipped vertically */}
         <div
-          className="pointer-events-none absolute left-0 right-0 -top-57 h-146 bg-cover bg-center"
+          className="pastel-hero-blob pointer-events-none absolute left-0 right-0 -top-57 h-146 bg-cover bg-center"
           style={{
             backgroundImage: `
               radial-gradient(
                 127.88% 53.54% at 50% 49.91%,
                 rgba(24, 15, 79, 0) 0%,
-                #020121 100%
+                var(--section) 100%
               ),
               url('/assets/homepage/hero-overlay-blob.png')
             `,
@@ -95,27 +97,28 @@ export default function HomePage() {
         />
 
         {/* NAVBAR */}
+        <LightHeroCubes />
         <CommonNavbar />
 
         {/* HERO CONTENT */}
         <div className="relative z-10 flex flex-1 items-center">
-          <div className="mx-auto flex w-full max-w-6xl flex-col items-center px-4 sm:px-6 lg:px-8 pb-20 pt-32 text-center sm:pt-36 lg:pt-38">
+          <div className="pastel-hero-card mx-auto flex w-full max-w-6xl flex-col items-center px-4 sm:px-6 lg:px-8 pb-20 pt-32 text-center sm:pt-36 lg:pt-38">
             {/* Small pill */}
             <Link href="/about" className="inline-block">
               <div
                 className="
                   flex items-center justify-center
                   rounded-full
-                  border border-white/20
-                  bg-white/5
+                  border border-edge/20
+                  bg-glass-5
                   px-6 py-1
                   text-center text-[14px] leading-[150%] font-normal
-                  text-[#F2F4F8]
+                  text-ink
                   backdrop-blur-md
-                  shadow-[0_10px_40px_rgba(15,23,42,0.7)]
+                  shadow-[0_8px_28px_rgba(72,57,34,0.06)] dark:shadow-[0_10px_40px_rgba(15,23,42,0.7)]
                   transition
-                  hover:bg-white/10 hover:border-white/30
-                  hover:shadow-[0_10px_50px_rgba(99,102,241,0.35)]
+                  hover:bg-glass-10 hover:border-edge/30
+                  hover:shadow-[0_10px_50px_rgba(var(--glow-primary-rgb),0.35)]
                   active:scale-[0.98]
                   cursor-pointer
                 "
@@ -134,7 +137,7 @@ export default function HomePage() {
                 font-bold
                 leading-[105%] sm:leading-[100%]
                 tracking-[-0.03em]
-                bg-[linear-gradient(145.55deg,#ECECEC_20.35%,rgba(236,236,236,0)_128.73%)]
+                bg-[image:var(--heading-gradient)]
                 bg-clip-text
                 drop-shadow-[0_0_12px_rgba(236,236,236,0.50)]
               "
@@ -149,7 +152,7 @@ export default function HomePage() {
               </span>
             </h1>
             {/* Body */}
-            <p className="mt-2 max-w-175 text-center text-[20px] lg:text-[22px] font-medium leading-[150%] sm:leading-[160%] text-[#ECECEC]/75">
+            <p className="mt-2 max-w-175 text-center text-[20px] lg:text-[22px] font-medium leading-[150%] sm:leading-[160%] text-copy-75">
               {/* visible on Mobile */}
               <span className="sm:hidden">
                 SQRATCH turns products into direct, meaningful, and rewarding
@@ -201,18 +204,18 @@ export default function HomePage() {
       </section>
 
       {/* ============== HOW SQRATCH WORKS SECTION ============== */}
-      <section className="bg-[#020121] py-24">
+      <section className="bg-section py-24">
         <div className="mx-auto max-w-6xl px-6 sm:px-6 lg:px-8">
           {/* ROW 1: Title + Learn More */}
           <div className="flex items-center justify-between gap-8">
             <div className="max-w-132.5">
               {/* Sub Title */}
-              <p className="text-[16px] font-semibold uppercase tracking-[0.30em] text-[#FFFFFF]/50">
+              <p className="text-[16px] font-semibold uppercase tracking-[0.30em] text-copy-50">
                 How Sqratch works
               </p>
 
               {/* Heading */}
-              <h2 className="mt-2 sm:mt-3 text-[28px] leading-8.5 sm:text-[32px] sm:leading-10 font-bold tracking-[-0.02em] text-white">
+              <h2 className="mt-2 sm:mt-3 text-[28px] leading-8.5 sm:text-[32px] sm:leading-10 font-bold tracking-[-0.02em] text-ink">
                 Discover the story, craft, <br />
                 and soul of a product.
               </h2>
@@ -228,22 +231,22 @@ export default function HomePage() {
                 <div className="flex items-start gap-4">
                   <div className="relative mt-1 h-11 w-11 flex-none shrink-0">
                     <div className="pointer-events-none absolute -inset-2 rounded-[16px] bg-linear-to-br from-[#5B6BFF] via-[#8A5CFF] to-[#D95CFF] opacity-80 blur-md" />
-                    <div className="relative flex h-11 w-11 items-center justify-center rounded-[14px] border border-white/25 bg-linear-to-br from-[#5B6BFF] via-[#8A5CFF] to-[#D95CFF] shadow-[0_10px_28px_rgba(126,108,255,0.66)]">
+                    <div className="relative flex h-11 w-11 items-center justify-center rounded-[14px] border border-edge/25 bg-linear-to-br from-[#5B6BFF] via-[#8A5CFF] to-[#D95CFF] shadow-[0_10px_28px_rgba(126,108,255,0.66)]">
                       <span className="tabular-nums text-[15px] font-bold tracking-[-0.02em] text-white [text-shadow:0_0_12px_rgba(255,255,255,0.7)]">
                         1
                       </span>
                     </div>
                   </div>
                   <div>
-                    <h3 className="text-[22px] text-base font-semibold text-white">
+                    <h3 className="text-[22px] text-base font-semibold text-ink">
                       Find a SQRATCH sticker
                     </h3>
-                    <p className="mt-1 text-[16px] leading-relaxed text-slate-300">
+                    <p className="mt-1 text-[16px] leading-relaxed text-slate-700 dark:text-slate-300">
                       A sign that there is more to this product.
                     </p>
                   </div>
                 </div>
-                <div className="mt-6 h-px w-full bg-white/5" />
+                <div className="mt-6 h-px w-full bg-glass-5" />
               </div>
 
               {/* Step 2 */}
@@ -251,22 +254,22 @@ export default function HomePage() {
                 <div className="flex items-start gap-4">
                   <div className="relative mt-1 h-11 w-11 flex-none shrink-0">
                     <div className="pointer-events-none absolute -inset-2 rounded-[16px] bg-linear-to-br from-[#7D5CFF] via-[#C65CFF] to-[#FF6EA8] opacity-80 blur-md" />
-                    <div className="relative flex h-11 w-11 items-center justify-center rounded-[14px] border border-white/25 bg-linear-to-br from-[#7D5CFF] via-[#C65CFF] to-[#FF6EA8] shadow-[0_10px_28px_rgba(198,92,255,0.62)]">
+                    <div className="relative flex h-11 w-11 items-center justify-center rounded-[14px] border border-edge/25 bg-linear-to-br from-[#7D5CFF] via-[#C65CFF] to-[#FF6EA8] shadow-[0_10px_28px_rgba(198,92,255,0.62)]">
                       <span className="tabular-nums text-[15px] font-bold tracking-[-0.02em] text-white [text-shadow:0_0_12px_rgba(255,255,255,0.7)]">
                         2
                       </span>
                     </div>
                   </div>
                   <div>
-                    <h3 className="text-[22px] text-base font-semibold text-white">
+                    <h3 className="text-[22px] text-base font-semibold text-ink">
                       Unlock a new world
                     </h3>
-                    <p className="mt-1 text-[16px] leading-relaxed text-slate-300">
+                    <p className="mt-1 text-[16px] leading-relaxed text-slate-700 dark:text-slate-300">
                       Scan to access new experiences built around the product.
                     </p>
                   </div>
                 </div>
-                <div className="mt-6 h-px w-full bg-white/5" />
+                <div className="mt-6 h-px w-full bg-glass-5" />
               </div>
 
               {/* Step 3 */}
@@ -274,23 +277,23 @@ export default function HomePage() {
                 <div className="flex items-start gap-4">
                   <div className="relative mt-1 h-11 w-11 flex-none shrink-0">
                     <div className="pointer-events-none absolute -inset-2 rounded-[16px] bg-linear-to-br from-[#A15CFF] via-[#FF5EA8] to-[#FF7A7A] opacity-80 blur-md" />
-                    <div className="relative flex h-11 w-11 items-center justify-center rounded-[14px] border border-white/25 bg-linear-to-br from-[#A15CFF] via-[#FF5EA8] to-[#FF7A7A] shadow-[0_10px_28px_rgba(255,94,168,0.6)]">
+                    <div className="relative flex h-11 w-11 items-center justify-center rounded-[14px] border border-edge/25 bg-linear-to-br from-[#A15CFF] via-[#FF5EA8] to-[#FF7A7A] shadow-[0_10px_28px_rgba(255,94,168,0.6)]">
                       <span className="tabular-nums text-[15px] font-bold tracking-[-0.02em] text-white [text-shadow:0_0_12px_rgba(255,255,255,0.7)]">
                         3
                       </span>
                     </div>
                   </div>
                   <div>
-                    <h3 className="text-[22px] text-base font-semibold text-white">
+                    <h3 className="text-[22px] text-base font-semibold text-ink">
                       Learn why it matters
                     </h3>
-                    <p className="mt-1 text-[16px] leading-relaxed text-slate-300">
+                    <p className="mt-1 text-[16px] leading-relaxed text-slate-700 dark:text-slate-300">
                       Explore the product’s story, history, craft, and
                       intention.
                     </p>
                   </div>
                 </div>
-                <div className="mt-6 h-px w-full bg-white/5" />
+                <div className="mt-6 h-px w-full bg-glass-5" />
               </div>
 
               {/* Step 4 */}
@@ -298,17 +301,17 @@ export default function HomePage() {
                 <div className="flex items-start gap-4">
                   <div className="relative mt-1 h-11 w-11 flex-none shrink-0">
                     <div className="pointer-events-none absolute -inset-2 rounded-[16px] bg-linear-to-br from-[#37D0FF] via-[#5E8BFF] to-[#9A6BFF] opacity-80 blur-md" />
-                    <div className="relative flex h-11 w-11 items-center justify-center rounded-[14px] border border-white/25 bg-linear-to-br from-[#37D0FF] via-[#5E8BFF] to-[#9A6BFF] shadow-[0_10px_28px_rgba(94,139,255,0.66)]">
+                    <div className="relative flex h-11 w-11 items-center justify-center rounded-[14px] border border-edge/25 bg-linear-to-br from-[#37D0FF] via-[#5E8BFF] to-[#9A6BFF] shadow-[0_10px_28px_rgba(94,139,255,0.66)]">
                       <span className="tabular-nums text-[15px] font-bold tracking-[-0.02em] text-white [text-shadow:0_0_12px_rgba(255,255,255,0.7)]">
                         4
                       </span>
                     </div>
                   </div>
                   <div>
-                    <h3 className="text-[22px] text-base font-semibold text-white">
+                    <h3 className="text-[22px] text-base font-semibold text-ink">
                       Go deeper
                     </h3>
-                    <p className="mt-1 text-[16px] leading-relaxed text-slate-300">
+                    <p className="mt-1 text-[16px] leading-relaxed text-slate-700 dark:text-slate-300">
                       Access expert guidance, practical knowledge, and ways to
                       buy.
                     </p>

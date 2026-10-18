@@ -59,7 +59,7 @@ export default async function Commerce7LinkPage({
     return (
       <Shell>
         <h1 style={{ fontSize: "20px" }}>This link is not valid</h1>
-        <p style={{ color: "#52525b" }}>
+        <p style={{ color: "var(--muted-foreground)" }}>
           Reopen the SQRATCH app from your Commerce7 admin to start again.
         </p>
       </Shell>
@@ -90,7 +90,7 @@ export default async function Commerce7LinkPage({
     return (
       <Shell>
         <h1 style={{ fontSize: "20px" }}>Connection link unavailable</h1>
-        <p style={{ color: "#52525b" }}>{message}</p>
+        <p style={{ color: "var(--muted-foreground)" }}>{message}</p>
       </Shell>
     );
   }
@@ -103,7 +103,7 @@ export default async function Commerce7LinkPage({
     return (
       <Shell>
         <h1 style={{ fontSize: "20px" }}>No eligible SQRATCH brand</h1>
-        <p style={{ color: "#52525b" }}>
+        <p style={{ color: "var(--muted-foreground)" }}>
           Your SQRATCH account doesn&apos;t administer any brand yet, so there is
           nothing to connect <strong>{intent.externalAccountId}</strong> to.
         </p>
@@ -125,7 +125,7 @@ export default async function Commerce7LinkPage({
     return (
       <Shell>
         <h1 style={{ fontSize: "20px" }}>Already connected to another brand</h1>
-        <p style={{ color: "#52525b" }}>
+        <p style={{ color: "var(--muted-foreground)" }}>
           Commerce7 tenant <strong>{intent.externalAccountId}</strong> is already
           connected to a different SQRATCH brand. Transferring a connected store
           between brands isn&apos;t automatic — please contact SQRATCH support to
@@ -140,7 +140,7 @@ export default async function Commerce7LinkPage({
       <h1 style={{ fontSize: "20px", marginBottom: "8px" }}>
         Connect Commerce7 to SQRATCH
       </h1>
-      <p style={{ color: "#52525b", marginTop: 0 }}>
+      <p style={{ color: "var(--muted-foreground)", marginTop: 0 }}>
         Commerce7 tenant <strong>{intent.externalAccountId}</strong>
       </p>
       <Commerce7LinkConfirmForm

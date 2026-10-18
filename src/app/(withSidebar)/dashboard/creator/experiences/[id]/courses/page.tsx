@@ -170,7 +170,7 @@ export default function CreatorExperienceCoursesPage({
           <Button
             asChild
             variant="outline"
-            className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+            className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
           >
             <Link href={`/dashboard/creator/experiences/${experienceId}/edit`}>
               Edit experience
@@ -181,12 +181,12 @@ export default function CreatorExperienceCoursesPage({
     >
       <PageCard>
         <h2 className="text-xl font-semibold">Create course</h2>
-        <p className="mt-2 text-sm text-white/60">
-          Create the course first, then use <span className="font-medium text-white">Manage lessons</span> on that course card to add lessons.
+        <p className="mt-2 text-sm text-copy-60">
+          Create the course first, then use <span className="font-medium text-ink">Manage lessons</span> on that course card to add lessons.
         </p>
         <div className="mt-5 grid gap-4 lg:grid-cols-2">
           <div className="space-y-2">
-            <p className="text-sm text-white/70">Course title</p>
+            <p className="text-sm text-copy-70">Course title</p>
             <Input
               value={newCourse.title}
               onChange={(event) =>
@@ -196,11 +196,11 @@ export default function CreatorExperienceCoursesPage({
                 }))
               }
               placeholder="Course title"
-              className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+              className="border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
             />
           </div>
           <div className="space-y-2">
-            <p className="text-sm text-white/70">Display order</p>
+            <p className="text-sm text-copy-70">Display order</p>
             <Input
               type="number"
               value={newCourse.sortOrder}
@@ -211,12 +211,12 @@ export default function CreatorExperienceCoursesPage({
                 }))
               }
               placeholder="Display order"
-              className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+              className="border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
             />
-            <p className="text-xs text-white/45">Lower numbers appear first.</p>
+            <p className="text-xs text-copy-45">Lower numbers appear first.</p>
           </div>
           <div className="space-y-2">
-            <p className="text-sm text-white/70">Course completion points</p>
+            <p className="text-sm text-copy-70">Course completion points</p>
             <Input
               type="number"
               min={0}
@@ -229,9 +229,9 @@ export default function CreatorExperienceCoursesPage({
                 }))
               }
               placeholder="0"
-              className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+              className="border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
             />
-            <p className="text-xs text-white/45">
+            <p className="text-xs text-copy-45">
               Awarded once when a user completes all active lessons in this
               course. Use 0 for no reward.
             </p>
@@ -246,7 +246,7 @@ export default function CreatorExperienceCoursesPage({
             }))
           }
           placeholder="Course description"
-          className="mt-4 min-h-[140px] border-white/10 bg-black/20 text-white placeholder:text-white/35"
+          className="mt-4 min-h-[140px] border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
         />
         <div className="mt-4 flex flex-wrap gap-4">
           <select
@@ -257,7 +257,7 @@ export default function CreatorExperienceCoursesPage({
                 access: event.target.value as "PUBLIC" | "PRIVATE",
               }))
             }
-            className="flex h-10 rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+            className="flex h-10 rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
           >
             <option value="PUBLIC">Public</option>
             <option value="PRIVATE">Private</option>
@@ -271,7 +271,7 @@ export default function CreatorExperienceCoursesPage({
               deletingId !== null ||
               !newCourse.title.trim()
             }
-            className="rounded-full border border-white bg-white text-black"
+            className="rounded-full border border-edge bg-primary text-primary-foreground"
           >
             {savingNew ? "Creating..." : "Create course"}
           </Button>
@@ -280,17 +280,17 @@ export default function CreatorExperienceCoursesPage({
 
       {error && (
         <PageCard>
-          <p className="text-sm text-red-300">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         </PageCard>
       )}
 
       {!data ? (
         <PageCard>
-          <p className="text-sm text-white/65">Loading courses...</p>
+          <p className="text-sm text-copy-65">Loading courses...</p>
         </PageCard>
       ) : data.courses.length === 0 ? (
         <PageCard>
-          <p className="text-sm text-white/65">
+          <p className="text-sm text-copy-65">
             No courses yet. Create a course above, then open Manage lessons on that course to add lessons.
           </p>
         </PageCard>
@@ -340,17 +340,17 @@ function EditableCourseCard({
     <PageCard>
       <div className="grid gap-4 lg:grid-cols-2">
         <div className="space-y-2">
-          <p className="text-sm text-white/70">Course title</p>
+          <p className="text-sm text-copy-70">Course title</p>
           <Input
             value={draft.title}
             onChange={(event) =>
               setDraft((current) => ({ ...current, title: event.target.value }))
             }
-            className="border-white/10 bg-black/20 text-white"
+            className="border-edge/10 bg-inset/20 text-ink"
           />
         </div>
         <div className="space-y-2">
-          <p className="text-sm text-white/70">Display order</p>
+          <p className="text-sm text-copy-70">Display order</p>
           <Input
             type="number"
             value={draft.sortOrder}
@@ -360,12 +360,12 @@ function EditableCourseCard({
                 sortOrder: Number(event.target.value || 0),
               }))
             }
-            className="border-white/10 bg-black/20 text-white"
+            className="border-edge/10 bg-inset/20 text-ink"
           />
-          <p className="text-xs text-white/45">Lower numbers appear first.</p>
+          <p className="text-xs text-copy-45">Lower numbers appear first.</p>
         </div>
         <div className="space-y-2">
-          <p className="text-sm text-white/70">Course completion points</p>
+          <p className="text-sm text-copy-70">Course completion points</p>
           <Input
             type="number"
             min={0}
@@ -377,9 +377,9 @@ function EditableCourseCard({
                 completionPointsReward: Number(event.target.value || 0),
               }))
             }
-            className="border-white/10 bg-black/20 text-white"
+            className="border-edge/10 bg-inset/20 text-ink"
           />
-          <p className="text-xs text-white/45">
+          <p className="text-xs text-copy-45">
             Awarded once when a user completes all active lessons. Use 0 for no
             reward.
           </p>
@@ -393,7 +393,7 @@ function EditableCourseCard({
             description: event.target.value,
           }))
         }
-        className="mt-4 min-h-[120px] border-white/10 bg-black/20 text-white"
+        className="mt-4 min-h-[120px] border-edge/10 bg-inset/20 text-ink"
       />
       <div className="mt-4 flex flex-wrap items-center gap-4">
         <select
@@ -404,7 +404,7 @@ function EditableCourseCard({
               access: event.target.value as "PUBLIC" | "PRIVATE",
             }))
           }
-          className="flex h-10 rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+          className="flex h-10 rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
         >
           <option value="PUBLIC">Public</option>
           <option value="PRIVATE">Private</option>
@@ -413,7 +413,7 @@ function EditableCourseCard({
           type="button"
           onClick={() => void onSave(draft)}
           disabled={disabled || !draft.title.trim()}
-          className="rounded-full border border-white bg-white text-black"
+          className="rounded-full border border-edge bg-primary text-primary-foreground"
         >
           {saving ? "Saving..." : "Save course"}
         </Button>
@@ -421,7 +421,7 @@ function EditableCourseCard({
           asChild={!disabled}
           disabled={disabled}
           variant="outline"
-          className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+          className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
         >
           {disabled ? (
             <span>Manage lessons</span>
@@ -435,7 +435,7 @@ function EditableCourseCard({
             variant="outline"
             onClick={() => void onDelete(course.id)}
             disabled={disabled}
-            className="rounded-full border-red-400/45 bg-red-500/10 text-red-200 hover:border-red-300/70 hover:bg-red-500/20 hover:text-red-100"
+            className="rounded-full border-red-400/45 bg-red-500/10 text-red-700 dark:text-red-200 hover:border-red-300/70 hover:bg-red-500/20 hover:text-red-100"
           >
             {deleting ? "Deleting..." : "Delete course"}
           </Button>

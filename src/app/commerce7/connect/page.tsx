@@ -52,10 +52,10 @@ function Shell({
 }) {
   const border =
     tone === "error"
-      ? "#dc2626"
+      ? "var(--destructive)"
       : tone === "success"
         ? "#16a34a"
-        : "#d4d4d8";
+        : "var(--border)";
 
   return (
     <>
@@ -102,7 +102,7 @@ export default async function Commerce7ConnectPage({
         <h1 style={{ fontSize: "18px", margin: "0 0 8px" }}>
           Missing Commerce7 context
         </h1>
-        <p style={{ margin: 0, color: "#52525b" }}>
+        <p style={{ margin: 0, color: "var(--muted-foreground)" }}>
           Open this page from the SQRATCH app inside your Commerce7 admin.
         </p>
       </Shell>
@@ -121,7 +121,7 @@ export default async function Commerce7ConnectPage({
         <h1 style={{ fontSize: "18px", margin: "0 0 8px" }}>
           Could not verify your Commerce7 account
         </h1>
-        <p style={{ margin: 0, color: "#52525b" }}>
+        <p style={{ margin: 0, color: "var(--muted-foreground)" }}>
           {verification.reason === "UNAUTHORIZED"
             ? "Your Commerce7 session has expired or is not permitted. Reload this page from your Commerce7 admin and try again."
             : "Commerce7 could not be reached right now. Please try again shortly."}
@@ -146,7 +146,7 @@ export default async function Commerce7ConnectPage({
         <h1 style={{ fontSize: "18px", margin: "0 0 8px" }}>
           SQRATCH is not installed on this tenant
         </h1>
-        <p style={{ margin: 0, color: "#52525b" }}>
+        <p style={{ margin: 0, color: "var(--muted-foreground)" }}>
           Install the SQRATCH app on <strong>{tenantId}</strong> from the
           Commerce7 App Store, then reopen this page.
         </p>
@@ -171,19 +171,19 @@ export default async function Commerce7ConnectPage({
         <h1 style={{ fontSize: "18px", margin: "0 0 12px" }}>Connected to SQRATCH</h1>
         <dl style={{ margin: 0, display: "grid", gap: "6px" }}>
           <div>
-            <dt style={{ display: "inline", color: "#52525b" }}>SQRATCH brand: </dt>
+            <dt style={{ display: "inline", color: "var(--muted-foreground)" }}>SQRATCH brand: </dt>
             <dd style={{ display: "inline", margin: 0, fontWeight: 600 }}>
               {connection.brand.name}
             </dd>
           </div>
           <div>
-            <dt style={{ display: "inline", color: "#52525b" }}>Commerce7 tenant: </dt>
+            <dt style={{ display: "inline", color: "var(--muted-foreground)" }}>Commerce7 tenant: </dt>
             <dd style={{ display: "inline", margin: 0, fontWeight: 600 }}>
               {tenantId}
             </dd>
           </div>
           <div>
-            <dt style={{ display: "inline", color: "#52525b" }}>Status: </dt>
+            <dt style={{ display: "inline", color: "var(--muted-foreground)" }}>Status: </dt>
             <dd style={{ display: "inline", margin: 0, fontWeight: 600 }}>
               {connection.status}
             </dd>
@@ -200,7 +200,7 @@ export default async function Commerce7ConnectPage({
         <h1 style={{ fontSize: "18px", margin: "0 0 8px" }}>
           Additional Commerce7 permission required
         </h1>
-        <p style={{ margin: 0, color: "#52525b" }}>
+        <p style={{ margin: 0, color: "var(--muted-foreground)" }}>
           Connecting this tenant to a SQRATCH brand must be done by a Commerce7
           Admin Owner. Please ask an Admin Owner on{" "}
           <strong>{tenantId}</strong> to complete the connection.
@@ -225,7 +225,7 @@ export default async function Commerce7ConnectPage({
   return (
     <Shell>
       <h1 style={{ fontSize: "18px", margin: "0 0 8px" }}>Connect to SQRATCH</h1>
-      <p style={{ margin: "0 0 16px", color: "#52525b" }}>
+      <p style={{ margin: "0 0 16px", color: "var(--muted-foreground)" }}>
         Link Commerce7 tenant <strong>{tenantId}</strong> to your SQRATCH brand.
         You&apos;ll sign in to SQRATCH in a new tab and choose which brand to
         connect. This link is valid for 10 minutes.
@@ -236,8 +236,8 @@ export default async function Commerce7ConnectPage({
         rel="noopener noreferrer"
         style={{
           display: "inline-block",
-          background: "#111827",
-          color: "#ffffff",
+          background: "var(--primary)",
+          color: "var(--primary-foreground)",
           padding: "10px 16px",
           borderRadius: "8px",
           textDecoration: "none",

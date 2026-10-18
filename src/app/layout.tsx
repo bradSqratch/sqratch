@@ -7,6 +7,7 @@ import "./globals.css";
 import AuthProvider from "@/context/AuthProvider";
 import GoogleAnalytics from "@/components/GoogleAnalytics";
 import { Suspense } from "react";
+import { ThemeProvider } from "@/components/theme-provider";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -50,7 +51,7 @@ export default function RootLayout({
   const isProd = process.env.NODE_ENV === "production";
 
   return (
-    <html lang="en" className="dark">
+    <html lang="en" suppressHydrationWarning>
       <head>
         {isProd && GA_ID && (
           <>
@@ -73,16 +74,18 @@ export default function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} ${lexendGiga.variable} ${montserrat.variable} font-sans antialiased app-bg`}
       >
-        <AuthProvider>
-          {isProd && GA_ID && (
-            <Suspense fallback={null}>
-              <GoogleAnalytics />
-            </Suspense>
-          )}
-          {children}
-          <Analytics />
-          <SpeedInsights />
-        </AuthProvider>
+        <ThemeProvider>
+          <AuthProvider>
+            {isProd && GA_ID && (
+              <Suspense fallback={null}>
+                <GoogleAnalytics />
+              </Suspense>
+            )}
+            {children}
+            <Analytics />
+            <SpeedInsights />
+          </AuthProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

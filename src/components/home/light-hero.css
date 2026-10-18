@@ -1,0 +1,120 @@
+/* Light hero art direction. Existing dark artwork and layout stay untouched. */
+:root:not(.dark) .pastel-hero-tint {
+  opacity: 1 !important;
+  background-color: transparent !important;
+  background-image:
+    radial-gradient(ellipse at 78% 12%, rgb(255 228 178 / 55%), transparent 57%),
+    linear-gradient(135deg, rgb(192 179 231 / 48%), rgb(247 235 226 / 30%) 65%, rgb(249 239 223 / 44%));
+}
+
+:root:not(.dark) .pastel-hero-blob,
+:root:not(.dark) .pastel-hero > img {
+  display: none;
+}
+
+:root:not(.dark) .pastel-hero > .z-10 {
+  padding-block: 7rem 4rem;
+}
+
+:root:not(.dark) .pastel-hero-card {
+  width: min(76vw, 72rem);
+  max-width: calc(100% - 3rem);
+  padding: clamp(2rem, 4vw, 3.5rem);
+  border: 1px solid rgb(255 255 255 / 76%);
+  border-radius: 2rem;
+  background: linear-gradient(135deg, rgb(255 253 250 / 28%), rgb(242 235 251 / 16%) 55%, rgb(255 241 217 / 25%));
+  backdrop-filter: blur(22px) saturate(1.18);
+  box-shadow: 0 24px 70px rgb(62 45 91 / 12%), inset 0 1px 0 rgb(255 255 255 / 85%), inset 0 -1px 0 rgb(255 255 255 / 25%);
+}
+
+:root:not(.dark) .pastel-hero-card > a > div {
+  background: linear-gradient(120deg, rgb(236 225 252 / 90%), rgb(255 249 232 / 90%) 52%, rgb(244 227 237 / 88%));
+  border-color: rgb(255 255 255 / 85%);
+  color: #51415f;
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 90%), 0 3px 14px rgb(101 81 128 / 12%);
+}
+
+:root:not(.dark) .pastel-hero-card > a:hover > div {
+  background: linear-gradient(120deg, #e9dcfa, #fff4d9 52%, #f0dfe9);
+  box-shadow: inset 0 1px 0 white, 0 5px 18px rgb(101 81 128 / 18%);
+}
+
+:root:not(.dark) .pastel-hero-card h1 {
+  margin-top: 2rem;
+  font-size: clamp(2.75rem, 5.5vw, 4.75rem);
+  line-height: 1.04;
+  color: #2c203b;
+  background: none;
+  filter: none;
+  text-wrap: balance;
+}
+
+:root:not(.dark) .pastel-hero-card > p {
+  margin-top: 1.25rem;
+  color: #51455c;
+  font-size: clamp(1rem, 1.6vw, 1.25rem);
+  font-weight: 400;
+}
+
+:root:not(.dark) .pastel-hero-card > div:last-child {
+  margin-top: 2rem;
+}
+
+:root:not(.dark) .pastel-hero-card input {
+  background: rgb(255 255 255 / 80%);
+  border-color: rgb(105 85 139 / 25%);
+  box-shadow: 0 3px 12px rgb(62 45 91 / 5%);
+}
+
+:root:not(.dark) .pastel-hero-card button {
+  border-color: transparent;
+  box-shadow: 0 5px 18px rgb(101 81 128 / 20%);
+}
+
+:root:not(.dark) .light-hero-cubes {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+:root:not(.dark) .light-hero-cube {
+  position: absolute;
+  width: clamp(10rem, 22vw, 22rem);
+}
+
+:root:not(.dark) .light-hero-cube :is(video, img) { width: 100%; }
+:root:not(.dark) .light-hero-cube-large { top: 9%; right: 0; }
+:root:not(.dark) .light-hero-cube-small { top: 8%; left: 0; }
+:root:not(.dark) .light-hero-cube-lower { bottom: 3%; left: -3%; }
+:root:not(.dark) .light-hero-cube-right-mid { top: 43%; right: -5%; }
+:root:not(.dark) .light-hero-cube-right-low { bottom: 8%; right: 2%; }
+:root:not(.dark) .light-hero-cube-bottom { bottom: -5%; right: 23%; }
+:root:not(.dark) .light-hero-cube-left-mid { top: 51%; left: -7%; }
+
+@media (min-width: 640px) {
+  :root:not(.dark) .pastel-hero-card h1 {
+    font-size: clamp(2rem, 4.6vw, 4.5rem);
+    white-space: nowrap;
+    text-wrap: nowrap;
+  }
+
+  :root:not(.dark) .pastel-hero-card h1 br { display: none; }
+}
+
+@media (min-width: 640px) and (max-width: 1023px) {
+  :root:not(.dark) .pastel-hero-card { width: calc(100% - 4rem); }
+  :root:not(.dark) :is(.light-hero-cube-left-mid, .light-hero-cube-right-mid) { display: none; }
+}
+
+@media (min-width: 1024px) {
+  :root:not(.dark) .light-hero-cube-large { top: 3%; }
+  :root:not(.dark) .light-hero-cube-right-low { bottom: 1%; right: 0; }
+}
+
+@media (max-width: 639px) {
+  :root:not(.dark) .pastel-hero-card { width: calc(100% - 2rem); padding: 2rem 1.25rem; border-radius: 1.5rem; }
+  :root:not(.dark) .light-hero-cube-large { right: -3rem; top: 3%; }
+  :root:not(.dark) .light-hero-cube-small { display: none; }
+  :root:not(.dark) :is(.light-hero-cube-right-mid, .light-hero-cube-left-mid, .light-hero-cube-bottom) { display: none; }
+}

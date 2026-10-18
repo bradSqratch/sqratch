@@ -12,6 +12,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { DashboardTopbarUser } from "@/components/dashboard-topbar-user";
 import { SqratchLogo } from "@/components/brand/sqratch-logo";
 import { hasPendingApproval } from "@/lib/approval-gating";
+import { ThemeSelect } from "@/components/theme-select";
 
 export const metadata: Metadata = {
   title: "Dashboard",
@@ -43,17 +44,17 @@ export default async function DashboardLayout({
             className="
               sticky top-0 z-30
               flex h-16 shrink-0 items-center justify-between
-              bg-[linear-gradient(180deg,rgba(7,10,26,0.85)_0%,rgba(7,10,26,0.55)_100%)]
+              bg-topbar dark:bg-[linear-gradient(180deg,rgba(var(--header-rgb),0.85)_0%,rgba(var(--header-rgb),0.55)_100%)]
               backdrop-blur-xl
-              border-b border-white/10
-              shadow-[0_8px_30px_rgba(0,0,0,0.35)]
+              border-b border-edge/10
+              shadow-[0_8px_28px_rgba(72,57,34,0.06)] dark:shadow-[0_8px_30px_rgba(0,0,0,0.35)]
               transition-[width,height]
               ease-linear
               group-has-data-[collapsible=icon]/sidebar-wrapper:h-12
             "
           >
             {/* Added styling classes from new code. */}
-            <div className="flex items-center gap-3 px-4 sm:px-6">
+            <div className="flex min-w-0 items-center gap-2 px-3 sm:gap-3 sm:px-6">
               {" "}
               {/* Added padding for consistent spacing. */}
               <SidebarTrigger className="-ml-1" />
@@ -72,13 +73,14 @@ export default async function DashboardLayout({
               {/* Mobile-only centered logo */}
               <Link
                 href="/dashboard"
-                className="sm:hidden justify-self-center flex items-center ml-12" // Flex on mobile, hidden on small and larger screens.
+                className="sm:hidden flex min-w-0 items-center"
               >
                 <SqratchLogo priority className="h-6 w-auto" />
               </Link>
             </div>
             {/* NEW: user name + role + guard */}
-            <div className="pr-4">
+            <div className="flex shrink-0 items-center gap-2 pr-3 sm:gap-3 sm:pr-4">
+              <ThemeSelect />
               <DashboardTopbarUser />
             </div>
           </header>
@@ -86,7 +88,7 @@ export default async function DashboardLayout({
           {/* Main Content Area */}
           <div className="flex-1 bg-transparent">
             <Suspense
-              fallback={<div className="p-6 text-white/70">Loading...</div>}
+              fallback={<div className="p-6 text-copy-70">Loading...</div>}
             >
               <div>{children}</div>
               <Toaster richColors />

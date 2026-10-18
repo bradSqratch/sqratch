@@ -4,7 +4,7 @@ import CommonNavbar from "@/components/commonNavbar";
 
 export default function NotFound() {
   return (
-    <main className="min-h-screen bg-[#05050f]">
+    <main className="min-h-screen bg-card dark:bg-[#05050f]">
       {/* Your existing header */}
       <CommonNavbar />
 
@@ -15,25 +15,25 @@ export default function NotFound() {
           <div className="absolute -left-40 -top-30 h-130 w-130 rounded-full bg-fuchsia-600/20 blur-[90px]" />
           <div className="absolute -right-35 -top-20 h-130 w-130 rounded-full bg-blue-600/20 blur-[90px]" />
           <div className="absolute left-1/2 top-[40%] h-150 w-175 -translate-x-1/2 rounded-full bg-indigo-500/10 blur-[110px]" />
-          <div className="absolute inset-0 bg-black/45" />
+          <div className="absolute inset-0 bg-inset/45" />
         </div>
 
         {/* Card */}
         <div className="relative z-10 mx-auto flex max-w-6xl items-center px-6 pb-10 pt-6">
-          <div className="w-full rounded-3xl border border-white/10 bg-white/3 backdrop-blur-xl shadow-[0_30px_90px_rgba(0,0,0,0.55)]">
+          <div className="w-full rounded-3xl border border-edge/10 bg-glass-3 backdrop-blur-xl shadow-[0_8px_28px_rgba(72,57,34,0.06)] dark:shadow-[0_30px_90px_rgba(0,0,0,0.55)]">
             <div className="grid grid-cols-1 gap-10 p-8 md:grid-cols-2 md:gap-10 md:p-12">
               {/* LEFT */}
               <div className="flex flex-col justify-center">
-                <div className="inline-flex w-fit items-center gap-2 rounded-full border border-white/10 bg-white/4 px-3 py-1 text-xs text-white/70">
+                <div className="inline-flex w-fit items-center gap-2 rounded-full border border-edge/10 bg-glass-4 px-3 py-1 text-xs text-copy-70">
                   <span className="h-2 w-2 rounded-full bg-pink-500" />
                   NOT FOUND
                 </div>
 
-                <h1 className="mt-4 text-4xl font-semibold tracking-tight text-white md:text-5xl">
+                <h1 className="mt-4 text-4xl font-semibold tracking-tight text-ink md:text-5xl">
                   Oops, Wrong Turn…
                 </h1>
 
-                <p className="mt-4 max-w-md text-base leading-relaxed text-white/70">
+                <p className="mt-4 max-w-md text-base leading-relaxed text-copy-70">
                   This page doesn’t exist (or you don’t have access to it). If
                   you were trying to use an admin tool, start from your
                   dashboard and navigate from there.
@@ -49,7 +49,7 @@ export default function NotFound() {
 
                   <Link
                     href="/contact"
-                    className="inline-flex items-center justify-center rounded-full border border-white/15 bg-white/3 px-5 py-2.5 text-sm font-semibold text-white/85 hover:bg-white/6 hover:text-white transition"
+                    className="inline-flex items-center justify-center rounded-full border border-edge/15 bg-glass-3 px-5 py-2.5 text-sm font-semibold text-copy-85 hover:bg-glass-6 hover:text-ink transition"
                   >
                     Contact
                   </Link>
@@ -60,11 +60,11 @@ export default function NotFound() {
               <div className="flex items-center justify-center">
                 <div className="relative w-full max-w-md">
                   <div className="absolute inset-0 rounded-3xl bg-linear-to-br from-pink-500/10 to-blue-500/10 blur-2xl" />
-                  <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-white/2 p-6">
+                  <div className="theme-media relative overflow-hidden rounded-3xl border border-edge/10 bg-[#05050f] p-6">
                     <Illustration404 />
                   </div>
 
-                  <div className="mt-4 text-center text-xs text-white/45">
+                  <div className="mt-4 text-center text-xs text-copy-45">
                     404 — Page not found
                   </div>
                 </div>
@@ -72,18 +72,18 @@ export default function NotFound() {
             </div>
 
             {/* Footer inside card */}
-            <div className="flex items-center justify-between border-t border-white/10 px-8 py-5 text-xs text-white/45 md:px-12">
+            <div className="flex items-center justify-between border-t border-edge/10 px-8 py-5 text-xs text-copy-45 md:px-12">
               <div>
                 © {new Date().getFullYear()} SQRATCH. All rights reserved.
               </div>
               <div className="flex items-center gap-4">
                 <Link
-                  className="hover:text-white/70 transition"
+                  className="hover:text-copy-70 transition"
                   href="/privacy"
                 >
                   Privacy
                 </Link>
-                <Link className="hover:text-white/70 transition" href="/terms">
+                <Link className="hover:text-copy-70 transition" href="/terms">
                   Terms
                 </Link>
               </div>

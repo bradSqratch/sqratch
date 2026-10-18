@@ -130,30 +130,30 @@ export function OrderDetailClient({ orderId }: { orderId: string }) {
     <BrandPageShell title="Order detail" description="Financial summary, line items, and attribution for one order.">
       <PageCard>
         {loading ? (
-          <p className="text-sm text-white/65">Loading order...</p>
+          <p className="text-sm text-copy-65">Loading order...</p>
         ) : notFound ? (
-          <p className="text-sm text-white/65">That order was not found.</p>
+          <p className="text-sm text-copy-65">That order was not found.</p>
         ) : error ? (
-          <p className="text-sm text-red-300">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         ) : !order ? (
-          <p className="text-sm text-white/65">That order was not found.</p>
+          <p className="text-sm text-copy-65">That order was not found.</p>
         ) : (
           <div className="space-y-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <p className="text-2xl font-semibold text-white/90">
+                <p className="text-2xl font-semibold text-copy-90">
                   Order {order.orderNumber ?? `#${order.id.slice(0, 8)}`}
                 </p>
-                <p className="mt-1 text-sm text-white/55">
+                <p className="mt-1 text-sm text-copy-55">
                   {PROVIDER_LABELS[order.provider]} — {order.connectionDisplayName} (
                   {order.connectionExternalAccountId})
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <span className="rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs text-white/70">
+                <span className="rounded-full border border-edge/15 bg-glass-5 px-3 py-1 text-xs text-copy-70">
                   {order.financialStatus ? FINANCIAL_STATUS_LABELS[order.financialStatus] ?? order.financialStatus : "Unknown"}
                 </span>
-                <span className="rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs text-white/70">
+                <span className="rounded-full border border-edge/15 bg-glass-5 px-3 py-1 text-xs text-copy-70">
                   {order.fulfillmentStatus
                     ? FULFILLMENT_STATUS_LABELS[order.fulfillmentStatus] ?? order.fulfillmentStatus
                     : "Unknown"}
@@ -161,8 +161,8 @@ export function OrderDetailClient({ orderId }: { orderId: string }) {
                 <span
                   className={`rounded-full border px-3 py-1 text-xs ${
                     order.attributed
-                      ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-200/90"
-                      : "border-white/15 bg-white/5 text-white/60"
+                      ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-700 dark:text-emerald-200/90"
+                      : "border-edge/15 bg-glass-5 text-copy-60"
                   }`}
                 >
                   {order.attributed ? "Attributed" : "Unattributed"}
@@ -171,13 +171,13 @@ export function OrderDetailClient({ orderId }: { orderId: string }) {
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-                <p className="text-xs text-white/50">Order date</p>
-                <p className="mt-1 text-sm text-white/80">{formatDateTime(order.orderDate)}</p>
+              <div className="rounded-xl border border-edge/10 bg-inset/20 p-3">
+                <p className="text-xs text-copy-50">Order date</p>
+                <p className="mt-1 text-sm text-copy-80">{formatDateTime(order.orderDate)}</p>
               </div>
-              <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-                <p className="text-xs text-white/50">Currency</p>
-                <p className="mt-1 text-sm text-white/80">{order.currencyCode ?? "Unknown"}</p>
+              <div className="rounded-xl border border-edge/10 bg-inset/20 p-3">
+                <p className="text-xs text-copy-50">Currency</p>
+                <p className="mt-1 text-sm text-copy-80">{order.currencyCode ?? "Unknown"}</p>
               </div>
               {/* PHASE B — the two timestamps are labelled DISTINCTLY and never
                   conflated. `providerUpdatedAt` is the provider's own version of
@@ -185,20 +185,20 @@ export function OrderDetailClient({ orderId }: { orderId: string }) {
                   out-of-order protection, which is what explains "my
                   reconciliation ran but nothing changed". `updatedAt` is when
                   SQRATCH last wrote the row. */}
-              <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-                <p className="text-xs text-white/50">Provider last updated</p>
-                <p className="mt-1 text-sm text-white/80">
+              <div className="rounded-xl border border-edge/10 bg-inset/20 p-3">
+                <p className="text-xs text-copy-50">Provider last updated</p>
+                <p className="mt-1 text-sm text-copy-80">
                   {order.providerUpdatedAt ? formatDateTime(order.providerUpdatedAt) : "Unknown"}
                 </p>
               </div>
-              <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-                <p className="text-xs text-white/50">SQRATCH last updated</p>
-                <p className="mt-1 text-sm text-white/80">{formatDateTime(order.updatedAt)}</p>
+              <div className="rounded-xl border border-edge/10 bg-inset/20 p-3">
+                <p className="text-xs text-copy-50">SQRATCH last updated</p>
+                <p className="mt-1 text-sm text-copy-80">{formatDateTime(order.updatedAt)}</p>
               </div>
             </div>
 
             {order.refundAnomaly ? (
-              <div role="note" className="rounded-2xl border border-amber-300/40 bg-amber-300/10 p-4 text-sm text-amber-100">
+              <div role="note" className="rounded-2xl border border-amber-300/40 bg-amber-300/10 p-4 text-sm text-amber-700 dark:text-amber-100">
                 <p className="font-semibold">Over-refund reported by {PROVIDER_LABELS[order.provider] ?? order.provider}</p>
                 <p className="mt-1">
                   {PROVIDER_LABELS[order.provider] ?? order.provider} reported an additional{" "}
@@ -211,60 +211,60 @@ export function OrderDetailClient({ orderId }: { orderId: string }) {
               </div>
             ) : null}
 
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-              <p className="text-sm font-semibold text-white/85">Financial summary</p>
+            <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+              <p className="text-sm font-semibold text-copy-85">Financial summary</p>
               <div className="mt-3 grid gap-3 sm:grid-cols-3">
                 <div>
-                  <p className="text-xs text-white/50">Subtotal</p>
-                  <p className="mt-1 text-sm text-white/80">{formatMoneyDisplay(order.subtotalMinor, order.currencyCode, order.minorUnitExponent)}</p>
+                  <p className="text-xs text-copy-50">Subtotal</p>
+                  <p className="mt-1 text-sm text-copy-80">{formatMoneyDisplay(order.subtotalMinor, order.currencyCode, order.minorUnitExponent)}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-white/50">Shipping</p>
-                  <p className="mt-1 text-sm text-white/80">{formatMoneyDisplay(order.shippingMinor, order.currencyCode, order.minorUnitExponent)}</p>
+                  <p className="text-xs text-copy-50">Shipping</p>
+                  <p className="mt-1 text-sm text-copy-80">{formatMoneyDisplay(order.shippingMinor, order.currencyCode, order.minorUnitExponent)}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-white/50">Tax</p>
-                  <p className="mt-1 text-sm text-white/80">{formatMoneyDisplay(order.taxMinor, order.currencyCode, order.minorUnitExponent)}</p>
+                  <p className="text-xs text-copy-50">Tax</p>
+                  <p className="mt-1 text-sm text-copy-80">{formatMoneyDisplay(order.taxMinor, order.currencyCode, order.minorUnitExponent)}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-white/50">Total</p>
-                  <p className="mt-1 text-sm font-semibold text-white/90">
+                  <p className="text-xs text-copy-50">Total</p>
+                  <p className="mt-1 text-sm font-semibold text-copy-90">
                     {formatMoneyDisplay(order.totalMinor, order.currencyCode, order.minorUnitExponent)}
                   </p>
                 </div>
                 <div>
-                  <p className="text-xs text-white/50">Refunded</p>
-                  <p className="mt-1 text-sm text-white/80">{formatMoneyDisplay(order.totalRefundedMinor, order.currencyCode, order.minorUnitExponent)}</p>
+                  <p className="text-xs text-copy-50">Refunded</p>
+                  <p className="mt-1 text-sm text-copy-80">{formatMoneyDisplay(order.totalRefundedMinor, order.currencyCode, order.minorUnitExponent)}</p>
                 </div>
                 <div>
-                  <p className="text-xs text-white/50">Net revenue</p>
-                  <p className="mt-1 text-sm font-semibold text-white/90">
+                  <p className="text-xs text-copy-50">Net revenue</p>
+                  <p className="mt-1 text-sm font-semibold text-copy-90">
                     {formatMoneyDisplay(order.netRevenueMinor, order.currencyCode, order.minorUnitExponent)}
                   </p>
                 </div>
               </div>
             </div>
 
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-              <p className="text-sm font-semibold text-white/85">Line items</p>
+            <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+              <p className="text-sm font-semibold text-copy-85">Line items</p>
               {order.lineItems.length === 0 ? (
-                <p className="mt-2 text-xs text-white/50">No line items recorded for this order.</p>
+                <p className="mt-2 text-xs text-copy-50">No line items recorded for this order.</p>
               ) : (
                 <div className="mt-3 space-y-2">
                   {order.lineItems.map((item) => (
                     <div
                       key={item.id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-black/20 p-3"
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-edge/10 bg-inset/20 p-3"
                     >
                       <div>
-                        <p className="text-sm text-white/80">{item.title ?? "Untitled item"}</p>
-                        <p className="mt-1 text-xs text-white/45">
+                        <p className="text-sm text-copy-80">{item.title ?? "Untitled item"}</p>
+                        <p className="mt-1 text-xs text-copy-45">
                           {item.sku ? `SKU ${item.sku}` : "No SKU"} — Qty {item.quantity}
                         </p>
                       </div>
                       <div className="text-right">
-                        <p className="text-sm text-white/80">{formatMoneyDisplay(item.unitPriceMinor, order.currencyCode, order.minorUnitExponent)} each</p>
-                        <p className="mt-1 text-xs text-white/50">{formatMoneyDisplay(item.totalMinor, order.currencyCode, order.minorUnitExponent)} total</p>
+                        <p className="text-sm text-copy-80">{formatMoneyDisplay(item.unitPriceMinor, order.currencyCode, order.minorUnitExponent)} each</p>
+                        <p className="mt-1 text-xs text-copy-50">{formatMoneyDisplay(item.totalMinor, order.currencyCode, order.minorUnitExponent)} total</p>
                       </div>
                     </div>
                   ))}
@@ -272,7 +272,7 @@ export function OrderDetailClient({ orderId }: { orderId: string }) {
               )}
             </div>
 
-            <Button asChild variant="outline" className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10">
+            <Button asChild variant="outline" className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10">
               <Link href="/dashboard/brand/commerce/orders">Back to order operations</Link>
             </Button>
           </div>

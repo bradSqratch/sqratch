@@ -281,11 +281,11 @@ export function LessonProductLinksSection({
 
   return (
     <>
-      <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
+      <div className="rounded-3xl border border-edge/10 bg-inset/20 p-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
           <div>
             <h3 className="text-lg font-semibold">Related Products</h3>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-white/60">
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-copy-60">
               Link products to this lesson so they can appear directly on the
               public lesson page.
             </p>
@@ -293,18 +293,18 @@ export function LessonProductLinksSection({
           <Button
             type="button"
             onClick={() => setOpen(true)}
-            className="rounded-full border border-white bg-white text-black"
+            className="rounded-full border border-edge bg-primary text-primary-foreground"
           >
             Add product
           </Button>
         </div>
 
         {actionError && (
-          <p className="mt-4 text-sm text-red-300">{actionError}</p>
+          <p className="mt-4 text-sm text-red-700 dark:text-red-300">{actionError}</p>
         )}
 
         {linkedProducts.length === 0 ? (
-          <div className="mt-5 rounded-3xl border border-dashed border-white/10 bg-black/10 p-5 text-sm text-white/55">
+          <div className="mt-5 rounded-3xl border border-dashed border-edge/10 bg-inset/10 p-5 text-sm text-copy-55">
             No products are linked to this lesson yet.
           </div>
         ) : (
@@ -321,7 +321,7 @@ export function LessonProductLinksSection({
               return (
                 <div
                   key={product.id}
-                  className="rounded-3xl border border-white/10 bg-[#111528] p-4"
+                  className="rounded-3xl border border-edge/10 bg-card dark:bg-[#111528] p-4"
                 >
                   <div className="flex items-start gap-4">
                     {product.imageUrl ? (
@@ -331,10 +331,10 @@ export function LessonProductLinksSection({
                         width={80}
                         height={80}
                         /* object-contain: provider images vary in aspect ratio; object-cover cropped tall bottle shots. */
-                        className="h-20 w-20 rounded-2xl bg-white/5 object-contain p-1"
+                        className="h-20 w-20 rounded-2xl bg-glass-5 object-contain p-1"
                       />
                     ) : (
-                      <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-white/8 text-xs text-white/45">
+                      <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-glass-8 text-xs text-copy-45">
                         No image
                       </div>
                     )}
@@ -345,18 +345,18 @@ export function LessonProductLinksSection({
                           {product.title || "Linked product"}
                         </p>
                       </div>
-                      <p className="mt-1 text-sm text-white/55">
+                      <p className="mt-1 text-sm text-copy-55">
                         {product.priceText || "Price available in store"}
                       </p>
                       {(campaignLabel || brandLabel) && (
                         <p className="mt-2 flex flex-wrap items-center gap-1.5">
                           {campaignLabel && (
-                            <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] uppercase tracking-[0.14em] text-white/50">
+                            <span className="rounded-full border border-edge/10 px-2 py-0.5 text-[11px] uppercase tracking-[0.14em] text-copy-50">
                               {campaignLabel}
                             </span>
                           )}
                           {brandLabel && (
-                            <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] uppercase tracking-[0.14em] text-white/50">
+                            <span className="rounded-full border border-edge/10 px-2 py-0.5 text-[11px] uppercase tracking-[0.14em] text-copy-50">
                               {brandLabel}
                             </span>
                           )}
@@ -366,7 +366,7 @@ export function LessonProductLinksSection({
                         href={product.productUrl}
                         target="_blank"
                         rel="noreferrer"
-                        className="mt-3 inline-flex text-sm text-sky-300 underline"
+                        className="mt-3 inline-flex text-sm text-sky-700 dark:text-sky-300 underline"
                       >
                         Open product
                       </a>
@@ -377,7 +377,7 @@ export function LessonProductLinksSection({
                       variant="outline"
                       onClick={() => void removeProduct(product.id)}
                       disabled={removingId === product.id}
-                      className="rounded-full border-white/15 bg-transparent text-white hover:bg-white/10"
+                      className="rounded-full border-edge/15 bg-transparent text-ink hover:bg-glass-10"
                     >
                       {removingId === product.id ? "Removing..." : "Remove"}
                     </Button>
@@ -390,10 +390,10 @@ export function LessonProductLinksSection({
       </div>
 
       <Dialog open={open} onOpenChange={setOpen}>
-        <DialogContent className="max-w-5xl border-white/10 bg-[#0d1021] text-white">
+        <DialogContent className="max-w-5xl border-edge/10 bg-card dark:bg-[#0d1021] text-ink">
           <DialogHeader>
             <DialogTitle>Attach products</DialogTitle>
-            <DialogDescription className="text-white/55">
+            <DialogDescription className="text-copy-55">
               Choose products from the connected lesson brand storefront and add
               them to this lesson.
             </DialogDescription>
@@ -405,12 +405,12 @@ export function LessonProductLinksSection({
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 placeholder="Search products"
-                className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+                className="border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
               />
             )}
 
             {available?.hasMore && (
-              <p className="text-xs text-white/45">
+              <p className="text-xs text-copy-45">
                 Showing the first {available.items.length} campaign-eligible products. This
                 campaign has more than that assigned; search below filters only what has
                 loaded.
@@ -418,18 +418,18 @@ export function LessonProductLinksSection({
             )}
 
             {loadingAvailable ? (
-              <div className="rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/60">
+              <div className="rounded-3xl border border-edge/10 bg-inset/20 p-6 text-sm text-copy-60">
                 Loading products...
               </div>
             ) : pickerError ? (
-              <div className="space-y-3 rounded-3xl border border-red-400/25 bg-red-500/10 p-6 text-sm text-red-200">
+              <div className="space-y-3 rounded-3xl border border-red-400/25 bg-red-500/10 p-6 text-sm text-red-700 dark:text-red-200">
                 <p>{pickerError}</p>
                 {selectedCampaign && (
                   <Button
                     type="button"
                     variant="outline"
                     onClick={clearCampaignSelection}
-                    className="rounded-full border-red-300/30 bg-transparent text-red-100 hover:bg-red-500/10"
+                    className="rounded-full border-red-300/30 bg-transparent text-red-700 dark:text-red-100 hover:bg-red-500/10"
                   >
                     Choose a different campaign
                   </Button>
@@ -440,8 +440,8 @@ export function LessonProductLinksSection({
               // list or attach UI is shown until the creator picks one — this
               // is what replaces the removed silent "first connected brand by
               // campaign order" fallback.
-              <div className="space-y-3 rounded-3xl border border-white/10 bg-black/20 p-6">
-                <p className="text-sm text-white/60">
+              <div className="space-y-3 rounded-3xl border border-edge/10 bg-inset/20 p-6">
+                <p className="text-sm text-copy-60">
                   This lesson is sponsored by multiple campaigns. Select which
                   one you&apos;re attaching a product for.
                 </p>
@@ -451,10 +451,10 @@ export function LessonProductLinksSection({
                       key={campaign.id}
                       type="button"
                       onClick={() => selectCampaignContext(campaign)}
-                      className="flex w-full items-center justify-between gap-3 rounded-2xl border border-white/10 bg-[#111528] px-4 py-3 text-left text-sm transition hover:border-white/25"
+                      className="flex w-full items-center justify-between gap-3 rounded-2xl border border-edge/10 bg-card dark:bg-[#111528] px-4 py-3 text-left text-sm transition hover:border-edge/25"
                     >
-                      <span className="text-white/80">
-                        <span className="font-medium text-white">
+                      <span className="text-copy-80">
+                        <span className="font-medium text-ink">
                           {campaign.name}
                         </span>
                         {" — "}
@@ -465,24 +465,24 @@ export function LessonProductLinksSection({
                 </div>
               </div>
             ) : !available?.connected ? (
-              <div className="rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/60">
+              <div className="rounded-3xl border border-edge/10 bg-inset/20 p-6 text-sm text-copy-60">
                 {available?.brand
                   ? `${available.brand.name} does not have a connected store yet.`
                   : "This lesson does not resolve to a campaign brand with a connected store yet."}
               </div>
             ) : available.items.length === 0 ? (
-              <div className="rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/60">
+              <div className="rounded-3xl border border-edge/10 bg-inset/20 p-6 text-sm text-copy-60">
                 No approved active products are assigned to this campaign.
               </div>
             ) : (
               <div className="space-y-3">
                 {available.brand && (
-                  <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/60">
+                  <div className="rounded-2xl border border-edge/10 bg-inset/20 px-4 py-3 text-sm text-copy-60">
                     {selectedCampaign ? (
                       <div className="flex flex-wrap items-center justify-between gap-3">
                         <span>
                           Attaching under{" "}
-                          <span className="font-medium text-white">
+                          <span className="font-medium text-ink">
                             {selectedCampaign.name}
                           </span>
                           {" — "}
@@ -491,7 +491,7 @@ export function LessonProductLinksSection({
                         <button
                           type="button"
                           onClick={clearCampaignSelection}
-                          className="text-xs text-sky-300 underline"
+                          className="text-xs text-sky-700 dark:text-sky-300 underline"
                         >
                           Change campaign
                         </button>
@@ -499,7 +499,7 @@ export function LessonProductLinksSection({
                     ) : (
                       <>
                         Using products from{" "}
-                        <span className="font-medium text-white">
+                        <span className="font-medium text-ink">
                           {available.brand.name}
                         </span>
                         .
@@ -519,7 +519,7 @@ export function LessonProductLinksSection({
                         className={`flex cursor-pointer gap-4 rounded-3xl border p-4 transition ${
                           alreadyLinked
                             ? "border-emerald-400/25 bg-emerald-500/10"
-                            : "border-white/10 bg-black/20 hover:border-white/20"
+                            : "border-edge/10 bg-inset/20 hover:border-edge/20"
                         }`}
                       >
                         <Checkbox
@@ -528,7 +528,7 @@ export function LessonProductLinksSection({
                           onCheckedChange={(value) =>
                             toggleSelection(product.productUrl, value === true)
                           }
-                          className="mt-1 border-white/20 data-[state=checked]:border-white data-[state=checked]:bg-white data-[state=checked]:text-black"
+                          className="mt-1 border-edge/20 data-[state=checked]:border-edge data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground"
                         />
 
                         {product.imageUrl ? (
@@ -538,10 +538,10 @@ export function LessonProductLinksSection({
                             width={80}
                             height={80}
                             /* object-contain: provider images vary in aspect ratio; object-cover cropped tall bottle shots. */
-                            className="h-20 w-20 rounded-2xl bg-white/5 object-contain p-1"
+                            className="h-20 w-20 rounded-2xl bg-glass-5 object-contain p-1"
                           />
                         ) : (
-                          <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-white/8 text-xs text-white/45">
+                          <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-glass-8 text-xs text-copy-45">
                             No image
                           </div>
                         )}
@@ -550,15 +550,15 @@ export function LessonProductLinksSection({
                           <div className="flex items-center justify-between gap-3">
                             <p className="truncate font-medium">{product.title}</p>
                             {alreadyLinked && (
-                              <span className="rounded-full border border-emerald-300/25 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-emerald-200">
+                              <span className="rounded-full border border-emerald-300/25 px-3 py-1 text-[11px] uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-200">
                                 Linked
                               </span>
                             )}
                           </div>
-                          <p className="mt-2 text-sm text-white/55">
+                          <p className="mt-2 text-sm text-copy-55">
                             {product.priceText || "Price available in store"}
                           </p>
-                          <p className="mt-2 truncate text-xs text-white/40">
+                          <p className="mt-2 truncate text-xs text-copy-40">
                             {product.productUrl}
                           </p>
                         </div>
@@ -568,7 +568,7 @@ export function LessonProductLinksSection({
                 </div>
 
                 {filteredProducts.length === 0 && (
-                  <div className="rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/60">
+                  <div className="rounded-3xl border border-edge/10 bg-inset/20 p-6 text-sm text-copy-60">
                     No products match your search.
                   </div>
                 )}
@@ -576,7 +576,7 @@ export function LessonProductLinksSection({
             )}
 
             {actionError && (
-              <p className="text-sm text-red-300">{actionError}</p>
+              <p className="text-sm text-red-700 dark:text-red-300">{actionError}</p>
             )}
 
             <div className="flex flex-wrap justify-end gap-3">
@@ -584,7 +584,7 @@ export function LessonProductLinksSection({
                 type="button"
                 variant="outline"
                 onClick={() => setOpen(false)}
-                className="rounded-full border-white/15 bg-transparent text-white hover:bg-white/10"
+                className="rounded-full border-edge/15 bg-transparent text-ink hover:bg-glass-10"
               >
                 Cancel
               </Button>
@@ -596,7 +596,7 @@ export function LessonProductLinksSection({
                   selectedUrls.length === 0 ||
                   !available?.connected
                 }
-                className="rounded-full border border-white bg-white text-black"
+                className="rounded-full border border-edge bg-primary text-primary-foreground"
               >
                 {linking ? "Adding..." : `Add ${selectedUrls.length || ""} product${selectedUrls.length === 1 ? "" : "s"}`.trim()}
               </Button>

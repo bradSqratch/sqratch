@@ -100,19 +100,19 @@ export default function BrandCampaignExperiencesPage({
           value={query}
           onChange={(event) => setQuery(event.target.value)}
           placeholder="Search experiences by title or slug"
-          className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+          className="border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
         />
       </PageCard>
 
       {error && (
         <PageCard>
-          <p className="text-sm text-red-300">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         </PageCard>
       )}
 
       {!data ? (
         <PageCard>
-          <p className="text-sm text-white/65">Loading experiences...</p>
+          <p className="text-sm text-copy-65">Loading experiences...</p>
         </PageCard>
       ) : (
         <div className="space-y-5">
@@ -122,18 +122,18 @@ export default function BrandCampaignExperiencesPage({
                 <div>
                   <div className="flex flex-wrap items-center gap-3">
                     <h2 className="text-xl font-semibold">{experience.title}</h2>
-                    <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/65">
+                    <span className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-65">
                       {experience.status}
                     </span>
                     {experience.attached && (
-                      <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-200">
+                      <span className="rounded-full border border-emerald-400/20 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-700 dark:text-emerald-200">
                         Attached
                       </span>
                     )}
                   </div>
-                  <p className="mt-2 text-sm text-white/55">/{experience.slug}</p>
+                  <p className="mt-2 text-sm text-copy-55">/{experience.slug}</p>
                   {experience.description && (
-                    <p className="mt-3 text-sm leading-6 text-white/70">
+                    <p className="mt-3 text-sm leading-6 text-copy-70">
                       {experience.description}
                     </p>
                   )}
@@ -149,7 +149,7 @@ export default function BrandCampaignExperiencesPage({
                   className={
                     experience.attached
                       ? "rounded-full border border-red-500/40 bg-red-500 text-white hover:bg-red-500/90"
-                      : "rounded-full border border-white bg-white text-black"
+                      : "rounded-full border border-edge bg-primary text-primary-foreground"
                   }
                 >
                   {savingId === experience.id

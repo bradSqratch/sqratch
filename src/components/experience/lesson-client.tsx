@@ -515,7 +515,7 @@ export function ExperienceLessonClient({
           <Button
             asChild
             variant="outline"
-            className="w-full rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+            className="w-full rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
           >
             <Link href={`/x/${data.experience.slug}/courses/${data.course.id}`}>
               Back to Course
@@ -524,7 +524,7 @@ export function ExperienceLessonClient({
           {data.nextLesson && (
             <Button
               asChild
-              className="w-full rounded-full border border-white bg-white text-black"
+              className="w-full rounded-full border border-edge bg-primary text-primary-foreground"
             >
               <Link href={`/x/${data.experience.slug}/lessons/${data.nextLesson.id}`}>
                 Next Lesson
@@ -546,12 +546,12 @@ export function ExperienceLessonClient({
           <PageCard className="overflow-hidden">
             <div className="space-y-6">
               <div>
-                <p className="text-xs uppercase tracking-[0.24em] text-white/45">
+                <p className="text-xs uppercase tracking-[0.24em] text-copy-45">
                   {data.course.title}
                 </p>
                 <h2 className="mt-2 text-3xl font-semibold">{data.lesson.title}</h2>
                 {data.lesson.description && (
-                  <p className="mt-3 max-w-3xl text-sm leading-7 text-white/70">
+                  <p className="mt-3 max-w-3xl text-sm leading-7 text-copy-70">
                     {data.lesson.description}
                   </p>
                 )}
@@ -560,7 +560,7 @@ export function ExperienceLessonClient({
               {data.lesson.videoSource === "UPLOAD" && data.lesson.videoAssetUrl ? (
                 <video
                   controls
-                  className="aspect-video w-full rounded-3xl border border-white/10 bg-black"
+                  className="aspect-video w-full rounded-3xl border border-edge/10 bg-black"
                   src={data.lesson.videoAssetUrl}
                   onLoadedMetadata={(event) => {
                     const resumeAt =
@@ -607,7 +607,7 @@ export function ExperienceLessonClient({
               ) : (
                 <div
                   id={playerId}
-                  className="aspect-video w-full overflow-hidden rounded-3xl border border-white/10 bg-black"
+                  className="aspect-video w-full overflow-hidden rounded-3xl border border-edge/10 bg-black"
                 />
               )}
             </div>
@@ -616,7 +616,7 @@ export function ExperienceLessonClient({
           <div className="space-y-6">
             <PageCard>
               <h3 className="text-xl font-semibold">Progress</h3>
-              <p className="mt-3 text-sm text-white/65">
+              <p className="mt-3 text-sm text-copy-65">
                 {currentLessonProgress?.isCompleted
                   ? "Completed"
                   : currentLessonProgress?.lastPositionSeconds
@@ -628,7 +628,7 @@ export function ExperienceLessonClient({
                   <Button
                     asChild
                     variant="outline"
-                    className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                    className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
                   >
                     <Link
                       href={`/x/${data.experience.slug}/lessons/${data.previousLesson.id}`}
@@ -640,7 +640,7 @@ export function ExperienceLessonClient({
                 {data.nextLesson && (
                   <Button
                     asChild
-                    className="rounded-full border border-white bg-white text-black"
+                    className="rounded-full border border-edge bg-primary text-primary-foreground"
                   >
                     <Link
                       href={`/x/${data.experience.slug}/lessons/${data.nextLesson.id}`}
@@ -656,20 +656,20 @@ export function ExperienceLessonClient({
               <h3 className="text-xl font-semibold">Related Products</h3>
               <div className="mt-5 space-y-4">
                 {productsLoading ? (
-                  <p className="text-sm text-white/65">
+                  <p className="text-sm text-copy-65">
                     Loading lesson products...
                   </p>
                 ) : productsError ? (
-                  <p className="text-sm text-red-300">{productsError}</p>
+                  <p className="text-sm text-red-700 dark:text-red-300">{productsError}</p>
                 ) : products.length === 0 ? (
-                  <p className="text-sm text-white/65">
+                  <p className="text-sm text-copy-65">
                     No products are linked to this lesson yet.
                   </p>
                 ) : (
                   products.map((product) => (
                     <div
                       key={product.id}
-                      className="rounded-3xl border border-white/10 bg-black/20 p-4"
+                      className="rounded-3xl border border-edge/10 bg-inset/20 p-4"
                     >
                       <div className="flex items-center gap-4">
                         {product.imageUrl ? (
@@ -682,10 +682,10 @@ export function ExperienceLessonClient({
                                provider product images vary in aspect ratio and
                                `object-cover` cropped tall bottle shots. The
                                thumbnail footprint is unchanged. */
-                            className="h-16 w-16 rounded-2xl bg-white/5 object-contain p-1"
+                            className="h-16 w-16 rounded-2xl bg-glass-5 object-contain p-1"
                           />
                         ) : (
-                          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-white/8 text-xs text-white/45">
+                          <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-glass-8 text-xs text-copy-45">
                             Link
                           </div>
                         )}
@@ -694,7 +694,7 @@ export function ExperienceLessonClient({
                             {product.title || "Shop product"}
                           </p>
                           {product.priceText && (
-                            <p className="mt-1 text-sm text-white/55">
+                            <p className="mt-1 text-sm text-copy-55">
                               {product.priceText}
                             </p>
                           )}
@@ -705,7 +705,7 @@ export function ExperienceLessonClient({
                         type="button"
                         onClick={() => handleOpenProduct(product)}
                         disabled={clickingProductId === product.id}
-                        className="mt-4 w-full rounded-full border border-white bg-white text-black"
+                        className="mt-4 w-full rounded-full border border-edge bg-primary text-primary-foreground"
                       >
                         {clickingProductId === product.id
                           ? "Opening..."

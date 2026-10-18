@@ -251,12 +251,12 @@ export function BrandShopifyClient({
     >
       <PageCard>
         {loading ? (
-          <p className="text-sm text-white/65">Loading Shopify status...</p>
+          <p className="text-sm text-copy-65">Loading Shopify status...</p>
         ) : (
           <div className="space-y-5">
             <div className="grid gap-4 lg:grid-cols-3">
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <p className="text-sm text-white/55">Status</p>
+              <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+                <p className="text-sm text-copy-55">Status</p>
                 <p className="mt-2 text-2xl font-semibold">
                   {brand?.shopifyConnectionStatus === "CONNECTED"
                     ? "Connected"
@@ -265,15 +265,15 @@ export function BrandShopifyClient({
                       : "Not connected"}
                 </p>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <p className="text-sm text-white/55">Shop domain</p>
-                <p className="mt-2 text-sm text-white/80">
+              <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+                <p className="text-sm text-copy-55">Shop domain</p>
+                <p className="mt-2 text-sm text-copy-80">
                   {brand?.shopifyShopDomain || "Not set"}
                 </p>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <p className="text-sm text-white/55">Last sync</p>
-                <p className="mt-2 text-sm text-white/80">
+              <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+                <p className="text-sm text-copy-55">Last sync</p>
+                <p className="mt-2 text-sm text-copy-80">
                   {brand?.shopifyLastProductSyncAt
                     ? new Date(brand.shopifyLastProductSyncAt).toLocaleString()
                     : "Never"}
@@ -282,19 +282,19 @@ export function BrandShopifyClient({
             </div>
 
             {isPublicShopifyApp ? (
-              <div className="rounded-2xl border border-[#b7a6e8]/20 bg-[#b7a6e8]/10 p-4 text-sm leading-6 text-white/75">
+              <div className="rounded-2xl border border-[#b7a6e8]/20 bg-[#b7a6e8]/10 p-4 text-sm leading-6 text-copy-75">
                 To connect Shopify, install or open SQRATCH from your Shopify
                 Admin. The store connection is completed from the embedded
                 SQRATCH app.
               </div>
             ) : (
               <div className="space-y-2">
-                <label className="text-sm text-white/70">Shopify domain</label>
+                <label className="text-sm text-copy-70">Shopify domain</label>
                 <Input
                   value={shopDomain}
                   onChange={(event) => setShopDomain(event.target.value)}
                   placeholder="your-store.myshopify.com"
-                  className="border-white/10 bg-black/20 text-white"
+                  className="border-edge/10 bg-inset/20 text-ink"
                 />
               </div>
             )}
@@ -309,7 +309,7 @@ export function BrandShopifyClient({
                     )}`;
                   }}
                   disabled={!shopDomain.trim() || isConnected}
-                  className="rounded-full border border-white bg-white text-black"
+                  className="rounded-full border border-edge bg-primary text-primary-foreground"
                 >
                   {isConnected ? "Shopify Connected" : "Connect Shopify"}
                 </Button>
@@ -320,7 +320,7 @@ export function BrandShopifyClient({
                 variant="outline"
                 onClick={() => void syncProducts()}
                 disabled={syncing || !isConnected}
-                className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
               >
                 {syncing ? "Syncing..." : "Fetch products"}
               </Button>
@@ -338,8 +338,8 @@ export function BrandShopifyClient({
               ) : null}
             </div>
 
-            {error && <p className="text-sm text-red-300">{error}</p>}
-            {message && <p className="text-sm text-emerald-300">{message}</p>}
+            {error && <p className="text-sm text-red-700 dark:text-red-300">{error}</p>}
+            {message && <p className="text-sm text-emerald-700 dark:text-emerald-300">{message}</p>}
           </div>
         )}
       </PageCard>
@@ -347,17 +347,17 @@ export function BrandShopifyClient({
       {isConnected && (
         <PageCard>
           <h2 className="text-xl font-semibold">Conversion tracking</h2>
-          <p className="mt-2 text-sm text-white/55">
+          <p className="mt-2 text-sm text-copy-55">
             Creator-driven orders are attributed once every step below is in
             place. The final step is enabled inside the Shopify Theme Editor.
           </p>
 
           {brand?.shopifyPermissionsNeedApproval && (
             <div className="mt-5 rounded-2xl border border-amber-400/30 bg-amber-400/10 p-4">
-              <h3 className="text-sm font-semibold text-amber-200">
+              <h3 className="text-sm font-semibold text-amber-700 dark:text-amber-200">
                 Shopify permissions need updating
               </h3>
-              <p className="mt-2 text-sm leading-6 text-white/75">
+              <p className="mt-2 text-sm leading-6 text-copy-75">
                 {[
                   !brand.orderAttributionReady ? "Order conversion access" : null,
                   !brand.themeVerificationScopeReady ? "Theme verification access" : null,
@@ -373,7 +373,7 @@ export function BrandShopifyClient({
                 <div className="mt-3 space-y-2">
                   <Button
                     asChild
-                    className="rounded-full border border-white bg-white text-black"
+                    className="rounded-full border border-edge bg-primary text-primary-foreground"
                   >
                     <a
                       href={brand.shopifyPermissionApprovalUrl}
@@ -384,17 +384,17 @@ export function BrandShopifyClient({
                       Approve Shopify permissions
                     </a>
                   </Button>
-                  <p className="text-xs text-white/55">
+                  <p className="text-xs text-copy-55">
                     This opens SQRATCH in Shopify Admin, where Shopify shows its
                     own permission screen. Review it there and press{" "}
-                    <span className="font-medium text-white/75">Update</span>.
+                    <span className="font-medium text-copy-75">Update</span>.
                     {isPollingApproval
                       ? " Checking for approval automatically..."
                       : null}
                   </p>
                 </div>
               ) : (
-                <p className="mt-3 text-xs text-white/55">
+                <p className="mt-3 text-xs text-copy-55">
                   The approval link becomes available once the store
                   connection finishes installing.
                 </p>
@@ -402,7 +402,7 @@ export function BrandShopifyClient({
             </div>
           )}
 
-          <div className="mt-5 divide-y divide-white/10 overflow-hidden rounded-2xl border border-white/10 bg-black/20">
+          <div className="mt-5 divide-y divide-edge/10 overflow-hidden rounded-2xl border border-edge/10 bg-inset/20">
             {[
               {
                 label: "Shopify connection",
@@ -446,10 +446,10 @@ export function BrandShopifyClient({
                 key={row.label}
                 className="flex flex-wrap items-center justify-between gap-2 px-4 py-3"
               >
-                <p className="text-sm text-white/55">{row.label}</p>
+                <p className="text-sm text-copy-55">{row.label}</p>
                 <p
                   className={`text-sm ${
-                    row.ready ? "text-emerald-300" : "text-amber-300"
+                    row.ready ? "text-emerald-700 dark:text-emerald-300" : "text-amber-700 dark:text-amber-300"
                   }`}
                 >
                   {row.value}
@@ -462,7 +462,7 @@ export function BrandShopifyClient({
             type="button"
             variant="outline"
             onClick={() => window.location.reload()}
-            className="mt-4 rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+            className="mt-4 rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
           >
             Refresh status
           </Button>
@@ -471,7 +471,7 @@ export function BrandShopifyClient({
             <div className="mt-5 space-y-3">
               <Button
                 asChild
-                className="rounded-full border border-white bg-white text-black"
+                className="rounded-full border border-edge bg-primary text-primary-foreground"
               >
                 <a
                   href={brand.shopifyAppEmbedDeepLink}
@@ -481,13 +481,13 @@ export function BrandShopifyClient({
                   Enable conversion tracking
                 </a>
               </Button>
-              <p className="text-sm text-white/55">
+              <p className="text-sm text-copy-55">
                 This opens Shopify&apos;s Theme Editor with the SQRATCH block
                 ready to enable. Press Save in the editor to activate it.
               </p>
             </div>
           ) : (
-            <p className="mt-5 text-sm text-white/55">
+            <p className="mt-5 text-sm text-copy-55">
               The Theme Editor link becomes available once the store connection
               finishes installing.
             </p>
@@ -498,7 +498,7 @@ export function BrandShopifyClient({
       {products.length > 0 && (
         <PageCard>
           <h2 className="text-xl font-semibold">Products</h2>
-          <p className="mt-2 text-sm text-white/55">
+          <p className="mt-2 text-sm text-copy-55">
             Showing up to 100 active Shopify products. Draft, archived, and
             disconnected store products are not shown.
           </p>
@@ -506,7 +506,7 @@ export function BrandShopifyClient({
             {products.map((product) => (
               <div
                 key={product.id}
-                className="rounded-2xl border border-white/10 bg-black/20 p-4"
+                className="rounded-2xl border border-edge/10 bg-inset/20 p-4"
               >
                 {product.imageUrl ? (
                   <Image
@@ -514,15 +514,15 @@ export function BrandShopifyClient({
                     alt={product.title}
                     width={480}
                     height={288}
-                    className="mb-4 h-36 w-full rounded-xl border border-white/10 object-cover"
+                    className="mb-4 h-36 w-full rounded-xl border border-edge/10 object-cover"
                   />
                 ) : (
-                  <div className="mb-4 flex h-36 w-full items-center justify-center rounded-xl border border-white/10 bg-white/5 text-xs uppercase tracking-[0.2em] text-white/35">
+                  <div className="mb-4 flex h-36 w-full items-center justify-center rounded-xl border border-edge/10 bg-glass-5 text-xs uppercase tracking-[0.2em] text-copy-35">
                     No image
                   </div>
                 )}
                 <h3 className="font-medium">{product.title}</h3>
-                <p className="mt-2 text-sm text-white/55">
+                <p className="mt-2 text-sm text-copy-55">
                   {product.priceRange.min !== null
                     ? `$${product.priceRange.min}${
                         product.priceRange.max !== null &&
@@ -532,7 +532,7 @@ export function BrandShopifyClient({
                       }`
                     : "No price range"}
                 </p>
-                <p className="mt-2 text-xs text-white/45">
+                <p className="mt-2 text-xs text-copy-45">
                   {product.variantIds.length} variants
                 </p>
                 {safeExternalProductUrl(product.productUrl) ? (
@@ -540,12 +540,12 @@ export function BrandShopifyClient({
                     href={safeExternalProductUrl(product.productUrl) ?? undefined}
                     target="_blank"
                     rel="noreferrer"
-                    className="mt-4 inline-flex text-sm text-sky-300 underline"
+                    className="mt-4 inline-flex text-sm text-sky-700 dark:text-sky-300 underline"
                   >
                     Open product
                   </a>
                 ) : (
-                  <p className="mt-4 text-sm text-white/45">No public product link.</p>
+                  <p className="mt-4 text-sm text-copy-45">No public product link.</p>
                 )}
               </div>
             ))}

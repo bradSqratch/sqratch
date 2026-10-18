@@ -212,21 +212,21 @@ function LoginPageInner() {
   };
 
   return (
-    <div className="relative min-h-screen bg-[#020015] text-white overflow-hidden">
+    <div className="relative min-h-screen bg-page text-ink overflow-hidden">
       {/* Contact-page style background */}
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute inset-0 bg-[radial-gradient(1200px_600px_at_50%_0%,rgba(99,102,241,0.28),rgba(2,0,21,0)_70%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(900px_500px_at_15%_25%,rgba(236,72,153,0.20),rgba(2,0,21,0)_60%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(900px_500px_at_85%_30%,rgba(34,211,238,0.18),rgba(2,0,21,0)_60%)]" />
-        <div className="absolute inset-x-0 bottom-0 h-64 bg-linear-to-b from-transparent to-[#020121]" />
+        <div className="absolute inset-0 bg-[radial-gradient(1200px_600px_at_50%_0%,rgba(var(--glow-primary-rgb),0.28),rgba(var(--scene-rgb),0)_70%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(900px_500px_at_15%_25%,rgba(var(--glow-secondary-rgb),0.20),rgba(var(--scene-rgb),0)_60%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(900px_500px_at_85%_30%,rgba(var(--glow-tertiary-rgb),0.18),rgba(var(--scene-rgb),0)_60%)]" />
+        <div className="absolute inset-x-0 bottom-0 h-64 bg-linear-to-b from-transparent to-section" />
       </div>
 
       {/* Loader overlay */}
       {loading && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
+        <div className="fixed inset-0 z-50 flex items-center justify-center theme-media bg-black/80 text-ink">
           <div className="flex flex-col items-center gap-4">
-            <div className="w-12 h-12 border-4 border-white border-t-transparent rounded-full animate-spin" />
-            <p className="text-white text-lg">Validating credentials...</p>
+            <div className="w-12 h-12 border-4 border-edge border-t-transparent rounded-full animate-spin" />
+            <p className="text-ink text-lg">Validating credentials...</p>
           </div>
         </div>
       )}
@@ -244,7 +244,7 @@ function LoginPageInner() {
                 mt-2
                 text-[40px] sm:text-[56px] lg:text-[64px]
                 font-bold leading-[105%] tracking-[-0.03em]
-                bg-[linear-gradient(145.55deg,#ECECEC_20.35%,rgba(236,236,236,0)_128.73%)]
+                bg-[image:var(--heading-gradient)]
                 bg-clip-text text-transparent
                 drop-shadow-[0_0_12px_rgba(236,236,236,0.50)]
               "
@@ -252,12 +252,12 @@ function LoginPageInner() {
               Login
             </h1>
 
-            <p className="mt-3 text-[16px] sm:text-[18px] leading-[160%] text-[#ECECEC]/75">
+            <p className="mt-3 text-[16px] sm:text-[18px] leading-[160%] text-copy-75">
               Login to access your dashboard
             </p>
 
             {viewerStatusLoaded && hasRedeemedQrWarning && (
-              <div className="mx-auto mt-6 max-w-2xl rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
+              <div className="mx-auto mt-6 max-w-2xl rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-700 dark:text-amber-100">
                 This QR code is already redeemed. You can still log in, but it
                 will not unlock private access or award points.
               </div>
@@ -269,10 +269,10 @@ function LoginPageInner() {
             className="
               relative mt-10 w-full max-w-md
               rounded-[28px]
-              border border-white/15
-              bg-white/6
+              border border-edge/15
+              bg-glass-6
               backdrop-blur-xl
-              shadow-[0_30px_90px_rgba(0,0,0,0.55)]
+              shadow-[0_8px_28px_rgba(72,57,34,0.06)] dark:shadow-[0_30px_90px_rgba(0,0,0,0.55)]
               overflow-hidden
             "
           >
@@ -291,8 +291,8 @@ function LoginPageInner() {
                     <div
                       className={`mt-2 text-center text-[14px] ${
                         message.type === "error"
-                          ? "text-red-400"
-                          : "text-green-400"
+                          ? "text-red-700 dark:text-red-400"
+                          : "text-green-700 dark:text-green-400"
                       }`}
                     >
                       {message.text}
@@ -306,7 +306,7 @@ function LoginPageInner() {
                 <div className="pb-5">
                   <div className="space-y-4">
                     <div>
-                      <Label htmlFor="email" className="pl-1 text-white/70">
+                      <Label htmlFor="email" className="pl-1 text-copy-70">
                         Email
                       </Label>
                       <Input
@@ -320,15 +320,15 @@ function LoginPageInner() {
                         }
                         className="
                   mt-2 rounded-2xl
-                  border-white/10 bg-black/30
-                  text-white placeholder:text-white/40
-                  focus-visible:ring-0 focus-visible:border-white/25
+                  border-edge/10 bg-inset/30
+                  text-ink placeholder:text-copy-40
+                  focus-visible:ring-0 focus-visible:border-edge/25
                 "
                       />
                     </div>
 
                     <div>
-                      <Label htmlFor="password" className="pl-1 text-white/70">
+                      <Label htmlFor="password" className="pl-1 text-copy-70">
                         Password
                       </Label>
                       <Input
@@ -342,9 +342,9 @@ function LoginPageInner() {
                         }
                         className="
                   mt-2 rounded-2xl
-                  border-white/10 bg-black/30
-                  text-white placeholder:text-white/40
-                  focus-visible:ring-0 focus-visible:border-white/25
+                  border-edge/10 bg-inset/30
+                  text-ink placeholder:text-copy-40
+                  focus-visible:ring-0 focus-visible:border-edge/25
                 "
                       />
                     </div>
@@ -358,7 +358,7 @@ function LoginPageInner() {
                   disabled={buttonDisabled || loading}
                   className="
             w-full rounded-full py-6
-            border border-white bg-white text-black
+            border border-edge bg-primary text-primary-foreground
             hover:scale-[1.01] active:scale-[0.99]
             transition
           "
@@ -366,9 +366,9 @@ function LoginPageInner() {
                   Login
                 </Button>
                 {viewerStatusLoaded && !hasRedeemedQrWarning && (
-                  <p className="text-center text-sm text-white/60">
+                  <p className="text-center text-sm text-copy-60">
                     Need an account?{" "}
-                    <Link href={signupHref} className="text-white underline">
+                    <Link href={signupHref} className="text-ink underline">
                       Sign up
                     </Link>
                   </p>
@@ -379,7 +379,7 @@ function LoginPageInner() {
         </main>
 
         {/* Footer */}
-        <div className="pb-6 text-center text-white/55">
+        <div className="pb-6 text-center text-copy-55">
           © {new Date().getFullYear()} SQRATCH. All rights reserved.
         </div>
       </div>

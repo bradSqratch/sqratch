@@ -174,18 +174,18 @@ export default function BrandCampaignProductsPage({ params }: { params: { id: st
   return <BrandPageShell
     title={data ? `${data.campaign.name} Products` : "Campaign Products"}
     description="Assign eligible, available brand catalog products to this campaign. Campaign assignment and generic Brand storefront visibility operate independently."
-    actions={<Button asChild variant="outline" className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"><Link href={`/dashboard/brand/campaigns/${campaignId}/edit`}>Back to campaign</Link></Button>}
+    actions={<Button asChild variant="outline" className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"><Link href={`/dashboard/brand/campaigns/${campaignId}/edit`}>Back to campaign</Link></Button>}
   >
     <PageCard>
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         {/* A placeholder is not an accessible name — it disappears on input
             and several screen readers ignore it. The display-order input in
             this same file already carries an aria-label; this matches it. */}
-        <Input aria-label="Search catalog products" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search catalog products" className="max-w-xl border-white/10 bg-black/20 text-white placeholder:text-white/35" />
+        <Input aria-label="Search catalog products" type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search catalog products" className="max-w-xl border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35" />
       </div>
     </PageCard>
-    {error && <PageCard><p className="text-sm text-red-300">{error}</p></PageCard>}
-    {!data ? <PageCard><p className="text-sm text-white/65">Loading catalog...</p></PageCard> : <div className="space-y-4">
+    {error && <PageCard><p className="text-sm text-red-700 dark:text-red-300">{error}</p></PageCard>}
+    {!data ? <PageCard><p className="text-sm text-copy-65">Loading catalog...</p></PageCard> : <div className="space-y-4">
       {data.products.map((product) => {
         const canAssign = product.isCampaignEligible && product.isAvailable;
         const active = product.assignment?.isActive;
@@ -196,43 +196,43 @@ export default function BrandCampaignProductsPage({ params }: { params: { id: st
               {/* `object-contain` inside a fixed canvas — provider product
                   images vary in aspect ratio and `object-cover` cropped tall
                   bottle shots. Matches the Brand catalog thumbnail. */}
-              {product.imageUrl && <Image src={product.imageUrl} alt="" width={64} height={64} className="h-16 w-16 rounded-lg bg-white/5 object-contain p-1" />}
+              {product.imageUrl && <Image src={product.imageUrl} alt="" width={64} height={64} className="h-16 w-16 rounded-lg bg-glass-5 object-contain p-1" />}
               <div className="space-y-2">
-                <h2 className="font-semibold text-white">{product.title}</h2>
-                {product.description && <p className="text-sm text-white/55">{product.description}</p>}
+                <h2 className="font-semibold text-ink">{product.title}</h2>
+                {product.description && <p className="text-sm text-copy-55">{product.description}</p>}
                 <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
-                  <span className={`rounded-full px-2.5 py-0.5 border ${active ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-300" : product.assignment ? "border-amber-400/30 bg-amber-500/10 text-amber-300" : "border-white/10 bg-white/5 text-white/50"}`}>
+                  <span className={`rounded-full px-2.5 py-0.5 border ${active ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300" : product.assignment ? "border-amber-400/30 bg-amber-500/10 text-amber-700 dark:text-amber-300" : "border-edge/10 bg-glass-5 text-copy-50"}`}>
                     {active ? "Campaign active" : product.assignment ? "Campaign inactive" : "Not assigned"}
                   </span>
-                  <span className={`rounded-full px-2.5 py-0.5 border ${product.isVisibleInShop ? "border-sky-400/30 bg-sky-500/10 text-sky-300" : "border-white/10 bg-white/5 text-white/45"}`}>
+                  <span className={`rounded-full px-2.5 py-0.5 border ${product.isVisibleInShop ? "border-sky-400/30 bg-sky-500/10 text-sky-700 dark:text-sky-300" : "border-edge/10 bg-glass-5 text-copy-45"}`}>
                     {product.isVisibleInShop ? "Storefront visible" : "Storefront hidden"}
                   </span>
-                  <span className={`rounded-full px-2.5 py-0.5 border ${product.isCampaignEligible ? "border-white/20 bg-white/5 text-white/70" : "border-red-400/20 bg-red-500/10 text-red-300"}`}>
+                  <span className={`rounded-full px-2.5 py-0.5 border ${product.isCampaignEligible ? "border-edge/20 bg-glass-5 text-copy-70" : "border-red-400/20 bg-red-500/10 text-red-700 dark:text-red-300"}`}>
                     {product.isCampaignEligible ? "Campaign eligible" : "Not eligible"}
                   </span>
-                  <span className={`rounded-full px-2.5 py-0.5 border ${product.isAvailable ? "border-white/20 bg-white/5 text-white/70" : "border-red-400/20 bg-red-500/10 text-red-300"}`}>
+                  <span className={`rounded-full px-2.5 py-0.5 border ${product.isAvailable ? "border-edge/20 bg-glass-5 text-copy-70" : "border-red-400/20 bg-red-500/10 text-red-700 dark:text-red-300"}`}>
                     {product.isAvailable ? "Catalog available" : "Unavailable"}
                   </span>
                   {!product.hasPublicStorefrontUrl && (
-                    <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-2.5 py-0.5 text-amber-300">
+                    <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-2.5 py-0.5 text-amber-700 dark:text-amber-300">
                       Unpublished online
                     </span>
                   )}
                 </div>
-                <p className="text-xs text-white/50">{explanation}</p>
+                <p className="text-xs text-copy-50">{explanation}</p>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-3">
-              {product.assignment && <label className="text-xs text-white/55">Order <Input aria-label={`Display order for ${product.title}`} type="number" min={0} max={1000000} defaultValue={product.assignment.displayOrder} onBlur={(event) => void saveOrder(product, event.target.value)} disabled={saving === product.brandCommerceProductId} className="ml-2 inline-flex h-8 w-24 border-white/10 bg-black/20 text-white" /></label>}
-              <Button type="button" disabled={saving === product.brandCommerceProductId || (!product.assignment && !canAssign)} onClick={() => void assign(product)} className="rounded-full border border-white bg-white text-black">
+              {product.assignment && <label className="text-xs text-copy-55">Order <Input aria-label={`Display order for ${product.title}`} type="number" min={0} max={1000000} defaultValue={product.assignment.displayOrder} onBlur={(event) => void saveOrder(product, event.target.value)} disabled={saving === product.brandCommerceProductId} className="ml-2 inline-flex h-8 w-24 border-edge/10 bg-inset/20 text-ink" /></label>}
+              <Button type="button" disabled={saving === product.brandCommerceProductId || (!product.assignment && !canAssign)} onClick={() => void assign(product)} className="rounded-full border border-edge bg-primary text-primary-foreground">
                 {saving === product.brandCommerceProductId ? "Saving..." : product.assignment ? (active ? "Deactivate campaign assignment" : "Reactivate campaign assignment") : "Assign to campaign"}
               </Button>
             </div>
           </div>
         </PageCard>;
       })}
-      {data.products.length === 0 && <PageCard><p className="text-sm text-white/65">No persisted brand catalog products match this search.</p></PageCard>}
-      {meta?.hasNextPage && meta.nextCursor && <div className="flex justify-center"><Button type="button" variant="outline" disabled={saving === "more"} onClick={() => { setSaving("more"); void load(meta.nextCursor ?? undefined, true).finally(() => setSaving(null)); }} className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10">{saving === "more" ? "Loading..." : "Load more products"}</Button></div>}
+      {data.products.length === 0 && <PageCard><p className="text-sm text-copy-65">No persisted brand catalog products match this search.</p></PageCard>}
+      {meta?.hasNextPage && meta.nextCursor && <div className="flex justify-center"><Button type="button" variant="outline" disabled={saving === "more"} onClick={() => { setSaving("more"); void load(meta.nextCursor ?? undefined, true).finally(() => setSaving(null)); }} className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10">{saving === "more" ? "Loading..." : "Load more products"}</Button></div>}
     </div>}
   </BrandPageShell>;
 }

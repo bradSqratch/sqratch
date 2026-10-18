@@ -72,7 +72,7 @@ export default function StickyWhatSqratchCreates() {
   const activeStep = activeIndex >= 0 ? steps[activeIndex] : null;
 
   return (
-    <section className="relative bg-[#0C0B30] py-24">
+    <section className="relative bg-card dark:bg-[#0C0B30] py-24">
       <div className="mx-auto max-w-6xl px-6 sm:px-6 lg:px-8">
         <div className="flex flex-col lg:flex-row lg:gap-20">
           {/* LEFT: Sticky Image Column */}
@@ -159,19 +159,19 @@ export default function StickyWhatSqratchCreates() {
 
                   {/* Text */}
                   <div>
-                    <p className="text-[14px] sm:text-[16px] font-semibold uppercase tracking-[0.30em] text-[#FFFFFF]/50">
+                    <p className="text-[14px] sm:text-[16px] font-semibold uppercase tracking-[0.30em] text-copy-50">
                       Connect More Deeply To Products You Love
                     </p>
 
-                    <h2 className="mt-6 text-[28px] sm:text-[30px] leading-[1.15] font-bold whitespace-pre-line text-[#A98DFF]">
+                    <h2 className="mt-6 text-[28px] sm:text-[30px] leading-[1.15] font-bold whitespace-pre-line text-brand">
                       {step.title}
                     </h2>
 
-                    <p className="mt-2 text-[16px] font-medium text-white/85">
+                    <p className="mt-2 text-[16px] font-medium text-copy-85">
                       {step.subtitle}
                     </p>
 
-                    <p className="mt-3 text-[16px] text-white max-w-[60ch]">
+                    <p className="mt-3 text-[16px] text-ink max-w-[60ch]">
                       {step.paragraph}
                     </p>
                   </div>
@@ -204,19 +204,19 @@ export default function StickyWhatSqratchCreates() {
                 transition={{ duration: 0.4, ease: "easeOut" }}
                 // === CHANGE END ===
               >
-                <p className="mt-8 text-[16px] font-semibold uppercase tracking-[0.30em] text-[#FFFFFF]/50">
+                <p className="mt-8 text-[16px] font-semibold uppercase tracking-[0.30em] text-copy-50">
                   Connect More Deeply To Products You Love
                 </p>
 
-                <h2 className="mt-10 text-[32px] leading-[1.2] font-bold whitespace-pre-line text-[#A98DFF] sm:text-[40px]">
+                <h2 className="mt-10 text-[32px] leading-[1.2] font-bold whitespace-pre-line text-brand sm:text-[40px]">
                   {step.title}
                 </h2>
 
-                <p className="mt-0 text-[18px] font-medium text-white/85">
+                <p className="mt-0 text-[18px] font-medium text-copy-85">
                   {step.subtitle}
                 </p>
 
-                <p className="mt-0 text-[18px] text-white max-w-[60ch]">
+                <p className="mt-0 text-[18px] text-ink max-w-[60ch]">
                   {step.paragraph}
                 </p>
               </motion.div>

@@ -175,57 +175,57 @@ export default async function DashboardPointsPage() {
       value: totals.spendablePoints,
       hint: "Spendable on rewards",
       Icon: Coins,
-      accent: "text-amber-300",
+      accent: "text-amber-700 dark:text-amber-300",
     },
     {
       label: "Lifetime Earned",
       value: totals.lifetimeEarnedPoints,
       hint: "Total participation — never reduced by spending",
       Icon: Award,
-      accent: "text-emerald-300",
+      accent: "text-emerald-700 dark:text-emerald-300",
     },
     {
       label: "Lifetime Spent",
       value: totals.lifetimeSpentPoints,
       hint: "Redeemed on rewards",
       Icon: ShoppingBag,
-      accent: "text-sky-300",
+      accent: "text-sky-700 dark:text-sky-300",
     },
     {
       label: "Lifetime Refunded",
       value: totals.lifetimeRefundedPoints,
       hint: "Returned to your balance",
       Icon: RotateCcw,
-      accent: "text-white/70",
+      accent: "text-copy-70",
     },
   ];
 
   return (
-    <div className="min-h-screen p-8 text-white">
+    <div className="min-h-screen p-8 text-ink">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
         <div className="flex items-start justify-between gap-6">
           <div>
-            <p className="text-sm uppercase tracking-[0.24em] text-white/45">
+            <p className="text-sm uppercase tracking-[0.24em] text-copy-45">
               SQRATCH
             </p>
             <h1 className="mt-2 text-4xl font-semibold tracking-tight">
               Points
             </h1>
-            <p className="mt-3 max-w-2xl text-sm leading-6 text-white/65">
-              Your <span className="text-white/85">current balance</span> can be
+            <p className="mt-3 max-w-2xl text-sm leading-6 text-copy-65">
+              Your <span className="text-copy-85">current balance</span> can be
               spent on rewards. Your{" "}
-              <span className="text-white/85">lifetime earned</span> points track
+              <span className="text-copy-85">lifetime earned</span> points track
               your total participation and are never reduced when you spend.
             </p>
           </div>
 
-          <div className="hidden items-center gap-3 rounded-3xl border border-white/10 bg-white/5 px-5 py-4 text-white/80 md:flex">
-            <Coins className="h-5 w-5 text-amber-300" />
+          <div className="hidden items-center gap-3 rounded-3xl border border-edge/10 bg-glass-5 px-5 py-4 text-copy-80 md:flex">
+            <Coins className="h-5 w-5 text-amber-700 dark:text-amber-300" />
             <div>
-              <p className="text-xs uppercase tracking-[0.2em] text-white/45">
+              <p className="text-xs uppercase tracking-[0.2em] text-copy-45">
                 Current Balance
               </p>
-              <p className="text-2xl font-semibold text-white">
+              <p className="text-2xl font-semibold text-ink">
                 {totals.spendablePoints}
               </p>
             </div>
@@ -236,34 +236,34 @@ export default async function DashboardPointsPage() {
           {summaryCards.map((card) => (
             <Card
               key={card.label}
-              className="rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl"
+              className="rounded-3xl border border-edge/10 bg-glass-5 backdrop-blur-xl"
             >
               <CardContent className="flex flex-col gap-3 p-6">
-                <div className="flex items-center gap-2 text-white/60">
+                <div className="flex items-center gap-2 text-copy-60">
                   <card.Icon className={`h-4 w-4 ${card.accent}`} />
                   <p className="text-xs uppercase tracking-[0.2em]">
                     {card.label}
                   </p>
                 </div>
-                <p className="text-4xl font-semibold tracking-tight text-white">
+                <p className="text-4xl font-semibold tracking-tight text-ink">
                   {card.value}
                 </p>
-                <p className="text-xs text-white/45">{card.hint}</p>
+                <p className="text-xs text-copy-45">{card.hint}</p>
               </CardContent>
             </Card>
           ))}
         </div>
 
-        <Card className="rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
+        <Card className="rounded-3xl border border-edge/10 bg-glass-5 backdrop-blur-xl shadow-[0_8px_28px_rgba(72,57,34,0.06)] dark:shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
           <CardContent className="flex flex-col gap-4 p-8 md:flex-row md:items-center md:justify-between">
             <div>
-              <p className="text-sm uppercase tracking-[0.22em] text-white/45">
+              <p className="text-sm uppercase tracking-[0.22em] text-copy-45">
                 Lifetime Earned
               </p>
-              <h2 className="mt-3 text-6xl font-semibold tracking-tight text-white">
+              <h2 className="mt-3 text-6xl font-semibold tracking-tight text-ink">
                 {totals.lifetimeEarnedPoints}
               </h2>
-              <p className="mt-3 text-sm text-white/55">
+              <p className="mt-3 text-sm text-copy-55">
                 Future SQRATCH minting is based on your lifetime earned points —
                 spending on rewards never lowers it.
               </p>
@@ -275,7 +275,7 @@ export default async function DashboardPointsPage() {
                   type="button"
                   disabled
                   variant="outline"
-                  className="rounded-full border-amber-300/20 bg-amber-300/10 px-4 text-amber-100 hover:bg-amber-300/15"
+                  className="rounded-full border-amber-300/20 bg-amber-300/10 px-4 text-amber-700 dark:text-amber-100 hover:bg-amber-300/15"
                 >
                   <Hammer className="h-4 w-4" />
                   Mining coming soon
@@ -284,7 +284,7 @@ export default async function DashboardPointsPage() {
                   <TooltipTrigger asChild>
                     <button
                       type="button"
-                      className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-white/10 bg-black/20 text-white/55 transition-colors hover:text-white/80"
+                      className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-edge/10 bg-inset/20 text-copy-55 transition-colors hover:text-copy-80"
                       aria-label="Mining info"
                     >
                       <Info className="h-4 w-4" />
@@ -293,7 +293,7 @@ export default async function DashboardPointsPage() {
                   <TooltipContent
                     side="top"
                     sideOffset={8}
-                    className="max-w-xs border border-white/10 bg-[#111827] text-white"
+                    className="max-w-xs border border-edge/10 bg-card dark:bg-[#111827] text-ink"
                   >
                     Only people who go through the SQRATCH experience will be
                     able to mint, based on lifetime earned points.
@@ -307,12 +307,12 @@ export default async function DashboardPointsPage() {
         <ShopifyRewardsClient currentPoints={totals.spendablePoints} />
         <Commerce7RewardsClient key={session.user.id} showErrors />
 
-        <Card className="rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
+        <Card className="rounded-3xl border border-edge/10 bg-glass-5 backdrop-blur-xl shadow-[0_8px_28px_rgba(72,57,34,0.06)] dark:shadow-[0_24px_70px_rgba(0,0,0,0.35)]">
           <CardContent className="p-6">
             <div className="flex items-center justify-between gap-4">
               <div>
                 <h2 className="text-xl font-semibold">Points Activity</h2>
-                <p className="mt-1 text-sm text-white/55">
+                <p className="mt-1 text-sm text-copy-55">
                   Recent activity across QR scans, lessons, courses, rewards,
                   refunds and bonuses.
                 </p>
@@ -321,7 +321,7 @@ export default async function DashboardPointsPage() {
 
             <div className="mt-6 space-y-3">
               {transactions.length === 0 ? (
-                <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 px-5 py-8 text-sm text-white/55">
+                <div className="rounded-2xl border border-dashed border-edge/10 bg-inset/20 px-5 py-8 text-sm text-copy-55">
                   No points activity yet. Scan an eligible QR code and log in to
                   start earning SQRATCH points.
                 </div>
@@ -333,15 +333,15 @@ export default async function DashboardPointsPage() {
                   return (
                     <div
                       key={transaction.id}
-                      className="flex flex-col gap-4 rounded-2xl border border-white/10 bg-black/20 px-5 py-4 md:flex-row md:items-center md:justify-between"
+                      className="flex flex-col gap-4 rounded-2xl border border-edge/10 bg-inset/20 px-5 py-4 md:flex-row md:items-center md:justify-between"
                     >
                       <div className="flex min-w-0 items-start gap-4">
-                        <div className="shrink-0 rounded-2xl border border-white/10 bg-white/8 p-3">
-                          <Icon className="h-5 w-5 text-white/80" aria-hidden="true" />
+                        <div className="shrink-0 rounded-2xl border border-edge/10 bg-glass-8 p-3">
+                          <Icon className="h-5 w-5 text-copy-80" aria-hidden="true" />
                         </div>
 
                         <div className="min-w-0">
-                          <p className="text-sm font-semibold text-white">
+                          <p className="text-sm font-semibold text-ink">
                             {label}
                           </p>
                           {detailLines.length > 0 ? (
@@ -351,8 +351,8 @@ export default async function DashboardPointsPage() {
                                   key={index}
                                   className={
                                     line.emphasis
-                                      ? "break-words text-sm text-white/65"
-                                      : "break-words text-xs text-white/45"
+                                      ? "break-words text-sm text-copy-65"
+                                      : "break-words text-xs text-copy-45"
                                   }
                                 >
                                   {line.text}
@@ -366,13 +366,13 @@ export default async function DashboardPointsPage() {
                       <div className="flex shrink-0 items-center justify-between gap-4 md:flex-col md:items-end">
                         <p
                           className={`text-xl font-semibold ${
-                            isPositive ? "text-emerald-300" : "text-red-300"
+                            isPositive ? "text-emerald-700 dark:text-emerald-300" : "text-red-700 dark:text-red-300"
                           }`}
                         >
                           {isPositive ? "+" : "−"}
                           {Math.abs(transaction.points)}
                         </p>
-                        <p className="text-xs text-white/45">
+                        <p className="text-xs text-copy-45">
                           {formatDate(transaction.createdAt)}
                         </p>
                       </div>

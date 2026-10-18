@@ -56,13 +56,13 @@ export default function QRLandingPage() {
   }, [qrCodeData, router]);
 
   return (
-    <div className="relative min-h-screen bg-[#020015] text-white overflow-hidden">
+    <div className="relative min-h-screen bg-page text-ink overflow-hidden">
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute inset-0 bg-[radial-gradient(1100px_600px_at_50%_10%,rgba(99,102,241,0.30),rgba(2,0,21,0)_70%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(900px_520px_at_50%_55%,rgba(99,102,241,0.13),rgba(2,0,21,0)_65%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(900px_600px_at_10%_90%,rgba(236,72,153,0.10),rgba(2,0,21,0)_65%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(1200px_900px_at_50%_50%,rgba(2,0,21,0)_35%,rgba(2,0,21,0.85)_100%)]" />
-        <div className="absolute inset-x-0 bottom-0 h-64 bg-linear-to-b from-transparent to-[#020121]" />
+        <div className="absolute inset-0 bg-[radial-gradient(1100px_600px_at_50%_10%,rgba(var(--glow-primary-rgb),0.30),rgba(var(--scene-rgb),0)_70%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(900px_520px_at_50%_55%,rgba(var(--glow-primary-rgb),0.13),rgba(var(--scene-rgb),0)_65%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(900px_600px_at_10%_90%,rgba(var(--glow-secondary-rgb),0.10),rgba(var(--scene-rgb),0)_65%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(1200px_900px_at_50%_50%,rgba(var(--scene-rgb),0)_35%,rgba(var(--scene-rgb),0.85)_100%)]" />
+        <div className="absolute inset-x-0 bottom-0 h-64 bg-linear-to-b from-transparent to-section" />
       </div>
 
       <div className="relative z-10 flex min-h-screen flex-col">
@@ -75,7 +75,7 @@ export default function QRLandingPage() {
                 mt-2
                 text-[40px] sm:text-[56px] lg:text-[64px]
                 font-bold leading-[105%] tracking-[-0.03em]
-                bg-[linear-gradient(145.55deg,#ECECEC_20.35%,rgba(236,236,236,0)_128.73%)]
+                bg-[image:var(--heading-gradient)]
                 bg-clip-text text-transparent
                 drop-shadow-[0_0_12px_rgba(236,236,236,0.50)]
               "
@@ -83,7 +83,7 @@ export default function QRLandingPage() {
               {error ? "Invalid QR" : "Unlocking..."}
             </h1>
 
-            <p className="mt-3 text-[16px] sm:text-[18px] leading-[160%] text-[#ECECEC]/75">
+            <p className="mt-3 text-[16px] sm:text-[18px] leading-[160%] text-copy-75">
               {error
                 ? "This QR code could not be used."
                 : "Please wait while we load your campaign."}
@@ -94,10 +94,10 @@ export default function QRLandingPage() {
             className="
               relative mt-10 w-full max-w-md
               rounded-[28px]
-              border border-white/15
-              bg-white/6
+              border border-edge/15
+              bg-glass-6
               backdrop-blur-xl
-              shadow-[0_30px_90px_rgba(0,0,0,0.55)]
+              shadow-[0_8px_28px_rgba(72,57,34,0.06)] dark:shadow-[0_30px_90px_rgba(0,0,0,0.55)]
               overflow-hidden
               p-8 text-center
             "
@@ -106,24 +106,24 @@ export default function QRLandingPage() {
 
             {error ? (
               <div className="space-y-4">
-                <p className="text-red-300">{error}</p>
+                <p className="text-red-700 dark:text-red-300">{error}</p>
                 <Link
                   href="/"
-                  className="inline-flex rounded-full border border-white bg-white px-6 py-3 text-black transition hover:scale-[1.01] active:scale-[0.99]"
+                  className="inline-flex rounded-full border border-edge bg-primary px-6 py-3 text-primary-foreground transition hover:scale-[1.01] active:scale-[0.99]"
                 >
                   Go Home
                 </Link>
               </div>
             ) : (
               <div className="flex flex-col items-center gap-4">
-                <div className="h-12 w-12 animate-spin rounded-full border-4 border-white border-t-transparent" />
-                <p className="text-white/80">Unlocking your experience...</p>
+                <div className="h-12 w-12 animate-spin rounded-full border-4 border-edge border-t-transparent" />
+                <p className="text-copy-80">Unlocking your experience...</p>
               </div>
             )}
           </div>
         </main>
 
-        <div className="pb-6 text-center text-white/55">
+        <div className="pb-6 text-center text-copy-55">
           © {new Date().getFullYear()} SQRATCH. All rights reserved.
         </div>
       </div>

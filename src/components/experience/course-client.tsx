@@ -96,8 +96,8 @@ export function ExperienceCourseClient({
       experience={data.experience}
       activeTab="learn"
       actions={
-        <div className="space-y-3 rounded-3xl border border-white/10 bg-black/20 p-5">
-          <p className="text-sm text-white/55">Course progress</p>
+        <div className="space-y-3 rounded-3xl border border-edge/10 bg-inset/20 p-5">
+          <p className="text-sm text-copy-55">Course progress</p>
           <p className="text-3xl font-semibold">
             {courseProgress?.progressPercent || 0}%
           </p>
@@ -124,13 +124,13 @@ export function ExperienceCourseClient({
           <div className="space-y-3">
             <div className="flex items-center gap-3">
               <h2 className="text-2xl font-semibold">{data.course.title}</h2>
-              <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/65">
+              <span className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-65">
                 {data.course.access}
               </span>
             </div>
 
             {data.course.description && (
-              <p className="max-w-3xl text-sm leading-6 text-white/70">
+              <p className="max-w-3xl text-sm leading-6 text-copy-70">
                 {data.course.description}
               </p>
             )}
@@ -143,19 +143,19 @@ export function ExperienceCourseClient({
               return (
                 <div
                   key={lesson.id}
-                  className="flex flex-col gap-4 rounded-3xl border border-white/10 bg-black/20 p-5 sm:flex-row sm:items-center sm:justify-between"
+                  className="flex flex-col gap-4 rounded-3xl border border-edge/10 bg-inset/20 p-5 sm:flex-row sm:items-center sm:justify-between"
                 >
                   <div>
-                    <p className="text-xs uppercase tracking-[0.24em] text-white/45">
+                    <p className="text-xs uppercase tracking-[0.24em] text-copy-45">
                       Lesson {index + 1}
                     </p>
                     <h3 className="mt-2 text-lg font-semibold">{lesson.title}</h3>
                     {lesson.description && (
-                      <p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">
+                      <p className="mt-2 max-w-2xl text-sm leading-6 text-copy-70">
                         {lesson.description}
                       </p>
                     )}
-                    <p className="mt-3 text-sm text-white/55">
+                    <p className="mt-3 text-sm text-copy-55">
                       {lessonProgress?.isCompleted
                         ? "Completed"
                         : lessonProgress?.lastPositionSeconds
@@ -166,7 +166,7 @@ export function ExperienceCourseClient({
 
                   <Button
                     asChild
-                    className="rounded-full border border-white bg-white text-black"
+                    className="rounded-full border border-edge bg-primary text-primary-foreground"
                   >
                     <Link href={`/x/${data.experience.slug}/lessons/${lesson.id}`}>
                       Open Lesson
