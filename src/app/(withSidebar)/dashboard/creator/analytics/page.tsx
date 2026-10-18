@@ -230,7 +230,7 @@ export default function CreatorAnalyticsPage() {
     >
       <PageCard>
         <div className="grid gap-4 lg:grid-cols-3">
-          <label className="grid gap-1.5 text-xs text-white/60">
+          <label className="grid gap-1.5 text-xs text-copy-60">
             Experience
           <select
             aria-label="Experience"
@@ -241,7 +241,7 @@ export default function CreatorAnalyticsPage() {
                 experienceId: event.target.value,
               }))
             }
-            className="flex h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+            className="flex h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
           >
             <option value="">All experiences</option>
             {data?.experiences.map((experience) => (
@@ -252,7 +252,7 @@ export default function CreatorAnalyticsPage() {
           </select>
           </label>
 
-          <label className="grid gap-1.5 text-xs text-white/60">
+          <label className="grid gap-1.5 text-xs text-copy-60">
             From
           <input
             type="date"
@@ -263,11 +263,11 @@ export default function CreatorAnalyticsPage() {
                 dateFrom: event.target.value,
               }))
             }
-            className="flex h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+            className="flex h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
           />
           </label>
 
-          <label className="grid gap-1.5 text-xs text-white/60">
+          <label className="grid gap-1.5 text-xs text-copy-60">
             To
           <input
             type="date"
@@ -278,7 +278,7 @@ export default function CreatorAnalyticsPage() {
                 dateTo: event.target.value,
               }))
             }
-            className="flex h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+            className="flex h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
           />
           </label>
         </div>
@@ -286,13 +286,13 @@ export default function CreatorAnalyticsPage() {
 
       {error && (
         <PageCard>
-          <p className="text-sm text-red-300">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         </PageCard>
       )}
 
       {!data ? (
         <PageCard>
-          <p className="text-sm text-white/65">Loading analytics...</p>
+          <p className="text-sm text-copy-65">Loading analytics...</p>
         </PageCard>
       ) : (
         <>
@@ -314,7 +314,7 @@ export default function CreatorAnalyticsPage() {
             <h2 className="text-xl font-semibold">By experience</h2>
             <div className="mt-5 overflow-x-auto">
               <table className="w-full min-w-[720px] text-left text-sm">
-                <thead className="text-white/55">
+                <thead className="text-copy-55">
                   <tr>
                     <th className="pb-3">Experience</th>
                     <th className="pb-3">Views</th>
@@ -323,13 +323,13 @@ export default function CreatorAnalyticsPage() {
                     <th className="pb-3">Questions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/10">
+                <tbody className="divide-y divide-edge/10">
                   {data.byExperience.map((row) => (
                     <tr key={row.id}>
                       <td className="py-3">
                         <div>
                           <p className="font-medium">{row.title}</p>
-                          <p className="text-xs text-white/45">/{row.slug}</p>
+                          <p className="text-xs text-copy-45">/{row.slug}</p>
                         </div>
                       </td>
                       <td className="py-3">{row.views}</td>
@@ -380,7 +380,7 @@ function CommerceClickSection({
     return (
       <PageCard>
         <h2 className="text-xl font-semibold">Product clicks</h2>
-        <p className="mt-3 text-sm text-red-300">{error}</p>
+        <p className="mt-3 text-sm text-red-700 dark:text-red-300">{error}</p>
       </PageCard>
     );
   }
@@ -389,7 +389,7 @@ function CommerceClickSection({
     return (
       <PageCard>
         <h2 className="text-xl font-semibold">Product clicks</h2>
-        <p className="mt-3 text-sm text-white/65">
+        <p className="mt-3 text-sm text-copy-65">
           Loading product click analytics...
         </p>
       </PageCard>
@@ -439,7 +439,7 @@ function CommerceClickSection({
       <PageCard>
         <div className="flex flex-wrap items-baseline justify-between gap-2">
           <h2 className="text-xl font-semibold">Product clicks per day</h2>
-          <p className="text-xs text-white/45">
+          <p className="text-xs text-copy-45">
             {data.range.start.slice(0, 10)} to {data.range.end.slice(0, 10)} (UTC)
           </p>
         </div>
@@ -449,7 +449,7 @@ function CommerceClickSection({
             least" would let a creator read the trailing zeroes as a collapse in
             traffic, so the shape of the gap is named explicitly. */}
         {data.timeSeriesTruncated && (
-          <p className="mt-3 text-xs text-amber-300">
+          <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
             This series is incomplete: the click sample hit its ceiling, so only
             the earliest clicks in this range are charted. Later days can show 0
             here while still being counted in the total above.
@@ -457,7 +457,7 @@ function CommerceClickSection({
         )}
 
         {peakClicks === 0 ? (
-          <p className="mt-4 text-sm text-white/65">
+          <p className="mt-4 text-sm text-copy-65">
             No product clicks recorded in this range.
           </p>
         ) : (
@@ -469,7 +469,7 @@ function CommerceClickSection({
                 className="flex min-w-[6px] flex-1 flex-col justify-end"
               >
                 <div
-                  className="rounded-t bg-white/45"
+                  className="rounded-t bg-glass-45"
                   style={{
                     height: `${Math.round((point.clicks / peakClicks) * 100)}%`,
                   }}
@@ -483,14 +483,14 @@ function CommerceClickSection({
       <div className="grid gap-4 lg:grid-cols-2">
         <PageCard>
           <h2 className="text-xl font-semibold">Clicks by surface</h2>
-          <p className="mt-1 text-xs text-white/45">
+          <p className="mt-1 text-xs text-copy-45">
             &quot;Unknown&quot; covers clicks recorded before the surface was
             captured; it is never guessed.
           </p>
           <ul className="mt-4 space-y-2 text-sm">
             {surfaceRows.map((row) => (
               <li key={row.bucket} className="flex justify-between gap-4">
-                <span className="text-white/70">{row.label}</span>
+                <span className="text-copy-70">{row.label}</span>
                 <span className="font-medium">{row.clicks}</span>
               </li>
             ))}
@@ -500,12 +500,12 @@ function CommerceClickSection({
         <PageCard>
           <h2 className="text-xl font-semibold">Clicks by provider</h2>
           {data.providerBreakdown.length === 0 ? (
-            <p className="mt-4 text-sm text-white/65">No clicks in this range.</p>
+            <p className="mt-4 text-sm text-copy-65">No clicks in this range.</p>
           ) : (
             <ul className="mt-4 space-y-2 text-sm">
               {data.providerBreakdown.map((row) => (
                 <li key={row.provider} className="flex justify-between gap-4">
-                  <span className="text-white/70">{row.provider}</span>
+                  <span className="text-copy-70">{row.provider}</span>
                   <span className="font-medium">{row.clicks}</span>
                 </li>
               ))}
@@ -544,7 +544,7 @@ function CommerceClickSection({
       )}
 
       <PageCard>
-        <p className="text-xs text-white/45">{data.note}</p>
+        <p className="text-xs text-copy-45">{data.note}</p>
       </PageCard>
     </>
   );
@@ -629,7 +629,7 @@ function ConversionAnalyticsSection({
     return (
       <PageCard>
         <h2 className="text-xl font-semibold">Attributed conversions &amp; revenue</h2>
-        <p className="mt-3 text-sm text-red-300">{error}</p>
+        <p className="mt-3 text-sm text-red-700 dark:text-red-300">{error}</p>
       </PageCard>
     );
   }
@@ -638,7 +638,7 @@ function ConversionAnalyticsSection({
     return (
       <PageCard>
         <h2 className="text-xl font-semibold">Attributed conversions &amp; revenue</h2>
-        <p className="mt-3 text-sm text-white/65">Loading conversion analytics...</p>
+        <p className="mt-3 text-sm text-copy-65">Loading conversion analytics...</p>
       </PageCard>
     );
   }
@@ -649,7 +649,7 @@ function ConversionAnalyticsSection({
     <>
       <PageCard>
         <h2 className="text-xl font-semibold">Attributed conversions &amp; revenue</h2>
-        <p className="mt-2 text-sm text-white/65">
+        <p className="mt-2 text-sm text-copy-65">
           Orders and revenue for {data.range.start.slice(0, 10)} to{" "}
           {data.range.end.slice(0, 10)}, counted only when SQRATCH has exact
           attribution evidence linking an order to your click.
@@ -661,7 +661,7 @@ function ConversionAnalyticsSection({
 
       {noOrders ? (
         <PageCard>
-          <p className="text-sm text-white/65">
+          <p className="text-sm text-copy-65">
             No attributed orders in this range. This can also mean orders exist for
             the merchant but none have exact SQRATCH attribution yet.
           </p>
@@ -758,34 +758,34 @@ function CreatorConversionTrendSection({ trend }: { trend: ConversionDailyPoint[
     <>
       <PageCard>
         <h2 className="text-xl font-semibold">Attributed conversions per day</h2>
-        <p className="mt-1 text-xs text-white/45">
+        <p className="mt-1 text-xs text-copy-45">
           UTC days. Every day in the range is shown, including days with no attributed orders.
         </p>
         <div className="mt-4 max-h-80 overflow-y-auto">
           <table className="w-full text-left text-sm">
-            <thead className="text-white/55">
+            <thead className="text-copy-55">
               <tr>
                 <th scope="col" className="pb-3">Day (UTC)</th>
                 <th scope="col" className="pb-3 w-full">Attributed orders</th>
                 <th scope="col" className="pb-3 text-right whitespace-nowrap">Paid now</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/10">
+            <tbody className="divide-y divide-edge/10">
               {trend.map((point) => (
                 <tr key={point.date}>
                   <td className="py-2 whitespace-nowrap pr-4">{point.date}</td>
                   <td className="py-2">
                     <div className="flex items-center gap-3">
                       <div
-                        className="h-2 rounded-full bg-white/45"
+                        className="h-2 rounded-full bg-glass-45"
                         style={{
                           width: `${Math.round((point.attributedOrders / peakOrders) * 100)}%`,
                         }}
                       />
-                      <span className="tabular-nums text-white/75">{point.attributedOrders}</span>
+                      <span className="tabular-nums text-copy-75">{point.attributedOrders}</span>
                     </div>
                   </td>
-                  <td className="py-2 text-right tabular-nums text-white/60">
+                  <td className="py-2 text-right tabular-nums text-copy-60">
                     {point.currentlyNetPositivePaidOrders}
                   </td>
                 </tr>
@@ -831,12 +831,12 @@ function CreatorTrendCurrencyTable({
           ? "Revenue per day — unknown currency"
           : `Revenue per day — ${currencyCode}`}
       </h2>
-      <p className="mt-1 text-xs text-white/45">
+      <p className="mt-1 text-xs text-copy-45">
         Shown separately per currency. Amounts in different currencies are never added together.
       </p>
       <div className="mt-4 max-h-80 overflow-auto">
         <table className="w-full min-w-[420px] text-left text-sm">
-          <thead className="text-white/55">
+          <thead className="text-copy-55">
             <tr>
               <th scope="col" className="pb-3">Day (UTC)</th>
               <th scope="col" className="pb-3 text-right">Gross</th>
@@ -844,14 +844,14 @@ function CreatorTrendCurrencyTable({
               <th scope="col" className="pb-3 text-right">Net</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-white/10">
+          <tbody className="divide-y divide-edge/10">
             {daysWithActivity.map((point) => (
               <tr key={point.date}>
                 <td className="py-2 whitespace-nowrap pr-4">{point.date}</td>
                 <td className="py-2 text-right tabular-nums whitespace-nowrap">
                   {format(point.grossRevenueByCurrency)}
                 </td>
-                <td className="py-2 text-right tabular-nums whitespace-nowrap text-amber-200/80">
+                <td className="py-2 text-right tabular-nums whitespace-nowrap text-amber-700 dark:text-amber-200/80">
                   {format(point.refundedRevenueByCurrency)}
                 </td>
                 <td className="py-2 text-right tabular-nums whitespace-nowrap">
@@ -877,9 +877,9 @@ function ConversionMetricCard({
 }) {
   return (
     <PageCard>
-      <p className="text-sm text-white/55">{label}</p>
+      <p className="text-sm text-copy-55">{label}</p>
       <p className="mt-2 text-4xl font-semibold">{value}</p>
-      <p className="mt-2 text-xs text-white/45">{subtext}</p>
+      <p className="mt-2 text-xs text-copy-45">{subtext}</p>
     </PageCard>
   );
 }
@@ -891,11 +891,11 @@ function MoneyRowsCard({ title, rows }: { title: string; rows: MoneyRow[] }) {
     <PageCard>
       <h3 className="text-lg font-semibold">{title}</h3>
       {lines.length === 0 ? (
-        <p className="mt-3 text-sm text-white/65">No attributed revenue in this range.</p>
+        <p className="mt-3 text-sm text-copy-65">No attributed revenue in this range.</p>
       ) : (
         <ul className="mt-3 space-y-1 text-sm">
           {lines.map((line) => (
-            <li key={line} className="tabular-nums text-white/85">
+            <li key={line} className="tabular-nums text-copy-85">
               {line}
             </li>
           ))}
@@ -913,18 +913,18 @@ function ProviderBreakdownTable({
   emptyLabel: string;
 }) {
   if (rows.length === 0) {
-    return <p className="mt-4 text-sm text-white/55">{emptyLabel}</p>;
+    return <p className="mt-4 text-sm text-copy-55">{emptyLabel}</p>;
   }
   return (
     <div className="mt-4 overflow-x-auto">
       <table className="w-full text-left text-sm">
-        <thead className="text-white/55">
+        <thead className="text-copy-55">
           <tr>
             <th className="pb-3">Platform</th>
             <th className="pb-3 text-right">Orders</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-white/10">
+        <tbody className="divide-y divide-edge/10">
           {rows.map((row) => (
             <tr key={row.id}>
               <td className="py-2 pr-4">{providerLabel(row.id)}</td>
@@ -949,20 +949,20 @@ function NamedBreakdownTable({
   emptyLabel: string;
 }) {
   if (rows.length === 0) {
-    return <p className="mt-4 text-sm text-white/55">{emptyLabel}</p>;
+    return <p className="mt-4 text-sm text-copy-55">{emptyLabel}</p>;
   }
   const visible = rows.slice(0, CONVERSION_BREAKDOWN_DISPLAY_LIMIT);
   const hiddenCount = rows.length - visible.length;
   return (
     <div className="mt-4 overflow-x-auto">
       <table className="w-full text-left text-sm">
-        <thead className="text-white/55">
+        <thead className="text-copy-55">
           <tr>
             <th className="pb-3">{columnLabel}</th>
             <th className="pb-3 text-right">Orders</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-white/10">
+        <tbody className="divide-y divide-edge/10">
           {visible.map((row) => (
             <tr key={row.id}>
               <td className="py-2 pr-4">{row.name ?? "Unavailable"}</td>
@@ -972,7 +972,7 @@ function NamedBreakdownTable({
         </tbody>
       </table>
       {hiddenCount > 0 && (
-        <p className="mt-2 text-xs text-white/45">+{hiddenCount} more not shown.</p>
+        <p className="mt-2 text-xs text-copy-45">+{hiddenCount} more not shown.</p>
       )}
     </div>
   );
@@ -989,17 +989,17 @@ function ClickRankCard({
     <PageCard>
       <h2 className="text-xl font-semibold">{title}</h2>
       {rows.length === 0 ? (
-        <p className="mt-4 text-sm text-white/65">No clicks in this range.</p>
+        <p className="mt-4 text-sm text-copy-65">No clicks in this range.</p>
       ) : (
         <div className="mt-5 overflow-x-auto">
           <table className="w-full min-w-[480px] text-left text-sm">
-            <thead className="text-white/55">
+            <thead className="text-copy-55">
               <tr>
                 <th className="pb-3">Name</th>
                 <th className="pb-3">Clicks</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/10">
+            <tbody className="divide-y divide-edge/10">
               {rows.map((row) => (
                 <tr key={row.id}>
                   <td className="py-3">{row.label ?? "Unavailable"}</td>
@@ -1030,9 +1030,9 @@ function MetricCard({
 }) {
   return (
     <PageCard>
-      <p className="text-sm text-white/55">{label}</p>
+      <p className="text-sm text-copy-55">{label}</p>
       <p className="mt-2 text-4xl font-semibold">
-        {hint && <span className="mr-1 text-base text-white/55">{hint}</span>}
+        {hint && <span className="mr-1 text-base text-copy-55">{hint}</span>}
         {value}
       </p>
     </PageCard>

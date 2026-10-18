@@ -132,10 +132,10 @@ function Commerce7StoreSettingsCard({
   }
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-4 space-y-4">
+    <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4 space-y-4">
       <div>
-        <p className="text-sm font-semibold text-white/85">Commerce7 store settings</p>
-        <p className="mt-1 text-xs leading-5 text-white/50">
+        <p className="text-sm font-semibold text-copy-85">Commerce7 store settings</p>
+        <p className="mt-1 text-xs leading-5 text-copy-50">
           Read directly from your Commerce7 account&apos;s own settings — SQRATCH never guesses or
           lets these be typed manually.
         </p>
@@ -144,36 +144,36 @@ function Commerce7StoreSettingsCard({
       {hasSettings ? (
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="block space-y-1 sm:col-span-2">
-            <span className="text-xs text-white/55">Website URL</span>
-            <p className="text-sm text-white/85">{connection.storefrontUrl}</p>
-            <span className="block text-[11px] leading-4 text-white/40">Synced from Commerce7</span>
+            <span className="text-xs text-copy-55">Website URL</span>
+            <p className="text-sm text-copy-85">{connection.storefrontUrl}</p>
+            <span className="block text-[11px] leading-4 text-copy-40">Synced from Commerce7</span>
           </div>
           <div className="block space-y-1">
-            <span className="text-xs text-white/55">Currency</span>
-            <p className="text-sm text-white/85">{connection.currencyCode}</p>
-            <span className="block text-[11px] leading-4 text-white/40">Synced from Commerce7</span>
+            <span className="text-xs text-copy-55">Currency</span>
+            <p className="text-sm text-copy-85">{connection.currencyCode}</p>
+            <span className="block text-[11px] leading-4 text-copy-40">Synced from Commerce7</span>
           </div>
           <div className="block space-y-1">
-            <span className="text-xs text-white/55">Product Page Route</span>
-            <p className="text-sm text-white/85">{connection.productRoute}</p>
-            <span className="block text-[11px] leading-4 text-white/40">Synced from Commerce7</span>
+            <span className="text-xs text-copy-55">Product Page Route</span>
+            <p className="text-sm text-copy-85">{connection.productRoute}</p>
+            <span className="block text-[11px] leading-4 text-copy-40">Synced from Commerce7</span>
           </div>
         </div>
       ) : (
-        <p className="text-sm text-white/55">Not synchronized yet.</p>
+        <p className="text-sm text-copy-55">Not synchronized yet.</p>
       )}
 
       {disabled ? (
-        <p className="text-xs text-amber-300/80">Reconnect this Commerce7 account before syncing settings.</p>
+        <p className="text-xs text-amber-700 dark:text-amber-300/80">Reconnect this Commerce7 account before syncing settings.</p>
       ) : null}
-      {error ? <p className="text-xs text-red-300">{error}</p> : null}
-      {message ? <p className="text-xs text-emerald-300/90">{message}</p> : null}
+      {error ? <p className="text-xs text-red-700 dark:text-red-300">{error}</p> : null}
+      {message ? <p className="text-xs text-emerald-700 dark:text-emerald-300/90">{message}</p> : null}
 
       <Button
         onClick={() => void handleSync()}
         disabled={disabled || syncing}
         variant="outline"
-        className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+        className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
       >
         {syncing ? "Syncing..." : "Sync settings from Commerce7"}
       </Button>
@@ -185,16 +185,16 @@ function ChecklistRow({ ok, label, detail }: { ok: boolean | null; label: string
   return (
     <div className="flex items-start justify-between gap-3 py-1.5">
       <div>
-        <p className="text-sm text-white/80">{label}</p>
-        {detail ? <p className="mt-0.5 text-xs text-white/45">{detail}</p> : null}
+        <p className="text-sm text-copy-80">{label}</p>
+        {detail ? <p className="mt-0.5 text-xs text-copy-45">{detail}</p> : null}
       </div>
       <span
         className={`shrink-0 rounded-full border px-2.5 py-0.5 text-xs ${
           ok === null
-            ? "border-white/15 bg-white/5 text-white/50"
+            ? "border-edge/15 bg-glass-5 text-copy-50"
             : ok
-              ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-200/90"
-              : "border-amber-400/25 bg-amber-400/10 text-amber-200/90"
+              ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-700 dark:text-emerald-200/90"
+              : "border-amber-400/25 bg-amber-400/10 text-amber-700 dark:text-amber-200/90"
         }`}
       >
         {ok === null ? "—" : ok ? "✓" : "Not yet"}
@@ -261,14 +261,14 @@ function Commerce7ReadinessChecklist({
   }, [connectionId, refreshKey]);
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-4 space-y-3">
-      <p className="text-sm font-semibold text-white/85">Commerce7 readiness</p>
+    <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4 space-y-3">
+      <p className="text-sm font-semibold text-copy-85">Commerce7 readiness</p>
       {loading ? (
-        <p className="text-sm text-white/65">Loading...</p>
+        <p className="text-sm text-copy-65">Loading...</p>
       ) : error ? (
-        <p className="text-sm text-red-300">{error}</p>
+        <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
       ) : diagnostics ? (
-        <div className="divide-y divide-white/5">
+        <div className="divide-y divide-edge/5">
           <ChecklistRow ok={diagnostics.connected} label="Connection" />
           <ChecklistRow ok={diagnostics.storefrontUrlConfigured} label="Website URL configured" />
           <ChecklistRow ok={diagnostics.productRouteConfigured} label="Product route configured" />
@@ -376,12 +376,12 @@ function Commerce7ConnectionLifecycleControl({
           onClick={() => void handleDisconnect()}
           disabled={busy}
           variant="outline"
-          className="rounded-full border-red-400/30 bg-transparent text-red-200 hover:bg-red-400/10"
+          className="rounded-full border-red-400/30 bg-transparent text-red-700 dark:text-red-200 hover:bg-red-400/10"
         >
           {busy ? "Disconnecting..." : "Disconnect Commerce7"}
         </Button>
-        {error ? <p className="text-xs text-red-300">{error}</p> : null}
-        <p className="text-[11px] leading-4 text-white/40">
+        {error ? <p className="text-xs text-red-700 dark:text-red-300">{error}</p> : null}
+        <p className="text-[11px] leading-4 text-copy-40">
           To connect a different Commerce7 store, disconnect this store first, then open/install
           SQRATCH from the other Commerce7 account and link it to this Brand.
         </p>
@@ -395,19 +395,19 @@ function Commerce7ConnectionLifecycleControl({
         <Button
           onClick={() => void handleReconnect()}
           disabled={busy}
-          className="rounded-full border border-white bg-white text-black hover:bg-white/90"
+          className="rounded-full border border-edge bg-primary text-primary-foreground hover:bg-primary/90"
         >
           {busy ? "Reconnecting..." : "Reconnect"}
         </Button>
         {appNotInstalled ? (
-          <p className="text-xs text-amber-300/80">
+          <p className="text-xs text-amber-700 dark:text-amber-300/80">
             SQRATCH is no longer installed in this Commerce7 account. Reinstall it from Commerce7
             Apps &amp; Extensions.
           </p>
         ) : error ? (
-          <p className="text-xs text-red-300">{error}</p>
+          <p className="text-xs text-red-700 dark:text-red-300">{error}</p>
         ) : null}
-        <p className="text-[11px] leading-4 text-white/40">
+        <p className="text-[11px] leading-4 text-copy-40">
           You can also connect a different Commerce7 store by opening SQRATCH from that Commerce7
           account.
         </p>
@@ -483,35 +483,35 @@ export function BrandCommerceClient() {
     >
       <PageCard>
         {loading ? (
-          <p className="text-sm text-white/65">Loading store status...</p>
+          <p className="text-sm text-copy-65">Loading store status...</p>
         ) : error ? (
-          <p className="text-sm text-red-300">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         ) : (
           <div className="space-y-5">
             <div className="grid gap-4 lg:grid-cols-3">
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <p className="text-sm text-white/55">Provider</p>
+              <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+                <p className="text-sm text-copy-55">Provider</p>
                 <p className="mt-2 text-lg font-semibold">
                   {connection ? providerLabel(connection.provider) : "Not connected"}
                 </p>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <p className="text-sm text-white/55">Status</p>
+              <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+                <p className="text-sm text-copy-55">Status</p>
                 <p className="mt-2 text-lg font-semibold">
                   {connection ? statusLabel(connection.status) : "Not connected"}
                 </p>
               </div>
-              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                <p className="text-sm text-white/55">Last product sync</p>
-                <p className="mt-2 text-sm text-white/80">
+              <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+                <p className="text-sm text-copy-55">Last product sync</p>
+                <p className="mt-2 text-sm text-copy-80">
                   {formatDateTime(connection?.lastProductSyncAt ?? null)}
                 </p>
               </div>
             </div>
 
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-              <p className="text-sm text-white/55">Connected account</p>
-              <p className="mt-2 text-sm text-white/80">
+            <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+              <p className="text-sm text-copy-55">Connected account</p>
+              <p className="mt-2 text-sm text-copy-80">
                 {connection
                   ? `${connection.displayName} (${connection.externalAccountId})`
                   : "No store connected yet."}
@@ -548,29 +548,29 @@ export function BrandCommerceClient() {
             ) : null}
 
             {!connection ? (
-              <p className="text-xs leading-5 text-white/50">
+              <p className="text-xs leading-5 text-copy-50">
                 Connect Shopify from the{" "}
-                <a href="/dashboard/brand/shopify" className="underline hover:text-white/80">
+                <a href="/dashboard/brand/shopify" className="underline hover:text-copy-80">
                   Shopify page
                 </a>
                 , or install the SQRATCH app from your Commerce7 admin and link
                 it to this brand.
               </p>
             ) : connection.provider === "SHOPIFY" ? (
-              <Button asChild variant="outline" className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10">
+              <Button asChild variant="outline" className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10">
                 <a href="/dashboard/brand/shopify">Manage Shopify connection</a>
               </Button>
             ) : null}
 
             <div className="flex flex-wrap gap-3">
-              <Button asChild className="rounded-full border border-white bg-white text-black hover:bg-white/90">
+              <Button asChild className="rounded-full border border-edge bg-primary text-primary-foreground hover:bg-primary/90">
                 <a href="/dashboard/brand/products">View products</a>
               </Button>
               {connection ? (
                 <Button
                   asChild
                   variant="outline"
-                  className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                  className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
                 >
                   <Link href="/dashboard/brand/commerce/orders">Order operations</Link>
                 </Button>

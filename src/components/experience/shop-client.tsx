@@ -199,10 +199,10 @@ export function ExperienceShopClient({
       experience={data}
       activeTab="shop"
       actions={
-        <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
-          <p className="text-sm text-white/55">Shop items loaded</p>
+        <div className="rounded-3xl border border-edge/10 bg-inset/20 p-5">
+          <p className="text-sm text-copy-55">Shop items loaded</p>
           <p className="mt-2 text-3xl font-semibold">{products.length}</p>
-          <p className="mt-2 text-sm text-white/55">
+          <p className="mt-2 text-sm text-copy-55">
             Opens the merchant storefront in a new tab.
           </p>
         </div>
@@ -210,17 +210,17 @@ export function ExperienceShopClient({
     >
       {shopLoading ? (
         <PageCard>
-          <p className="text-sm text-white/65">Loading products...</p>
+          <p className="text-sm text-copy-65">Loading products...</p>
         </PageCard>
       ) : shopError && products.length === 0 ? (
         <PageCard>
-          <p className="text-sm text-red-300">{shopError}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{shopError}</p>
         </PageCard>
       ) : !shopMeta ? (
         <PageCard>
           <div className="space-y-3">
-            <h2 className="text-2xl font-semibold text-[#988dbf]">Shop</h2>
-            <p className="max-w-2xl text-sm leading-6 text-white/70">
+            <h2 className="text-2xl font-semibold text-brand">Shop</h2>
+            <p className="max-w-2xl text-sm leading-6 text-copy-70">
               No products have been linked to this experience yet.
             </p>
           </div>
@@ -230,15 +230,15 @@ export function ExperienceShopClient({
           <PageCard>
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
-                <h2 className="text-2xl font-semibold text-[#988dbf]">Shop</h2>
-                <p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">
+                <h2 className="text-2xl font-semibold text-brand">Shop</h2>
+                <p className="mt-2 max-w-2xl text-sm leading-6 text-copy-70">
                   {shopMeta.campaign
                     ? "These products are linked to this experience, selected for this campaign, or available from its brand storefront."
                     : "These products are linked to this experience or available from its linked campaign brands and storefronts."}
                 </p>
               </div>
               {shopMeta.campaign && (
-                <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-sm text-white/65">
+                <div className="rounded-2xl border border-edge/10 bg-inset/20 px-4 py-3 text-sm text-copy-65">
                   Campaign: {shopMeta.campaign.name}
                 </div>
               )}
@@ -251,8 +251,8 @@ export function ExperienceShopClient({
           {products.length === 0 ? (
             <PageCard>
               <div className="space-y-3">
-                <h2 className="text-2xl font-semibold text-[#988dbf]">Shop</h2>
-                <p className="max-w-2xl text-sm leading-6 text-white/70">
+                <h2 className="text-2xl font-semibold text-brand">Shop</h2>
+                <p className="max-w-2xl text-sm leading-6 text-copy-70">
                   No products have been linked to this experience yet.
                 </p>
               </div>
@@ -266,7 +266,7 @@ export function ExperienceShopClient({
                     className="flex flex-col justify-between overflow-hidden"
                   >
                     <div>
-                      <div className="overflow-hidden rounded-3xl border border-white/10">
+                      <div className="overflow-hidden rounded-3xl border border-edge/10">
                         {product.imageUrl && !failedImageIds.has(product.id) ? (
                           <Image
                             src={product.imageUrl}
@@ -290,10 +290,10 @@ export function ExperienceShopClient({
                                footprint every row depends on while showing
                                the entire source image, matching the Brand
                                catalog thumbnail fix. */
-                            className="aspect-[4/3] w-full bg-white/5 object-contain p-2"
+                            className="aspect-[4/3] w-full bg-glass-5 object-contain p-2"
                           />
                         ) : (
-                          <div className="flex aspect-[4/3] items-center justify-center bg-[linear-gradient(135deg,rgba(96,165,250,0.18),rgba(34,197,94,0.10),rgba(2,0,21,0.45))] text-sm text-white/45">
+                          <div className="flex aspect-[4/3] items-center justify-center bg-[linear-gradient(135deg,rgba(96,165,250,0.18),rgba(34,197,94,0.10),rgba(var(--scene-rgb),0.45))] text-sm text-copy-45">
                             No image
                           </div>
                         )}
@@ -301,32 +301,32 @@ export function ExperienceShopClient({
 
                       <div className="mt-5 flex flex-1 flex-col">
                         <div className="flex flex-wrap items-center gap-2">
-                          <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/60">
+                          <span className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-60">
                             {product.source === "CAMPAIGN_PRODUCT"
                               ? "Campaign product"
                               : "Brand storefront"}
                           </span>
                           {product.brand && (
-                            <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/60">
+                            <span className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-60">
                               {product.brand.name}
                             </span>
                           )}
                           {product.productCampaign && (
-                            <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/60">
+                            <span className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-60">
                               Campaign: {product.productCampaign.name}
                             </span>
                           )}
                         </div>
 
-                        <h3 className="mt-4 text-xl font-semibold text-[#988dbf]">
+                        <h3 className="mt-4 text-xl font-semibold text-brand">
                           {product.title}
                         </h3>
                         {product.description && (
-                          <p className="mt-2 text-sm leading-6 text-white/65">
+                          <p className="mt-2 text-sm leading-6 text-copy-65">
                             {product.description}
                           </p>
                         )}
-                        <p className="mt-2 text-sm text-white/55">
+                        <p className="mt-2 text-sm text-copy-55">
                           {product.priceText || "Price available in store"}
                         </p>
 
@@ -350,7 +350,7 @@ export function ExperienceShopClient({
 
               {shopError && (
                 <PageCard>
-                  <p className="text-sm text-red-300">{shopError}</p>
+                  <p className="text-sm text-red-700 dark:text-red-300">{shopError}</p>
                 </PageCard>
               )}
 
@@ -361,7 +361,7 @@ export function ExperienceShopClient({
                     variant="outline"
                     disabled={loadingMore}
                     onClick={handleLoadMore}
-                    className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                    className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
                   >
                     {loadingMore ? "Loading..." : "Load more products"}
                   </Button>

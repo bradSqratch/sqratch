@@ -15,7 +15,7 @@ export function BrandPageShell({
   children: ReactNode;
 }) {
   return (
-    <div className="space-y-6 p-6 text-white sm:p-8">
+    <div className="space-y-6 p-6 text-ink sm:p-8">
       <BrandSelector />
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div className="space-y-2">
@@ -23,7 +23,7 @@ export function BrandPageShell({
             {title}
           </h1>
           {description && (
-            <p className="max-w-3xl text-sm leading-6 text-white/65">
+            <p className="max-w-3xl text-sm leading-6 text-copy-65">
               {description}
             </p>
           )}

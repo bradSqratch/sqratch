@@ -108,7 +108,7 @@ function MembershipBadges({ user }: { user: UserRecord }) {
   }, [user]);
 
   if (memberships.length === 0) {
-    return <span className="text-sm text-white/35">None</span>;
+    return <span className="text-sm text-copy-35">None</span>;
   }
 
   return (
@@ -116,7 +116,7 @@ function MembershipBadges({ user }: { user: UserRecord }) {
       {memberships.map((label) => (
         <span
           key={label}
-          className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-xs text-white/75"
+          className="rounded-full border border-edge/10 bg-white/[0.03] px-3 py-1 text-xs text-copy-75"
         >
           {label}
         </span>
@@ -309,14 +309,14 @@ export default function AdminUserManagementPage() {
   }
 
   return (
-    <div className="space-y-6 p-6 text-white sm:p-8">
-      <div className="rounded-[28px] border border-[#28456C] bg-[#0B183D]/90 px-6 py-7 shadow-[0_20px_80px_rgba(0,0,0,0.35)] sm:px-8">
-        <div className="flex flex-col gap-4 border-b border-white/10 pb-6 xl:flex-row xl:items-center xl:justify-between">
+    <div className="space-y-6 p-6 text-ink sm:p-8">
+      <div className="rounded-[28px] border border-border dark:border-[#28456C] bg-card dark:bg-[#0B183D]/90 px-6 py-7 shadow-[0_8px_28px_rgba(72,57,34,0.06)] dark:shadow-[0_20px_80px_rgba(0,0,0,0.35)] sm:px-8">
+        <div className="flex flex-col gap-4 border-b border-edge/10 pb-6 xl:flex-row xl:items-center xl:justify-between">
           <div className="space-y-1">
             <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight">
               Admin Users
             </h1>
-            <p className="text-sm text-white/60">
+            <p className="text-sm text-copy-60">
               Search users and manage their roles and details with full
               edit controls.
             </p>
@@ -327,7 +327,7 @@ export default function AdminUserManagementPage() {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder="Search by name or email"
-              className="h-10 w-full border-white/10 bg-white/[0.04] text-white placeholder:text-white/35 sm:w-72"
+              className="h-10 w-full border-edge/10 bg-white/[0.04] text-ink placeholder:text-copy-35 sm:w-72"
             />
             <Button
               type="button"
@@ -343,14 +343,14 @@ export default function AdminUserManagementPage() {
           <div
             className={`mt-5 flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${
               notice.type === "success"
-                ? "border-emerald-400/25 bg-emerald-500/10 text-emerald-200"
-                : "border-amber-400/25 bg-amber-500/10 text-amber-100"
+                ? "border-emerald-400/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200"
+                : "border-amber-400/25 bg-amber-500/10 text-amber-700 dark:text-amber-100"
             }`}
           >
             <span>{notice.text}</span>
             <button
               type="button"
-              className="shrink-0 text-white/60 hover:text-white"
+              className="shrink-0 text-copy-60 hover:text-ink"
               onClick={() => setNotice(null)}
               aria-label="Dismiss"
             >
@@ -360,53 +360,53 @@ export default function AdminUserManagementPage() {
         )}
 
         {error && (
-          <div className="mt-5 rounded-xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          <div className="mt-5 rounded-xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm text-red-700 dark:text-red-200">
             {error}
           </div>
         )}
 
-        <div className="mt-6 overflow-hidden rounded-2xl border border-white/10">
-          <Table className="min-w-[1040px] bg-transparent text-white">
-            <TableHeader className="[&_tr]:border-white/10">
-              <TableRow className="border-white/10 bg-white/[0.02] hover:bg-white/[0.02]">
-                <TableHead className="px-4 py-4 text-sm font-medium text-white/75">
+        <div className="mt-6 overflow-hidden rounded-2xl border border-edge/10">
+          <Table className="min-w-[1040px] bg-transparent text-ink">
+            <TableHeader className="[&_tr]:border-edge/10">
+              <TableRow className="border-edge/10 bg-white/[0.02] hover:bg-white/[0.02]">
+                <TableHead className="px-4 py-4 text-sm font-medium text-copy-75">
                   Name
                 </TableHead>
-                <TableHead className="py-4 text-sm font-medium text-white/75">
+                <TableHead className="py-4 text-sm font-medium text-copy-75">
                   Email
                 </TableHead>
-                <TableHead className="py-4 text-sm font-medium text-white/75">
+                <TableHead className="py-4 text-sm font-medium text-copy-75">
                   Role
                 </TableHead>
-                <TableHead className="py-4 text-sm font-medium text-white/75">
+                <TableHead className="py-4 text-sm font-medium text-copy-75">
                   Creator/Brand
                 </TableHead>
-                <TableHead className="py-4 text-sm font-medium text-white/75">
+                <TableHead className="py-4 text-sm font-medium text-copy-75">
                   Created At
                 </TableHead>
-                <TableHead className="py-4 text-sm font-medium text-white/75">
+                <TableHead className="py-4 text-sm font-medium text-copy-75">
                   Status
                 </TableHead>
-                <TableHead className="py-4 text-sm font-medium text-white/75">
+                <TableHead className="py-4 text-sm font-medium text-copy-75">
                   Actions
                 </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody className="[&_tr:last-child]:border-b-0">
               {loading ? (
-                <TableRow className="border-white/10 hover:bg-transparent">
+                <TableRow className="border-edge/10 hover:bg-transparent">
                   <TableCell
                     colSpan={7}
-                    className="px-4 py-8 text-center text-white/60"
+                    className="px-4 py-8 text-center text-copy-60"
                   >
                     Loading users...
                   </TableCell>
                 </TableRow>
               ) : users.length === 0 ? (
-                <TableRow className="border-white/10 hover:bg-transparent">
+                <TableRow className="border-edge/10 hover:bg-transparent">
                   <TableCell
                     colSpan={7}
-                    className="px-4 py-8 text-center text-white/60"
+                    className="px-4 py-8 text-center text-copy-60"
                   >
                     No users found.
                   </TableCell>
@@ -415,29 +415,29 @@ export default function AdminUserManagementPage() {
                 users.map((user) => (
                   <TableRow
                     key={user.id}
-                    className="border-white/10 text-white/90 hover:bg-white/[0.03]"
+                    className="border-edge/10 text-copy-90 hover:bg-white/[0.03]"
                   >
-                    <TableCell className="px-4 py-4 text-base font-medium text-white">
+                    <TableCell className="px-4 py-4 text-base font-medium text-ink">
                       {user.name || "Unnamed user"}
                     </TableCell>
-                    <TableCell className="py-4 text-sm text-white/80">
+                    <TableCell className="py-4 text-sm text-copy-80">
                       {user.email}
                     </TableCell>
-                    <TableCell className="py-4 text-sm text-white/80">
+                    <TableCell className="py-4 text-sm text-copy-80">
                       {user.role}
                     </TableCell>
                     <TableCell className="py-4">
                       <MembershipBadges user={user} />
                     </TableCell>
-                    <TableCell className="py-4 text-sm text-white/80">
+                    <TableCell className="py-4 text-sm text-copy-80">
                       {formatDateTime(user.createdAt)}
                     </TableCell>
                     <TableCell className="py-4">
                       <span
                         className={`rounded-full border px-3 py-1 text-xs ${
                           user.isActive
-                            ? "border-emerald-400/25 bg-emerald-500/10 text-emerald-200"
-                            : "border-white/10 bg-white/[0.04] text-white/65"
+                            ? "border-emerald-400/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200"
+                            : "border-edge/10 bg-white/[0.04] text-copy-65"
                         }`}
                       >
                         {user.isActive ? "Active" : "Disabled"}
@@ -448,7 +448,7 @@ export default function AdminUserManagementPage() {
                         <Button
                           type="button"
                           variant="outline"
-                          className="h-8 rounded-xl border-[#35507D] bg-transparent px-5 text-white hover:bg-white/[0.06] hover:text-white"
+                          className="h-8 rounded-xl border-border dark:border-[#35507D] bg-transparent px-5 text-ink hover:bg-white/[0.06] hover:text-ink"
                           onClick={() =>
                             setEditForm({
                               id: user.id,
@@ -480,10 +480,10 @@ export default function AdminUserManagementPage() {
       </div>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="border-white/10 bg-[#0B183D] text-white sm:max-w-xl">
+        <DialogContent className="border-edge/10 bg-card dark:bg-[#0B183D] text-ink sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Create User</DialogTitle>
-            <DialogDescription className="text-white/60">
+            <DialogDescription className="text-copy-60">
               Create a new user and send a verification email.
             </DialogDescription>
           </DialogHeader>
@@ -500,7 +500,7 @@ export default function AdminUserManagementPage() {
                     name: event.target.value,
                   }))
                 }
-                className="border-white/10 bg-white/[0.04] text-white"
+                className="border-edge/10 bg-white/[0.04] text-ink"
               />
             </div>
 
@@ -516,7 +516,7 @@ export default function AdminUserManagementPage() {
                     email: event.target.value,
                   }))
                 }
-                className="border-white/10 bg-white/[0.04] text-white"
+                className="border-edge/10 bg-white/[0.04] text-ink"
               />
             </div>
 
@@ -532,7 +532,7 @@ export default function AdminUserManagementPage() {
                     password: event.target.value,
                   }))
                 }
-                className="border-white/10 bg-white/[0.04] text-white"
+                className="border-edge/10 bg-white/[0.04] text-ink"
               />
             </div>
 
@@ -547,10 +547,10 @@ export default function AdminUserManagementPage() {
                     role: event.target.value as UserRole,
                   }))
                 }
-                className="h-10 rounded-md border border-white/10 bg-white/[0.04] px-3 text-sm text-white outline-none"
+                className="h-10 rounded-md border border-edge/10 bg-white/[0.04] px-3 text-sm text-ink outline-none"
               >
                 {roles.map((role) => (
-                  <option key={role} value={role} className="text-black">
+                  <option key={role} value={role} className="bg-popover text-popover-foreground">
                     {role}
                   </option>
                 ))}
@@ -562,7 +562,7 @@ export default function AdminUserManagementPage() {
             <Button
               type="button"
               variant="outline"
-              className="border-white/10 bg-transparent text-white hover:bg-white/10"
+              className="border-edge/10 bg-transparent text-ink hover:bg-glass-10"
               onClick={() => setCreateOpen(false)}
             >
               Cancel
@@ -583,10 +583,10 @@ export default function AdminUserManagementPage() {
         open={Boolean(editForm)}
         onOpenChange={(open) => !open && setEditForm(null)}
       >
-        <DialogContent className="border-white/10 bg-[#0B183D] text-white sm:max-w-xl">
+        <DialogContent className="border-edge/10 bg-card dark:bg-[#0B183D] text-ink sm:max-w-xl">
           <DialogHeader>
             <DialogTitle>Edit User</DialogTitle>
-            <DialogDescription className="text-white/60">
+            <DialogDescription className="text-copy-60">
               Update user details, role, and active state.
             </DialogDescription>
           </DialogHeader>
@@ -608,7 +608,7 @@ export default function AdminUserManagementPage() {
                         : current,
                     )
                   }
-                  className="border-white/10 bg-white/[0.04] text-white"
+                  className="border-edge/10 bg-white/[0.04] text-ink"
                 />
               </div>
 
@@ -620,9 +620,9 @@ export default function AdminUserManagementPage() {
                   value={editForm.email}
                   readOnly
                   aria-readonly="true"
-                  className="border-white/10 bg-white/[0.04] text-white/70"
+                  className="border-edge/10 bg-white/[0.04] text-copy-70"
                 />
-                <p className="text-xs text-white/45">
+                <p className="text-xs text-copy-45">
                   {canTransferEmail
                     ? "To change this address, use Transfer email below."
                     : "Admin emails can't be changed from this screen."}
@@ -644,10 +644,10 @@ export default function AdminUserManagementPage() {
                         : current,
                     )
                   }
-                  className="h-10 rounded-md border border-white/10 bg-white/[0.04] px-3 text-sm text-white outline-none"
+                  className="h-10 rounded-md border border-edge/10 bg-white/[0.04] px-3 text-sm text-ink outline-none"
                 >
                   {roles.map((role) => (
-                    <option key={role} value={role} className="text-black">
+                    <option key={role} value={role} className="bg-popover text-popover-foreground">
                       {role}
                     </option>
                   ))}
@@ -659,8 +659,8 @@ export default function AdminUserManagementPage() {
                 <Button
                   type="button"
                   variant="outline"
-                  className={`w-full justify-between border-white/10 bg-white/[0.04] text-white hover:bg-white/10 ${
-                    editForm.isActive ? "text-emerald-200" : "text-white/70"
+                  className={`w-full justify-between border-edge/10 bg-white/[0.04] text-ink hover:bg-glass-10 ${
+                    editForm.isActive ? "text-emerald-700 dark:text-emerald-200" : "text-copy-70"
                   }`}
                   onClick={() =>
                     setEditForm((current) =>
@@ -674,7 +674,7 @@ export default function AdminUserManagementPage() {
                   }
                 >
                   <span>{editForm.isActive ? "Enabled" : "Disabled"}</span>
-                  <span className="text-xs text-white/55">
+                  <span className="text-xs text-copy-55">
                     Click to toggle
                   </span>
                 </Button>
@@ -684,7 +684,7 @@ export default function AdminUserManagementPage() {
                 <div className="space-y-3 rounded-xl border border-amber-300/20 bg-amber-400/[0.04] p-4">
                   <div>
                     <Label htmlFor="transfer-email">Transfer email</Label>
-                    <p className="mt-1 text-xs leading-5 text-white/55">
+                    <p className="mt-1 text-xs leading-5 text-copy-55">
                       Moves this account to a new login email. It becomes
                       unverified, is signed out everywhere, and a one-time code
                       is emailed to the new address. The password stays the
@@ -699,12 +699,12 @@ export default function AdminUserManagementPage() {
                       onChange={(event) => setTransferEmail(event.target.value)}
                       aria-invalid={Boolean(transferEmail.trim()) && !transferEmailValid}
                       placeholder="new-owner@example.com"
-                      className="border-white/10 bg-white/[0.04] text-white placeholder:text-white/35"
+                      className="border-edge/10 bg-white/[0.04] text-ink placeholder:text-copy-35"
                     />
                     <Button
                       type="button"
                       variant="outline"
-                      className="border-amber-300/30 bg-transparent text-amber-100 hover:bg-amber-400/10"
+                      className="border-amber-300/30 bg-transparent text-amber-700 dark:text-amber-100 hover:bg-amber-400/10"
                       disabled={!transferEmailValid || transferring || submitting}
                       onClick={() => setTransferConfirmOpen(true)}
                     >
@@ -712,12 +712,12 @@ export default function AdminUserManagementPage() {
                     </Button>
                   </div>
                   {transferEmail.trim() && !transferEmailValid && (
-                    <p className="text-xs text-amber-200/80">
+                    <p className="text-xs text-amber-700 dark:text-amber-200/80">
                       Enter a complete email address, e.g. name@company.com.
                     </p>
                   )}
                   {transferError && (
-                    <p className="text-sm text-red-300">{transferError}</p>
+                    <p className="text-sm text-red-700 dark:text-red-300">{transferError}</p>
                   )}
                 </div>
               )}
@@ -728,7 +728,7 @@ export default function AdminUserManagementPage() {
             <Button
               type="button"
               variant="outline"
-              className="border-white/10 bg-transparent text-white hover:bg-white/10"
+              className="border-edge/10 bg-transparent text-ink hover:bg-glass-10"
               onClick={() => setEditForm(null)}
             >
               Cancel
@@ -749,10 +749,10 @@ export default function AdminUserManagementPage() {
         open={transferConfirmOpen}
         onOpenChange={(open) => !transferring && setTransferConfirmOpen(open)}
       >
-        <AlertDialogContent className="border-white/10 bg-[#0B183D] text-white">
+        <AlertDialogContent className="border-edge/10 bg-card dark:bg-[#0B183D] text-ink">
           <AlertDialogHeader>
             <AlertDialogTitle>Transfer this account&apos;s email?</AlertDialogTitle>
-            <AlertDialogDescription className="text-white/60">
+            <AlertDialogDescription className="text-copy-60">
               {editForm
                 ? `${editForm.email} will be replaced by ${transferEmail.trim().toLowerCase()}. `
                 : ""}
@@ -765,7 +765,7 @@ export default function AdminUserManagementPage() {
           <AlertDialogFooter>
             <AlertDialogCancel
               disabled={transferring}
-              className="border-white/10 bg-transparent text-white hover:bg-white/10"
+              className="border-edge/10 bg-transparent text-ink hover:bg-glass-10"
             >
               Cancel
             </AlertDialogCancel>
@@ -785,17 +785,17 @@ export default function AdminUserManagementPage() {
         open={Boolean(deleteTarget)}
         onOpenChange={(open) => !open && setDeleteTarget(null)}
       >
-        <AlertDialogContent className="border-white/10 bg-[#0B183D] text-white">
+        <AlertDialogContent className="border-edge/10 bg-card dark:bg-[#0B183D] text-ink">
           <AlertDialogHeader>
             <AlertDialogTitle>Delete user?</AlertDialogTitle>
-            <AlertDialogDescription className="text-white/60">
+            <AlertDialogDescription className="text-copy-60">
               {deleteTarget
                 ? `This will permanently remove ${deleteTarget.email}.`
                 : "This action cannot be undone."}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel className="border-white/10 bg-transparent text-white hover:bg-white/10">
+            <AlertDialogCancel className="border-edge/10 bg-transparent text-ink hover:bg-glass-10">
               Cancel
             </AlertDialogCancel>
             <AlertDialogAction

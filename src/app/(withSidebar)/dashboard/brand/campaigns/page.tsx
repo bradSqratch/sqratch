@@ -47,7 +47,7 @@ export default function BrandCampaignsPage() {
       actions={
         <Button
           asChild
-          className="rounded-full border border-white bg-white text-black"
+          className="rounded-full border border-edge bg-primary text-primary-foreground"
         >
           <Link href="/dashboard/brand/campaigns/new">Create campaign</Link>
         </Button>
@@ -55,15 +55,15 @@ export default function BrandCampaignsPage() {
     >
       {loading ? (
         <PageCard>
-          <p className="text-sm text-white/65">Loading campaigns...</p>
+          <p className="text-sm text-copy-65">Loading campaigns...</p>
         </PageCard>
       ) : error ? (
         <PageCard>
-          <p className="text-sm text-red-300">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         </PageCard>
       ) : campaigns.length === 0 ? (
         <PageCard>
-          <p className="text-sm text-white/65">No campaigns yet.</p>
+          <p className="text-sm text-copy-65">No campaigns yet.</p>
         </PageCard>
       ) : (
         <div className="grid gap-5 xl:grid-cols-2">
@@ -72,28 +72,28 @@ export default function BrandCampaignsPage() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h2 className="text-2xl font-semibold">{campaign.name}</h2>
-                  <p className="mt-1 text-sm text-white/55">/{campaign.slug}</p>
+                  <p className="mt-1 text-sm text-copy-55">/{campaign.slug}</p>
                 </div>
-                <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/65">
+                <span className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-65">
                   {campaign.isActive ? "Active" : "Inactive"}
                 </span>
               </div>
               {campaign.description && (
-                <p className="mt-4 text-sm leading-6 text-white/70">
+                <p className="mt-4 text-sm leading-6 text-copy-70">
                   {campaign.description}
                 </p>
               )}
               <div className="mt-6 grid gap-3 sm:grid-cols-2">
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                  <p className="text-xs uppercase tracking-[0.24em] text-white/45">
+                <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+                  <p className="text-xs uppercase tracking-[0.24em] text-copy-45">
                     QR batches
                   </p>
                   <p className="mt-2 text-2xl font-semibold">
                     {campaign.qrBatchesCount}
                   </p>
                 </div>
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                  <p className="text-xs uppercase tracking-[0.24em] text-white/45">
+                <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+                  <p className="text-xs uppercase tracking-[0.24em] text-copy-45">
                     Experiences
                   </p>
                   <p className="mt-2 text-2xl font-semibold">
@@ -104,7 +104,7 @@ export default function BrandCampaignsPage() {
               <div className="mt-6 flex flex-wrap gap-3">
                 <Button
                   asChild
-                  className="rounded-full border border-white bg-white text-black"
+                  className="rounded-full border border-edge bg-primary text-primary-foreground"
                 >
                   <Link href={`/dashboard/brand/campaigns/${campaign.id}/edit`}>
                     Edit
@@ -113,7 +113,7 @@ export default function BrandCampaignsPage() {
                 <Button
                   asChild
                   variant="outline"
-                  className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                  className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
                 >
                   <Link href={`/dashboard/brand/campaigns/${campaign.id}/products`}>
                     Campaign products
@@ -122,7 +122,7 @@ export default function BrandCampaignsPage() {
                 <Button
                   asChild
                   variant="outline"
-                  className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                  className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
                 >
                   <Link
                     href={`/dashboard/brand/campaigns/${campaign.id}/experiences`}

@@ -70,10 +70,10 @@ const FULFILLMENT_STATUS_LABELS: Record<CommerceOrderFulfillmentStatus, string> 
 };
 
 function fulfillmentToneClass(status: CommerceOrderFulfillmentStatus | null): string {
-  if (status === "FULFILLED") return "border-emerald-400/25 bg-emerald-400/10 text-emerald-200/90";
-  if (status === "PARTIALLY_FULFILLED") return "border-amber-400/25 bg-amber-400/10 text-amber-200/90";
-  if (status === "RESTOCKED") return "border-white/15 bg-white/5 text-white/50";
-  return "border-white/10 bg-white/5 text-white/55";
+  if (status === "FULFILLED") return "border-emerald-400/25 bg-emerald-400/10 text-emerald-700 dark:text-emerald-200/90";
+  if (status === "PARTIALLY_FULFILLED") return "border-amber-400/25 bg-amber-400/10 text-amber-700 dark:text-amber-200/90";
+  if (status === "RESTOCKED") return "border-edge/15 bg-glass-5 text-copy-50";
+  return "border-edge/10 bg-glass-5 text-copy-55";
 }
 
 function statusLabel(status: CommerceConnectionStatus): string {
@@ -220,10 +220,10 @@ function CatchUpOrdersControl({
 
   return (
     <div className="space-y-2">
-      <p className="text-xs text-white/50">Order reconciliation</p>
-      <p className="text-sm text-white/80">
+      <p className="text-xs text-copy-50">Order reconciliation</p>
+      <p className="text-sm text-copy-80">
         Last successfully reconciled through:{" "}
-        <span className="text-white/60">{loadingState ? "Loading..." : reconciledThroughLabel}</span>
+        <span className="text-copy-60">{loadingState ? "Loading..." : reconciledThroughLabel}</span>
       </p>
 
       {/* PHASE C4 — the rest of the durable checkpoint, previously only
@@ -231,7 +231,7 @@ function CatchUpOrdersControl({
           so "reconciled through" being behind it is normal progress rather
           than a fault. */}
       {!loadingState && state ? (
-        <div className="grid gap-1 text-[11px] leading-4 text-white/45 sm:grid-cols-2">
+        <div className="grid gap-1 text-[11px] leading-4 text-copy-45 sm:grid-cols-2">
           {state.targetThrough ? (
             <p>Catching up toward: {formatDateTime(state.targetThrough)}</p>
           ) : null}
@@ -240,14 +240,14 @@ function CatchUpOrdersControl({
           ) : null}
           {state.lastRunOutcome ? <p>Last outcome: {state.lastRunOutcome}</p> : null}
           {state.activeRunStartedAt ? (
-            <p className="text-amber-200/80 sm:col-span-2">
+            <p className="text-amber-700 dark:text-amber-200/80 sm:col-span-2">
               Reconciliation claimed since {formatDateTime(state.activeRunStartedAt)}.
               If the process stopped, an operator must confirm termination before releasing the claim.
             </p>
           ) : null}
           {/* Already a short classified tag server-side, never a raw error. */}
           {state.lastRunError ? (
-            <p className="text-amber-200/80 sm:col-span-2">Last error: {state.lastRunError}</p>
+            <p className="text-amber-700 dark:text-amber-200/80 sm:col-span-2">Last error: {state.lastRunError}</p>
           ) : null}
         </div>
       ) : null}
@@ -259,15 +259,15 @@ function CatchUpOrdersControl({
           contiguous checkpoint forward, silently skipping everything in
           between. */}
       {!loadingState && state?.customRangeFrom && state?.customRangeTo ? (
-        <div className="rounded-lg border border-white/10 bg-black/20 p-2 text-[11px] leading-4 text-white/45">
-          <p className="text-white/60">Last custom range (separate from the checkpoint above)</p>
+        <div className="rounded-lg border border-edge/10 bg-inset/20 p-2 text-[11px] leading-4 text-copy-45">
+          <p className="text-copy-60">Last custom range (separate from the checkpoint above)</p>
           <p>
             {formatDateTime(state.customRangeFrom)} → {formatDateTime(state.customRangeTo)}
           </p>
           {state.customRangeCursor ? (
             <p>Progress: {formatDateTime(state.customRangeCursor)}</p>
           ) : null}
-          <p className="mt-1 text-white/35">
+          <p className="mt-1 text-copy-35">
             A custom range repairs a specific historical window only. It does not move the
             contiguous Catch Up checkpoint.
           </p>
@@ -278,19 +278,19 @@ function CatchUpOrdersControl({
         onClick={() => void handleCatchUp()}
         disabled={disabled || running}
         variant="outline"
-        className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+        className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
       >
         {running ? "Catching up..." : "Catch up orders"}
       </Button>
       {running ? (
-        <p className="text-[11px] leading-4 text-white/40">
+        <p className="text-[11px] leading-4 text-copy-40">
           Reconciliation in progress. You can leave this page safely; progress already completed will
           be preserved and Catch Up can resume later.
         </p>
       ) : null}
-      {error ? <p className="text-xs text-red-300">{error}</p> : null}
+      {error ? <p className="text-xs text-red-700 dark:text-red-300">{error}</p> : null}
       {lastChunk ? (
-        <p className="text-xs text-white/60">
+        <p className="text-xs text-copy-60">
           {lastChunk.status === "FAILED"
             ? `Stopped: ${lastChunk.error ?? "an error occurred"}`
             : lastChunk.reachedTarget
@@ -420,7 +420,7 @@ function ReconcileCustomRangeControl({
         onClick={() => setExpanded(true)}
         disabled={disabled}
         variant="outline"
-        className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+        className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
       >
         Reconcile custom range
       </Button>
@@ -428,10 +428,10 @@ function ReconcileCustomRangeControl({
   }
 
   return (
-    <div className="space-y-3 rounded-xl border border-white/10 bg-black/20 p-3">
-      <p className="text-xs text-white/50">Reconcile a specific historical date/time range</p>
+    <div className="space-y-3 rounded-xl border border-edge/10 bg-inset/20 p-3">
+      <p className="text-xs text-copy-50">Reconcile a specific historical date/time range</p>
       <div className="grid gap-3 sm:grid-cols-2">
-        <label className="space-y-1 text-xs text-white/55">
+        <label className="space-y-1 text-xs text-copy-55">
           <span>From</span>
           <Input
             type="datetime-local"
@@ -439,10 +439,10 @@ function ReconcileCustomRangeControl({
             max={maxDateTimeLocal}
             onChange={(e) => setFromValue(e.target.value)}
             disabled={disabled || running}
-            className="border-white/10 bg-black/20 text-white"
+            className="border-edge/10 bg-inset/20 text-ink"
           />
         </label>
-        <label className="space-y-1 text-xs text-white/55">
+        <label className="space-y-1 text-xs text-copy-55">
           <span>To</span>
           <Input
             type="datetime-local"
@@ -450,11 +450,11 @@ function ReconcileCustomRangeControl({
             max={maxDateTimeLocal}
             onChange={(e) => setToValue(e.target.value)}
             disabled={disabled || running}
-            className="border-white/10 bg-black/20 text-white"
+            className="border-edge/10 bg-inset/20 text-ink"
           />
         </label>
       </div>
-      <p className="text-[11px] leading-4 text-white/40">
+      <p className="text-[11px] leading-4 text-copy-40">
         This repairs a specific historical window and does not change the main reconciliation checkpoint
         above.
       </p>
@@ -462,7 +462,7 @@ function ReconcileCustomRangeControl({
         <Button
           onClick={() => void handleReconcileRange()}
           disabled={disabled || running}
-          className="rounded-full border border-white bg-white text-black hover:bg-white/90"
+          className="rounded-full border border-edge bg-primary text-primary-foreground hover:bg-primary/90"
         >
           {running ? "Reconciling..." : "Reconcile selected range"}
         </Button>
@@ -474,14 +474,14 @@ function ReconcileCustomRangeControl({
           }}
           disabled={running}
           variant="outline"
-          className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+          className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
         >
           Cancel
         </Button>
       </div>
-      {error ? <p className="text-xs text-red-300">{error}</p> : null}
+      {error ? <p className="text-xs text-red-700 dark:text-red-300">{error}</p> : null}
       {lastChunk ? (
-        <p className="text-xs text-white/60">
+        <p className="text-xs text-copy-60">
           {lastChunk.status === "FAILED"
             ? `Stopped: ${lastChunk.error ?? "an error occurred"}`
             : lastChunk.reachedTarget
@@ -508,71 +508,71 @@ function ConnectionOrderOperationsCard({
     summary.unknownFinancialStatusCount;
 
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-4 space-y-4">
+    <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4 space-y-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold text-white/85">
+          <p className="text-sm font-semibold text-copy-85">
             {PROVIDER_LABELS[summary.provider]} — {summary.displayName}
           </p>
-          <p className="mt-1 text-xs text-white/50">{summary.externalAccountId}</p>
+          <p className="mt-1 text-xs text-copy-50">{summary.externalAccountId}</p>
         </div>
-        <span className="rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs text-white/70">
+        <span className="rounded-full border border-edge/15 bg-glass-5 px-3 py-1 text-xs text-copy-70">
           {statusLabel(summary.status)}
         </span>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-          <p className="text-xs text-white/50">Latest order ingested</p>
-          <p className="mt-1 text-sm text-white/80">{formatDateTime(summary.latestOrderIngestedAt)}</p>
+        <div className="rounded-xl border border-edge/10 bg-inset/20 p-3">
+          <p className="text-xs text-copy-50">Latest order ingested</p>
+          <p className="mt-1 text-sm text-copy-80">{formatDateTime(summary.latestOrderIngestedAt)}</p>
         </div>
-        <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-          <p className="text-xs text-white/50">Latest webhook processed</p>
-          <p className="mt-1 text-sm text-white/80">{formatDateTime(summary.latestWebhookProcessedAt)}</p>
+        <div className="rounded-xl border border-edge/10 bg-inset/20 p-3">
+          <p className="text-xs text-copy-50">Latest webhook processed</p>
+          <p className="mt-1 text-sm text-copy-80">{formatDateTime(summary.latestWebhookProcessedAt)}</p>
         </div>
       </div>
 
       <div>
-        <p className="text-xs text-white/50">Orders by status ({totalOrders} total)</p>
+        <p className="text-xs text-copy-50">Orders by status ({totalOrders} total)</p>
         <div className="mt-2 flex flex-wrap gap-2">
           {FINANCIAL_STATUS_ORDER.filter(
             (status) => (summary.orderCountsByFinancialStatus[status] ?? 0) > 0,
           ).map((status) => (
             <span
               key={status}
-              className="rounded-full border border-white/10 bg-white/5 px-3 py-1 text-xs text-white/70"
+              className="rounded-full border border-edge/10 bg-glass-5 px-3 py-1 text-xs text-copy-70"
             >
               {FINANCIAL_STATUS_LABELS[status]}: {summary.orderCountsByFinancialStatus[status]}
             </span>
           ))}
           {summary.unknownFinancialStatusCount > 0 ? (
-            <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-3 py-1 text-xs text-amber-200/90">
+            <span className="rounded-full border border-amber-400/25 bg-amber-400/10 px-3 py-1 text-xs text-amber-700 dark:text-amber-200/90">
               Unknown: {summary.unknownFinancialStatusCount}
             </span>
           ) : null}
-          {totalOrders === 0 ? <span className="text-xs text-white/40">No orders yet.</span> : null}
+          {totalOrders === 0 ? <span className="text-xs text-copy-40">No orders yet.</span> : null}
         </div>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-          <p className="text-xs text-white/50">Attributed to a SQRATCH click</p>
-          <p className="mt-1 text-lg font-semibold text-white/85">{summary.attributedOrderCount}</p>
+        <div className="rounded-xl border border-edge/10 bg-inset/20 p-3">
+          <p className="text-xs text-copy-50">Attributed to a SQRATCH click</p>
+          <p className="mt-1 text-lg font-semibold text-copy-85">{summary.attributedOrderCount}</p>
         </div>
-        <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-          <p className="text-xs text-white/50">Unattributed</p>
-          <p className="mt-1 text-lg font-semibold text-white/85">{summary.unattributedOrderCount}</p>
+        <div className="rounded-xl border border-edge/10 bg-inset/20 p-3">
+          <p className="text-xs text-copy-50">Unattributed</p>
+          <p className="mt-1 text-lg font-semibold text-copy-85">{summary.unattributedOrderCount}</p>
         </div>
       </div>
 
       {summary.provider === "COMMERCE7" ? (
         <div className="space-y-3">
-          <div className="rounded-xl border border-white/10 bg-black/20 p-3">
-            <p className="text-xs text-white/50">SQRATCH order webhook receiver</p>
-            <p className="mt-1 text-sm text-white/80">
+          <div className="rounded-xl border border-edge/10 bg-inset/20 p-3">
+            <p className="text-xs text-copy-50">SQRATCH order webhook receiver</p>
+            <p className="mt-1 text-sm text-copy-80">
               {summary.orderReceiverConfigured ? "Ready" : "Not configured"}
             </p>
-            <p className="mt-1 text-[11px] leading-4 text-white/40">
+            <p className="mt-1 text-[11px] leading-4 text-copy-40">
               This only reflects SQRATCH&apos;s own receiver readiness — Commerce7&apos;s webhook
               subscription state is not observable from here.
             </p>
@@ -613,16 +613,16 @@ const ACTIVITY_CATEGORY_LABELS: Record<OrderActivityCategory, string> = {
 };
 
 function activityCategoryToneClass(category: OrderActivityCategory): string {
-  if (category === "WEBHOOK") return "border-sky-400/25 bg-sky-400/10 text-sky-200/90";
-  if (category === "RECONCILIATION") return "border-violet-400/25 bg-violet-400/10 text-violet-200/90";
-  return "border-white/15 bg-white/5 text-white/60";
+  if (category === "WEBHOOK") return "border-sky-400/25 bg-sky-400/10 text-sky-700 dark:text-sky-200/90";
+  if (category === "RECONCILIATION") return "border-violet-400/25 bg-violet-400/10 text-violet-700 dark:text-violet-200/90";
+  return "border-edge/15 bg-glass-5 text-copy-60";
 }
 
 function activityStatusToneClass(status: string): string {
-  if (status === "PROCESSED") return "border-emerald-400/25 bg-emerald-400/10 text-emerald-200/90";
-  if (status === "FAILED") return "border-red-400/25 bg-red-400/10 text-red-200/90";
-  if (status === "RECEIVED") return "border-amber-400/25 bg-amber-400/10 text-amber-200/90";
-  return "border-white/15 bg-white/5 text-white/60";
+  if (status === "PROCESSED") return "border-emerald-400/25 bg-emerald-400/10 text-emerald-700 dark:text-emerald-200/90";
+  if (status === "FAILED") return "border-red-400/25 bg-red-400/10 text-red-700 dark:text-red-200/90";
+  if (status === "RECEIVED") return "border-amber-400/25 bg-amber-400/10 text-amber-700 dark:text-amber-200/90";
+  return "border-edge/15 bg-glass-5 text-copy-60";
 }
 
 const ACTIVITY_STATUS_LABELS: Record<string, string> = {
@@ -702,7 +702,7 @@ function OrderActivityPanel({
       <Button
         onClick={() => setExpanded(true)}
         variant="outline"
-        className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+        className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
       >
         View ingestion activity
       </Button>
@@ -710,36 +710,36 @@ function OrderActivityPanel({
   }
 
   return (
-    <div className="space-y-3 rounded-xl border border-white/10 bg-black/20 p-3">
+    <div className="space-y-3 rounded-xl border border-edge/10 bg-inset/20 p-3">
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-xs text-white/50">Recent ingestion activity</p>
+        <p className="text-xs text-copy-50">Recent ingestion activity</p>
         <Button
           onClick={() => setExpanded(false)}
           variant="outline"
-          className="h-7 rounded-full border-white/20 bg-transparent px-3 text-[11px] text-white hover:bg-white/10"
+          className="h-7 rounded-full border-edge/20 bg-transparent px-3 text-[11px] text-ink hover:bg-glass-10"
         >
           Hide
         </Button>
       </div>
 
       {/* THE HISTORY-vs-CURRENT-STATE DISCLAIMER. Load-bearing, not filler. */}
-      <p className="text-[11px] leading-4 text-white/40">
+      <p className="text-[11px] leading-4 text-copy-40">
         This is a history of ingestion events, not the current state of your orders. An older failed
         or skipped event can be followed by a successful reconciliation that already repaired the
         order — open the order itself to see its current state.
       </p>
 
       {loading ? (
-        <p className="text-sm text-white/65">Loading activity...</p>
+        <p className="text-sm text-copy-65">Loading activity...</p>
       ) : error ? (
-        <p className="text-sm text-red-300">{error}</p>
+        <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
       ) : !page || page.entries.length === 0 ? (
-        <p className="text-sm text-white/65">No ingestion activity recorded yet.</p>
+        <p className="text-sm text-copy-65">No ingestion activity recorded yet.</p>
       ) : (
         <>
           <div className="space-y-2">
             {page.entries.map((entry) => (
-              <div key={entry.id} className="rounded-lg border border-white/10 bg-black/20 p-2.5">
+              <div key={entry.id} className="rounded-lg border border-edge/10 bg-inset/20 p-2.5">
                 <div className="flex flex-wrap items-center gap-2">
                   <span
                     className={`rounded-full border px-2.5 py-0.5 text-[11px] ${activityCategoryToneClass(entry.category)}`}
@@ -751,13 +751,13 @@ function OrderActivityPanel({
                   >
                     {ACTIVITY_STATUS_LABELS[entry.status] ?? entry.status}
                   </span>
-                  <span className="text-[11px] text-white/45">{formatDateTime(entry.receivedAt)}</span>
+                  <span className="text-[11px] text-copy-45">{formatDateTime(entry.receivedAt)}</span>
                 </div>
-                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-white/45">
+                <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-copy-45">
                   {entry.order ? (
                     <a
                       href={`/dashboard/brand/commerce/orders/${entry.order.id}`}
-                      className="text-white/70 underline underline-offset-2 hover:text-white focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+                      className="text-copy-70 underline underline-offset-2 hover:text-ink focus:outline-none focus-visible:ring-2 focus-visible:ring-edge/40"
                     >
                       Order {entry.order.orderNumber ?? entry.order.id.slice(0, 8)}
                     </a>
@@ -768,7 +768,7 @@ function OrderActivityPanel({
                     <span>No canonical order</span>
                   )}
                   {entry.externalOrderRef ? (
-                    <span className="font-mono text-white/35">
+                    <span className="font-mono text-copy-35">
                       provider ref {entry.externalOrderRef.slice(0, 12)}
                     </span>
                   ) : null}
@@ -777,7 +777,7 @@ function OrderActivityPanel({
                   ) : null}
                 </div>
                 {entry.failureSummary ? (
-                  <p className="mt-1.5 text-[11px] text-amber-200/80">
+                  <p className="mt-1.5 text-[11px] text-amber-700 dark:text-amber-200/80">
                     {describeOrderEventNote(entry.failureSummary, PROVIDER_LABELS[entry.provider] ?? entry.provider, entry.order ? { currencyCode: entry.order.currencyCode ?? null, minorUnitExponent: entry.order.minorUnitExponent ?? null } : null)}
                   </p>
                 ) : null}
@@ -792,7 +792,7 @@ function OrderActivityPanel({
               }}
               disabled={loading}
               variant="outline"
-              className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+              className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
             >
               Load older activity
             </Button>
@@ -805,7 +805,7 @@ function OrderActivityPanel({
               }}
               disabled={loading}
               variant="outline"
-              className="ml-2 rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+              className="ml-2 rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
             >
               Back to newest
             </Button>
@@ -1089,19 +1089,19 @@ function OrderExplorer({
   return (
     <PageCard>
       <div className="flex flex-wrap items-baseline justify-between gap-2">
-        <p className="text-sm font-semibold text-white/85">Orders</p>
-        <p className="text-[11px] text-white/40">Newest first, by the time SQRATCH ingested the order</p>
+        <p className="text-sm font-semibold text-copy-85">Orders</p>
+        <p className="text-[11px] text-copy-40">Newest first, by the time SQRATCH ingested the order</p>
       </div>
 
       {/* ---------------- Filter toolbar ---------------- */}
       <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {connections.length > 1 ? (
-          <label className="space-y-1 text-xs text-white/55">
+          <label className="space-y-1 text-xs text-copy-55">
             <span>Store</span>
             <select
               value={draft.connectionId}
               onChange={(e) => setDraft((d) => ({ ...d, connectionId: e.target.value }))}
-              className="h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+              className="h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
             >
               <option value="">All stores</option>
               {connections.map((connection) => (
@@ -1113,7 +1113,7 @@ function OrderExplorer({
           </label>
         ) : null}
 
-        <label className="space-y-1 text-xs text-white/55">
+        <label className="space-y-1 text-xs text-copy-55">
           <span>Order number</span>
           <Input
             value={draft.orderNumber}
@@ -1121,16 +1121,16 @@ function OrderExplorer({
             // Bounded here as well as server-side; the server is authoritative.
             maxLength={MAX_ORDER_NUMBER_SEARCH_LENGTH}
             placeholder="e.g. 1002"
-            className="border-white/10 bg-black/20 text-white"
+            className="border-edge/10 bg-inset/20 text-ink"
           />
         </label>
 
-        <label className="space-y-1 text-xs text-white/55">
+        <label className="space-y-1 text-xs text-copy-55">
           <span>Payment status</span>
           <select
             value={draft.financialStatus}
             onChange={(e) => setDraft((d) => ({ ...d, financialStatus: e.target.value }))}
-            className="h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+            className="h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
           >
             <option value="">Any payment status</option>
             {FINANCIAL_STATUS_OPTIONS.map((option) => (
@@ -1141,12 +1141,12 @@ function OrderExplorer({
           </select>
         </label>
 
-        <label className="space-y-1 text-xs text-white/55">
+        <label className="space-y-1 text-xs text-copy-55">
           <span>Fulfillment status</span>
           <select
             value={draft.fulfillmentStatus}
             onChange={(e) => setDraft((d) => ({ ...d, fulfillmentStatus: e.target.value }))}
-            className="h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+            className="h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
           >
             <option value="">Any fulfillment status</option>
             {FULFILLMENT_STATUS_OPTIONS.map((option) => (
@@ -1157,12 +1157,12 @@ function OrderExplorer({
           </select>
         </label>
 
-        <label className="space-y-1 text-xs text-white/55">
+        <label className="space-y-1 text-xs text-copy-55">
           <span>Attribution</span>
           <select
             value={draft.attributed}
             onChange={(e) => setDraft((d) => ({ ...d, attributed: e.target.value }))}
-            className="h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+            className="h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
           >
             <option value="">All orders</option>
             <option value="attributed">Attributed</option>
@@ -1170,23 +1170,23 @@ function OrderExplorer({
           </select>
         </label>
 
-        <label className="space-y-1 text-xs text-white/55">
+        <label className="space-y-1 text-xs text-copy-55">
           <span>Order date from</span>
           <Input
             type="datetime-local"
             value={draft.dateFrom}
             onChange={(e) => setDraft((d) => ({ ...d, dateFrom: e.target.value }))}
-            className="border-white/10 bg-black/20 text-white"
+            className="border-edge/10 bg-inset/20 text-ink"
           />
         </label>
 
-        <label className="space-y-1 text-xs text-white/55">
+        <label className="space-y-1 text-xs text-copy-55">
           <span>Order date to</span>
           <Input
             type="datetime-local"
             value={draft.dateTo}
             onChange={(e) => setDraft((d) => ({ ...d, dateTo: e.target.value }))}
-            className="border-white/10 bg-black/20 text-white"
+            className="border-edge/10 bg-inset/20 text-ink"
           />
         </label>
       </div>
@@ -1195,7 +1195,7 @@ function OrderExplorer({
         <Button
           onClick={applyFilters}
           disabled={loading}
-          className="rounded-full border border-white bg-white text-black hover:bg-white/90"
+          className="rounded-full border border-edge bg-primary text-primary-foreground hover:bg-primary/90"
         >
           Apply filters
         </Button>
@@ -1204,7 +1204,7 @@ function OrderExplorer({
             onClick={resetFilters}
             disabled={loading}
             variant="outline"
-            className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+            className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
           >
             Clear filters
           </Button>
@@ -1213,11 +1213,11 @@ function OrderExplorer({
 
       {/* ---------------- Results ---------------- */}
       {loading ? (
-        <p className="mt-4 text-sm text-white/65">Loading orders...</p>
+        <p className="mt-4 text-sm text-copy-65">Loading orders...</p>
       ) : error ? (
-        <p className="mt-4 text-sm text-red-300">{error}</p>
+        <p className="mt-4 text-sm text-red-700 dark:text-red-300">{error}</p>
       ) : rows.length === 0 ? (
-        <p className="mt-4 text-sm text-white/65">
+        <p className="mt-4 text-sm text-copy-65">
           {filtersAreActive
             ? "No orders match these filters."
             : "No orders yet."}
@@ -1241,7 +1241,7 @@ function OrderExplorer({
             onClick={goPrevious}
             disabled={!canGoPrevious || loading}
             variant="outline"
-            className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+            className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
           >
             Previous
           </Button>
@@ -1249,11 +1249,11 @@ function OrderExplorer({
             onClick={goNext}
             disabled={!hasNextPage || loading}
             variant="outline"
-            className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+            className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
           >
             Next
           </Button>
-          <span className="text-[11px] text-white/40">Page {cursorStack.length + 1}</span>
+          <span className="text-[11px] text-copy-40">Page {cursorStack.length + 1}</span>
         </div>
       ) : null}
     </PageCard>
@@ -1278,19 +1278,19 @@ function OrderExplorerRow({ row }: { row: OrderListRow }) {
   return (
     <a
       href={`/dashboard/brand/commerce/orders/${row.id}`}
-      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-black/20 p-3 hover:bg-white/5 focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40"
+      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-edge/10 bg-inset/20 p-3 hover:bg-glass-5 focus:outline-none focus-visible:ring-2 focus-visible:ring-edge/40"
     >
       <div className="min-w-0">
-        <p className="text-sm text-white/80">
+        <p className="text-sm text-copy-80">
           {row.orderNumber ?? `#${row.id.slice(0, 8)}`} — {PROVIDER_LABELS[row.provider] ?? row.provider}
         </p>
-        <p className="mt-1 text-xs text-white/45">
+        <p className="mt-1 text-xs text-copy-45">
           {formatDateTime(row.orderDate)} — {row.financialStatus ?? "Unknown"} —{" "}
           {row.attributed ? "Attributed" : "Unattributed"}
         </p>
       </div>
       <div className="flex flex-col items-end gap-1">
-        <p className="text-sm text-white/80 tabular-nums">
+        <p className="text-sm text-copy-80 tabular-nums">
           {formatMoneyDisplay(row.totalMinor, row.currencyCode, row.minorUnitExponent)}
         </p>
         {/* Refunded/net are shown ONLY when money has actually been refunded
@@ -1298,10 +1298,10 @@ function OrderExplorerRow({ row }: { row: OrderListRow }) {
             (net always equals gross there). */}
         {hasRefund ? (
           <>
-            <p className="text-[11px] text-amber-200/80 tabular-nums">
+            <p className="text-[11px] text-amber-700 dark:text-amber-200/80 tabular-nums">
               Refunded {formatMoneyDisplay(refunded, row.currencyCode, row.minorUnitExponent)}
             </p>
-            <p className="text-[11px] text-white/55 tabular-nums">
+            <p className="text-[11px] text-copy-55 tabular-nums">
               Net {formatMoneyDisplay(row.netRevenueMinor, row.currencyCode, row.minorUnitExponent)}
             </p>
           </>
@@ -1380,20 +1380,20 @@ export function BrandCommerceOrdersClient() {
     >
       <PageCard>
         {loading ? (
-          <p className="text-sm text-white/65">Loading order operations...</p>
+          <p className="text-sm text-copy-65">Loading order operations...</p>
         ) : error ? (
-          <p className="text-sm text-red-300">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         ) : !summary || summary.connections.length === 0 ? (
-          <p className="text-sm text-white/65">
+          <p className="text-sm text-copy-65">
             No commerce connections yet.{" "}
-            <a href="/dashboard/brand/commerce" className="underline hover:text-white/80">
+            <a href="/dashboard/brand/commerce" className="underline hover:text-copy-80">
               Set one up from the Store page.
             </a>
           </p>
         ) : (
           <div className="space-y-4">
             {!summary.complete ? (
-              <p className="rounded-xl border border-amber-400/25 bg-amber-400/10 p-3 text-xs text-amber-200/90">
+              <p className="rounded-xl border border-amber-400/25 bg-amber-400/10 p-3 text-xs text-amber-700 dark:text-amber-200/90">
                 Some connection data could not be loaded — this list may be incomplete. Reload to try
                 again.
               </p>
@@ -1406,7 +1406,7 @@ export function BrandCommerceOrdersClient() {
                 activityRefreshToken={refreshToken}
               />
             ))}
-            <Button asChild variant="outline" className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10">
+            <Button asChild variant="outline" className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10">
               <a href="/dashboard/brand/commerce">Back to Store</a>
             </Button>
           </div>

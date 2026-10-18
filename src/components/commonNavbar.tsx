@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SqratchLogo } from "@/components/brand/sqratch-logo";
+import { PublicThemeToggle } from "@/components/theme-select";
 
 export type CommonNavbarProps = {
   logoHref?: string;
@@ -18,10 +19,10 @@ export default function CommonNavbar({
     <header
       className={
         isLight
-          ? "fixed inset-x-0 top-0 z-50 border-b border-black/5 bg-white/85 backdrop-blur-md"
+          ? "fixed inset-x-0 top-0 z-50 border-b border-black/5 bg-card/85 backdrop-blur-md"
           : `
         fixed top-0 left-0 right-0 z-50
-        bg-black/80
+        bg-card/85 dark:bg-black/80
         backdrop-blur-sm
         shadow-[inset_0_-1px_0_rgba(0,50,53,0.2)]
       `
@@ -35,8 +36,8 @@ export default function CommonNavbar({
           />
         </Link>
 
-        {showAdminLogin && (
-          <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 sm:gap-3">
+          {showAdminLogin && (
             <Link
               href="/login"
               className={`inline-flex items-center justify-center rounded-full
@@ -45,13 +46,14 @@ export default function CommonNavbar({
                   leading-none font-normal transition-colors whitespace-nowrap ${
                     isLight
                       ? "border-black/20 text-black hover:bg-black hover:text-white"
-                      : "border-[#ECECEC] text-[#ECECEC] hover:bg-white hover:text-black"
+                      : "border-edge text-ink hover:bg-primary hover:text-primary-foreground"
                   }`}
             >
               Admin Login
             </Link>
-          </div>
-        )}
+          )}
+          <PublicThemeToggle />
+        </div>
 
         {/* Actions */}
         {/* <div className="flex items-center gap-4">
@@ -59,10 +61,10 @@ export default function CommonNavbar({
                 href="https://calendly.com/sqratch"
                 className="
                   inline-flex items-center justify-center rounded-full
-                  border border-[#ECECEC] bg-transparent
+                  border border-edge bg-transparent
                   h-8 px-3 text-[12px] sm:h-9 sm:px-4 sm:text-[13px] md:h-10 md:px-5 md:text-[14px]
-                  leading-none font-normal text-[#ECECEC]
-                  hover:bg-white hover:text-black transition-colors
+                  leading-none font-normal text-ink
+                  hover:bg-primary hover:text-primary-foreground transition-colors
                   whitespace-nowrap
                 "
               >

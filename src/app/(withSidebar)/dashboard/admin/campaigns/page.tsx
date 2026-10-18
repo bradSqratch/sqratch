@@ -167,7 +167,7 @@ export default function AdminCampaignsPage() {
     >
       {error && (
         <PageCard>
-          <p className="text-sm text-red-300">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         </PageCard>
       )}
 
@@ -175,14 +175,14 @@ export default function AdminCampaignsPage() {
         <form onSubmit={createCampaign} className="space-y-5">
           <div className="flex items-center justify-between gap-3">
             <h2 className="text-xl font-semibold">Create Campaign</h2>
-            <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/55">
+            <span className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-55">
               Admin-managed
             </span>
           </div>
 
           <div className="grid gap-4 lg:grid-cols-3">
             <div className="space-y-2">
-              <label className="text-sm text-white/70">Brand</label>
+              <label className="text-sm text-copy-70">Brand</label>
               <select
                 value={createForm.brandId}
                 onChange={(event) =>
@@ -191,17 +191,17 @@ export default function AdminCampaignsPage() {
                     brandId: event.target.value,
                   }))
                 }
-                className="h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white outline-none"
+                className="h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink outline-none"
               >
                 {data?.brands.map((brand) => (
-                  <option key={brand.id} value={brand.id} className="text-black">
+                  <option key={brand.id} value={brand.id} className="bg-popover text-popover-foreground">
                     {brand.name}
                   </option>
                 ))}
               </select>
             </div>
             <div className="space-y-2">
-              <label className="text-sm text-white/70">Name</label>
+              <label className="text-sm text-copy-70">Name</label>
               <Input
                 value={createForm.name}
                 onChange={(event) => {
@@ -214,11 +214,11 @@ export default function AdminCampaignsPage() {
                       : slugifyValue(name),
                   }));
                 }}
-                className="border-white/10 bg-black/20 text-white"
+                className="border-edge/10 bg-inset/20 text-ink"
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm text-white/70">Slug</label>
+              <label className="text-sm text-copy-70">Slug</label>
               <Input
                 value={createForm.slug}
                 onChange={(event) => {
@@ -228,13 +228,13 @@ export default function AdminCampaignsPage() {
                     slug: slugifyValue(event.target.value),
                   }));
                 }}
-                className="border-white/10 bg-black/20 text-white"
+                className="border-edge/10 bg-inset/20 text-ink"
               />
             </div>
           </div>
 
           <div className="space-y-2">
-            <label className="text-sm text-white/70">Description</label>
+            <label className="text-sm text-copy-70">Description</label>
             <Textarea
               value={createForm.description}
               onChange={(event) =>
@@ -243,11 +243,11 @@ export default function AdminCampaignsPage() {
                   description: event.target.value,
                 }))
               }
-              className="min-h-[120px] border-white/10 bg-black/20 text-white"
+              className="min-h-[120px] border-edge/10 bg-inset/20 text-ink"
             />
           </div>
 
-          <label className="flex items-center gap-3 text-sm text-white/70">
+          <label className="flex items-center gap-3 text-sm text-copy-70">
             <input
               type="checkbox"
               checked={createForm.isActive}
@@ -270,7 +270,7 @@ export default function AdminCampaignsPage() {
               !createForm.slug.trim() ||
               !createForm.brandId
             }
-            className="rounded-full border border-white bg-white text-black"
+            className="rounded-full border border-edge bg-primary text-primary-foreground"
           >
             {creating ? "Creating..." : "Create campaign"}
           </Button>
@@ -279,11 +279,11 @@ export default function AdminCampaignsPage() {
 
       {loading ? (
         <PageCard>
-          <p className="text-sm text-white/65">Loading campaigns...</p>
+          <p className="text-sm text-copy-65">Loading campaigns...</p>
         </PageCard>
       ) : !data || data.campaigns.length === 0 ? (
         <PageCard>
-          <p className="text-sm text-white/65">No campaigns found.</p>
+          <p className="text-sm text-copy-65">No campaigns found.</p>
         </PageCard>
       ) : (
         <div className="space-y-5">
@@ -302,11 +302,11 @@ export default function AdminCampaignsPage() {
                         <h2 className="text-2xl font-semibold">
                           {campaign.name}
                         </h2>
-                        <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/65">
+                        <span className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-65">
                           {campaign.isActive ? "Active" : "Inactive"}
                         </span>
                       </div>
-                      <p className="mt-1 text-sm text-white/55">
+                      <p className="mt-1 text-sm text-copy-55">
                         /{campaign.slug}
                       </p>
                     </div>
@@ -323,14 +323,14 @@ export default function AdminCampaignsPage() {
 
                   <div className="grid gap-4 lg:grid-cols-3">
                     <div className="space-y-2">
-                      <label className="text-sm text-white/70">Owning brand</label>
-                      <div className="flex h-10 items-center rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white/75">
+                      <label className="text-sm text-copy-70">Owning brand</label>
+                      <div className="flex h-10 items-center rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-copy-75">
                         {campaign.brand?.name ?? "Unavailable"}
-                        <span className="ml-2 text-xs text-white/45">Permanent</span>
+                        <span className="ml-2 text-xs text-copy-45">Permanent</span>
                       </div>
                     </div>
                     <div className="space-y-2">
-                      <label className="text-sm text-white/70">Name</label>
+                      <label className="text-sm text-copy-70">Name</label>
                       <Input
                         value={draft.name}
                         onChange={(event) =>
@@ -342,11 +342,11 @@ export default function AdminCampaignsPage() {
                             },
                           }))
                         }
-                        className="border-white/10 bg-black/20 text-white"
+                        className="border-edge/10 bg-inset/20 text-ink"
                       />
                     </div>
                     <div className="space-y-2">
-                      <label className="text-sm text-white/70">Slug</label>
+                      <label className="text-sm text-copy-70">Slug</label>
                       <Input
                         value={draft.slug}
                         onChange={(event) =>
@@ -358,13 +358,13 @@ export default function AdminCampaignsPage() {
                             },
                           }))
                         }
-                        className="border-white/10 bg-black/20 text-white"
+                        className="border-edge/10 bg-inset/20 text-ink"
                       />
                     </div>
                   </div>
 
                   <div className="space-y-2">
-                    <label className="text-sm text-white/70">Description</label>
+                    <label className="text-sm text-copy-70">Description</label>
                     <Textarea
                       value={draft.description}
                       onChange={(event) =>
@@ -376,12 +376,12 @@ export default function AdminCampaignsPage() {
                           },
                         }))
                       }
-                      className="min-h-[120px] border-white/10 bg-black/20 text-white"
+                      className="min-h-[120px] border-edge/10 bg-inset/20 text-ink"
                     />
                   </div>
 
                   <div className="flex flex-wrap items-center gap-4">
-                    <label className="flex items-center gap-3 text-sm text-white/70">
+                    <label className="flex items-center gap-3 text-sm text-copy-70">
                       <input
                         type="checkbox"
                         checked={draft.isActive}
@@ -403,7 +403,7 @@ export default function AdminCampaignsPage() {
                       type="button"
                       disabled={savingId === campaign.id}
                       onClick={() => void saveCampaign(campaign.id)}
-                      className="rounded-full border border-white bg-white text-black"
+                      className="rounded-full border border-edge bg-primary text-primary-foreground"
                     >
                       {savingId === campaign.id ? "Saving..." : "Save changes"}
                     </Button>
@@ -420,8 +420,8 @@ export default function AdminCampaignsPage() {
 
 function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-      <p className="text-xs uppercase tracking-[0.24em] text-white/45">
+    <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+      <p className="text-xs uppercase tracking-[0.24em] text-copy-45">
         {label}
       </p>
       <p className="mt-2 text-2xl font-semibold">{value}</p>

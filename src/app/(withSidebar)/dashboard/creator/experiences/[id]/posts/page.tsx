@@ -144,13 +144,13 @@ export default function CreatorExperiencePostsPage({
             <Button
               asChild
               variant="outline"
-              className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+              className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
             >
               <Link href="/dashboard/creator/experiences">Back to experiences</Link>
             </Button>
             <Button
               asChild
-              className="rounded-full border border-white bg-white text-black"
+              className="rounded-full border border-edge bg-primary text-primary-foreground"
             >
               <Link href={`/x/${experience.slug}/posts`}>Open live posts page</Link>
             </Button>
@@ -160,15 +160,15 @@ export default function CreatorExperiencePostsPage({
     >
       {loading ? (
         <PageCard>
-          <p className="text-sm text-white/65">Loading posts...</p>
+          <p className="text-sm text-copy-65">Loading posts...</p>
         </PageCard>
       ) : error ? (
         <PageCard>
-          <p className="text-sm text-red-300">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         </PageCard>
       ) : !experience || !postsData ? (
         <PageCard>
-          <p className="text-sm text-white/65">Experience not found.</p>
+          <p className="text-sm text-copy-65">Experience not found.</p>
         </PageCard>
       ) : (
         <>
@@ -177,20 +177,20 @@ export default function CreatorExperiencePostsPage({
               <div>
                 <div className="flex flex-wrap items-center gap-3">
                   <h2 className="text-2xl font-semibold">{experience.title}</h2>
-                  <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/60">
+                  <span className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-60">
                     {experience.status}
                   </span>
                 </div>
-                <p className="mt-2 text-sm text-white/55">/{experience.slug}</p>
+                <p className="mt-2 text-sm text-copy-55">/{experience.slug}</p>
                 {experience.description && (
-                  <p className="mt-4 max-w-3xl text-sm leading-6 text-white/70">
+                  <p className="mt-4 max-w-3xl text-sm leading-6 text-copy-70">
                     {experience.description}
                   </p>
                 )}
               </div>
 
-              <div className="rounded-2xl border border-white/10 bg-black/20 px-5 py-4 text-center">
-                <p className="text-xs uppercase tracking-[0.24em] text-white/45">
+              <div className="rounded-2xl border border-edge/10 bg-inset/20 px-5 py-4 text-center">
+                <p className="text-xs uppercase tracking-[0.24em] text-copy-45">
                   Posts
                 </p>
                 <p className="mt-2 text-2xl font-semibold">
@@ -204,14 +204,14 @@ export default function CreatorExperiencePostsPage({
             <div className="flex items-start justify-between gap-4">
               <div>
                 <h2 className="text-xl font-semibold">Create post</h2>
-                <p className="mt-2 text-sm text-white/65">
+                <p className="mt-2 text-sm text-copy-65">
                   Creator posts are attached directly to this experience, not to a
                   course. Courses hold lessons; posts and Q&amp;A sit alongside
                   them under the experience.
                 </p>
               </div>
               {isDraft && (
-                <span className="rounded-full border border-amber-300/20 bg-amber-400/10 px-3 py-1 text-xs text-amber-200">
+                <span className="rounded-full border border-amber-300/20 bg-amber-400/10 px-3 py-1 text-xs text-amber-700 dark:text-amber-200">
                   Draft experience
                 </span>
               )}
@@ -222,18 +222,18 @@ export default function CreatorExperiencePostsPage({
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
                 placeholder="Optional post title"
-                className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+                className="border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
               />
               <Textarea
                 value={body}
                 onChange={(event) => setBody(event.target.value)}
                 placeholder="Write the update you want to publish to this experience."
-                className="min-h-[160px] border-white/10 bg-black/20 text-white placeholder:text-white/35"
+                className="min-h-[160px] border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
               />
               <Button
                 type="submit"
                 disabled={!postsData.canCreate || saving || !body.trim()}
-                className="rounded-full border border-white bg-white text-black"
+                className="rounded-full border border-edge bg-primary text-primary-foreground"
               >
                 {saving ? "Publishing..." : "Publish post"}
               </Button>
@@ -243,7 +243,7 @@ export default function CreatorExperiencePostsPage({
           <div className="space-y-5">
             {postsData.posts.length === 0 ? (
               <PageCard>
-                <p className="text-sm text-white/65">
+                <p className="text-sm text-copy-65">
                   No posts published for this experience yet.
                 </p>
               </PageCard>
@@ -257,18 +257,18 @@ export default function CreatorExperiencePostsPage({
                           {post.title || "Untitled post"}
                         </h2>
                         {post.isPinned && (
-                          <span className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1 text-xs text-amber-200">
+                          <span className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1 text-xs text-amber-700 dark:text-amber-200">
                             Pinned
                           </span>
                         )}
                       </div>
-                      <p className="mt-2 text-sm text-white/50">
+                      <p className="mt-2 text-sm text-copy-50">
                         {formatDate(post.createdAt)}
                       </p>
                     </div>
 
-                    <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3 text-center">
-                      <p className="text-xs uppercase tracking-[0.24em] text-white/45">
+                    <div className="rounded-2xl border border-edge/10 bg-inset/20 px-4 py-3 text-center">
+                      <p className="text-xs uppercase tracking-[0.24em] text-copy-45">
                         Comments
                       </p>
                       <p className="mt-2 text-2xl font-semibold">
@@ -277,7 +277,7 @@ export default function CreatorExperiencePostsPage({
                     </div>
                   </div>
 
-                  <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-white/75">
+                  <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-copy-75">
                     {post.body}
                   </p>
                 </PageCard>

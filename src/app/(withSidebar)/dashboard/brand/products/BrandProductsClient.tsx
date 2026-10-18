@@ -133,12 +133,12 @@ function draftFromSelection(selection: ProductSelection): OverrideDraft {
 
 function toneClass(tone: SyncOutcomeNotice["tone"]): string {
   if (tone === "success") {
-    return "border-emerald-300/30 bg-emerald-300/10 text-emerald-100";
+    return "border-emerald-300/30 bg-emerald-300/10 text-emerald-700 dark:text-emerald-100";
   }
   if (tone === "warning") {
-    return "border-amber-300/25 bg-amber-300/10 text-amber-100";
+    return "border-amber-300/25 bg-amber-300/10 text-amber-700 dark:text-amber-100";
   }
-  return "border-red-300/25 bg-red-300/10 text-red-200";
+  return "border-red-300/25 bg-red-300/10 text-red-700 dark:text-red-200";
 }
 
 function formatDateTime(value: string | null): string {
@@ -162,10 +162,10 @@ const SYNC_RUN_STATUS_LABELS: Record<string, string> = {
 };
 
 function syncRunStatusToneClass(status: string): string {
-  if (status === "SUCCEEDED") return "border-emerald-400/25 bg-emerald-400/10 text-emerald-200/90";
-  if (status === "PARTIAL") return "border-amber-400/25 bg-amber-400/10 text-amber-200/90";
-  if (status === "FAILED") return "border-red-400/25 bg-red-400/10 text-red-200/90";
-  return "border-white/15 bg-white/5 text-white/70";
+  if (status === "SUCCEEDED") return "border-emerald-400/25 bg-emerald-400/10 text-emerald-700 dark:text-emerald-200/90";
+  if (status === "PARTIAL") return "border-amber-400/25 bg-amber-400/10 text-amber-700 dark:text-amber-200/90";
+  if (status === "FAILED") return "border-red-400/25 bg-red-400/10 text-red-700 dark:text-red-200/90";
+  return "border-edge/15 bg-glass-5 text-copy-70";
 }
 
 /**
@@ -219,31 +219,31 @@ function SyncRunHistory({ connectionId }: { connectionId: string }) {
 
   return (
     <PageCard>
-      <p className="text-sm font-semibold text-white/85">Sync history</p>
+      <p className="text-sm font-semibold text-copy-85">Sync history</p>
       {loading ? (
-        <p className="mt-3 text-sm text-white/65">Loading sync history...</p>
+        <p className="mt-3 text-sm text-copy-65">Loading sync history...</p>
       ) : error ? (
-        <p className="mt-3 text-sm text-red-300">{error}</p>
+        <p className="mt-3 text-sm text-red-700 dark:text-red-300">{error}</p>
       ) : runs.length === 0 ? (
-        <p className="mt-3 text-sm text-white/65">No sync runs recorded yet for this store.</p>
+        <p className="mt-3 text-sm text-copy-65">No sync runs recorded yet for this store.</p>
       ) : (
         <div className="mt-3 max-h-80 space-y-2 overflow-y-auto pr-1">
           {runs.map((run) => (
-            <div key={run.id} className="rounded-xl border border-white/10 bg-black/20 p-3">
+            <div key={run.id} className="rounded-xl border border-edge/10 bg-inset/20 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="text-xs text-white/60">{formatDateTime(run.startedAt)}</p>
+                <p className="text-xs text-copy-60">{formatDateTime(run.startedAt)}</p>
                 <span className={`rounded-full border px-3 py-1 text-xs ${syncRunStatusToneClass(run.status)}`}>
                   {SYNC_RUN_STATUS_LABELS[run.status] ?? run.status}
                 </span>
               </div>
-              <p className="mt-2 text-xs text-white/50">
+              <p className="mt-2 text-xs text-copy-50">
                 Fetched {run.fetchedCount}, created {run.createdCount}, updated {run.updatedCount}, unchanged{" "}
                 {run.unchangedCount}, unavailable {run.markedUnavailableCount}
                 {run.failedCount > 0 ? `, failed ${run.failedCount}` : ""}
                 {run.hasNextPage ? " — truncated" : ""}
               </p>
               {run.failureSummary ? (
-                <p className="mt-1 text-xs text-amber-200/80">{run.failureSummary}</p>
+                <p className="mt-1 text-xs text-amber-700 dark:text-amber-200/80">{run.failureSummary}</p>
               ) : null}
             </div>
           ))}
@@ -687,7 +687,7 @@ export function BrandProductsClient() {
                       ? "Connect a commerce store, or reconnect the one that needs it, before syncing products."
                       : undefined
           }
-          className="rounded-full border border-white bg-white text-black hover:bg-white/90"
+          className="rounded-full border border-edge bg-primary text-primary-foreground hover:bg-primary/90"
         >
           <RefreshCw className={`h-4 w-4 ${syncing ? "animate-spin" : ""}`} />
           {syncing ? "Syncing..." : "Sync products"}
@@ -697,19 +697,19 @@ export function BrandProductsClient() {
       <PageCard>
         <div className="space-y-5">
           <div className="grid gap-4 lg:grid-cols-3">
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-              <p className="text-sm text-white/55">Connected store</p>
-              <p className="mt-2 text-sm text-white/80">
+            <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+              <p className="text-sm text-copy-55">Connected store</p>
+              <p className="mt-2 text-sm text-copy-80">
                 {displayConnection?.externalAccountId || "Not connected"}
               </p>
               {displayConnection ? (
-                <span className="mt-2 inline-flex rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs text-white/70">
+                <span className="mt-2 inline-flex rounded-full border border-edge/15 bg-glass-5 px-3 py-1 text-xs text-copy-70">
                   {providerLabel}
                 </span>
               ) : null}
             </div>
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-              <p className="text-sm text-white/55">Connection status</p>
+            <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+              <p className="text-sm text-copy-55">Connection status</p>
               <p className="mt-2 text-lg font-semibold">
                 {isConnected
                   ? "Connected"
@@ -720,9 +720,9 @@ export function BrandProductsClient() {
                       : "Not connected"}
               </p>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-              <p className="text-sm text-white/55">Last successful sync</p>
-              <p className="mt-2 text-sm text-white/80">{lastSyncLabel}</p>
+            <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+              <p className="text-sm text-copy-55">Last successful sync</p>
+              <p className="mt-2 text-sm text-copy-80">{lastSyncLabel}</p>
             </div>
           </div>
 
@@ -731,7 +731,7 @@ export function BrandProductsClient() {
               {syncNotice.message}
             </div>
           ) : null}
-          <p className="text-xs leading-5 text-white/50">
+          <p className="text-xs leading-5 text-copy-50">
             Changes made in {providerLabel || "your store"}, including changing a product between Active and Draft,
             appear in SQRATCH after the next successful product sync.
           </p>
@@ -742,21 +742,21 @@ export function BrandProductsClient() {
 
       <PageCard>
         <div className="flex flex-col gap-4 md:flex-row md:flex-wrap md:items-end">
-          <label className="min-w-[220px] flex-1 space-y-2 text-sm text-white/70">
+          <label className="min-w-[220px] flex-1 space-y-2 text-sm text-copy-70">
             <span>Search</span>
             <Input
               value={q}
               onChange={(event) => setQ(event.target.value)}
               placeholder="Search by title or SKU"
-              className="border-white/10 bg-black/20 text-white"
+              className="border-edge/10 bg-inset/20 text-ink"
             />
           </label>
-          <label className="space-y-2 text-sm text-white/70">
+          <label className="space-y-2 text-sm text-copy-70">
             <span>Product status</span>
             <select
               value={availability}
               onChange={(event) => setAvailability(event.target.value as AvailabilityFilter)}
-              className="h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+              className="h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
             >
               <option value="available">Active</option>
               <option value="unavailable">Inactive</option>
@@ -764,12 +764,12 @@ export function BrandProductsClient() {
             </select>
           </label>
           {connections.length > 1 ? (
-            <label className="space-y-2 text-sm text-white/70">
+            <label className="space-y-2 text-sm text-copy-70">
               <span>Store{selectionRequired ? " (select one to sync)" : ""}</span>
               <select
                 value={connectionId}
                 onChange={(event) => setConnectionId(event.target.value)}
-                className="h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+                className="h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
               >
                 <option value="">All stores (browse only)</option>
                 {connections.map((connection) => (
@@ -791,20 +791,20 @@ export function BrandProductsClient() {
 
       {listError ? (
         <PageCard>
-          <p className="text-sm text-red-300">{listError}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{listError}</p>
         </PageCard>
       ) : null}
 
       <PageCard>
         {loading ? (
-          <p className="text-sm text-white/65">Loading products...</p>
+          <p className="text-sm text-copy-65">Loading products...</p>
         ) : !isConnected && products.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-6 text-sm text-white/55">
+          <div className="rounded-2xl border border-dashed border-edge/10 bg-inset/20 p-6 text-sm text-copy-55">
             No commerce store is connected yet. Connect a store from the Store
             page, then come back here to sync products.
           </div>
         ) : products.length === 0 ? (
-          <div className="rounded-2xl border border-dashed border-white/10 bg-black/20 p-6 text-sm text-white/55">
+          <div className="rounded-2xl border border-dashed border-edge/10 bg-inset/20 p-6 text-sm text-copy-55">
             {q.trim() || availability !== "available"
               ? "No products match the current filters."
               : "No products synced yet. Use “Sync products” above to pull in the catalog."}
@@ -819,7 +819,7 @@ export function BrandProductsClient() {
               // otherwise make the anchor reload SQRATCH itself.
               const links = brandProductLinks(product);
               const thumbnail = product.imageUrl ? (
-                <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-xl border border-white/10 bg-white/5">
+                <div className="relative h-28 w-28 shrink-0 overflow-hidden rounded-xl border border-edge/10 bg-glass-5">
                   {/* PHASE 23 — PART 1: provider product images (e.g.
                       Commerce7 wine bottle shots) legitimately vary in
                       aspect ratio and are not guaranteed square.
@@ -838,7 +838,7 @@ export function BrandProductsClient() {
                   />
                 </div>
               ) : (
-                <div className="flex h-28 w-28 items-center justify-center rounded-xl border border-white/10 bg-white/5 text-white/35">
+                <div className="flex h-28 w-28 items-center justify-center rounded-xl border border-edge/10 bg-glass-5 text-copy-35">
                   <Package className="h-6 w-6" />
                 </div>
               );
@@ -846,7 +846,7 @@ export function BrandProductsClient() {
               return (
                 <div
                   key={product.id}
-                  className="rounded-3xl border border-white/10 bg-black/20 p-5"
+                  className="rounded-3xl border border-edge/10 bg-inset/20 p-5"
                 >
                   <div className="flex flex-col gap-4 lg:flex-row">
                     {links.publicUrl ? (
@@ -864,26 +864,26 @@ export function BrandProductsClient() {
                             href={links.publicUrl}
                             target="_blank"
                             rel="noopener noreferrer"
-                            className="text-lg font-semibold text-white hover:underline"
+                            className="text-lg font-semibold text-ink hover:underline"
                           >
                             {product.title}
                           </a>
                         ) : (
-                          <span className="text-lg font-semibold text-white">{product.title}</span>
+                          <span className="text-lg font-semibold text-ink">{product.title}</span>
                         )}
                         <span
                           title="Active means this product was present and active in the latest successful product sync."
                           className={`rounded-full border px-3 py-1 text-xs ${
                             product.isAvailable
-                              ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-100"
-                              : "border-white/10 bg-white/5 text-white/50"
+                              ? "border-emerald-300/30 bg-emerald-300/10 text-emerald-700 dark:text-emerald-100"
+                              : "border-edge/10 bg-glass-5 text-copy-50"
                           }`}
                         >
                           {product.isAvailable ? "Active" : "Inactive"}
                         </span>
                       </div>
                       {links.note ? (
-                        <p className="text-sm text-white/55">
+                        <p className="text-sm text-copy-55">
                           {links.note}
                           {links.previewUrl ? (
                             <>
@@ -892,7 +892,7 @@ export function BrandProductsClient() {
                                 href={links.previewUrl}
                                 target="_blank"
                                 rel="noopener noreferrer nofollow"
-                                className="text-sky-300 underline underline-offset-2"
+                                className="text-sky-700 dark:text-sky-300 underline underline-offset-2"
                                 title="Store preview for you as the merchant. Commerce7 still requires customers to log in with the right access."
                               >
                                 Open in Commerce7
@@ -901,24 +901,24 @@ export function BrandProductsClient() {
                           ) : null}
                         </p>
                       ) : null}
-                      <p className="text-sm text-white/55">
+                      <p className="text-sm text-copy-55">
                         SKU: {product.sku || "—"}
                       </p>
-                      <p className="text-sm text-white/80">
+                      <p className="text-sm text-copy-80">
                         {formatPriceDisplay(product.price)}
                       </p>
 
-                      <div className="grid gap-3 pt-1 text-sm text-white/70">
+                      <div className="grid gap-3 pt-1 text-sm text-copy-70">
                         <label className="flex items-center gap-2">
                           <Checkbox
                             checked={product.selection.isVisibleInShop}
                             disabled={togglingId === product.id}
                             onCheckedChange={() => void toggleVisibility(product)}
-                            className="border-white/30 data-[state=checked]:border-emerald-300 data-[state=checked]:bg-emerald-400"
+                            className="border-edge/30 data-[state=checked]:border-emerald-300 data-[state=checked]:bg-emerald-400"
                           />
                           Visible in SQRATCH Shop
                         </label>
-                        <p className="-mt-2 pl-6 text-xs leading-5 text-white/50">
+                        <p className="-mt-2 pl-6 text-xs leading-5 text-copy-50">
                           Shows this product in the public SQRATCH campaign storefront when the
                           campaign uses the brand catalog.
                         </p>
@@ -927,11 +927,11 @@ export function BrandProductsClient() {
                             checked={product.selection.isCampaignEligible}
                             disabled={togglingId === product.id}
                             onCheckedChange={() => void toggleEligibility(product)}
-                            className="border-white/30 data-[state=checked]:border-emerald-300 data-[state=checked]:bg-emerald-400"
+                            className="border-edge/30 data-[state=checked]:border-emerald-300 data-[state=checked]:bg-emerald-400"
                           />
                           Campaign eligible
                         </label>
-                        <p className="-mt-2 pl-6 text-xs leading-5 text-white/50">
+                        <p className="-mt-2 pl-6 text-xs leading-5 text-copy-50">
                           Marks this product as eligible for future campaign assignment.
                           Campaign-level product selection and creator filtering will be added in
                           a later phase.
@@ -939,11 +939,11 @@ export function BrandProductsClient() {
                       </div>
 
                       <details className="pt-2">
-                        <summary className="cursor-pointer select-none text-sm text-white/60">
+                        <summary className="cursor-pointer select-none text-sm text-copy-60">
                           Presentation overrides
                         </summary>
                         <div className="mt-3 grid gap-3 lg:grid-cols-2">
-                          <label className="space-y-1 text-xs text-white/55">
+                          <label className="space-y-1 text-xs text-copy-55">
                             <span>Display order</span>
                             <Input
                               type="number"
@@ -955,10 +955,10 @@ export function BrandProductsClient() {
                               onChange={(event) =>
                                 updateDraft(product.id, { displayOrder: event.target.value })
                               }
-                              className="border-white/10 bg-black/20 text-white"
+                              className="border-edge/10 bg-inset/20 text-ink"
                             />
                           </label>
-                          <label className="space-y-1 text-xs text-white/55">
+                          <label className="space-y-1 text-xs text-copy-55">
                             <span>
                               Title override ({draft.titleOverride.length}/
                               {TITLE_OVERRIDE_MAX_LENGTH})
@@ -969,10 +969,10 @@ export function BrandProductsClient() {
                                 updateDraft(product.id, { titleOverride: event.target.value })
                               }
                               placeholder={product.title}
-                              className="border-white/10 bg-black/20 text-white"
+                              className="border-edge/10 bg-inset/20 text-ink"
                             />
                           </label>
-                          <label className="space-y-1 text-xs text-white/55 lg:col-span-2">
+                          <label className="space-y-1 text-xs text-copy-55 lg:col-span-2">
                             <span>
                               Short description override ({draft.shortDescriptionOverride.length}/
                               {SHORT_DESCRIPTION_OVERRIDE_MAX_LENGTH})
@@ -984,7 +984,7 @@ export function BrandProductsClient() {
                                   shortDescriptionOverride: event.target.value,
                                 })
                               }
-                              className="min-h-20 border-white/10 bg-black/20 text-white"
+                              className="min-h-20 border-edge/10 bg-inset/20 text-ink"
                             />
                           </label>
                         </div>
@@ -994,15 +994,15 @@ export function BrandProductsClient() {
                             variant="outline"
                             onClick={() => void saveOverrides(product)}
                             disabled={state?.saving}
-                            className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                            className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
                           >
                             {state?.saving ? "Saving..." : "Save overrides"}
                           </Button>
                           {state?.error ? (
-                            <span className="text-xs text-red-300">{state.error}</span>
+                            <span className="text-xs text-red-700 dark:text-red-300">{state.error}</span>
                           ) : null}
                           {state?.success ? (
-                            <span className="text-xs text-emerald-300">Saved.</span>
+                            <span className="text-xs text-emerald-700 dark:text-emerald-300">Saved.</span>
                           ) : null}
                         </div>
                       </details>
@@ -1021,7 +1021,7 @@ export function BrandProductsClient() {
               variant="outline"
               onClick={() => void loadProducts({ reset: false, cursor: meta.nextCursor })}
               disabled={loadingMore}
-              className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+              className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
             >
               {loadingMore ? "Loading..." : "Load more"}
             </Button>

@@ -4,6 +4,48 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
+  /* Neutral roles retain dark glass shades and use readable light surfaces. */
+  --color-ink: var(--ink);
+  --color-edge: var(--edge);
+  --color-inset: var(--inset);
+  --color-page: var(--page);
+  --color-section: var(--section);
+  --color-brand: var(--brand);
+  --color-topbar: var(--topbar);
+  --color-copy-25: var(--copy-25);
+  --color-copy-35: var(--copy-35);
+  --color-copy-40: var(--copy-40);
+  --color-copy-45: var(--copy-45);
+  --color-copy-50: var(--copy-50);
+  --color-copy-52: var(--copy-52);
+  --color-copy-55: var(--copy-55);
+  --color-copy-58: var(--copy-58);
+  --color-copy-60: var(--copy-60);
+  --color-copy-65: var(--copy-65);
+  --color-copy-70: var(--copy-70);
+  --color-copy-72: var(--copy-72);
+  --color-copy-75: var(--copy-75);
+  --color-copy-76: var(--copy-76);
+  --color-copy-78: var(--copy-78);
+  --color-copy-80: var(--copy-80);
+  --color-copy-82: var(--copy-82);
+  --color-copy-85: var(--copy-85);
+  --color-copy-88: var(--copy-88);
+  --color-copy-90: var(--copy-90);
+  --color-copy-95: var(--copy-95);
+  --color-glass-2: var(--glass-2);
+  --color-glass-3: var(--glass-3);
+  --color-glass-4: var(--glass-4);
+  --color-glass-5: var(--glass-5);
+  --color-glass-6: var(--glass-6);
+  --color-glass-8: var(--glass-8);
+  --color-glass-10: var(--glass-10);
+  --color-glass-12: var(--glass-12);
+  --color-glass-16: var(--glass-16);
+  --color-glass-20: var(--glass-20);
+  --color-glass-45: var(--glass-45);
+  --color-glass-85: var(--glass-85);
+
   --color-background: var(--background);
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
@@ -46,48 +88,155 @@
 }
 
 :root {
+  color-scheme: light;
+  --ink: #292830;
+  --edge: #625e70;
+  --inset: #e0e0e6;
+  --page: #f7f6f2;
+  --section: #efeee8;
+  --brand: #69558b;
+  --topbar: #f0ede6;
+  --scene-rgb: 247,246,242;
+  --glow-primary-rgb: 190,178,155;
+  --glow-secondary-rgb: 210,167,143;
+  --glow-tertiary-rgb: 165,184,162;
+  --hero-overlay: #f3f0e9;
+  --header-rgb: 250,249,245;
+  --dock-rgb: 250,249,245;
+  --heading-gradient: linear-gradient(145.55deg, #292830 20.35%, #696257 128.73%);
+  --copy-25: #706b78;
+  --copy-35: #706b78;
+  --copy-40: #706b78;
+  --copy-45: #706b78;
+  --copy-50: #706b78;
+  --copy-52: #706b78;
+  --copy-55: #706b78;
+  --copy-58: #504c58;
+  --copy-60: #504c58;
+  --copy-65: #504c58;
+  --copy-70: #504c58;
+  --copy-72: #504c58;
+  --copy-75: #504c58;
+  --copy-76: #504c58;
+  --copy-78: #504c58;
+  --copy-80: #504c58;
+  --copy-82: #504c58;
+  --copy-85: #504c58;
+  --copy-88: #504c58;
+  --copy-90: #504c58;
+  --copy-95: #504c58;
+  --glass-2: #f8f7f4;
+  --glass-3: #f8f7f4;
+  --glass-4: #f5f4f0;
+  --glass-5: #eeedf2;
+  --glass-6: #fffefa;
+  --glass-8: #f2f0f5;
+  --glass-10: #ebe7f0;
+  --glass-12: #e6e0ed;
+  --glass-16: #ded6e7;
+  --glass-20: rgb(121 109 88 / 20%);
+  --glass-45: rgb(121 109 88 / 45%);
+  --glass-85: rgb(121 109 88 / 85%);
+
   --radius: 0.625rem;
-  --background: transparent;
-  --foreground: oklch(0.129 0.042 264.695);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.129 0.042 264.695);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.129 0.042 264.695);
-  --primary: oklch(0.208 0.042 265.755);
-  --primary-foreground: oklch(0.984 0.003 247.858);
-  --secondary: oklch(0.968 0.007 247.896);
-  --secondary-foreground: oklch(0.208 0.042 265.755);
-  --muted: oklch(0.968 0.007 247.896);
-  --muted-foreground: oklch(0.554 0.046 257.417);
-  --accent: oklch(0.968 0.007 247.896);
-  --accent-foreground: oklch(0.208 0.042 265.755);
+  --background: #f7f6f2;
+  --foreground: #292830;
+  --card: #fffefa;
+  --card-foreground: #292830;
+  --popover: #fffefa;
+  --popover-foreground: #292830;
+  --primary: #655180;
+  --primary-foreground: #fffefa;
+  --secondary: #efedf3;
+  --secondary-foreground: #494052;
+  --muted: #efedf3;
+  --muted-foreground: #706b78;
+  --accent: #efedf3;
+  --accent-foreground: #494052;
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.929 0.013 255.508);
-  --input: oklch(0.929 0.013 255.508);
-  --ring: oklch(0.704 0.04 256.788);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: transparent;
-  --sidebar-foreground: oklch(0.984 0.003 247.858);
+  --border: #dedbe3;
+  --input: #dedbe3;
+  --ring: #88739f;
+  --chart-1: #b56d54;
+  --chart-2: #78907b;
+  --chart-3: #7c8b9d;
+  --chart-4: #bd9b5e;
+  --chart-5: #9c8aab;
+  --sidebar: #e9ede5;
+  --sidebar-foreground: #292830;
   --sidebar-primary: transparent;
   --leftsidebar-primary: transparent;
-  --sidebar-primary-foreground: oklch(0.984 0.003 247.858);
-  --sidebar-accent: oklch(0.968 0.007 247.896);
-  --sidebar-accent-foreground: oklch(0.208 0.042 265.755);
-  --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(48.505% 0.0695 207.195);
+  --sidebar-primary-foreground: #292830;
+  --sidebar-accent: #dce4d4;
+  --sidebar-accent-foreground: #354632;
+  --sidebar-border: #d7ddcf;
+  --sidebar-ring: #677c5c;
+  --card-colour-1: #e7eddf;
+  --card-colour-2: #f4ead7;
+  --card-colour-3: #eee8f4;
+  --card-colour-4: #f6e5dd;
+  --card-colour-5: #e3edef;
+  --card-colour-6: #fffefa;
+}
+
+.dark {
+  --topbar: #070a1a;
+  --glow-primary-rgb: 99,102,241;
+  --glow-secondary-rgb: 236,72,153;
+  --glow-tertiary-rgb: 34,211,238;
+  --card-colour-6: #ffffff;
   --card-colour-1: oklch(60.238% 0.101 197.435);
   --card-colour-2: oklch(75.47% 0.16209 71.392);
   --card-colour-3: oklch(32.765% 0.06784 257.29);
   --card-colour-4: oklch(59.058% 0.16589 32.373);
   --card-colour-5: oklch(16.903% 0.0314 222.684);
-  --card-colour-6: #ffffff;
-}
 
-.dark {
+  color-scheme: dark;
+  --ink: #ffffff;
+  --edge: #ffffff;
+  --inset: #000000;
+  --page: #020015;
+  --section: #020121;
+  --brand: #988dbf;
+  --scene-rgb: 2,0,21;
+  --hero-overlay: #020043;
+  --header-rgb: 7,10,26;
+  --dock-rgb: 14,16,36;
+  --heading-gradient: linear-gradient(145.55deg, #ECECEC 20.35%, rgba(236,236,236,0) 128.73%);
+  --copy-25: rgb(255 255 255 / 25%);
+  --copy-35: rgb(255 255 255 / 35%);
+  --copy-40: rgb(255 255 255 / 40%);
+  --copy-45: rgb(255 255 255 / 45%);
+  --copy-50: rgb(255 255 255 / 50%);
+  --copy-52: rgb(255 255 255 / 52%);
+  --copy-55: rgb(255 255 255 / 55%);
+  --copy-58: rgb(255 255 255 / 58%);
+  --copy-60: rgb(255 255 255 / 60%);
+  --copy-65: rgb(255 255 255 / 65%);
+  --copy-70: rgb(255 255 255 / 70%);
+  --copy-72: rgb(255 255 255 / 72%);
+  --copy-75: rgb(255 255 255 / 75%);
+  --copy-76: rgb(255 255 255 / 76%);
+  --copy-78: rgb(255 255 255 / 78%);
+  --copy-80: rgb(255 255 255 / 80%);
+  --copy-82: rgb(255 255 255 / 82%);
+  --copy-85: rgb(255 255 255 / 85%);
+  --copy-88: rgb(255 255 255 / 88%);
+  --copy-90: rgb(255 255 255 / 90%);
+  --copy-95: rgb(255 255 255 / 95%);
+  --glass-2: rgb(255 255 255 / 2%);
+  --glass-3: rgb(255 255 255 / 3%);
+  --glass-4: rgb(255 255 255 / 4%);
+  --glass-5: rgb(255 255 255 / 5%);
+  --glass-6: rgb(255 255 255 / 6%);
+  --glass-8: rgb(255 255 255 / 8%);
+  --glass-10: rgb(255 255 255 / 10%);
+  --glass-12: rgb(255 255 255 / 12%);
+  --glass-16: rgb(255 255 255 / 16%);
+  --glass-20: rgb(255 255 255 / 20%);
+  --glass-45: rgb(255 255 255 / 45%);
+  --glass-85: rgb(255 255 255 / 85%);
+
   --background: transparent;
   --foreground: oklch(0.984 0.003 247.858);
   --card: oklch(0.208 0.042 265.755);
@@ -129,9 +278,10 @@
   body {
     @apply text-foreground;
   }
-  /* Dark UI: render native date picker icons and popups in dark mode. */
-  input[type="date"] {
-    color-scheme: dark;
+  /* Native date, datetime, select and other controls inherit the active scheme. */
+  option {
+    background: var(--popover);
+    color: var(--popover-foreground);
   }
   html {
     @apply bg-transparent;
@@ -139,7 +289,7 @@
 }
 
 /* App-wide background to match Figma (dark with subtle blue glows) */
-.app-bg {
+.dark .app-bg {
   /* Solid dark base */
   background-color: #0b0e13 !important;
   /* Layered radial glows + gentle vertical gradient */
@@ -205,15 +355,15 @@
   justify-content: center;
   border-radius: 9999px;
   padding: 0.5rem 1.8rem;
-  border: 1px solid rgba(255, 255, 255, 0.18);
-  background-color: rgba(0, 0, 0, 0.3);
-  color: rgba(226, 232, 240, 0.9);
+  border: 1px solid color-mix(in srgb, var(--edge) 18%, transparent);
+  background-color: color-mix(in srgb, var(--inset) 30%, transparent);
+  color: var(--foreground);
   backdrop-filter: blur(12px);
   transition: all 0.2s;
 }
 
 .btn-outlined:hover {
-  background-color: rgba(255, 255, 255, 0.1);
+  background-color: var(--accent);
 }
 
 .btn-solid {
@@ -225,13 +375,13 @@
   justify-content: center;
   border-radius: 9999px;
   padding: 0.5rem 1.8rem;
-  background-color: #ffffff;
-  color: #0f172a;
+  background-color: var(--primary);
+  color: var(--primary-foreground);
   transition: all 0.2s;
 }
 
 .btn-solid:hover {
-  background-color: #f1f5f9;
+  background-color: color-mix(in srgb, var(--primary) 90%, transparent);
 }
 
 /* 📱 Mobile adjustments */
@@ -257,4 +407,168 @@
     font-size: 14px;
     padding: 0.4rem 0.8rem;
   }
+}
+
+/* Warm paper canvas, shared by every light screen. */
+:root:not(.dark) .app-bg {
+  background-color: var(--page);
+  background-image: none;
+  min-height: 100vh;
+}
+
+/* Image/video overlays keep white copy, even when the surrounding UI is light. */
+.theme-media {
+  --glow-primary-rgb: 99,102,241;
+  --glow-secondary-rgb: 236,72,153;
+  --glow-tertiary-rgb: 34,211,238;
+  --ink: #ffffff;
+  --edge: #ffffff;
+  --inset: #000000;
+  --scene-rgb: 2,0,21;
+  --copy-25: rgb(255 255 255 / 25%);
+  --copy-35: rgb(255 255 255 / 35%);
+  --copy-40: rgb(255 255 255 / 40%);
+  --copy-45: rgb(255 255 255 / 45%);
+  --copy-50: rgb(255 255 255 / 50%);
+  --copy-52: rgb(255 255 255 / 52%);
+  --copy-55: rgb(255 255 255 / 55%);
+  --copy-58: rgb(255 255 255 / 58%);
+  --copy-60: rgb(255 255 255 / 60%);
+  --copy-65: rgb(255 255 255 / 65%);
+  --copy-70: rgb(255 255 255 / 70%);
+  --copy-72: rgb(255 255 255 / 72%);
+  --copy-75: rgb(255 255 255 / 75%);
+  --copy-76: rgb(255 255 255 / 76%);
+  --copy-78: rgb(255 255 255 / 78%);
+  --copy-80: rgb(255 255 255 / 80%);
+  --copy-82: rgb(255 255 255 / 82%);
+  --copy-85: rgb(255 255 255 / 85%);
+  --copy-88: rgb(255 255 255 / 88%);
+  --copy-90: rgb(255 255 255 / 90%);
+  --copy-95: rgb(255 255 255 / 95%);
+  --glass-2: rgb(255 255 255 / 2%);
+  --glass-3: rgb(255 255 255 / 3%);
+  --glass-4: rgb(255 255 255 / 4%);
+  --glass-5: rgb(255 255 255 / 5%);
+  --glass-6: rgb(255 255 255 / 6%);
+  --glass-8: rgb(255 255 255 / 8%);
+  --glass-10: rgb(255 255 255 / 10%);
+  --glass-12: rgb(255 255 255 / 12%);
+  --glass-16: rgb(255 255 255 / 16%);
+  --glass-20: rgb(255 255 255 / 20%);
+  --glass-45: rgb(255 255 255 / 45%);
+  --glass-85: rgb(255 255 255 / 85%);
+}
+
+:root:not(.dark) {
+  --shadow-glass: 0 8px 28px rgb(72 57 34 / 6%);
+}
+:root:not(.dark) :is([data-slot="card"], [data-slot="dialog-content"], [data-slot="alert-dialog-content"]) {
+  box-shadow: var(--shadow-glass);
+}
+
+:root:not(.dark) header {
+  box-shadow: 0 2px 12px rgb(72 57 34 / 5%);
+}
+
+.dark [data-slot="sidebar"][data-mobile="true"] {
+  background-color: #070a1a;
+}
+
+/* Light-only refinement of the shared shadcn primitives. Keep this scope explicit:
+   dark-mode component geometry, surfaces and interactions must stay unchanged. */
+:root:not(.dark) [data-slot="card"] {
+  border-color: var(--border);
+  border-radius: 1rem;
+  box-shadow: 0 1px 2px rgb(41 40 48 / 3%), 0 6px 20px rgb(41 40 48 / 3%);
+  backdrop-filter: none;
+}
+
+:root:not(.dark) :is([data-slot="dialog-content"], [data-slot="alert-dialog-content"], [data-slot="popover-content"], [data-slot="select-content"], [data-slot="dropdown-menu-content"]) {
+  border-color: var(--border);
+  box-shadow: 0 12px 40px rgb(41 40 48 / 12%), 0 2px 6px rgb(41 40 48 / 4%);
+}
+
+:root:not(.dark) :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]) {
+  background-color: var(--card);
+  border-color: var(--input);
+  border-radius: 0.5rem;
+  box-shadow: 0 1px 2px rgb(41 40 48 / 3%);
+}
+
+:root:not(.dark) :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"]):focus-visible {
+  border-color: var(--ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--ring) 18%, transparent);
+}
+
+:root:not(.dark) :is([data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"])[aria-invalid="true"] {
+  border-color: var(--destructive);
+}
+
+:root:not(.dark) [data-slot="button"] {
+  border-radius: 0.5rem;
+  font-weight: 500;
+  transition-property: background-color, color, border-color, box-shadow;
+  transition-duration: 160ms;
+}
+
+:root:not(.dark) [data-slot="table-header"] {
+  background-color: var(--muted);
+}
+
+:root:not(.dark) [data-slot="table-head"] {
+  color: var(--muted-foreground);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding-inline: 1rem;
+}
+
+:root:not(.dark) [data-slot="table-cell"] {
+  padding: 0.875rem 1rem;
+}
+
+:root:not(.dark) [data-slot="table-row"] {
+  border-color: var(--border);
+}
+
+:root:not(.dark) [data-slot="sidebar-inset"] > header {
+  box-shadow: none;
+  border-color: var(--border);
+}
+
+:root:not(.dark) [data-slot="sidebar-group-label"] {
+  color: #737b6c;
+  font-size: 0.625rem;
+  letter-spacing: 0.1em;
+}
+
+:root:not(.dark) [data-slot="sidebar-menu-button"] {
+  min-height: 2.5rem;
+  color: #535c4e;
+}
+
+:root:not(.dark) [data-slot="sidebar-menu-button"]:hover {
+  background-color: #e0e6d9;
+  border-color: transparent;
+  color: var(--sidebar-accent-foreground);
+}
+
+:root:not(.dark) [data-slot="sidebar-menu-button"][data-active="true"] {
+  background-color: var(--sidebar-accent);
+  border-color: #ccd7c2;
+  color: var(--sidebar-accent-foreground);
+  box-shadow: inset 3px 0 0 var(--sidebar-ring);
+  font-weight: 600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root:not(.dark) [data-slot="button"] {
+    transition-duration: 0ms;
+  }
+}
+
+/* PageCard already provides its spacing through shadcn CardContent. */
+:root:not(.dark) [data-page-card="true"] {
+  padding-block: 0;
+  background-color: var(--card);
 }

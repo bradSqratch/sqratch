@@ -133,24 +133,24 @@ function PostCard({
   }
 
   return (
-    <div className="rounded-3xl border border-white/10 bg-black/20 p-6">
+    <div className="rounded-3xl border border-edge/10 bg-inset/20 p-6">
       <div className="flex items-center justify-between gap-3">
         <div>
           {post.title && (
-            <h3 className="text-xl font-semibold text-[#988dbf]">
+            <h3 className="text-xl font-semibold text-brand">
               {post.title}
             </h3>
           )}
-          <p className="mt-1 text-sm text-white/50">{formatDate(post.createdAt)}</p>
+          <p className="mt-1 text-sm text-copy-50">{formatDate(post.createdAt)}</p>
         </div>
         {post.isPinned && (
-          <span className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1 text-xs text-amber-200">
+          <span className="rounded-full border border-amber-300/30 bg-amber-400/10 px-3 py-1 text-xs text-amber-700 dark:text-amber-200">
             Pinned
           </span>
         )}
       </div>
 
-      <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-white/75">
+      <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-copy-75">
         {post.body}
       </p>
 
@@ -159,21 +159,21 @@ function PostCard({
           type="button"
           variant="outline"
           onClick={() => void loadComments()}
-          className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+          className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
         >
           {comments ? "Refresh comments" : `View comments (${post.commentCount})`}
         </Button>
       </div>
 
-      {commentsLoading && <p className="mt-4 text-sm text-white/55">Loading comments...</p>}
-      {commentError && <p className="mt-4 text-sm text-red-300">{commentError}</p>}
+      {commentsLoading && <p className="mt-4 text-sm text-copy-55">Loading comments...</p>}
+      {commentError && <p className="mt-4 text-sm text-red-700 dark:text-red-300">{commentError}</p>}
 
       {comments && (
         <div className="mt-5 space-y-3">
           {comments.map((comment) => (
             <div
               key={comment.id}
-              className="rounded-2xl border border-white/10 bg-white/5 p-4"
+              className="rounded-2xl border border-edge/10 bg-glass-5 p-4"
             >
               <div className="flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2">
@@ -184,17 +184,17 @@ function PostCard({
                       variant="outline"
                       onClick={() => void deleteComment(comment.id)}
                       disabled={commentDeletingId === comment.id}
-                      className="h-7 rounded-full border-red-200/50 bg-transparent px-3 text-xs text-red-100 hover:bg-red-500/10"
+                      className="h-7 rounded-full border-red-200/50 bg-transparent px-3 text-xs text-red-700 dark:text-red-100 hover:bg-red-500/10"
                     >
                       {commentDeletingId === comment.id ? "Deleting..." : "Delete"}
                     </Button>
                   )}
                 </div>
-                <p className="text-xs text-white/45">
+                <p className="text-xs text-copy-45">
                   {formatDate(comment.createdAt)}
                 </p>
               </div>
-              <p className="mt-2 text-sm leading-6 text-white/70">{comment.body}</p>
+              <p className="mt-2 text-sm leading-6 text-copy-70">{comment.body}</p>
             </div>
           ))}
         </div>
@@ -206,7 +206,7 @@ function PostCard({
             value={commentDraft}
             onChange={(event) => setCommentDraft(event.target.value)}
             placeholder="Add a comment"
-            className="min-h-[110px] border-white/10 bg-black/25 text-white placeholder:text-white/35"
+            className="min-h-[110px] border-edge/10 bg-inset/25 text-ink placeholder:text-copy-35"
           />
           <Button
             type="submit"
@@ -299,8 +299,8 @@ export function ExperiencePostsClient({
       experience={data}
       activeTab="posts"
       actions={
-        <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
-          <p className="text-sm text-white/55">Posts</p>
+        <div className="rounded-3xl border border-edge/10 bg-inset/20 p-5">
+          <p className="text-sm text-copy-55">Posts</p>
           <p className="mt-2 text-3xl font-semibold">{data.counts.posts}</p>
         </div>
       }
@@ -316,8 +316,8 @@ export function ExperiencePostsClient({
         <div className="space-y-6">
           {postsData?.canCreate && (
             <PageCard>
-              <h2 className="text-2xl font-semibold text-[#988dbf]">Publish a post</h2>
-              <p className="mt-2 text-sm leading-6 text-white/70">
+              <h2 className="text-2xl font-semibold text-brand">Publish a post</h2>
+              <p className="mt-2 text-sm leading-6 text-copy-70">
                 Only the creator who owns this experience can publish new posts.
               </p>
 
@@ -326,13 +326,13 @@ export function ExperiencePostsClient({
                   value={title}
                   onChange={(event) => setTitle(event.target.value)}
                   placeholder="Post title (optional)"
-                  className="border-white/10 bg-black/25 text-white placeholder:text-white/35"
+                  className="border-edge/10 bg-inset/25 text-ink placeholder:text-copy-35"
                 />
                 <Textarea
                   value={body}
                   onChange={(event) => setBody(event.target.value)}
                   placeholder="Write your update"
-                  className="min-h-[160px] border-white/10 bg-black/25 text-white placeholder:text-white/35"
+                  className="min-h-[160px] border-edge/10 bg-inset/25 text-ink placeholder:text-copy-35"
                 />
                 <Button
                   type="submit"
@@ -347,18 +347,18 @@ export function ExperiencePostsClient({
 
           {postsLoading && (
             <PageCard>
-              <p className="text-sm text-white/65">Loading post feed...</p>
+              <p className="text-sm text-copy-65">Loading post feed...</p>
             </PageCard>
           )}
           {postsError && (
             <PageCard>
-              <p className="text-sm text-red-300">{postsError}</p>
+              <p className="text-sm text-red-700 dark:text-red-300">{postsError}</p>
             </PageCard>
           )}
 
           {postsData && postsData.posts.length === 0 && (
             <PageCard>
-              <p className="text-sm text-white/65">No posts published yet.</p>
+              <p className="text-sm text-copy-65">No posts published yet.</p>
             </PageCard>
           )}
 

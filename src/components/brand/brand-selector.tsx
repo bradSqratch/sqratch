@@ -64,8 +64,8 @@ export function BrandSelector() {
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3">
-      <label htmlFor="active-brand" className="text-sm font-medium text-white/70">
+    <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-edge/10 bg-glass-5 px-4 py-3">
+      <label htmlFor="active-brand" className="text-sm font-medium text-copy-70">
         Active brand
       </label>
       <select
@@ -73,7 +73,7 @@ export function BrandSelector() {
         value={activeBrandId}
         disabled={saving}
         onChange={(event) => void switchBrand(event.target.value)}
-        className="min-w-48 rounded-xl border border-white/15 bg-black/20 px-3 py-2 text-sm text-white outline-none focus:border-white/40"
+        className="min-w-48 rounded-xl border border-edge/15 bg-inset/20 px-3 py-2 text-sm text-ink outline-none focus:border-edge/40"
       >
         <option value="" disabled>
           Select a brand
@@ -85,9 +85,9 @@ export function BrandSelector() {
         ))}
       </select>
       {selectionRequired ? (
-        <span className="text-xs text-amber-200">Choose a brand to continue.</span>
+        <span className="text-xs text-amber-700 dark:text-amber-200">Choose a brand to continue.</span>
       ) : null}
-      {error ? <span className="text-xs text-red-200">{error}</span> : null}
+      {error ? <span className="text-xs text-red-700 dark:text-red-200">{error}</span> : null}
     </div>
   );
 }

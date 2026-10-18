@@ -72,17 +72,17 @@ function formatDateTime(value: string) {
 
 function getDecisionClasses(status: ApprovalHistoryItem["status"]) {
   return status === "APPROVED"
-    ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-200"
-    : "border-rose-400/25 bg-rose-400/10 text-rose-200";
+    ? "border-emerald-400/25 bg-emerald-400/10 text-emerald-700 dark:text-emerald-200"
+    : "border-rose-400/25 bg-rose-400/10 text-rose-700 dark:text-rose-200";
 }
 
 function ApprovalNote({ reason }: { reason: string | null }) {
   return (
-    <div className="rounded-2xl border border-white/10 bg-black/20 px-4 py-3">
-      <p className="text-[11px] uppercase tracking-[0.2em] text-white/40">
+    <div className="rounded-2xl border border-edge/10 bg-inset/20 px-4 py-3">
+      <p className="text-[11px] uppercase tracking-[0.2em] text-copy-40">
         Admin Note
       </p>
-      <p className="mt-2 text-sm leading-6 text-white/65">
+      <p className="mt-2 text-sm leading-6 text-copy-65">
         {reason?.trim() || "No admin note added."}
       </p>
     </div>
@@ -176,30 +176,30 @@ export default function AdminApprovalsPage() {
     >
       {error && (
         <PageCard>
-          <p className="text-sm text-red-300">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         </PageCard>
       )}
 
       {loading ? (
         <PageCard>
-          <p className="text-sm text-white/65">Loading approvals...</p>
+          <p className="text-sm text-copy-65">Loading approvals...</p>
         </PageCard>
       ) : (
         <div className="space-y-6">
           <Tabs defaultValue="creator" className="space-y-5">
             <TabsList
               variant="line"
-              className="rounded-full border border-white/10 bg-white/6 p-1"
+              className="rounded-full border border-edge/10 bg-glass-6 p-1"
             >
               <TabsTrigger
                 value="creator"
-                className="rounded-full px-5 data-[state=active]:bg-white data-[state=active]:text-black"
+                className="rounded-full px-5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
               >
                 Creator Applications ({creatorCount})
               </TabsTrigger>
               <TabsTrigger
                 value="brand"
-                className="rounded-full px-5 data-[state=active]:bg-white data-[state=active]:text-black"
+                className="rounded-full px-5 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground"
               >
                 Brand Applications ({brandCount})
               </TabsTrigger>
@@ -208,7 +208,7 @@ export default function AdminApprovalsPage() {
             <TabsContent value="creator" className="space-y-5">
               {creatorCount === 0 ? (
                 <PageCard>
-                  <p className="text-sm text-white/65">
+                  <p className="text-sm text-copy-65">
                     No pending creator applications.
                   </p>
                 </PageCard>
@@ -221,19 +221,19 @@ export default function AdminApprovalsPage() {
                           <h2 className="text-2xl font-semibold">
                             {request.user.name || request.user.email}
                           </h2>
-                          <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/65">
+                          <span className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-65">
                             {request.user.role}
                           </span>
-                          <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/65">
+                          <span className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-65">
                             {request.user.isEmailVerified
                               ? "Email verified"
                               : "Email pending"}
                           </span>
                         </div>
-                        <p className="text-sm text-white/60">
+                        <p className="text-sm text-copy-60">
                           {request.user.email}
                         </p>
-                        <p className="text-sm text-white/55">
+                        <p className="text-sm text-copy-55">
                           Applied {formatDateTime(request.createdAt)}
                         </p>
                         <ApprovalNote reason={request.reason} />
@@ -248,7 +248,7 @@ export default function AdminApprovalsPage() {
                           onClick={() =>
                             void handleCreatorAction(request.id, "approve")
                           }
-                          className="w-full justify-center rounded-full border border-white bg-white text-black sm:w-36"
+                          className="w-full justify-center rounded-full border border-edge bg-primary text-primary-foreground sm:w-36"
                         >
                           {processingKey === `creator:${request.id}:approve`
                             ? "Approving..."
@@ -263,7 +263,7 @@ export default function AdminApprovalsPage() {
                           onClick={() =>
                             void handleCreatorAction(request.id, "reject")
                           }
-                          className="w-full justify-center rounded-full border-white/20 bg-transparent text-white hover:bg-white/10 sm:w-36"
+                          className="w-full justify-center rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10 sm:w-36"
                         >
                           {processingKey === `creator:${request.id}:reject`
                             ? "Rejecting..."
@@ -279,7 +279,7 @@ export default function AdminApprovalsPage() {
             <TabsContent value="brand" className="space-y-5">
               {brandCount === 0 ? (
                 <PageCard>
-                  <p className="text-sm text-white/65">
+                  <p className="text-sm text-copy-65">
                     No pending brand applications.
                   </p>
                 </PageCard>
@@ -294,21 +294,21 @@ export default function AdminApprovalsPage() {
                               request.user.name ||
                               request.user.email}
                           </h2>
-                          <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/65">
+                          <span className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-65">
                             {request.user.isEmailVerified
                               ? "Email verified"
                               : "Email pending"}
                           </span>
                         </div>
-                        <p className="text-sm text-white/60">
+                        <p className="text-sm text-copy-60">
                           {request.user.email}
                         </p>
                         {request.proposedStoreUrl && (
-                          <p className="text-sm text-white/55">
+                          <p className="text-sm text-copy-55">
                             Store URL: {request.proposedStoreUrl}
                           </p>
                         )}
-                        <p className="text-sm text-white/55">
+                        <p className="text-sm text-copy-55">
                           Applied {formatDateTime(request.createdAt)}
                         </p>
                         <ApprovalNote reason={request.reason} />
@@ -323,7 +323,7 @@ export default function AdminApprovalsPage() {
                           onClick={() =>
                             void handleBrandAction(request.id, "approve")
                           }
-                          className="w-full justify-center rounded-full border border-white bg-white text-black sm:w-36"
+                          className="w-full justify-center rounded-full border border-edge bg-primary text-primary-foreground sm:w-36"
                         >
                           {processingKey === `brand:${request.id}:approve`
                             ? "Approving..."
@@ -338,7 +338,7 @@ export default function AdminApprovalsPage() {
                           onClick={() =>
                             void handleBrandAction(request.id, "reject")
                           }
-                          className="w-full justify-center rounded-full border-white/20 bg-transparent text-white hover:bg-white/10 sm:w-36"
+                          className="w-full justify-center rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10 sm:w-36"
                         >
                           {processingKey === `brand:${request.id}:reject`
                             ? "Rejecting..."
@@ -353,45 +353,45 @@ export default function AdminApprovalsPage() {
           </Tabs>
 
           <PageCard className="overflow-hidden p-0">
-            <div className="flex items-center justify-between border-b border-white/10 px-6 py-5">
+            <div className="flex items-center justify-between border-b border-edge/10 px-6 py-5">
               <div className="space-y-1">
                 <h2 className="text-2xl font-semibold">Past Approvals</h2>
-                <p className="text-sm text-white/60">
+                <p className="text-sm text-copy-60">
                   Processed creator and brand requests, ordered by latest
                   decision.
                 </p>
               </div>
-              <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/60">
+              <span className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-60">
                 {approvalHistory.length} total
               </span>
             </div>
 
             {approvalHistory.length === 0 ? (
               <div className="px-6 py-8">
-                <p className="text-sm text-white/65">
+                <p className="text-sm text-copy-65">
                   No approvals have been processed yet.
                 </p>
               </div>
             ) : (
-              <Table className="min-w-[880px] text-white">
-                <TableHeader className="[&_tr]:border-white/10">
-                  <TableRow className="border-white/10 hover:bg-transparent">
-                    <TableHead className="px-6 py-4 text-xs uppercase tracking-[0.18em] text-white/50">
+              <Table className="min-w-[880px] text-ink">
+                <TableHeader className="[&_tr]:border-edge/10">
+                  <TableRow className="border-edge/10 hover:bg-transparent">
+                    <TableHead className="px-6 py-4 text-xs uppercase tracking-[0.18em] text-copy-50">
                       Name
                     </TableHead>
-                    <TableHead className="py-4 text-xs uppercase tracking-[0.18em] text-white/50">
+                    <TableHead className="py-4 text-xs uppercase tracking-[0.18em] text-copy-50">
                       Email
                     </TableHead>
-                    <TableHead className="py-4 text-xs uppercase tracking-[0.18em] text-white/50">
+                    <TableHead className="py-4 text-xs uppercase tracking-[0.18em] text-copy-50">
                       Type
                     </TableHead>
-                    <TableHead className="py-4 text-xs uppercase tracking-[0.18em] text-white/50">
+                    <TableHead className="py-4 text-xs uppercase tracking-[0.18em] text-copy-50">
                       Status
                     </TableHead>
-                    <TableHead className="py-4 text-xs uppercase tracking-[0.18em] text-white/50">
+                    <TableHead className="py-4 text-xs uppercase tracking-[0.18em] text-copy-50">
                       Role
                     </TableHead>
-                    <TableHead className="py-4 text-xs uppercase tracking-[0.18em] text-white/50">
+                    <TableHead className="py-4 text-xs uppercase tracking-[0.18em] text-copy-50">
                       Reviewed At
                     </TableHead>
                   </TableRow>
@@ -400,27 +400,27 @@ export default function AdminApprovalsPage() {
                   {approvalHistory.map((item) => (
                     <TableRow
                       key={`${item.requestType}:${item.id}`}
-                      className="border-white/10 text-white/88 hover:bg-white/[0.03]"
+                      className="border-edge/10 text-copy-88 hover:bg-white/[0.03]"
                     >
-                      <TableCell className="px-6 py-4 font-medium text-white">
+                      <TableCell className="px-6 py-4 font-medium text-ink">
                         <div className="flex flex-col gap-1">
                           <span>
                             {item.proposedBrandName ||
                               item.user.name ||
                               item.user.email}
                           </span>
-                          <span className="text-xs text-white/45">
+                          <span className="text-xs text-copy-45">
                             Applied {formatDateTime(item.createdAt)}
                           </span>
-                          <span className="text-xs text-white/55">
+                          <span className="text-xs text-copy-55">
                             Note: {item.reason?.trim() || "No admin note added."}
                           </span>
                         </div>
                       </TableCell>
-                      <TableCell className="py-4 text-white/72">
+                      <TableCell className="py-4 text-copy-72">
                         {item.user.email}
                       </TableCell>
-                      <TableCell className="py-4 text-white/72">
+                      <TableCell className="py-4 text-copy-72">
                         {item.requestType === "CREATOR"
                           ? "Creator"
                           : "Brand"}
@@ -432,14 +432,14 @@ export default function AdminApprovalsPage() {
                           {item.status}
                         </span>
                       </TableCell>
-                      <TableCell className="py-4 text-white/72">
+                      <TableCell className="py-4 text-copy-72">
                         {item.user.role}
                       </TableCell>
-                      <TableCell className="py-4 text-white/72">
+                      <TableCell className="py-4 text-copy-72">
                         <div className="flex flex-col gap-1">
                           <span>{formatDateTime(item.updatedAt)}</span>
                           {item.reviewedBy && (
-                            <span className="text-xs text-white/45">
+                            <span className="text-xs text-copy-45">
                               by{" "}
                               {item.reviewedBy.name || item.reviewedBy.email}
                             </span>

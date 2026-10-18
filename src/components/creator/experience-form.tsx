@@ -315,7 +315,7 @@ export function CreatorExperienceForm({
         <Button
           asChild
           variant="outline"
-          className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+          className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
         >
           <Link href="/dashboard/creator/experiences">Back to experiences</Link>
         </Button>
@@ -323,12 +323,12 @@ export function CreatorExperienceForm({
     >
       <PageCard>
         {loading ? (
-          <p className="text-sm text-white/65">Loading experience...</p>
+          <p className="text-sm text-copy-65">Loading experience...</p>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-5">
             <div className="grid gap-5 lg:grid-cols-2">
               <div className="space-y-2">
-                <label className="text-sm text-white/70">Title</label>
+                <label className="text-sm text-copy-70">Title</label>
                 <Input
                   value={form.title}
                   onChange={(event) => {
@@ -340,12 +340,12 @@ export function CreatorExperienceForm({
                     }));
                   }}
                   placeholder="Experience title"
-                  className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+                  className="border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
                 />
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm text-white/70">Slug</label>
+                <label className="text-sm text-copy-70">Slug</label>
                 <Input
                   value={form.slug}
                   onChange={(event) => {
@@ -356,13 +356,13 @@ export function CreatorExperienceForm({
                     }));
                   }}
                   placeholder="experience-slug"
-                  className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+                  className="border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
                 />
               </div>
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm text-white/70">Description</label>
+              <label className="text-sm text-copy-70">Description</label>
               <Textarea
                 value={form.description}
                 onChange={(event) =>
@@ -372,14 +372,14 @@ export function CreatorExperienceForm({
                   }))
                 }
                 placeholder="Describe the experience"
-                className="min-h-[160px] border-white/10 bg-black/20 text-white placeholder:text-white/35"
+                className="min-h-[160px] border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
               />
             </div>
 
-            <div className="space-y-3 rounded-3xl border border-white/10 bg-black/10 p-4">
+            <div className="space-y-3 rounded-3xl border border-edge/10 bg-inset/10 p-4">
               <div className="grid gap-5 lg:grid-cols-2">
                 <div className="space-y-2">
-                  <label className="text-sm text-white/70">
+                  <label className="text-sm text-copy-70">
                     WHY video source
                   </label>
                   <select
@@ -402,15 +402,15 @@ export function CreatorExperienceForm({
                             : "",
                       }));
                     }}
-                    className="flex h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+                    className="flex h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
                   >
-                    <option value="" className="bg-[#111527]">
+                    <option value="" className="bg-card dark:bg-[#111527]">
                       No WHY video
                     </option>
-                    <option value="YOUTUBE" className="bg-[#111527]">
+                    <option value="YOUTUBE" className="bg-card dark:bg-[#111527]">
                       YouTube
                     </option>
-                    <option value="UPLOAD" className="bg-[#111527]">
+                    <option value="UPLOAD" className="bg-card dark:bg-[#111527]">
                       Upload from device
                     </option>
                   </select>
@@ -419,7 +419,7 @@ export function CreatorExperienceForm({
 
               {form.whyVideoSource === "YOUTUBE" ? (
                 <div className="space-y-2">
-                  <label className="text-sm text-white/70">YouTube URL</label>
+                  <label className="text-sm text-copy-70">YouTube URL</label>
                   <Input
                     value={form.whyYoutubeUrl}
                     onChange={(event) =>
@@ -428,7 +428,7 @@ export function CreatorExperienceForm({
                         whyYoutubeUrl: event.target.value,
                       }))
                     }
-                    className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+                    className="border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
                     placeholder="https://www.youtube.com/watch?v=..."
                   />
                 </div>
@@ -437,7 +437,7 @@ export function CreatorExperienceForm({
               {form.whyVideoSource === "UPLOAD" ? (
                 <div className="space-y-3">
                   <div className="space-y-2">
-                    <label className="text-sm text-white/70">
+                    <label className="text-sm text-copy-70">
                       WHY video file
                     </label>
                     <Input
@@ -446,23 +446,23 @@ export function CreatorExperienceForm({
                       onChange={(event) =>
                         setPendingWhyVideoFile(event.target.files?.[0] || null)
                       }
-                      className="border-white/10 bg-black/20 text-white file:mr-4 file:rounded-full file:border-0 file:bg-white file:px-4 file:py-2 file:text-black"
+                      className="border-edge/10 bg-inset/20 text-ink file:mr-4 file:rounded-full file:border-0 file:bg-primary file:px-4 file:py-2 file:text-primary-foreground"
                     />
                   </div>
 
-                  <p className="text-sm text-white/55">
+                  <p className="text-sm text-copy-55">
                     MP4, MOV, WEBM, M4V up to 250 MB. The file uploads only
                     after you click Save Changes.
                   </p>
 
                   {pendingWhyVideoFile ? (
-                    <p className="text-sm text-white/65">
+                    <p className="text-sm text-copy-65">
                       Pending file: {pendingWhyVideoFile.name}
                     </p>
                   ) : null}
 
                   {form.whyVideoAssetUrl ? (
-                    <p className="break-all text-sm text-white/55">
+                    <p className="break-all text-sm text-copy-55">
                       Current asset: {form.whyVideoAssetUrl}
                     </p>
                   ) : null}
@@ -472,9 +472,9 @@ export function CreatorExperienceForm({
 
             <div className="grid gap-5 lg:grid-cols-2">
               <div className="space-y-2">
-                <label className="text-sm text-white/70">Cover image</label>
-                <div className="overflow-hidden rounded-3xl border border-white/10 bg-white/5">
-                  <div className="aspect-[16/9] bg-black/25">
+                <label className="text-sm text-copy-70">Cover image</label>
+                <div className="overflow-hidden rounded-3xl border border-edge/10 bg-glass-5">
+                  <div className="aspect-[16/9] bg-inset/25">
                     {coverPreview || form.coverImageUrl ? (
                       <>
                         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -485,12 +485,12 @@ export function CreatorExperienceForm({
                         />
                       </>
                     ) : (
-                      <div className="flex h-full items-center justify-center text-sm text-white/40">
+                      <div className="flex h-full items-center justify-center text-sm text-copy-40">
                         No cover image uploaded
                       </div>
                     )}
                   </div>
-                  <div className="space-y-3 border-t border-white/10 p-4">
+                  <div className="space-y-3 border-t border-edge/10 p-4">
                     <div className="flex flex-wrap items-center gap-3">
                       <input
                         ref={fileInputRef}
@@ -505,16 +505,16 @@ export function CreatorExperienceForm({
                         variant="outline"
                         disabled={!experienceId || saving}
                         onClick={() => fileInputRef.current?.click()}
-                        className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                        className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
                       >
                         {pendingCoverFile ? "Cover selected" : "Upload cover image"}
                       </Button>
                       {!experienceId ? (
-                        <p className="text-xs text-white/45">
+                        <p className="text-xs text-copy-45">
                           Save the experience first to enable uploads.
                         </p>
                       ) : (
-                        <p className="text-xs text-white/45">
+                        <p className="text-xs text-copy-45">
                           PNG, JPG, JPEG, WEBP up to 5 MB.
                         </p>
                       )}
@@ -534,10 +534,10 @@ export function CreatorExperienceForm({
                         }));
                       }}
                       placeholder="https://..."
-                      className="border-white/10 bg-black/20 text-white placeholder:text-white/35"
+                      className="border-edge/10 bg-inset/20 text-ink placeholder:text-copy-35"
                     />
                     {pendingCoverFile && (
-                      <p className="text-xs text-white/45">
+                      <p className="text-xs text-copy-45">
                         Pending file: {pendingCoverFile.name}. Save changes to upload and apply it.
                       </p>
                     )}
@@ -546,7 +546,7 @@ export function CreatorExperienceForm({
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm text-white/70">Status</label>
+                <label className="text-sm text-copy-70">Status</label>
                 <select
                   value={form.status}
                   onChange={(event) =>
@@ -555,7 +555,7 @@ export function CreatorExperienceForm({
                       status: event.target.value as "DRAFT" | "PUBLISHED",
                     }))
                   }
-                  className="flex h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+                  className="flex h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
                 >
                   <option value="DRAFT">Draft</option>
                   <option value="PUBLISHED">Published</option>
@@ -563,7 +563,7 @@ export function CreatorExperienceForm({
               </div>
             </div>
 
-            {error && <p className="text-sm text-red-300">{error}</p>}
+            {error && <p className="text-sm text-red-700 dark:text-red-300">{error}</p>}
 
             <Button
               type="submit"
@@ -577,7 +577,7 @@ export function CreatorExperienceForm({
                   !form.whyVideoAssetUrl.trim() &&
                   !pendingWhyVideoFile)
               }
-              className="rounded-full border border-white bg-white text-black"
+              className="rounded-full border border-edge bg-primary text-primary-foreground"
             >
               {submitLabel}
             </Button>

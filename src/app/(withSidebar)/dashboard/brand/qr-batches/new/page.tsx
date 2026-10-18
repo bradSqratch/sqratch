@@ -83,11 +83,11 @@ export default function BrandNewQRBatchPage() {
       <PageCard>
         <form onSubmit={handleSubmit} className="space-y-5">
           <div className="space-y-2">
-            <label className="text-sm text-white/70">Campaign</label>
+            <label className="text-sm text-copy-70">Campaign</label>
             <select
               value={campaignId}
               onChange={(event) => setCampaignId(event.target.value)}
-              className="flex h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+              className="flex h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
             >
               {campaigns.map((campaign) => (
                 <option key={campaign.id} value={campaign.id}>
@@ -99,32 +99,32 @@ export default function BrandNewQRBatchPage() {
 
           <div className="grid gap-5 lg:grid-cols-2">
             <div className="space-y-2">
-              <label className="text-sm text-white/70">Quantity</label>
+              <label className="text-sm text-copy-70">Quantity</label>
               <Input
                 type="number"
                 min={1}
                 max={5000}
                 value={quantity}
                 onChange={(event) => setQuantity(Number(event.target.value || 0))}
-                className="border-white/10 bg-black/20 text-white"
+                className="border-edge/10 bg-inset/20 text-ink"
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm text-white/70">Batch name</label>
+              <label className="text-sm text-copy-70">Batch name</label>
               <Input
                 value={batchName}
                 onChange={(event) => setBatchName(event.target.value)}
-                className="border-white/10 bg-black/20 text-white"
+                className="border-edge/10 bg-inset/20 text-ink"
               />
             </div>
           </div>
 
-          {error && <p className="text-sm text-red-300">{error}</p>}
+          {error && <p className="text-sm text-red-700 dark:text-red-300">{error}</p>}
 
           <Button
             type="submit"
             disabled={saving || !campaignId || quantity <= 0}
-            className="rounded-full border border-white bg-white text-black"
+            className="rounded-full border border-edge bg-primary text-primary-foreground"
           >
             {saving ? "Generating..." : "Generate batch"}
           </Button>

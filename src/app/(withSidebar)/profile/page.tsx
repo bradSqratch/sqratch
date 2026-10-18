@@ -178,19 +178,19 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="min-h-screen p-8 text-white">
+    <div className="min-h-screen p-8 text-ink">
       <h1 className="text-3xl font-semibold">Profile</h1>
-      <p className="mt-2 text-sm text-white/65">
+      <p className="mt-2 text-sm text-copy-65">
         Manage your display name and profile image.
       </p>
 
       <PageCard className="mt-6">
         {loading ? (
-          <p className="text-sm text-white/65">Loading profile...</p>
+          <p className="text-sm text-copy-65">Loading profile...</p>
         ) : (
           <form onSubmit={handleSave} className="space-y-6">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
-              <div className="h-24 w-24 overflow-hidden rounded-full border border-white/10 bg-white/5">
+              <div className="h-24 w-24 overflow-hidden rounded-full border border-edge/10 bg-glass-5">
                 {avatarPreview || imageUrl ? (
                   <>
                     {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -201,7 +201,7 @@ export default function ProfilePage() {
                     />
                   </>
                 ) : (
-                  <div className="flex h-full items-center justify-center text-xs text-white/40">
+                  <div className="flex h-full items-center justify-center text-xs text-copy-40">
                     No image
                   </div>
                 )}
@@ -221,15 +221,15 @@ export default function ProfilePage() {
                   variant="outline"
                   onClick={() => fileInputRef.current?.click()}
                   disabled={saving}
-                  className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+                  className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
                 >
                   {pendingAvatarFile ? "Image selected" : "Upload profile image"}
                 </Button>
-                <p className="text-xs text-white/45">
+                <p className="text-xs text-copy-45">
                   PNG, JPG, JPEG, WEBP up to 5 MB.
                 </p>
                 {pendingAvatarFile ? (
-                  <p className="text-xs text-white/45">
+                  <p className="text-xs text-copy-45">
                     Pending file: {pendingAvatarFile.name}. Save profile to upload and apply it.
                   </p>
                 ) : null}
@@ -238,29 +238,29 @@ export default function ProfilePage() {
 
             <div className="grid gap-5 lg:grid-cols-2">
               <div className="space-y-2">
-                <label className="text-sm text-white/70">Name</label>
+                <label className="text-sm text-copy-70">Name</label>
                 <Input
                   value={name}
                   onChange={(event) => setName(event.target.value)}
-                  className="border-white/10 bg-black/20 text-white"
+                  className="border-edge/10 bg-inset/20 text-ink"
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-sm text-white/70">Email</label>
+                <label className="text-sm text-copy-70">Email</label>
                 <Input
                   value={profile?.email || ""}
                   disabled
-                  className="border-white/10 bg-black/20 text-white/60"
+                  className="border-edge/10 bg-inset/20 text-copy-60"
                 />
               </div>
             </div>
 
-            {error && <p className="text-sm text-red-300">{error}</p>}
+            {error && <p className="text-sm text-red-700 dark:text-red-300">{error}</p>}
 
             <Button
               type="submit"
               disabled={saving}
-              className="rounded-full border border-white bg-white text-black"
+              className="rounded-full border border-edge bg-primary text-primary-foreground"
             >
               {saving ? "Saving..." : "Save profile"}
             </Button>
@@ -270,55 +270,55 @@ export default function ProfilePage() {
 
       <PageCard className="mt-6">
         <h2 className="text-xl font-semibold">Change password</h2>
-        <p className="mt-2 text-sm text-white/60">
+        <p className="mt-2 text-sm text-copy-60">
           Use a strong password with at least 8 characters, including a letter and a number.
         </p>
 
         <form onSubmit={handleChangePassword} className="mt-5 space-y-4">
           <div className="grid gap-5 lg:grid-cols-2">
             <div className="space-y-2">
-              <label className="text-sm text-white/70">Current password</label>
+              <label className="text-sm text-copy-70">Current password</label>
               <Input
                 type="password"
                 value={currentPassword}
                 onChange={(event) => setCurrentPassword(event.target.value)}
-                className="border-white/10 bg-black/20 text-white"
+                className="border-edge/10 bg-inset/20 text-ink"
               />
             </div>
             <div className="space-y-2">
-              <label className="text-sm text-white/70">New password</label>
+              <label className="text-sm text-copy-70">New password</label>
               <Input
                 type="password"
                 value={newPassword}
                 onChange={(event) => setNewPassword(event.target.value)}
-                className="border-white/10 bg-black/20 text-white"
+                className="border-edge/10 bg-inset/20 text-ink"
               />
             </div>
           </div>
 
           <div className="grid gap-5 lg:grid-cols-2">
             <div className="space-y-2">
-              <label className="text-sm text-white/70">Confirm new password</label>
+              <label className="text-sm text-copy-70">Confirm new password</label>
               <Input
                 type="password"
                 value={confirmPassword}
                 onChange={(event) => setConfirmPassword(event.target.value)}
-                className="border-white/10 bg-black/20 text-white"
+                className="border-edge/10 bg-inset/20 text-ink"
               />
             </div>
           </div>
 
           {passwordError && (
-            <p className="text-sm text-red-300">{passwordError}</p>
+            <p className="text-sm text-red-700 dark:text-red-300">{passwordError}</p>
           )}
           {passwordSuccess && (
-            <p className="text-sm text-emerald-200">{passwordSuccess}</p>
+            <p className="text-sm text-emerald-700 dark:text-emerald-200">{passwordSuccess}</p>
           )}
 
           <Button
             type="submit"
             disabled={passwordSaving}
-            className="rounded-full border border-white bg-white text-black"
+            className="rounded-full border border-edge bg-primary text-primary-foreground"
           >
             {passwordSaving ? "Updating..." : "Update password"}
           </Button>

@@ -190,23 +190,23 @@ export function ShopifyShopRewardCard({
   }
 
   return (
-    <div className="rounded-3xl border border-amber-300/20 bg-[linear-gradient(135deg,rgba(251,191,36,0.14),rgba(199,52,132,0.12),rgba(0,0,0,0.25))] p-5 shadow-[0_24px_70px_rgba(0,0,0,0.28)]">
+    <div className="rounded-3xl border border-amber-300/20 bg-[linear-gradient(135deg,rgba(251,191,36,0.14),rgba(199,52,132,0.12),rgba(0,0,0,0.25))] p-5 shadow-[0_8px_28px_rgba(72,57,34,0.06)] dark:shadow-[0_24px_70px_rgba(0,0,0,0.28)]">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
-          <div className="flex items-center gap-2 text-amber-100">
+          <div className="flex items-center gap-2 text-amber-700 dark:text-amber-100">
             <Gift className="h-5 w-5" />
             <p className="text-sm uppercase tracking-[0.2em]">SQRATCH Reward</p>
           </div>
-          <h2 className="mt-2 text-2xl font-semibold text-white">
+          <h2 className="mt-2 text-2xl font-semibold text-ink">
             You have {pointsBalance} points
           </h2>
-          <p className="mt-2 max-w-2xl text-sm leading-6 text-white/65">
+          <p className="mt-2 max-w-2xl text-sm leading-6 text-copy-65">
             Claim a single-use Shopify discount code for this brand. Copy and
             paste this code at Shopify checkout.
           </p>
         </div>
 
-        {error ? <p className="text-sm text-red-200">{error}</p> : null}
+        {error ? <p className="text-sm text-red-700 dark:text-red-200">{error}</p> : null}
       </div>
 
       <div className="mt-5 grid gap-4 lg:grid-cols-2">
@@ -220,16 +220,16 @@ export function ShopifyShopRewardCard({
               key={offer.id}
               className={`rounded-2xl border p-4 ${
                 isMuted
-                  ? "border-white/5 bg-black/15 opacity-70"
-                  : "border-white/10 bg-black/25"
+                  ? "border-edge/5 bg-inset/15 opacity-70"
+                  : "border-edge/10 bg-inset/25"
               }`}
             >
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div>
-                  <h3 className="text-lg font-semibold text-white">
+                  <h3 className="text-lg font-semibold text-ink">
                     {offer.title}
                   </h3>
-                  <p className="mt-1 text-sm text-white/55">
+                  <p className="mt-1 text-sm text-copy-55">
                     {offer.pointsCost} points for{" "}
                     {offer.discountType === "PERCENTAGE"
                       ? `${formatRewardPercentage(offer.discountPercentageBasisPoints)} off`
@@ -239,8 +239,8 @@ export function ShopifyShopRewardCard({
                 <span
                   className={`rounded-full border px-3 py-1 text-xs ${
                     offer.canRedeem
-                      ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-100"
-                      : "border-white/15 bg-white/5 text-white/65"
+                      ? "border-emerald-300/25 bg-emerald-300/10 text-emerald-700 dark:text-emerald-100"
+                      : "border-edge/15 bg-glass-5 text-copy-65"
                   }`}
                 >
                   {offer.canRedeem ? "Claimable" : offer.displayLabel}
@@ -250,7 +250,7 @@ export function ShopifyShopRewardCard({
               {offer.disabledReason === "NOT_ENOUGH_POINTS" ? (
                 <p
                   id={disabledDescriptionId}
-                  className="mt-3 text-sm leading-6 text-white/70"
+                  className="mt-3 text-sm leading-6 text-copy-70"
                 >
                   You have {offer.userPointsBalance} points and this reward
                   requires {offer.pointsCost} points. You need {offer.pointsShortfall}{" "}
@@ -259,33 +259,33 @@ export function ShopifyShopRewardCard({
               ) : isMuted ? (
                 <p
                   id={disabledDescriptionId}
-                  className="mt-3 text-sm leading-6 text-white/65"
+                  className="mt-3 text-sm leading-6 text-copy-65"
                 >
                   This reward is currently unavailable: {offer.displayLabel}.
                 </p>
               ) : null}
 
-              <div className="mt-4 grid gap-2 text-sm text-white/65 sm:grid-cols-2">
+              <div className="mt-4 grid gap-2 text-sm text-copy-65 sm:grid-cols-2">
                 <p>
-                  <span className="text-white/40">Claim by:</span>{" "}
+                  <span className="text-copy-40">Claim by:</span>{" "}
                   {formatDate(offer.claimEndsAt, "Ongoing")}
                 </p>
                 <p>
-                  <span className="text-white/40">Code expires:</span>{" "}
+                  <span className="text-copy-40">Code expires:</span>{" "}
                   {offer.codeValidDays} days after claim
                 </p>
               </div>
 
               {offer.appliesTo === "SPECIFIC_PRODUCTS" ? (
-                <div className="mt-4 rounded-2xl border border-white/10 bg-white/5 p-3">
-                  <p className="text-xs uppercase tracking-[0.18em] text-white/35">
+                <div className="mt-4 rounded-2xl border border-edge/10 bg-glass-5 p-3">
+                  <p className="text-xs uppercase tracking-[0.18em] text-copy-35">
                     Applies to
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {offer.products.map((product) => (
                       <span
                         key={product.shopifyProductGid}
-                        className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/65"
+                        className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-65"
                       >
                         {product.title || product.shopifyProductGid}
                       </span>
@@ -293,28 +293,28 @@ export function ShopifyShopRewardCard({
                   </div>
                 </div>
               ) : (
-                <p className="mt-4 text-xs uppercase tracking-[0.18em] text-white/35">
+                <p className="mt-4 text-xs uppercase tracking-[0.18em] text-copy-35">
                   Applies to all products
                 </p>
               )}
 
-              <p className="mt-3 text-xs text-white/45">
+              <p className="mt-3 text-xs text-copy-45">
                 Single-use code. Anyone with the code can use it once.
               </p>
 
               {issuedCode ? (
                 <div className="mt-4 rounded-2xl border border-emerald-300/20 bg-emerald-300/10 p-3">
-                  <p className="text-xs uppercase tracking-[0.18em] text-emerald-100/60">
+                  <p className="text-xs uppercase tracking-[0.18em] text-emerald-700 dark:text-emerald-100/60">
                     Generated code
                   </p>
                   <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <code className="rounded-xl border border-white/10 bg-black/30 px-3 py-2 font-semibold text-white">
+                    <code className="rounded-xl border border-edge/10 bg-inset/30 px-3 py-2 font-semibold text-ink">
                       {issuedCode}
                     </code>
                     <Button
                       type="button"
                       onClick={() => void copyCode(issuedCode)}
-                      className="rounded-full border border-white bg-white text-black"
+                      className="rounded-full border border-edge bg-primary text-primary-foreground"
                     >
                       {copiedCode === issuedCode ? (
                         <Check className="h-4 w-4" />
@@ -324,7 +324,7 @@ export function ShopifyShopRewardCard({
                       Copy
                     </Button>
                   </div>
-                  <p className="mt-2 text-sm text-emerald-100/75">
+                  <p className="mt-2 text-sm text-emerald-700 dark:text-emerald-100/75">
                     Copy and paste this code at Shopify checkout.
                   </p>
                 </div>
@@ -340,7 +340,7 @@ export function ShopifyShopRewardCard({
                   aria-describedby={
                     !offer.canRedeem ? disabledDescriptionId : undefined
                   }
-                  className="rounded-full border border-white bg-white text-black hover:bg-white/90"
+                  className="rounded-full border border-edge bg-primary text-primary-foreground hover:bg-primary/90"
                 >
                   {redeemingOfferId === offer.id
                     ? "Redeeming..."

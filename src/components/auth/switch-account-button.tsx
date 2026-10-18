@@ -34,7 +34,7 @@ export function SwitchAccountButton({
       variant="outline"
       disabled={pending}
       onClick={handleClick}
-      className="rounded-full border-white/25 bg-transparent px-6 text-white hover:bg-white/10"
+      className="rounded-full border-edge/25 bg-transparent px-6 text-ink hover:bg-glass-10"
     >
       {pending ? "Signing out..." : label}
     </Button>

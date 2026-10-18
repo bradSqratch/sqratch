@@ -49,8 +49,8 @@ function GradientStatCard({
     <div
       className={[
         "relative rounded-3xl p-[1.25px]",
-        "bg-[linear-gradient(135deg,rgba(255,255,255,0.28)_0%,rgba(255,255,255,0.10)_28%,rgba(0,0,0,0.55)_100%)]",
-        "shadow-[0_26px_80px_rgba(0,0,0,0.45)]",
+        "bg-border dark:bg-[linear-gradient(135deg,rgba(255,255,255,0.28)_0%,rgba(255,255,255,0.10)_28%,rgba(0,0,0,0.55)_100%)]",
+        "shadow-[0_8px_28px_rgba(72,57,34,0.06)] dark:shadow-[0_26px_80px_rgba(0,0,0,0.45)]",
         className,
       ].join(" ")}
     >
@@ -62,8 +62,8 @@ function GradientStatCard({
         style={{ backgroundColor: colorVar }}
       >
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_140%_at_0%_0%,rgba(255,255,255,0.42)_0%,rgba(255,255,255,0.18)_30%,rgba(255,255,255,0.00)_60%)]" />
-        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(120%_140%_at_100%_100%,rgba(0,0,0,0.74)_0%,rgba(0,0,0,0.40)_36%,rgba(0,0,0,0.00)_70%)]" />
-        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.05)_0%,rgba(0,0,0,0.00)_42%,rgba(0,0,0,0.22)_100%)]" />
+        <div className="pointer-events-none hidden dark:block absolute inset-0 bg-[radial-gradient(120%_140%_at_100%_100%,rgba(0,0,0,0.74)_0%,rgba(0,0,0,0.40)_36%,rgba(0,0,0,0.00)_70%)]" />
+        <div className="pointer-events-none hidden dark:block absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.05)_0%,rgba(0,0,0,0.00)_42%,rgba(0,0,0,0.22)_100%)]" />
         <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(80%_80%_at_50%_20%,rgba(255,255,255,0.08)_0%,rgba(255,255,255,0.00)_60%)]" />
 
         <div className="relative z-10">{children}</div>
@@ -83,8 +83,8 @@ function StatCard({
 }) {
   return (
     <GradientStatCard colorVar={colorVar}>
-      <div className="p-6 text-white">
-        <div className="text-[15px] font-semibold text-white/90">{title}</div>
+      <div className="p-6 text-ink">
+        <div className="text-[15px] font-semibold text-copy-90">{title}</div>
         <div className="mt-4 text-5xl font-bold tracking-tight">{value}</div>
       </div>
     </GradientStatCard>
@@ -100,19 +100,19 @@ function CampaignCard({
 }) {
   return (
     <GradientStatCard colorVar={colorVar} className="min-h-35">
-      <div className="p-6 text-white">
-        <div className="text-[15px] font-semibold text-white/95">
+      <div className="p-6 text-ink">
+        <div className="text-[15px] font-semibold text-copy-95">
           {c.campaignName}
         </div>
 
-        <div className="mt-5 space-y-1 text-sm text-white/85">
+        <div className="mt-5 space-y-1 text-sm text-copy-85">
           <div>
-            <span className="text-white/70">Total QR Codes:</span>{" "}
-            <span className="font-medium text-white/95">{c.totalQRCodes}</span>
+            <span className="text-copy-70">Total QR Codes:</span>{" "}
+            <span className="font-medium text-copy-95">{c.totalQRCodes}</span>
           </div>
           <div>
-            <span className="text-white/70">Redeemed:</span>{" "}
-            <span className="font-medium text-white/95">{c.redeemedCount}</span>
+            <span className="text-copy-70">Redeemed:</span>{" "}
+            <span className="font-medium text-copy-95">{c.redeemedCount}</span>
           </div>
         </div>
       </div>
@@ -141,15 +141,15 @@ function SimpleOverviewCard({
   const textValue = typeof value === "string" ? value : null;
   const isLongText = textValue ? textValue.length > 10 : false;
   const valueClassName = textValue
-    ? `mt-3 ${isLongText ? "text-base tracking-wide" : "text-xl"} font-semibold leading-snug text-white break-words`
-    : "mt-3 text-3xl font-bold tracking-tight text-white";
+    ? `mt-3 ${isLongText ? "text-base tracking-wide" : "text-xl"} font-semibold leading-snug text-ink break-words`
+    : "mt-3 text-3xl font-bold tracking-tight text-ink";
 
   return (
-    <Card className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl shadow-[0_20px_70px_rgba(0,0,0,0.35)]">
+    <Card className="rounded-2xl border border-edge/10 bg-glass-5 backdrop-blur-xl shadow-[0_8px_28px_rgba(72,57,34,0.06)] dark:shadow-[0_20px_70px_rgba(0,0,0,0.35)]">
       <CardContent className="p-6">
-        <div className="text-sm font-semibold text-white/75">{title}</div>
+        <div className="text-sm font-semibold text-copy-75">{title}</div>
         <div className={valueClassName}>{value}</div>
-        {hint ? <div className="mt-2 text-xs text-white/55">{hint}</div> : null}
+        {hint ? <div className="mt-2 text-xs text-copy-55">{hint}</div> : null}
       </CardContent>
     </Card>
   );
@@ -285,7 +285,7 @@ export default function DashboardPage() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen text-white/80">
+      <div className="flex items-center justify-center min-h-screen text-copy-80">
         <p>Loading dashboard...</p>
       </div>
     );
@@ -293,7 +293,7 @@ export default function DashboardPage() {
 
   if (!session || !role) {
     return (
-      <div className="flex items-center justify-center min-h-screen text-white/80">
+      <div className="flex items-center justify-center min-h-screen text-copy-80">
         <p>Unauthorized</p>
       </div>
     );
@@ -301,17 +301,17 @@ export default function DashboardPage() {
 
   if (role === "BRAND_ADMIN" && activeBrandRequired) {
     return (
-      <div className="flex min-h-screen items-center justify-center px-6 text-white">
-        <Card className="w-full max-w-lg rounded-3xl border border-white/10 bg-white/5 backdrop-blur-xl">
+      <div className="flex min-h-screen items-center justify-center px-6 text-ink">
+        <Card className="w-full max-w-lg rounded-3xl border border-edge/10 bg-glass-5 backdrop-blur-xl">
           <CardContent className="space-y-5 p-8 text-center">
             <h1 className="text-2xl font-semibold">Select an active brand</h1>
-            <p className="text-sm leading-6 text-white/65">
+            <p className="text-sm leading-6 text-copy-65">
               Choose which brand you want to manage before loading brand dashboard data.
             </p>
             <Button
               type="button"
               onClick={() => router.push("/dashboard/brand/profile")}
-              className="rounded-full bg-white text-black hover:bg-white/90"
+              className="rounded-full bg-primary text-primary-foreground hover:bg-primary/90"
             >
               Choose brand
             </Button>
@@ -326,7 +326,7 @@ export default function DashboardPage() {
   // --------------------
   if (role === "ADMIN" && currentMonthStats && allTimeStats) {
     return (
-      <div className="min-h-screen p-8 space-y-10 text-white">
+      <div className="min-h-screen p-8 space-y-10 text-ink">
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-semibold">Admin Dashboard</h1>
           <div>
@@ -343,7 +343,7 @@ export default function DashboardPage() {
               {loading ? "Refreshing…" : "Refresh"}
             </Button>
             <Button
-              className="ml-4 bg-[--card-colour-1] text-white"
+              className="ml-4 bg-[--card-colour-1] text-ink"
               onClick={handleExport}
             >
               Export Reports
@@ -352,7 +352,7 @@ export default function DashboardPage() {
         </div>
 
         {errorMsg ? (
-          <div className="text-sm text-red-300">{errorMsg}</div>
+          <div className="text-sm text-red-700 dark:text-red-300">{errorMsg}</div>
         ) : null}
 
         {/* All-Time Section (UNCHANGED) */}
@@ -452,7 +452,7 @@ export default function DashboardPage() {
   // --------------------
   if (summary) {
     return (
-      <div className="min-h-screen p-8 space-y-8 text-white">
+      <div className="min-h-screen p-8 space-y-8 text-ink">
         <div className="flex items-center justify-between">
           <h1 className="text-3xl font-semibold">Dashboard</h1>
           <Button
@@ -469,7 +469,7 @@ export default function DashboardPage() {
         </div>
 
         {errorMsg ? (
-          <div className="text-sm text-red-300">{errorMsg}</div>
+          <div className="text-sm text-red-700 dark:text-red-300">{errorMsg}</div>
         ) : null}
 
         {/* Role-based overview cards */}
@@ -531,34 +531,34 @@ export default function DashboardPage() {
             </div>
 
             {/* Recent activity list */}
-            <Card className="rounded-2xl border border-white/10 bg-white/5 backdrop-blur-xl">
+            <Card className="rounded-2xl border border-edge/10 bg-glass-5 backdrop-blur-xl">
               <CardContent className="p-6">
-                <div className="text-sm font-semibold text-white/75">
+                <div className="text-sm font-semibold text-copy-75">
                   Recent Activity
                 </div>
                 <div className="mt-4 space-y-3">
                   {(summary.recentActivity ?? []).length === 0 ? (
-                    <div className="text-sm text-white/55">
+                    <div className="text-sm text-copy-55">
                       No activity yet.
                     </div>
                   ) : (
                     (summary.recentActivity ?? []).map((a, idx) => (
                       <div
                         key={idx}
-                        className="flex items-start justify-between gap-4 rounded-xl border border-white/10 bg-white/5 px-4 py-3"
+                        className="flex items-start justify-between gap-4 rounded-xl border border-edge/10 bg-glass-5 px-4 py-3"
                       >
                         <div>
-                          <div className="text-sm font-medium text-white">
+                          <div className="text-sm font-medium text-ink">
                             {a.label}
                           </div>
                           {a.detail ? (
-                            <div className="text-xs text-white/60">
+                            <div className="text-xs text-copy-60">
                               {a.detail}
                             </div>
                           ) : null}
                         </div>
                         {a.at ? (
-                          <div className="text-xs text-white/55">{a.at}</div>
+                          <div className="text-xs text-copy-55">{a.at}</div>
                         ) : null}
                       </div>
                     ))
@@ -573,7 +573,7 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="flex items-center justify-center min-h-screen text-white/80">
+    <div className="flex items-center justify-center min-h-screen text-copy-80">
       <p>Access Denied or Unknown Role</p>
     </div>
   );

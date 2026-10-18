@@ -29,7 +29,7 @@ export function NavUser({
       <SidebarMenuItem>
         <SidebarMenuButton
           size="lg"
-          className="text-white hover:!text-white hover:!bg-white/5 hover:backdrop-blur-sm hover:border hover:border-white/10 hover:rounded-lg transition-all duration-200 cursor-pointer"
+          className="rounded-lg border border-transparent text-ink transition-[background-color,color,border-color] duration-200 hover:border-sidebar-border hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring motion-reduce:transition-none cursor-pointer"
         >
           <Avatar className="h-8 w-8 rounded-full bg-white">
             <AvatarImage src={user.avatar} alt={user.name} />

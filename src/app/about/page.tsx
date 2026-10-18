@@ -8,10 +8,10 @@ import { PageFade } from "@/components/ui/page-fade";
 
 function Callout({ children }: { children: React.ReactNode }) {
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur-xl">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(700px_300px_at_20%_0%,rgba(99,102,241,0.18),rgba(0,0,0,0)_55%)]" />
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(700px_300px_at_90%_90%,rgba(236,72,153,0.10),rgba(0,0,0,0)_55%)]" />
-      <div className="relative text-[15px] sm:text-[16px] leading-[1.7] text-white/82">
+    <div className="relative overflow-hidden rounded-2xl border border-edge/10 bg-glass-5 p-5 backdrop-blur-xl">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(700px_300px_at_20%_0%,rgba(var(--glow-primary-rgb),0.18),rgba(0,0,0,0)_55%)]" />
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(700px_300px_at_90%_90%,rgba(var(--glow-secondary-rgb),0.10),rgba(0,0,0,0)_55%)]" />
+      <div className="relative text-[15px] sm:text-[16px] leading-[1.7] text-copy-82">
         {children}
       </div>
     </div>
@@ -20,14 +20,14 @@ function Callout({ children }: { children: React.ReactNode }) {
 
 export default function AboutPage() {
   return (
-    <div className="relative min-h-screen bg-[#020015] text-white overflow-hidden">
+    <div className="relative min-h-screen bg-page text-ink overflow-hidden">
       {/* Background glows (match your redeem/login vibe) */}
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute inset-0 bg-[radial-gradient(1100px_600px_at_50%_10%,rgba(99,102,241,0.30),rgba(2,0,21,0)_70%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(900px_520px_at_12%_35%,rgba(236,72,153,0.14),rgba(2,0,21,0)_60%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(900px_520px_at_88%_38%,rgba(34,211,238,0.10),rgba(2,0,21,0)_60%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(1200px_900px_at_50%_50%,rgba(2,0,21,0)_35%,rgba(2,0,21,0.90)_100%)]" />
-        <div className="absolute inset-x-0 bottom-0 h-64 bg-linear-to-b from-transparent to-[#020121]" />
+        <div className="absolute inset-0 bg-[radial-gradient(1100px_600px_at_50%_10%,rgba(var(--glow-primary-rgb),0.30),rgba(var(--scene-rgb),0)_70%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(900px_520px_at_12%_35%,rgba(var(--glow-secondary-rgb),0.14),rgba(var(--scene-rgb),0)_60%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(900px_520px_at_88%_38%,rgba(var(--glow-tertiary-rgb),0.10),rgba(var(--scene-rgb),0)_60%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(1200px_900px_at_50%_50%,rgba(var(--scene-rgb),0)_35%,rgba(var(--scene-rgb),0.90)_100%)]" />
+        <div className="absolute inset-x-0 bottom-0 h-64 bg-linear-to-b from-transparent to-section" />
       </div>
 
       <div className="relative z-10 flex min-h-screen flex-col">
@@ -41,7 +41,7 @@ export default function AboutPage() {
                 mt-2
                 text-[40px] sm:text-[56px] lg:text-[64px]
                 font-bold leading-[105%] tracking-[-0.03em]
-                bg-[linear-gradient(145.55deg,#ECECEC_20.35%,rgba(236,236,236,0)_128.73%)]
+                bg-[image:var(--heading-gradient)]
                 bg-clip-text text-transparent
                 drop-shadow-[0_0_12px_rgba(236,236,236,0.50)]
               "
@@ -49,7 +49,7 @@ export default function AboutPage() {
               About SQRATCH
             </PageFade>
 
-            <PageFade as="p" variant="supporting-text" className="mt-3 text-[16px] sm:text-[18px] leading-[160%] text-[#ECECEC]/75">
+            <PageFade as="p" variant="supporting-text" className="mt-3 text-[16px] sm:text-[18px] leading-[160%] text-copy-75">
               MORE THAN A LABEL
             </PageFade>
           </div>
@@ -59,10 +59,10 @@ export default function AboutPage() {
               className="
                 relative w-full
                 rounded-[28px]
-                border border-white/15
-                bg-white/6
+                border border-edge/15
+                bg-glass-6
                 backdrop-blur-xl
-                shadow-[0_30px_90px_rgba(0,0,0,0.55)]
+                shadow-[0_8px_28px_rgba(72,57,34,0.06)] dark:shadow-[0_30px_90px_rgba(0,0,0,0.55)]
                 overflow-hidden
               "
             >
@@ -71,8 +71,8 @@ export default function AboutPage() {
 
             <CardContent className="relative z-10 p-6 sm:p-10">
               {/* Lead */}
-              <div className="space-y-4 text-[15px] sm:text-[16px] leading-[1.9] text-white/80">
-                <p className="text-white/85">
+              <div className="space-y-4 text-[15px] sm:text-[16px] leading-[1.9] text-copy-80">
+                <p className="text-copy-85">
                   Most products hold more than a label can ever say.
                 </p>
                 <p>
@@ -100,7 +100,7 @@ export default function AboutPage() {
               {/* Privacy callout */}
               <div className="mt-8">
                 <Callout>
-                  <span className="text-white font-semibold">SQRATCH</span> adds
+                  <span className="text-ink font-semibold">SQRATCH</span> adds
                   that missing layer back by turning the package into a small
                   piece of media. A miniature cinema for story, knowledge, and
                   experience.
@@ -108,17 +108,17 @@ export default function AboutPage() {
               </div>
 
               {/* Secondary emphasis card */}
-              <div className="mt-8 rounded-2xl border border-white/10 bg-black/25 p-6 backdrop-blur-xl">
-                {/* <div className="text-white/90 font-semibold">
+              <div className="mt-8 rounded-2xl border border-edge/10 bg-inset/25 p-6 backdrop-blur-xl">
+                {/* <div className="text-copy-90 font-semibold">
                   Built for the real world
                 </div> */}
-                <div className="text-white/75 leading-[1.85]">
+                <div className="text-copy-75 leading-[1.85]">
                   It also gives brands a new kind of reach. Through an
                   integrated ecommerce layer with location aware ecommerce,
                   SQRATCH can connect consumers to relevant buying options
                   wherever the product is sold.
                 </div>
-                <div className="mt-2 text-white/75 leading-[1.85]">
+                <div className="mt-2 text-copy-75 leading-[1.85]">
                   That makes the product itself more engaging, more useful, and
                   more rewarding for everyone.
                 </div>
@@ -126,13 +126,13 @@ export default function AboutPage() {
 
               {/* Optional CTA row (enable if you want) */}
               {/*
-              <div className="mt-10 flex flex-col sm:flex-row items-center justify-between gap-4 rounded-2xl border border-white/10 bg-white/5 p-5">
-                <div className="text-white/80">
+              <div className="mt-10 flex flex-col sm:flex-row items-center justify-between gap-4 rounded-2xl border border-edge/10 bg-glass-5 p-5">
+                <div className="text-copy-80">
                   Want to see what a SQRATCH experience looks like?
                 </div>
                 <a
                   href="/redeemQR"
-                  className="rounded-full border border-white bg-white px-6 py-2 text-black transition hover:scale-[1.01] active:scale-[0.99]"
+                  className="rounded-full border border-edge bg-primary px-6 py-2 text-primary-foreground transition hover:scale-[1.01] active:scale-[0.99]"
                 >
                   Try a demo
                 </a>

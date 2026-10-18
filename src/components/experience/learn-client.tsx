@@ -62,8 +62,8 @@ export function ExperienceLearnClient({
       experience={data}
       activeTab="learn"
       actions={
-        <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
-          <p className="text-sm text-white/55">Visible lessons</p>
+        <div className="rounded-3xl border border-edge/10 bg-inset/20 p-5">
+          <p className="text-sm text-copy-55">Visible lessons</p>
           <p className="mt-2 text-3xl font-semibold">
             {data.courseSummary.visibleLessonCount}
           </p>
@@ -73,13 +73,13 @@ export function ExperienceLearnClient({
       <PageCard>
         <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
           <div>
-            <h2 className="text-2xl font-semibold text-[#988dbf]">Courses</h2>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">
+            <h2 className="text-2xl font-semibold text-brand">Courses</h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-copy-70">
               Public courses are open now. Private courses appear here once your
               account is logged in and the linked campaign is unlocked.
             </p>
           </div>
-          {progressError && <p className="text-sm text-amber-300">{progressError}</p>}
+          {progressError && <p className="text-sm text-amber-700 dark:text-amber-300">{progressError}</p>}
         </div>
 
         <div className="mt-8 grid gap-5 md:grid-cols-2">
@@ -89,24 +89,24 @@ export function ExperienceLearnClient({
             return (
               <div
                 key={course.id}
-                className="rounded-3xl border border-white/10 bg-black/20 p-6"
+                className="rounded-3xl border border-edge/10 bg-inset/20 p-6"
               >
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <h3 className="text-xl font-semibold text-[#988dbf]">{course.title}</h3>
+                    <h3 className="text-xl font-semibold text-brand">{course.title}</h3>
                     {course.description && (
-                      <p className="mt-2 text-sm leading-6 text-white/70">
+                      <p className="mt-2 text-sm leading-6 text-copy-70">
                         {course.description}
                       </p>
                     )}
                   </div>
-                  <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/65">
+                  <span className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-65">
                     {course.access}
                   </span>
                 </div>
 
                 <div className="mt-6 space-y-4">
-                  <p className="text-sm text-white/55">
+                  <p className="text-sm text-copy-55">
                     {course.lessonCount} lessons
                   </p>
                   <ProgressBar
@@ -133,7 +133,7 @@ export function ExperienceLearnClient({
         </div>
 
         {data.courses.length === 0 && (
-          <div className="mt-8 rounded-3xl border border-white/10 bg-black/20 p-6 text-sm text-white/65">
+          <div className="mt-8 rounded-3xl border border-edge/10 bg-inset/20 p-6 text-sm text-copy-65">
             No courses are visible in this experience yet.
           </div>
         )}

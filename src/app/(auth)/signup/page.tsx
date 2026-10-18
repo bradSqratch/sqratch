@@ -216,19 +216,19 @@ function SignupPageInner() {
   };
 
   return (
-    <div className="relative min-h-screen bg-[#020015] text-white overflow-hidden">
+    <div className="relative min-h-screen bg-page text-ink overflow-hidden">
       <div className="pointer-events-none absolute inset-0">
-        <div className="absolute inset-0 bg-[radial-gradient(1200px_600px_at_50%_0%,rgba(99,102,241,0.28),rgba(2,0,21,0)_70%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(900px_500px_at_15%_25%,rgba(236,72,153,0.20),rgba(2,0,21,0)_60%)]" />
-        <div className="absolute inset-0 bg-[radial-gradient(900px_500px_at_85%_30%,rgba(34,211,238,0.18),rgba(2,0,21,0)_60%)]" />
-        <div className="absolute inset-x-0 bottom-0 h-64 bg-linear-to-b from-transparent to-[#020121]" />
+        <div className="absolute inset-0 bg-[radial-gradient(1200px_600px_at_50%_0%,rgba(var(--glow-primary-rgb),0.28),rgba(var(--scene-rgb),0)_70%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(900px_500px_at_15%_25%,rgba(var(--glow-secondary-rgb),0.20),rgba(var(--scene-rgb),0)_60%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(900px_500px_at_85%_30%,rgba(var(--glow-tertiary-rgb),0.18),rgba(var(--scene-rgb),0)_60%)]" />
+        <div className="absolute inset-x-0 bottom-0 h-64 bg-linear-to-b from-transparent to-section" />
       </div>
 
       {loading && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80">
+        <div className="fixed inset-0 z-50 flex items-center justify-center theme-media bg-black/80 text-ink">
           <div className="flex flex-col items-center gap-4">
-            <div className="h-12 w-12 animate-spin rounded-full border-4 border-white border-t-transparent" />
-            <p className="text-lg text-white">Creating your account...</p>
+            <div className="h-12 w-12 animate-spin rounded-full border-4 border-edge border-t-transparent" />
+            <p className="text-lg text-ink">Creating your account...</p>
           </div>
         </div>
       )}
@@ -243,7 +243,7 @@ function SignupPageInner() {
                 mt-2
                 text-[40px] sm:text-[56px] lg:text-[64px]
                 font-bold leading-[105%] tracking-[-0.03em]
-                bg-[linear-gradient(145.55deg,#ECECEC_20.35%,rgba(236,236,236,0)_128.73%)]
+                bg-[image:var(--heading-gradient)]
                 bg-clip-text text-transparent
                 drop-shadow-[0_0_12px_rgba(236,236,236,0.50)]
               "
@@ -251,14 +251,14 @@ function SignupPageInner() {
               {redeemedQrBlocksSignup ? "QR Already Redeemed" : "Signup"}
             </h1>
 
-            <p className="mt-3 text-[16px] sm:text-[18px] leading-[160%] text-[#ECECEC]/75">
+            <p className="mt-3 text-[16px] sm:text-[18px] leading-[160%] text-copy-75">
               {redeemedQrBlocksSignup
                 ? "Log in to browse public content"
                 : "Create your account to get started"}
             </p>
 
             {viewerStatusLoaded && hasRedeemedQrWarning && (
-              <div className="mx-auto mt-6 max-w-2xl rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-100">
+              <div className="mx-auto mt-6 max-w-2xl rounded-2xl border border-amber-300/20 bg-amber-400/10 px-4 py-3 text-sm leading-6 text-amber-700 dark:text-amber-100">
                 This QR code is already redeemed. You can log in and browse
                 public content, but you will not earn points or unlock private
                 access from this QR code.
@@ -271,15 +271,15 @@ function SignupPageInner() {
               className="
                 relative mt-10 w-full max-w-md
                 rounded-[28px]
-                border border-white/15
-                bg-white/6
+                border border-edge/15
+                bg-glass-6
                 backdrop-blur-xl
-                shadow-[0_30px_90px_rgba(0,0,0,0.55)]
+                shadow-[0_8px_28px_rgba(72,57,34,0.06)] dark:shadow-[0_30px_90px_rgba(0,0,0,0.55)]
                 overflow-hidden
               "
             >
-              <CardContent className="flex items-center justify-center gap-3 p-8 text-white/70">
-                <div className="h-5 w-5 animate-spin rounded-full border-2 border-white/50 border-t-transparent" />
+              <CardContent className="flex items-center justify-center gap-3 p-8 text-copy-70">
+                <div className="h-5 w-5 animate-spin rounded-full border-2 border-edge/50 border-t-transparent" />
                 Checking QR status...
               </CardContent>
             </Card>
@@ -288,24 +288,24 @@ function SignupPageInner() {
               className="
                 relative mt-10 w-full max-w-md
                 rounded-[28px]
-                border border-white/15
-                bg-white/6
+                border border-edge/15
+                bg-glass-6
                 backdrop-blur-xl
-                shadow-[0_30px_90px_rgba(0,0,0,0.55)]
+                shadow-[0_8px_28px_rgba(72,57,34,0.06)] dark:shadow-[0_30px_90px_rgba(0,0,0,0.55)]
                 overflow-hidden
               "
             >
               <div className="pointer-events-none absolute inset-0 rounded-[28px] shadow-[inset_0_0_0_1px_rgba(255,255,255,0.08)]" />
 
               <CardContent className="relative space-y-5 p-6 text-center sm:p-8">
-                <p className="text-sm leading-6 text-white/70">
+                <p className="text-sm leading-6 text-copy-70">
                   This QR code has already been used by another redemption. Use
                   a fresh QR code if you need private access or points.
                 </p>
 
                 <Button
                   asChild
-                  className="w-full rounded-full border border-white bg-white py-6 text-black"
+                  className="w-full rounded-full border border-edge bg-primary py-6 text-primary-foreground"
                 >
                   <Link href={loginHref}>Log In</Link>
                 </Button>
@@ -316,10 +316,10 @@ function SignupPageInner() {
               className="
                 relative mt-10 w-full max-w-md
                 rounded-[28px]
-                border border-white/15
-                bg-white/6
+                border border-edge/15
+                bg-glass-6
                 backdrop-blur-xl
-                shadow-[0_30px_90px_rgba(0,0,0,0.55)]
+                shadow-[0_8px_28px_rgba(72,57,34,0.06)] dark:shadow-[0_30px_90px_rgba(0,0,0,0.55)]
                 overflow-hidden pt-4 pb-2
               "
             >
@@ -338,8 +338,8 @@ function SignupPageInner() {
                       <div
                         className={`mt-2 text-center text-[14px] ${
                           message.type === "error"
-                            ? "text-red-400"
-                            : "text-green-400"
+                            ? "text-red-700 dark:text-red-400"
+                            : "text-green-700 dark:text-green-400"
                         }`}
                       >
                         {message.text}
@@ -351,7 +351,7 @@ function SignupPageInner() {
                 <CardContent className="space-y-5 px-6 pb-2 sm:px-8">
                   <div className="space-y-4">
                     <div>
-                      <Label htmlFor="name" className="pl-1 text-white/70">
+                      <Label htmlFor="name" className="pl-1 text-copy-70">
                         Name
                       </Label>
                       <Input
@@ -362,12 +362,12 @@ function SignupPageInner() {
                         onChange={(e) =>
                           setUser({ ...user, name: e.target.value })
                         }
-                        className="mt-2 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25"
+                        className="mt-2 rounded-2xl border-edge/10 bg-inset/30 text-ink placeholder:text-copy-40 focus-visible:ring-0 focus-visible:border-edge/25"
                       />
                     </div>
 
                     <div>
-                      <Label htmlFor="email" className="pl-1 text-white/70">
+                      <Label htmlFor="email" className="pl-1 text-copy-70">
                         Email
                       </Label>
                       <Input
@@ -381,12 +381,12 @@ function SignupPageInner() {
                             email: e.target.value.toLowerCase(),
                           })
                         }
-                        className="mt-2 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25"
+                        className="mt-2 rounded-2xl border-edge/10 bg-inset/30 text-ink placeholder:text-copy-40 focus-visible:ring-0 focus-visible:border-edge/25"
                       />
                     </div>
 
                     <div>
-                      <Label htmlFor="password" className="pl-1 text-white/70">
+                      <Label htmlFor="password" className="pl-1 text-copy-70">
                         Password
                       </Label>
                       <Input
@@ -397,7 +397,7 @@ function SignupPageInner() {
                         onChange={(e) =>
                           setUser({ ...user, password: e.target.value })
                         }
-                        className="mt-2 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25"
+                        className="mt-2 rounded-2xl border-edge/10 bg-inset/30 text-ink placeholder:text-copy-40 focus-visible:ring-0 focus-visible:border-edge/25"
                       />
                     </div>
                   </div>
@@ -407,7 +407,7 @@ function SignupPageInner() {
                   <Button
                     type="submit"
                     disabled={buttonDisabled || loading}
-                    className="w-full rounded-full py-6 border border-white bg-white text-black hover:scale-[1.01] active:scale-[0.99] transition"
+                    className="w-full rounded-full py-6 border border-edge bg-primary text-primary-foreground hover:scale-[1.01] active:scale-[0.99] transition"
                   >
                     Signup
                   </Button>
@@ -420,7 +420,7 @@ function SignupPageInner() {
                       setShowApplyCard(true);
                       setMessage(null);
                     }}
-                    className="w-full rounded-full border border-white/15 bg-white/5 text-white hover:bg-white/10"
+                    className="w-full rounded-full border border-edge/15 bg-glass-5 text-ink hover:bg-glass-10"
                   >
                     Apply as Creator or Brand
                   </Button>
@@ -428,7 +428,7 @@ function SignupPageInner() {
                   <Button
                     variant="link"
                     asChild
-                    className="mt-2 text-white/70 hover:text-white"
+                    className="mt-2 text-copy-70 hover:text-ink"
                   >
                     <Link href={loginHref}>Already have an account? Login</Link>
                   </Button>
@@ -440,10 +440,10 @@ function SignupPageInner() {
               className="
                 relative mt-10 w-full max-w-md
                 rounded-[28px]
-                border border-white/15
-                bg-white/6
+                border border-edge/15
+                bg-glass-6
                 backdrop-blur-xl
-                shadow-[0_30px_90px_rgba(0,0,0,0.55)]
+                shadow-[0_8px_28px_rgba(72,57,34,0.06)] dark:shadow-[0_30px_90px_rgba(0,0,0,0.55)]
                 overflow-hidden
               "
             >
@@ -462,8 +462,8 @@ function SignupPageInner() {
                       <div
                         className={`mt-2 text-center text-[14px] ${
                           message.type === "error"
-                            ? "text-red-400"
-                            : "text-green-400"
+                            ? "text-red-700 dark:text-red-400"
+                            : "text-green-700 dark:text-green-400"
                         }`}
                       >
                         {message.text}
@@ -474,10 +474,10 @@ function SignupPageInner() {
 
                 <CardContent className="space-y-5 px-6 pb-2 sm:px-8">
                   <div className="mb-2">
-                    <h2 className="text-lg font-semibold text-white">
+                    <h2 className="text-lg font-semibold text-ink">
                       Apply as Creator or Brand
                     </h2>
-                    <p className="mt-1 text-sm text-white/65">
+                    <p className="mt-1 text-sm text-copy-65">
                       Your account will be created first, and your application
                       will be submitted for review.
                     </p>
@@ -491,14 +491,14 @@ function SignupPageInner() {
                     }}
                     className="pt-1"
                   >
-                    <TabsList className="grid w-full grid-cols-2 bg-black/30">
+                    <TabsList className="grid w-full grid-cols-2 bg-inset/30">
                       <TabsTrigger value="creator">Creator</TabsTrigger>
                       <TabsTrigger value="brand">Brand</TabsTrigger>
                     </TabsList>
 
                     <TabsContent value="creator" className="mt-4 space-y-4">
                       <div>
-                        <Label className="pl-1 text-white/70">
+                        <Label className="pl-1 text-copy-70">
                           Display Name
                         </Label>
                         <Input
@@ -509,14 +509,14 @@ function SignupPageInner() {
                               displayName: e.target.value,
                             }))
                           }
-                          className="mt-2 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25"
+                          className="mt-2 rounded-2xl border-edge/10 bg-inset/30 text-ink placeholder:text-copy-40 focus-visible:ring-0 focus-visible:border-edge/25"
                         />
                       </div>
 
                       <div>
                         <Label
                           htmlFor="creator-email"
-                          className="pl-1 text-white/70"
+                          className="pl-1 text-copy-70"
                         >
                           Email
                         </Label>
@@ -531,14 +531,14 @@ function SignupPageInner() {
                               email: e.target.value.toLowerCase(),
                             })
                           }
-                          className="mt-2 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25"
+                          className="mt-2 rounded-2xl border-edge/10 bg-inset/30 text-ink placeholder:text-copy-40 focus-visible:ring-0 focus-visible:border-edge/25"
                         />
                       </div>
 
                       <div>
                         <Label
                           htmlFor="creator-password"
-                          className="pl-1 text-white/70"
+                          className="pl-1 text-copy-70"
                         >
                           Password
                         </Label>
@@ -550,14 +550,14 @@ function SignupPageInner() {
                           onChange={(e) =>
                             setUser({ ...user, password: e.target.value })
                           }
-                          className="mt-2 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25"
+                          className="mt-2 rounded-2xl border-edge/10 bg-inset/30 text-ink placeholder:text-copy-40 focus-visible:ring-0 focus-visible:border-edge/25"
                         />
                       </div>
 
                       <div>
                         <Label
                           htmlFor="creator-name"
-                          className="pl-1 text-white/70"
+                          className="pl-1 text-copy-70"
                         >
                           Your Name
                         </Label>
@@ -569,12 +569,12 @@ function SignupPageInner() {
                           onChange={(e) =>
                             setUser({ ...user, name: e.target.value })
                           }
-                          className="mt-2 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25"
+                          className="mt-2 rounded-2xl border-edge/10 bg-inset/30 text-ink placeholder:text-copy-40 focus-visible:ring-0 focus-visible:border-edge/25"
                         />
                       </div>
 
                       <div>
-                        <Label className="pl-1 text-white/70">
+                        <Label className="pl-1 text-copy-70">
                           Website / Social
                         </Label>
                         <Input
@@ -585,12 +585,12 @@ function SignupPageInner() {
                               websiteOrSocial: e.target.value,
                             }))
                           }
-                          className="mt-2 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25"
+                          className="mt-2 rounded-2xl border-edge/10 bg-inset/30 text-ink placeholder:text-copy-40 focus-visible:ring-0 focus-visible:border-edge/25"
                         />
                       </div>
 
                       <div>
-                        <Label className="pl-1 text-white/70">
+                        <Label className="pl-1 text-copy-70">
                           Reason / Note
                         </Label>
                         <Textarea
@@ -601,14 +601,14 @@ function SignupPageInner() {
                               shortReason: e.target.value,
                             }))
                           }
-                          className="mt-2 min-h-27.5 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25"
+                          className="mt-2 min-h-27.5 rounded-2xl border-edge/10 bg-inset/30 text-ink placeholder:text-copy-40 focus-visible:ring-0 focus-visible:border-edge/25"
                         />
                       </div>
                     </TabsContent>
 
                     <TabsContent value="brand" className="mt-4 space-y-4">
                       <div>
-                        <Label className="pl-1 text-white/70">Brand Name</Label>
+                        <Label className="pl-1 text-copy-70">Brand Name</Label>
                         <Input
                           value={brandApplication.brandName}
                           onChange={(e) =>
@@ -617,14 +617,14 @@ function SignupPageInner() {
                               brandName: e.target.value,
                             }))
                           }
-                          className="mt-2 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25"
+                          className="mt-2 rounded-2xl border-edge/10 bg-inset/30 text-ink placeholder:text-copy-40 focus-visible:ring-0 focus-visible:border-edge/25"
                         />
                       </div>
 
                       <div>
                         <Label
                           htmlFor="brand-email"
-                          className="pl-1 text-white/70"
+                          className="pl-1 text-copy-70"
                         >
                           Email
                         </Label>
@@ -639,14 +639,14 @@ function SignupPageInner() {
                               email: e.target.value.toLowerCase(),
                             })
                           }
-                          className="mt-2 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25"
+                          className="mt-2 rounded-2xl border-edge/10 bg-inset/30 text-ink placeholder:text-copy-40 focus-visible:ring-0 focus-visible:border-edge/25"
                         />
                       </div>
 
                       <div>
                         <Label
                           htmlFor="brand-password"
-                          className="pl-1 text-white/70"
+                          className="pl-1 text-copy-70"
                         >
                           Password
                         </Label>
@@ -658,14 +658,14 @@ function SignupPageInner() {
                           onChange={(e) =>
                             setUser({ ...user, password: e.target.value })
                           }
-                          className="mt-2 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25"
+                          className="mt-2 rounded-2xl border-edge/10 bg-inset/30 text-ink placeholder:text-copy-40 focus-visible:ring-0 focus-visible:border-edge/25"
                         />
                       </div>
 
                       <div>
                         <Label
                           htmlFor="brand-name-user"
-                          className="pl-1 text-white/70"
+                          className="pl-1 text-copy-70"
                         >
                           Your Name
                         </Label>
@@ -677,12 +677,12 @@ function SignupPageInner() {
                           onChange={(e) =>
                             setUser({ ...user, name: e.target.value })
                           }
-                          className="mt-2 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25"
+                          className="mt-2 rounded-2xl border-edge/10 bg-inset/30 text-ink placeholder:text-copy-40 focus-visible:ring-0 focus-visible:border-edge/25"
                         />
                       </div>
 
                       <div>
-                        <Label className="pl-1 text-white/70">Website</Label>
+                        <Label className="pl-1 text-copy-70">Website</Label>
                         <Input
                           value={brandApplication.website}
                           onChange={(e) =>
@@ -691,12 +691,12 @@ function SignupPageInner() {
                               website: e.target.value,
                             }))
                           }
-                          className="mt-2 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25"
+                          className="mt-2 rounded-2xl border-edge/10 bg-inset/30 text-ink placeholder:text-copy-40 focus-visible:ring-0 focus-visible:border-edge/25"
                         />
                       </div>
 
                       <div>
-                        <Label className="pl-1 text-white/70">
+                        <Label className="pl-1 text-copy-70">
                           Reason / Note
                         </Label>
                         <Textarea
@@ -707,7 +707,7 @@ function SignupPageInner() {
                               shortGoal: e.target.value,
                             }))
                           }
-                          className="mt-2 min-h-27.5 rounded-2xl border-white/10 bg-black/30 text-white placeholder:text-white/40 focus-visible:ring-0 focus-visible:border-white/25"
+                          className="mt-2 min-h-27.5 rounded-2xl border-edge/10 bg-inset/30 text-ink placeholder:text-copy-40 focus-visible:ring-0 focus-visible:border-edge/25"
                         />
                       </div>
                     </TabsContent>
@@ -718,7 +718,7 @@ function SignupPageInner() {
                   <Button
                     type="submit"
                     disabled={buttonDisabled || loading}
-                    className="w-full rounded-full py-6 border border-white bg-white text-black hover:scale-[1.01] active:scale-[0.99] transition"
+                    className="w-full rounded-full py-6 border border-edge bg-primary text-primary-foreground hover:scale-[1.01] active:scale-[0.99] transition"
                   >
                     Submit Application
                   </Button>
@@ -731,7 +731,7 @@ function SignupPageInner() {
                       setRequestedRole(null);
                       setMessage(null);
                     }}
-                    className="w-full rounded-full border border-white/15 bg-white/5 text-white hover:bg-white/10"
+                    className="w-full rounded-full border border-edge/15 bg-glass-5 text-ink hover:bg-glass-10"
                   >
                     Back to Normal Signup
                   </Button>
@@ -739,7 +739,7 @@ function SignupPageInner() {
                   <Button
                     variant="link"
                     asChild
-                    className="text-white/70 hover:text-white"
+                    className="text-copy-70 hover:text-ink"
                   >
                     <Link href={loginHref}>Already have an account? Login</Link>
                   </Button>
@@ -749,7 +749,7 @@ function SignupPageInner() {
           )}
         </main>
 
-        <div className="pb-6 text-center text-white/55">
+        <div className="pb-6 text-center text-copy-55">
           © {new Date().getFullYear()} SQRATCH. All rights reserved.
         </div>
       </div>

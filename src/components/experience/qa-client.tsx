@@ -87,17 +87,17 @@ function QuestionCard({
   }
 
   return (
-    <div className="rounded-3xl border border-white/10 bg-black/20 p-6">
+    <div className="rounded-3xl border border-edge/10 bg-inset/20 p-6">
       <div className="flex flex-wrap items-center gap-3">
-        <span className="rounded-full border border-white/10 px-3 py-1 text-xs text-white/65">
+        <span className="rounded-full border border-edge/10 px-3 py-1 text-xs text-copy-65">
           {question.status}
         </span>
-        <p className="text-xs uppercase tracking-[0.24em] text-white/45">
+        <p className="text-xs uppercase tracking-[0.24em] text-copy-45">
           {question.askedBy.name} • {formatDate(question.createdAt)}
         </p>
       </div>
 
-      <p className="mt-4 text-sm leading-7 text-white/80">{question.body}</p>
+      <p className="mt-4 text-sm leading-7 text-copy-80">{question.body}</p>
 
       {question.answers.length > 0 ? (
         <div className="mt-5 space-y-3">
@@ -106,7 +106,7 @@ function QuestionCard({
               key={answer.id}
               className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4"
             >
-              <p className="text-xs uppercase tracking-[0.24em] text-emerald-200/70">
+              <p className="text-xs uppercase tracking-[0.24em] text-emerald-700 dark:text-emerald-200/70">
                 Answered by {answer.answeredBy.name}
               </p>
               <p className="mt-2 text-sm leading-6 text-emerald-50/90">
@@ -121,9 +121,9 @@ function QuestionCard({
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
             placeholder="Write an answer"
-            className="min-h-[120px] border-white/10 bg-black/25 text-white placeholder:text-white/35"
+            className="min-h-[120px] border-edge/10 bg-inset/25 text-ink placeholder:text-copy-35"
           />
-          {error && <p className="text-sm text-red-300">{error}</p>}
+          {error && <p className="text-sm text-red-700 dark:text-red-300">{error}</p>}
           <Button
             type="submit"
             disabled={saving || !draft.trim()}
@@ -217,12 +217,12 @@ export function ExperienceQAClient({
       experience={data}
       activeTab="qa"
       actions={
-        <div className="rounded-3xl border border-white/10 bg-black/20 p-5">
-          <p className="text-sm text-white/55">Daily question limit</p>
+        <div className="rounded-3xl border border-edge/10 bg-inset/20 p-5">
+          <p className="text-sm text-copy-55">Daily question limit</p>
           <p className="mt-2 text-3xl font-semibold">
             {qaData?.remainingToday ?? data.qaDailyQuestionLimit}
           </p>
-          <p className="mt-2 text-sm text-white/55">Remaining today</p>
+          <p className="mt-2 text-sm text-copy-55">Remaining today</p>
         </div>
       }
     >
@@ -236,8 +236,8 @@ export function ExperienceQAClient({
       ) : (
         <div className="space-y-6">
           <PageCard>
-            <h2 className="text-2xl font-semibold text-[#988dbf]">Ask the creator</h2>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-white/70">
+            <h2 className="text-2xl font-semibold text-brand">Ask the creator</h2>
+            <p className="mt-2 max-w-2xl text-sm leading-6 text-copy-70">
               You can submit up to {qaData?.dailyLimit || data.qaDailyQuestionLimit} question
               {qaData?.dailyLimit === 1 || data.qaDailyQuestionLimit === 1 ? "" : "s"} per day for this
               experience.
@@ -249,7 +249,7 @@ export function ExperienceQAClient({
                   value={draft}
                   onChange={(event) => setDraft(event.target.value)}
                   placeholder="Ask your question"
-                  className="min-h-[140px] border-white/10 bg-black/25 text-white placeholder:text-white/35"
+                  className="min-h-[140px] border-edge/10 bg-inset/25 text-ink placeholder:text-copy-35"
                 />
                 <Button
                   type="submit"
@@ -260,23 +260,23 @@ export function ExperienceQAClient({
                 </Button>
               </form>
             ) : (
-              <div className="mt-6 rounded-3xl border border-white/10 bg-black/20 p-5 text-sm text-white/65">
+              <div className="mt-6 rounded-3xl border border-edge/10 bg-inset/20 p-5 text-sm text-copy-65">
                 You have reached today&apos;s limit for this experience.
               </div>
             )}
 
-            {qaError && <p className="mt-4 text-sm text-red-300">{qaError}</p>}
+            {qaError && <p className="mt-4 text-sm text-red-700 dark:text-red-300">{qaError}</p>}
           </PageCard>
 
           {qaLoading && (
             <PageCard>
-              <p className="text-sm text-white/65">Loading questions...</p>
+              <p className="text-sm text-copy-65">Loading questions...</p>
             </PageCard>
           )}
 
           {qaData && qaData.questions.length === 0 && (
             <PageCard>
-              <p className="text-sm text-white/65">
+              <p className="text-sm text-copy-65">
                 No questions have been submitted yet.
               </p>
             </PageCard>

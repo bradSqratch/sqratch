@@ -285,28 +285,28 @@ export default function BrandAnalyticsPage() {
     >
       <PageCard>
         <h2 className="text-lg font-semibold">Global date range</h2>
-        <p className="mt-1 text-sm text-white/65">UTC calendar days. Applies to every section below.</p>
+        <p className="mt-1 text-sm text-copy-65">UTC calendar days. Applies to every section below.</p>
         <div className="mt-3 grid gap-4 sm:grid-cols-2">
           <label htmlFor="analytics-from" className="grid gap-2 text-sm">
             From
             <input id="analytics-from" type="date" value={filters.dateFrom}
               onChange={(event) => setFilters((current) => ({ ...current, dateFrom: event.target.value }))}
-              className="flex h-10 rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white" />
+              className="flex h-10 rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink" />
           </label>
           <label htmlFor="analytics-to" className="grid gap-2 text-sm">
             To
             <input id="analytics-to" type="date" value={filters.dateTo}
               onChange={(event) => setFilters((current) => ({ ...current, dateTo: event.target.value }))}
-              className="flex h-10 rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white" />
+              className="flex h-10 rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink" />
           </label>
         </div>
-        {dateError && <p role="alert" className="mt-3 text-sm text-amber-300">{dateError}</p>}
+        {dateError && <p role="alert" className="mt-3 text-sm text-amber-700 dark:text-amber-300">{dateError}</p>}
       </PageCard>
 
       {!dateError && <>
       <PageCard>
         <h2 className="text-xl font-semibold">Engagement</h2>
-        <p id="campaign-filter-scope" className="mt-1 text-sm text-white/65">
+        <p id="campaign-filter-scope" className="mt-1 text-sm text-copy-65">
           Campaign filters engagement only. Product clicks and conversions cover the whole brand.
         </p>
         <label htmlFor="analytics-campaign" className="mt-3 grid max-w-md gap-2 text-sm">
@@ -314,7 +314,7 @@ export default function BrandAnalyticsPage() {
           <select id="analytics-campaign" aria-describedby="campaign-filter-scope"
             value={filters.campaignId}
             onChange={(event) => setFilters((current) => ({ ...current, campaignId: event.target.value }))}
-            className="flex h-10 rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white">
+            className="flex h-10 rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink">
             <option value="">All campaigns</option>
             {campaigns.map((campaign) => <option key={campaign.id} value={campaign.id}>{campaign.name}</option>)}
           </select>
@@ -323,13 +323,13 @@ export default function BrandAnalyticsPage() {
 
       {error && (
         <PageCard>
-          <p className="text-sm text-red-300">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         </PageCard>
       )}
 
       {!data && !error ? (
         <PageCard>
-          <p className="text-sm text-white/65">Loading analytics...</p>
+          <p className="text-sm text-copy-65">Loading analytics...</p>
         </PageCard>
       ) : data ? (
         <>
@@ -345,12 +345,12 @@ export default function BrandAnalyticsPage() {
           </div>
 
           {Object.values(data.totals).every((value) => value === 0) ? (
-            <p className="text-sm text-white/65">No engagement was recorded in this date range.</p>
+            <p className="text-sm text-copy-65">No engagement was recorded in this date range.</p>
           ) : <PageCard>
             <h2 className="text-xl font-semibold">By campaign</h2>
             <div className="mt-5 overflow-x-auto">
               <table className="w-full min-w-[760px] text-left text-sm">
-                <thead className="text-white/55">
+                <thead className="text-copy-55">
                   <tr>
                     <th className="pb-3">Campaign</th>
                     <th className="pb-3">Scans</th>
@@ -360,13 +360,13 @@ export default function BrandAnalyticsPage() {
                     <th className="pb-3">Shop clicks</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/10">
+                <tbody className="divide-y divide-edge/10">
                   {data.byCampaign.map((row) => (
                     <tr key={row.id}>
                       <td className="py-3">
                         <div>
                           <p className="font-medium">{row.name}</p>
-                          <p className="text-xs text-white/45">/{row.slug}</p>
+                          <p className="text-xs text-copy-45">/{row.slug}</p>
                         </div>
                       </td>
                       <td className="py-3">{row.scans}</td>
@@ -413,7 +413,7 @@ function CommerceClickSection({
     return (
       <PageCard>
         <h2 className="text-xl font-semibold">Product clicks</h2>
-        <p className="mt-3 text-sm text-red-300">{error}</p>
+        <p className="mt-3 text-sm text-red-700 dark:text-red-300">{error}</p>
       </PageCard>
     );
   }
@@ -422,7 +422,7 @@ function CommerceClickSection({
     return (
       <PageCard>
         <h2 className="text-xl font-semibold">Product clicks</h2>
-        <p className="mt-3 text-sm text-white/65">Loading product clicks...</p>
+        <p className="mt-3 text-sm text-copy-65">Loading product clicks...</p>
       </PageCard>
     );
   }
@@ -438,12 +438,12 @@ function CommerceClickSection({
     <>
       <PageCard>
         <h2 className="text-xl font-semibold">Product clicks</h2>
-        <p className="mt-2 text-sm text-white/65">
+        <p className="mt-2 text-sm text-copy-65">
           Outbound clicks on your products across every experience, for{" "}
           {formatDay(data.range.start)} to {formatDay(data.range.end)}. Counted for
           your whole brand, so the campaign filter above does not apply here.
         </p>
-        <p className="mt-2 text-xs text-white/45">
+        <p className="mt-2 text-xs text-copy-45">
           Product clicks record outbound traffic separately from attributed
           conversions. Orders and revenue are counted only when SQRATCH has
           exact attribution evidence from the commerce integration — see
@@ -472,7 +472,7 @@ function CommerceClickSection({
 
       {isEmpty ? (
         <PageCard>
-          <p className="text-sm text-white/65">
+          <p className="text-sm text-copy-65">
             No product clicks were recorded in this date range.
           </p>
         </PageCard>
@@ -488,7 +488,7 @@ function CommerceClickSection({
                   loud — "lower bound" alone would let a reader conclude traffic
                   stopped. */}
               {data.timeSeriesTruncated && (
-                <p className="text-xs text-amber-300">
+                <p className="text-xs text-amber-700 dark:text-amber-300">
                   Incomplete: this range exceeded the sampling limit, so only its
                   earliest clicks are charted. Later days can show 0 here while
                   still being counted in the total above.
@@ -497,20 +497,20 @@ function CommerceClickSection({
             </div>
             <div className="mt-5 max-h-80 overflow-y-auto">
               <table className="w-full text-left text-sm">
-                <thead className="text-white/55">
+                <thead className="text-copy-55">
                   <tr>
                     <th className="pb-3">Day (UTC)</th>
                     <th className="pb-3 w-full">Clicks</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/10">
+                <tbody className="divide-y divide-edge/10">
                   {data.timeSeries.map((point) => (
                     <tr key={point.date}>
                       <td className="py-2 whitespace-nowrap pr-4">{point.date}</td>
                       <td className="py-2">
                         <div className="flex items-center gap-3">
                           <div
-                            className="h-2 rounded-full bg-white/45"
+                            className="h-2 rounded-full bg-glass-45"
                             style={{
                               width:
                                 peakDailyClicks > 0
@@ -518,7 +518,7 @@ function CommerceClickSection({
                                   : "0%",
                             }}
                           />
-                          <span className="tabular-nums text-white/75">
+                          <span className="tabular-nums text-copy-75">
                             {point.clicks}
                           </span>
                         </div>
@@ -542,7 +542,7 @@ function CommerceClickSection({
                 }))}
                 emptyLabel="No surface data."
               />
-              <p className="mt-3 text-xs text-white/45">
+              <p className="mt-3 text-xs text-copy-45">
                 &quot;Not recorded&quot; covers clicks logged before the surface was
                 tracked. It is reported as unknown rather than guessed from
                 whichever link survived.
@@ -566,7 +566,7 @@ function CommerceClickSection({
           <div className="grid gap-4 lg:grid-cols-2">
             <PageCard>
               <h3 className="text-lg font-semibold">Entry campaign</h3>
-              <p className="mt-1 text-xs text-white/45">
+              <p className="mt-1 text-xs text-copy-45">
                 How visitors reached the experience before clicking. Campaigns run
                 by other brands are grouped together and never named.
               </p>
@@ -588,7 +588,7 @@ function CommerceClickSection({
 
             <PageCard>
               <h3 className="text-lg font-semibold">Product campaign</h3>
-              <p className="mt-1 text-xs text-white/45">
+              <p className="mt-1 text-xs text-copy-45">
                 Which of your campaigns authorized the clicked product. Separate
                 from entry campaigns above: one click can appear in both, so the
                 two are never added together.
@@ -732,7 +732,7 @@ function ConversionAnalyticsSection({
     return (
       <PageCard>
         <h2 className="text-xl font-semibold">Attributed conversions &amp; revenue</h2>
-        <p className="mt-3 text-sm text-red-300">{error}</p>
+        <p className="mt-3 text-sm text-red-700 dark:text-red-300">{error}</p>
       </PageCard>
     );
   }
@@ -741,7 +741,7 @@ function ConversionAnalyticsSection({
     return (
       <PageCard>
         <h2 className="text-xl font-semibold">Attributed conversions &amp; revenue</h2>
-        <p className="mt-3 text-sm text-white/65">Loading conversion analytics...</p>
+        <p className="mt-3 text-sm text-copy-65">Loading conversion analytics...</p>
       </PageCard>
     );
   }
@@ -755,7 +755,7 @@ function ConversionAnalyticsSection({
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-xl font-semibold">Attributed conversions &amp; revenue</h2>
-            <p className="mt-2 text-sm text-white/65">
+            <p className="mt-2 text-sm text-copy-65">
               Orders and revenue for {formatDay(data.range.start)} to{" "}
               {formatDay(data.range.end)}, counted only when SQRATCH has exact
               attribution evidence from the commerce integration. Counted for your
@@ -769,7 +769,7 @@ function ConversionAnalyticsSection({
             <Button
               asChild
               variant="outline"
-              className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+              className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
             >
               {/* `attributed` — the SAME parameter name the orders API and
                   the explorer's own toolbar use. A different name here would
@@ -781,7 +781,7 @@ function ConversionAnalyticsSection({
             <Button
               asChild
               variant="outline"
-              className="rounded-full border-white/20 bg-transparent text-white hover:bg-white/10"
+              className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
             >
               <Link href="/dashboard/brand/commerce/orders">View order operations</Link>
             </Button>
@@ -791,7 +791,7 @@ function ConversionAnalyticsSection({
 
       {noOrders ? (
         <PageCard>
-          <p className="text-sm text-white/65">
+          <p className="text-sm text-copy-65">
             No commerce orders were recorded in this date range.
           </p>
         </PageCard>
@@ -810,7 +810,7 @@ function ConversionAnalyticsSection({
 
           {noAttributionYet && (
             <PageCard>
-              <p className="text-sm text-white/65">
+              <p className="text-sm text-copy-65">
                 Orders have been ingested, but none in this range have exact SQRATCH
                 attribution yet.
               </p>
@@ -848,7 +848,7 @@ function ConversionAnalyticsSection({
           <div className="grid gap-4 lg:grid-cols-2">
             <PageCard>
               <h3 className="text-lg font-semibold">By entry campaign</h3>
-              <p className="mt-1 text-xs text-white/45">
+              <p className="mt-1 text-xs text-copy-45">
                 Acquisition context — how the visitor arrived. Shows only campaigns
                 your brand owns; an order attributed through another brand&apos;s
                 acquisition campaign still counts above but has nothing to name
@@ -863,7 +863,7 @@ function ConversionAnalyticsSection({
 
             <PageCard>
               <h3 className="text-lg font-semibold">By product campaign</h3>
-              <p className="mt-1 text-xs text-white/45">
+              <p className="mt-1 text-xs text-copy-45">
                 Product-authorization context — which campaign authorized the
                 purchased product. Separate from entry campaign above: one order
                 can appear in both, so the two are never added together.
@@ -941,31 +941,31 @@ function ConversionTrendSection({ data }: { data: BrandConversionAnalytics }) {
     <>
       <PageCard>
         <h3 className="text-lg font-semibold">Attributed conversions per day</h3>
-        <p className="mt-1 text-xs text-white/45">
+        <p className="mt-1 text-xs text-copy-45">
           UTC days. Every day in the range is shown, including days with no attributed orders.
         </p>
         {!hasAnyActivity ? (
-          <p className="mt-4 text-sm text-white/65">
+          <p className="mt-4 text-sm text-copy-65">
             No attributed conversions on any day in this range.
           </p>
         ) : (
           <div className="mt-4 max-h-80 overflow-y-auto">
             <table className="w-full text-left text-sm">
-              <thead className="text-white/55">
+              <thead className="text-copy-55">
                 <tr>
                   <th scope="col" className="pb-3">Day (UTC)</th>
                   <th scope="col" className="pb-3 w-full">Attributed orders</th>
                   <th scope="col" className="pb-3 text-right whitespace-nowrap">Paid now</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/10">
+              <tbody className="divide-y divide-edge/10">
                 {trend.map((point) => (
                   <tr key={point.date}>
                     <td className="py-2 whitespace-nowrap pr-4">{point.date}</td>
                     <td className="py-2">
                       <div className="flex items-center gap-3">
                         <div
-                          className="h-2 rounded-full bg-white/45"
+                          className="h-2 rounded-full bg-glass-45"
                           style={{
                             width:
                               peakOrders > 0
@@ -973,10 +973,10 @@ function ConversionTrendSection({ data }: { data: BrandConversionAnalytics }) {
                                 : "0%",
                           }}
                         />
-                        <span className="tabular-nums text-white/75">{point.attributedOrders}</span>
+                        <span className="tabular-nums text-copy-75">{point.attributedOrders}</span>
                       </div>
                     </td>
-                    <td className="py-2 text-right tabular-nums text-white/60">
+                    <td className="py-2 text-right tabular-nums text-copy-60">
                       {point.currentlyNetPositivePaidOrders}
                     </td>
                   </tr>
@@ -1028,17 +1028,17 @@ function ConversionTrendCurrencyTable({
       <h3 className="text-lg font-semibold">
         {currencyCode === "UNKNOWN" ? "Revenue per day — unknown currency" : `Revenue per day — ${currencyCode}`}
       </h3>
-      <p className="mt-1 text-xs text-white/45">
+      <p className="mt-1 text-xs text-copy-45">
         Shown separately per currency. Amounts in different currencies are never added together.
       </p>
       {daysWithActivity.length === 0 ? (
-        <p className="mt-4 text-sm text-white/65">No revenue in this currency in this range.</p>
+        <p className="mt-4 text-sm text-copy-65">No revenue in this currency in this range.</p>
       ) : (
         // Wide money tables scroll INSIDE their own container so the page
         // itself never overflows horizontally on mobile.
         <div className="mt-4 max-h-80 overflow-auto">
           <table className="w-full min-w-[420px] text-left text-sm">
-            <thead className="text-white/55">
+            <thead className="text-copy-55">
               <tr>
                 <th scope="col" className="pb-3">Day (UTC)</th>
                 <th scope="col" className="pb-3 text-right">Gross</th>
@@ -1046,14 +1046,14 @@ function ConversionTrendCurrencyTable({
                 <th scope="col" className="pb-3 text-right">Net</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/10">
+            <tbody className="divide-y divide-edge/10">
               {daysWithActivity.map((point) => (
                 <tr key={point.date}>
                   <td className="py-2 whitespace-nowrap pr-4">{point.date}</td>
                   <td className="py-2 text-right tabular-nums whitespace-nowrap">
                     {format(point.grossRevenueByCurrency)}
                   </td>
-                  <td className="py-2 text-right tabular-nums whitespace-nowrap text-amber-200/80">
+                  <td className="py-2 text-right tabular-nums whitespace-nowrap text-amber-700 dark:text-amber-200/80">
                     {format(point.refundedRevenueByCurrency)}
                   </td>
                   <td className="py-2 text-right tabular-nums whitespace-nowrap">
@@ -1080,9 +1080,9 @@ function ConversionMetricCard({
 }) {
   return (
     <PageCard>
-      <p className="text-sm text-white/55">{label}</p>
+      <p className="text-sm text-copy-55">{label}</p>
       <p className="mt-2 text-4xl font-semibold">{value}</p>
-      <p className="mt-2 text-xs text-white/45">{subtext}</p>
+      <p className="mt-2 text-xs text-copy-45">{subtext}</p>
     </PageCard>
   );
 }
@@ -1100,11 +1100,11 @@ function MoneyRowsCard({ title, rows }: { title: string; rows: MoneyRow[] }) {
     <PageCard>
       <h3 className="text-lg font-semibold">{title}</h3>
       {lines.length === 0 ? (
-        <p className="mt-3 text-sm text-white/65">No attributed revenue in this range.</p>
+        <p className="mt-3 text-sm text-copy-65">No attributed revenue in this range.</p>
       ) : (
         <ul className="mt-3 space-y-1 text-sm">
           {lines.map((line) => (
-            <li key={line} className="tabular-nums text-white/85">
+            <li key={line} className="tabular-nums text-copy-85">
               {line}
             </li>
           ))}
@@ -1122,18 +1122,18 @@ function ProviderBreakdownTable({
   emptyLabel: string;
 }) {
   if (rows.length === 0) {
-    return <p className="mt-4 text-sm text-white/55">{emptyLabel}</p>;
+    return <p className="mt-4 text-sm text-copy-55">{emptyLabel}</p>;
   }
   return (
     <div className="mt-4 overflow-x-auto">
       <table className="w-full text-left text-sm">
-        <thead className="text-white/55">
+        <thead className="text-copy-55">
           <tr>
             <th className="pb-3">Platform</th>
             <th className="pb-3 text-right">Orders</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-white/10">
+        <tbody className="divide-y divide-edge/10">
           {rows.map((row) => (
             <tr key={row.id}>
               <td className="py-2 pr-4">{providerLabel(row.id)}</td>
@@ -1159,20 +1159,20 @@ function NamedBreakdownTable({
   emptyLabel: string;
 }) {
   if (rows.length === 0) {
-    return <p className="mt-4 text-sm text-white/55">{emptyLabel}</p>;
+    return <p className="mt-4 text-sm text-copy-55">{emptyLabel}</p>;
   }
   const visible = rows.slice(0, CONVERSION_BREAKDOWN_DISPLAY_LIMIT);
   const hiddenCount = rows.length - visible.length;
   return (
     <div className="mt-4 overflow-x-auto">
       <table className="w-full text-left text-sm">
-        <thead className="text-white/55">
+        <thead className="text-copy-55">
           <tr>
             <th className="pb-3">{columnLabel}</th>
             <th className="pb-3 text-right">Orders</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-white/10">
+        <tbody className="divide-y divide-edge/10">
           {visible.map((row) => (
             <tr key={row.id}>
               <td className="py-2 pr-4">{row.name ?? "Unavailable"}</td>
@@ -1182,7 +1182,7 @@ function NamedBreakdownTable({
         </tbody>
       </table>
       {hiddenCount > 0 && (
-        <p className="mt-2 text-xs text-white/45">+{hiddenCount} more not shown.</p>
+        <p className="mt-2 text-xs text-copy-45">+{hiddenCount} more not shown.</p>
       )}
     </div>
   );
@@ -1198,19 +1198,19 @@ function BreakdownTable({
   emptyLabel: string;
 }) {
   if (rows.length === 0) {
-    return <p className="mt-4 text-sm text-white/55">{emptyLabel}</p>;
+    return <p className="mt-4 text-sm text-copy-55">{emptyLabel}</p>;
   }
 
   return (
     <div className="mt-4 overflow-x-auto">
       <table className="w-full text-left text-sm">
-        <thead className="text-white/55">
+        <thead className="text-copy-55">
           <tr>
             <th className="pb-3">{columnLabel}</th>
             <th className="pb-3 text-right">Clicks</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-white/10">
+        <tbody className="divide-y divide-edge/10">
           {rows.map((row) => (
             <tr key={row.key}>
               <td className="py-2 pr-4">{row.label}</td>
@@ -1249,9 +1249,9 @@ function MetricCard({
 }) {
   return (
     <PageCard>
-      <p className="text-sm text-white/55">{label}</p>
+      <p className="text-sm text-copy-55">{label}</p>
       <p className="mt-2 text-4xl font-semibold">{value}</p>
-      {hint && <p className="mt-1 text-xs text-white/45">{hint}</p>}
+      {hint && <p className="mt-1 text-xs text-copy-45">{hint}</p>}
     </PageCard>
   );
 }

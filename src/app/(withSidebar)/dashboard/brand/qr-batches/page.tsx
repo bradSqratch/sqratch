@@ -260,7 +260,7 @@ export default function BrandQRBatchesPage() {
       actions={
         <Button
           asChild
-          className="rounded-full border border-white bg-white text-black"
+          className="rounded-full border border-edge bg-primary text-primary-foreground"
         >
           <Link href="/dashboard/brand/qr-batches/new">Create new batch</Link>
         </Button>
@@ -268,22 +268,22 @@ export default function BrandQRBatchesPage() {
     >
       {loading ? (
         <PageCard>
-          <p className="text-sm text-white/65">Loading QR batches...</p>
+          <p className="text-sm text-copy-65">Loading QR batches...</p>
         </PageCard>
       ) : error ? (
         <PageCard>
-          <p className="text-sm text-red-300">{error}</p>
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         </PageCard>
       ) : !data ? (
         <PageCard>
-          <p className="text-sm text-white/65">No QR data found.</p>
+          <p className="text-sm text-copy-65">No QR data found.</p>
         </PageCard>
       ) : (
         <div className="space-y-6">
           <PageCard>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[720px] text-left text-sm">
-                <thead className="text-white/55">
+                <thead className="text-copy-55">
                   <tr>
                     <th className="pb-3">Batch</th>
                     <th className="pb-3">Campaign</th>
@@ -292,7 +292,7 @@ export default function BrandQRBatchesPage() {
                     <th className="pb-3">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/10">
+                <tbody className="divide-y divide-edge/10">
                   {visibleBatches.map((batch) => (
                     <tr
                       key={batch.id}
@@ -308,7 +308,7 @@ export default function BrandQRBatchesPage() {
                           <Button
                             type="button"
                             variant="outline"
-                            className="h-8 rounded-xl border-white/20 bg-white/10 px-4 text-white hover:bg-white/20"
+                            className="h-8 rounded-xl border-edge/20 bg-glass-10 px-4 text-ink hover:bg-glass-20"
                             onClick={(event) => {
                               event.stopPropagation();
                               window.location.href = `/api/brand/qr-batches/${batch.id}/export`;
@@ -338,7 +338,7 @@ export default function BrandQRBatchesPage() {
               </table>
 
               {visibleBatches.length === 0 && (
-                <p className="pt-4 text-sm text-white/60">
+                <p className="pt-4 text-sm text-copy-60">
                   No batches match the selected filters.
                 </p>
               )}
@@ -346,17 +346,17 @@ export default function BrandQRBatchesPage() {
           </PageCard>
 
           <PageCard>
-            <div className="flex flex-col gap-4 border-b border-white/10 pb-5 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-col gap-4 border-b border-edge/10 pb-5 lg:flex-row lg:items-center lg:justify-between">
               <div className="space-y-1">
                 <h2 className="text-2xl font-semibold">QR Code List</h2>
-                <p className="text-sm text-white/60">
+                <p className="text-sm text-copy-60">
                   Filter QR codes by campaign or batch and review their current
                   redemption status.
                 </p>
               </div>
 
               <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
-                <label className="flex items-center gap-3 text-sm text-white/70">
+                <label className="flex items-center gap-3 text-sm text-copy-70">
                   <span>Campaign</span>
                   <select
                     value={selectedCampaignId}
@@ -364,7 +364,7 @@ export default function BrandQRBatchesPage() {
                       setSelectedCampaignId(event.target.value);
                       setSelectedBatchId("all");
                     }}
-                    className="h-10 min-w-[220px] rounded-xl border border-white/10 bg-black/20 px-3 text-sm text-white"
+                    className="h-10 min-w-[220px] rounded-xl border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
                   >
                     <option value="all">All campaigns</option>
                     {data.campaigns.map((campaign) => (
@@ -375,12 +375,12 @@ export default function BrandQRBatchesPage() {
                   </select>
                 </label>
 
-                <label className="flex items-center gap-3 text-sm text-white/70">
+                <label className="flex items-center gap-3 text-sm text-copy-70">
                   <span>Batch</span>
                   <select
                     value={selectedBatchId}
                     onChange={(event) => setSelectedBatchId(event.target.value)}
-                    className="h-10 min-w-[220px] rounded-xl border border-white/10 bg-black/20 px-3 text-sm text-white"
+                    className="h-10 min-w-[220px] rounded-xl border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
                   >
                     <option value="all">All batches</option>
                     {batchOptions.map((batch) => (
@@ -395,7 +395,7 @@ export default function BrandQRBatchesPage() {
 
             <div className="mt-6 overflow-x-auto">
               <table className="w-full min-w-[980px] text-left text-sm">
-                <thead className="text-white/55">
+                <thead className="text-copy-55">
                   <tr>
                     <th className="pb-3">Code</th>
                     <th className="pb-3">Batch</th>
@@ -406,10 +406,10 @@ export default function BrandQRBatchesPage() {
                     <th className="pb-3">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/10">
+                <tbody className="divide-y divide-edge/10">
                   {visibleQrCodes.map((qrCode) => (
                     <tr key={qrCode.id}>
-                      <td className="py-3 font-medium text-white/90">
+                      <td className="py-3 font-medium text-copy-90">
                         {qrCode.code}
                       </td>
                       <td className="py-3">{qrCode.batch?.name || "—"}</td>
@@ -422,7 +422,7 @@ export default function BrandQRBatchesPage() {
                           <Button
                             type="button"
                             variant="outline"
-                            className="h-8 rounded-xl border-[#35507D] bg-transparent px-5 text-white hover:bg-white/[0.06] hover:text-white"
+                            className="h-8 rounded-xl border-[#35507D] bg-transparent px-5 text-ink hover:bg-white/[0.06] hover:text-ink"
                             onClick={() =>
                               setEditForm({
                                 id: qrCode.id,
@@ -455,7 +455,7 @@ export default function BrandQRBatchesPage() {
               </table>
 
               {visibleQrCodes.length === 0 && (
-                <p className="pt-4 text-sm text-white/60">
+                <p className="pt-4 text-sm text-copy-60">
                   No QR codes match the selected filters.
                 </p>
               )}
@@ -468,12 +468,12 @@ export default function BrandQRBatchesPage() {
         open={Boolean(editForm)}
         onOpenChange={(open) => !open && setEditForm(null)}
       >
-        <DialogContent className="border-white/10 bg-[#050814] text-white sm:max-w-[520px]">
+        <DialogContent className="border-edge/10 bg-card dark:bg-[#050814] text-ink sm:max-w-[520px]">
           <DialogHeader>
             <DialogTitle className="text-3xl font-semibold">
               Edit QR Code
             </DialogTitle>
-            <DialogDescription className="text-white/60">
+            <DialogDescription className="text-copy-60">
               Update the QR code details.
             </DialogDescription>
           </DialogHeader>
@@ -491,23 +491,23 @@ export default function BrandQRBatchesPage() {
                     />
                   </div>
                 ) : (
-                  <div className="flex h-40 w-40 items-center justify-center rounded-md border border-white/10 bg-white text-sm text-black/55">
+                  <div className="flex h-40 w-40 items-center justify-center rounded-md border border-edge/10 bg-white text-sm text-black/55">
                     No image
                   </div>
                 )}
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm text-white/80">QR Code</label>
+                <label className="text-sm text-copy-80">QR Code</label>
                 <Input
                   value={editForm.code}
                   disabled
-                  className="border-white/10 bg-black/20 text-white"
+                  className="border-edge/10 bg-inset/20 text-ink"
                 />
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm text-white/80">Status</label>
+                <label className="text-sm text-copy-80">Status</label>
                 <select
                   value={editForm.status}
                   onChange={(event) =>
@@ -520,7 +520,7 @@ export default function BrandQRBatchesPage() {
                         : current,
                     )
                   }
-                  className="flex h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+                  className="flex h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
                 >
                   <option value="NEW">NEW</option>
                   <option value="REDEEMED">REDEEMED</option>
@@ -528,25 +528,25 @@ export default function BrandQRBatchesPage() {
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm text-white/80">Used By</label>
+                <label className="text-sm text-copy-80">Used By</label>
                 <Input
                   value={editForm.usedBy || "Not applicable"}
                   disabled
-                  className="border-white/10 bg-black/20 text-white"
+                  className="border-edge/10 bg-inset/20 text-ink"
                 />
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm text-white/80">Used At</label>
+                <label className="text-sm text-copy-80">Used At</label>
                 <Input
                   value={editForm.usedAt ? formatDateTime(editForm.usedAt) : "—"}
                   disabled
-                  className="border-white/10 bg-black/20 text-white"
+                  className="border-edge/10 bg-inset/20 text-ink"
                 />
               </div>
 
               <div className="space-y-2">
-                <label className="text-sm text-white/80">Campaign</label>
+                <label className="text-sm text-copy-80">Campaign</label>
                 <select
                   value={editForm.campaignId}
                   onChange={(event) =>
@@ -559,7 +559,7 @@ export default function BrandQRBatchesPage() {
                         : current,
                     )
                   }
-                  className="flex h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+                  className="flex h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
                 >
                   {data?.campaigns.map((campaign) => (
                     <option key={campaign.id} value={campaign.id}>
@@ -575,7 +575,7 @@ export default function BrandQRBatchesPage() {
             <Button
               type="button"
               disabled={!editForm || savingId === editForm.id}
-              className="w-full rounded-xl border border-white bg-white text-black"
+              className="w-full rounded-xl border border-edge bg-primary text-primary-foreground"
               onClick={() => void handleSaveQrCode()}
             >
               {editForm && savingId === editForm.id

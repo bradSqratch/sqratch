@@ -37,9 +37,9 @@ export function DashboardTopbarUser() {
   const role = session.user?.role;
 
   return (
-    <div className="flex items-center gap-3 text-white/85">
-      <div className="hidden sm:block text-sm font-medium">{name}</div>
-      <div className="rounded-full border border-white/15 bg-white/5 px-3 py-1 text-xs font-semibold tracking-wide text-white/80">
+    <div className="hidden items-center gap-3 text-copy-85 lg:flex">
+      <div className="hidden max-w-48 truncate text-sm font-medium xl:block">{name}</div>
+      <div className="rounded-full border border-edge/15 bg-glass-5 px-3 py-1 text-xs font-semibold tracking-wide text-copy-80">
         {roleLabel(role)}
       </div>
     </div>
