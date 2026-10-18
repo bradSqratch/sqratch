@@ -60,9 +60,15 @@ export async function PATCH(
         throw new Error("USER_NOT_FOUND");
       }
 
+      // An email change must go through "Transfer email" so the account is
+      // re-verified and its sessions are invalidated.
+      if (existingUser.email.toLowerCase() !== email) {
+        throw new Error("EMAIL_CHANGE_NOT_ALLOWED");
+      }
+
       const user = await tx.user.update({
         where: { id },
-        data: { name, email, role, isActive },
+        data: { name, role, isActive },
         select: {
           id: true,
           name: true,
@@ -133,6 +139,13 @@ export async function PATCH(
   } catch (error: unknown) {
     if (error instanceof Error && error.message === "USER_NOT_FOUND") {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
+    }
+
+    if (error instanceof Error && error.message === "EMAIL_CHANGE_NOT_ALLOWED") {
+      return NextResponse.json(
+        { error: "Use Transfer email to change a user's email address." },
+        { status: 400 },
+      );
     }
 
     const err = error as { code?: string; meta?: { target?: string[] } };

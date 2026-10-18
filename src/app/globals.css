@@ -129,6 +129,10 @@
   body {
     @apply text-foreground;
   }
+  /* Dark UI: render native date picker icons and popups in dark mode. */
+  input[type="date"] {
+    color-scheme: dark;
+  }
   html {
     @apply bg-transparent;
   }

@@ -123,6 +123,12 @@ function CampaignCard({
 // --------------------
 // NEW: small reusable card
 // --------------------
+function formatStatusLabel(status?: string | number | null) {
+  if (!status) return "—";
+  const label = String(status).replace(/_/g, " ").toLowerCase();
+  return label.charAt(0).toUpperCase() + label.slice(1);
+}
+
 function SimpleOverviewCard({
   title,
   value,
@@ -135,7 +141,7 @@ function SimpleOverviewCard({
   const textValue = typeof value === "string" ? value : null;
   const isLongText = textValue ? textValue.length > 10 : false;
   const valueClassName = textValue
-    ? `mt-3 ${isLongText ? "text-lg" : "text-xl"} font-semibold leading-snug text-white break-words`
+    ? `mt-3 ${isLongText ? "text-base tracking-wide" : "text-xl"} font-semibold leading-snug text-white break-words`
     : "mt-3 text-3xl font-bold tracking-tight text-white";
 
   return (
@@ -417,7 +423,7 @@ export default function DashboardPage() {
         {summary ? (
           <section className="pt-2">
             <h2 className="text-2xl font-semibold mb-4">Overview</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
               <SimpleOverviewCard
                 title="Approvals Pending"
                 value={summaryCards.approvalsPending ?? 0}
@@ -468,7 +474,7 @@ export default function DashboardPage() {
 
         {/* Role-based overview cards */}
         {summary.role === "BRAND_ADMIN" ? (
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             <SimpleOverviewCard
               title="Campaigns"
               value={summaryCards.campaignsCount ?? 0}
@@ -479,7 +485,7 @@ export default function DashboardPage() {
             />
             <SimpleOverviewCard
               title="Product Sync"
-              value={summaryCards.productSyncStatus ?? "—"}
+              value={formatStatusLabel(summaryCards.productSyncStatus)}
               hint="Shopify connection + catalog status"
             />
             <SimpleOverviewCard
@@ -490,7 +496,7 @@ export default function DashboardPage() {
         ) : null}
 
         {summary.role === "CREATOR" ? (
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
             <SimpleOverviewCard
               title="Experiences"
               value={summaryCards.experiencesCount ?? 0}

@@ -491,13 +491,13 @@ export function BrandCommerceClient() {
             <div className="grid gap-4 lg:grid-cols-3">
               <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                 <p className="text-sm text-white/55">Provider</p>
-                <p className="mt-2 text-2xl font-semibold">
+                <p className="mt-2 text-lg font-semibold">
                   {connection ? providerLabel(connection.provider) : "Not connected"}
                 </p>
               </div>
               <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                 <p className="text-sm text-white/55">Status</p>
-                <p className="mt-2 text-2xl font-semibold">
+                <p className="mt-2 text-lg font-semibold">
                   {connection ? statusLabel(connection.status) : "Not connected"}
                 </p>
               </div>

@@ -205,10 +205,7 @@ sqratch/
 
 | Route                         | Purpose                      | Enforcement                                                                                                                              |
 | ----------------------------- | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
-| `/admin/qr-management`        | QR code admin tools          | `middleware.ts` (`isAdminRoute`)                                                                                                         |
 | `/admin/user-management`      | User admin                   | `middleware.ts` (`isAdminRoute`)                                                                                                         |
-| `/admin/campaigns-management` | Campaign admin               | `middleware.ts` (`isAdminRoute`)                                                                                                         |
-| `/admin/print-qr`             | QR printing tool             | `middleware.ts` (`isAdminRoute`)                                                                                                         |
 | `/dashboard/admin/approvals`  | Brand/creator approval queue | `dashboard/admin/layout.tsx` (middleware only checks `/dashboard/**` is authenticated, not role — the path doesn't match `isAdminRoute`) |
 | `/dashboard/admin/brands`     | Brand list                   | `dashboard/admin/layout.tsx`                                                                                                             |
 | `/dashboard/admin/users`      | User list                    | `dashboard/admin/layout.tsx`                                                                                                             |

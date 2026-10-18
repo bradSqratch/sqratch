@@ -230,7 +230,10 @@ export default function CreatorAnalyticsPage() {
     >
       <PageCard>
         <div className="grid gap-4 lg:grid-cols-3">
+          <label className="grid gap-1.5 text-xs text-white/60">
+            Experience
           <select
+            aria-label="Experience"
             value={filters.experienceId}
             onChange={(event) =>
               setFilters((current) => ({
@@ -238,7 +241,7 @@ export default function CreatorAnalyticsPage() {
                 experienceId: event.target.value,
               }))
             }
-            className="flex h-10 rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+            className="flex h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
           >
             <option value="">All experiences</option>
             {data?.experiences.map((experience) => (
@@ -247,7 +250,10 @@ export default function CreatorAnalyticsPage() {
               </option>
             ))}
           </select>
+          </label>
 
+          <label className="grid gap-1.5 text-xs text-white/60">
+            From
           <input
             type="date"
             value={filters.dateFrom}
@@ -257,9 +263,12 @@ export default function CreatorAnalyticsPage() {
                 dateFrom: event.target.value,
               }))
             }
-            className="flex h-10 rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+            className="flex h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
           />
+          </label>
 
+          <label className="grid gap-1.5 text-xs text-white/60">
+            To
           <input
             type="date"
             value={filters.dateTo}
@@ -269,8 +278,9 @@ export default function CreatorAnalyticsPage() {
                 dateTo: event.target.value,
               }))
             }
-            className="flex h-10 rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
+            className="flex h-10 w-full rounded-md border border-white/10 bg-black/20 px-3 text-sm text-white"
           />
+          </label>
         </div>
       </PageCard>
 

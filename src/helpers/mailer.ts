@@ -4,6 +4,7 @@ import {
   buildApprovalEmailHtml,
   buildWelcomeEmailHtml,
   buildInviteEmailHtml,
+  buildEmailTransferVerificationHtml,
 } from "@/helpers/emailTemplates";
 
 function createTransport() {
@@ -82,6 +83,47 @@ export async function sendVerificationEmail(email: string, otpCode: string) {
   };
 
   return transporter.sendMail(mailOptions);
+}
+
+/**
+ * Sends the OTP email for an admin-initiated email transfer. The link only
+ * carries the address; the code is typed into the verify page.
+ */
+export async function sendEmailTransferVerificationEmail({
+  email,
+  name,
+  code,
+  expiresInHours,
+}: {
+  email: string;
+  name?: string | null;
+  code: string;
+  expiresInHours: number;
+}) {
+  const from = process.env.ADMIN_EMAIL;
+  const safeName = name && name.trim() ? name.trim() : "there";
+  const verifyUrl = `${getAppBaseUrl().replace(/\/+$/, "")}/verify-email?email=${encodeURIComponent(email)}`;
+  const expiresLabel = `${expiresInHours} hours`;
+
+  return transporter.sendMail({
+    from,
+    to: email,
+    subject: "Verify your new SQRATCH email",
+    html: buildEmailTransferVerificationHtml({
+      name: safeName,
+      email,
+      code,
+      verifyUrl,
+      expiresLabel,
+    }),
+    text:
+      `Hi ${safeName},\n\n` +
+      `${email} is now the login email for a SQRATCH account.\n\n` +
+      `Your verification code: ${code}\n` +
+      `It is valid for ${expiresLabel}.\n\n` +
+      `Open the verification page and enter the code: ${verifyUrl}\n\n` +
+      "After verifying you will be taken to the login page. If the code stops working, use Resend code on that page. If you were not expecting this email, you can ignore it.\n",
+  });
 }
 
 /**

@@ -351,7 +351,7 @@ export default function CreatorCourseLessonsPage({
   return (
     <CreatorPageShell
       title={data ? `${data.course.title} Lessons` : "Manage Lessons"}
-      description="Choose between YouTube and uploaded video sources for each lesson, update the lesson metadata inline, and attach Shopify products that should appear on the public lesson page."
+      description="Choose between YouTube and uploaded video sources for each lesson, update the lesson metadata inline, and attach store products that should appear on the public lesson page."
     >
       <PageCard>
         <h2 className="text-xl font-semibold">Add lesson</h2>

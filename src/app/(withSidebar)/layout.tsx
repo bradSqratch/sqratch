@@ -34,10 +34,10 @@ export default async function DashboardLayout({
 
   return (
     <SidebarProvider>
-      <div className="flex h-screen w-full">
+      <div className="flex min-h-screen w-full">
         <AppSidebar />
         {/* SidebarInset to contain breadcrumbs and main content */}
-        <SidebarInset className="flex flex-col w-full">
+        <SidebarInset className="flex min-w-0 flex-col w-auto">
           {/* Header with Sticky Styling */}
           <header
             className="
@@ -88,7 +88,7 @@ export default async function DashboardLayout({
             <Suspense
               fallback={<div className="p-6 text-white/70">Loading...</div>}
             >
-              <main>{children}</main>
+              <div>{children}</div>
               <Toaster richColors />
             </Suspense>
           </div>

@@ -15,6 +15,7 @@ export {
 
 const MAX_FAILED_ATTEMPTS = 5;
 const VERIFICATION_TTL_MS = 10 * 60 * 1000;
+export const TRANSFER_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000;
 type DbClient = PrismaClient | Prisma.TransactionClient;
 
 export async function issueEmailVerificationChallenge(
@@ -23,10 +24,12 @@ export async function issueEmailVerificationChallenge(
   email: string,
   options: {
     welcomeEligible: boolean;
+    /** Overrides the default 10 minute lifetime (used by admin email transfers). */
+    ttlMs?: number;
   },
 ) {
   const code = generateEmailVerificationCode();
-  const expires = new Date(Date.now() + VERIFICATION_TTL_MS);
+  const expires = new Date(Date.now() + (options.ttlMs ?? VERIFICATION_TTL_MS));
   const codeHash = hashEmailVerificationCode(email, code);
 
   await db.emailVerificationToken.deleteMany({ where: { userId } });
@@ -101,13 +104,23 @@ export async function verifyAndConsumeEmailVerificationCode(
 
       if (consumed.count !== 1) return "unavailable";
 
-      await tx.user.update({
-        where: { id: challenge.userId },
+      // Only mark the account verified if it still owns the address the code
+      // was issued for. If an admin transferred the email after this request
+      // read the challenge, the whole transaction rolls back.
+      const verifiedUser = await tx.user.updateMany({
+        where: {
+          id: challenge.userId,
+          email: { equals: email, mode: "insensitive" },
+        },
         data: {
           isEmailVerified: true,
           emailVerifiedAt: now,
         },
       });
+
+      if (verifiedUser.count !== 1) {
+        throw new Error("EMAIL_VERIFICATION_EMAIL_CHANGED");
+      }
 
       await enqueueWelcomeEmailIfEligible(tx, {
         userId: challenge.userId,

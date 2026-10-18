@@ -215,18 +215,12 @@ export function AppSidebar() {
       icon: FlagIcon,
       roles: ["ADMIN"],
     },
-    {
-      title: "Analytics",
-      url: "/admin/analytics",
-      icon: BarChart3,
-      roles: ["ADMIN"],
-    },
   ];
 
   const data = {
     user: {
-      name: session?.user?.name || "SQRATCH",
-      email: session?.user?.email || "dummyemail@gmail.com",
+      name: session?.user?.name || "Loading…",
+      email: session?.user?.email || "",
       avatar: session?.user?.imageUrl || session?.user?.image || "/P_logo.png",
     },
   };

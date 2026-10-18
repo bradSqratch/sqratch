@@ -355,7 +355,7 @@ export default function BrandQRBatchesPage() {
                 </p>
               </div>
 
-              <div className="flex flex-col gap-3 sm:flex-row">
+              <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
                 <label className="flex items-center gap-3 text-sm text-white/70">
                   <span>Campaign</span>
                   <select

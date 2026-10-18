@@ -6,6 +6,7 @@ import {
   getErrorMessage,
 } from "@/components/experience/client-utils";
 import { Button } from "@/components/ui/button";
+import { isValidEmail } from "@/lib/email-validation";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -134,6 +135,19 @@ export default function AdminUserManagementPage() {
   const [deleteTarget, setDeleteTarget] = useState<UserRecord | null>(null);
   const [createForm, setCreateForm] = useState<CreateForm>(emptyCreateForm);
   const [submitting, setSubmitting] = useState(false);
+  const [notice, setNotice] = useState<{
+    type: "success" | "warning";
+    text: string;
+  } | null>(null);
+  const [transferEmail, setTransferEmail] = useState("");
+  const [transferConfirmOpen, setTransferConfirmOpen] = useState(false);
+  const [transferring, setTransferring] = useState(false);
+  const [transferError, setTransferError] = useState<string | null>(null);
+  const editingUser = editForm
+    ? users.find((user) => user.id === editForm.id) ?? null
+    : null;
+  const transferEmailValid = isValidEmail(transferEmail);
+  const canTransferEmail = Boolean(editingUser && editingUser.role !== "ADMIN");
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -169,6 +183,7 @@ export default function AdminUserManagementPage() {
   }
 
   async function handleCreateUser() {
+    setNotice(null);
     setSubmitting(true);
     setError(null);
 
@@ -191,6 +206,7 @@ export default function AdminUserManagementPage() {
   }
 
   async function handleSaveEdit() {
+    setNotice(null);
     if (!editForm) {
       return;
     }
@@ -218,7 +234,57 @@ export default function AdminUserManagementPage() {
     }
   }
 
+  useEffect(() => {
+    setTransferEmail("");
+    setTransferError(null);
+    setTransferConfirmOpen(false);
+  }, [editForm?.id]);
+
+  async function handleTransferEmail() {
+    if (!editForm || !isValidEmail(transferEmail)) {
+      return;
+    }
+
+    setTransferring(true);
+    setTransferError(null);
+
+    try {
+      const result = await fetchJson<{
+        ok: boolean;
+        emailSent: boolean;
+        email: string;
+      }>(`/api/admin/user-management/transfer-email/${editForm.id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ newEmail: transferEmail }),
+      });
+
+      setTransferConfirmOpen(false);
+      setEditForm(null);
+      setNotice(
+        result.emailSent
+          ? {
+              type: "success",
+              text: `Email transferred to ${result.email}. A verification code was sent there; the user must verify it before logging in.`,
+            }
+          : {
+              type: "warning",
+              text: `Email transferred to ${result.email}, but the verification email could not be sent. Ask the user to open /verify-email?email=${result.email} and use Resend code.`,
+            },
+      );
+      await loadUsers(query);
+    } catch (transferFailure) {
+      setTransferConfirmOpen(false);
+      setTransferError(
+        getErrorMessage(transferFailure, "Failed to transfer email."),
+      );
+    } finally {
+      setTransferring(false);
+    }
+  }
+
   async function handleDeleteUser() {
+    setNotice(null);
     if (!deleteTarget) {
       return;
     }
@@ -245,13 +311,13 @@ export default function AdminUserManagementPage() {
   return (
     <div className="space-y-6 p-6 text-white sm:p-8">
       <div className="rounded-[28px] border border-[#28456C] bg-[#0B183D]/90 px-6 py-7 shadow-[0_20px_80px_rgba(0,0,0,0.35)] sm:px-8">
-        <div className="flex flex-col gap-4 border-b border-white/10 pb-6 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col gap-4 border-b border-white/10 pb-6 xl:flex-row xl:items-center xl:justify-between">
           <div className="space-y-1">
-            <h1 className="text-4xl font-semibold tracking-tight">
+            <h1 className="text-3xl sm:text-4xl font-semibold tracking-tight">
               Admin Users
             </h1>
             <p className="text-sm text-white/60">
-              Manage users in the legacy table view with live search and full
+              Search users and manage their roles and details with full
               edit controls.
             </p>
           </div>
@@ -272,6 +338,26 @@ export default function AdminUserManagementPage() {
             </Button>
           </div>
         </div>
+
+        {notice && (
+          <div
+            className={`mt-5 flex items-start justify-between gap-3 rounded-xl border px-4 py-3 text-sm ${
+              notice.type === "success"
+                ? "border-emerald-400/25 bg-emerald-500/10 text-emerald-200"
+                : "border-amber-400/25 bg-amber-500/10 text-amber-100"
+            }`}
+          >
+            <span>{notice.text}</span>
+            <button
+              type="button"
+              className="shrink-0 text-white/60 hover:text-white"
+              onClick={() => setNotice(null)}
+              aria-label="Dismiss"
+            >
+              ×
+            </button>
+          </div>
+        )}
 
         {error && (
           <div className="mt-5 rounded-xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm text-red-200">
@@ -532,18 +618,15 @@ export default function AdminUserManagementPage() {
                   id="edit-email"
                   type="email"
                   value={editForm.email}
-                  onChange={(event) =>
-                    setEditForm((current) =>
-                      current
-                        ? {
-                            ...current,
-                            email: event.target.value,
-                          }
-                        : current,
-                    )
-                  }
-                  className="border-white/10 bg-white/[0.04] text-white"
+                  readOnly
+                  aria-readonly="true"
+                  className="border-white/10 bg-white/[0.04] text-white/70"
                 />
+                <p className="text-xs text-white/45">
+                  {canTransferEmail
+                    ? "To change this address, use Transfer email below."
+                    : "Admin emails can't be changed from this screen."}
+                </p>
               </div>
 
               <div className="space-y-2">
@@ -596,6 +679,48 @@ export default function AdminUserManagementPage() {
                   </span>
                 </Button>
               </div>
+
+              {canTransferEmail && (
+                <div className="space-y-3 rounded-xl border border-amber-300/20 bg-amber-400/[0.04] p-4">
+                  <div>
+                    <Label htmlFor="transfer-email">Transfer email</Label>
+                    <p className="mt-1 text-xs leading-5 text-white/55">
+                      Moves this account to a new login email. It becomes
+                      unverified, is signed out everywhere, and a one-time code
+                      is emailed to the new address. The password stays the
+                      same.
+                    </p>
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      id="transfer-email"
+                      type="email"
+                      value={transferEmail}
+                      onChange={(event) => setTransferEmail(event.target.value)}
+                      aria-invalid={Boolean(transferEmail.trim()) && !transferEmailValid}
+                      placeholder="new-owner@example.com"
+                      className="border-white/10 bg-white/[0.04] text-white placeholder:text-white/35"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      className="border-amber-300/30 bg-transparent text-amber-100 hover:bg-amber-400/10"
+                      disabled={!transferEmailValid || transferring || submitting}
+                      onClick={() => setTransferConfirmOpen(true)}
+                    >
+                      Transfer email
+                    </Button>
+                  </div>
+                  {transferEmail.trim() && !transferEmailValid && (
+                    <p className="text-xs text-amber-200/80">
+                      Enter a complete email address, e.g. name@company.com.
+                    </p>
+                  )}
+                  {transferError && (
+                    <p className="text-sm text-red-300">{transferError}</p>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -611,7 +736,7 @@ export default function AdminUserManagementPage() {
             <Button
               type="button"
               className="bg-[#4EA3FF] text-white hover:bg-[#4098f7]"
-              disabled={submitting}
+              disabled={submitting || transferring}
               onClick={() => void handleSaveEdit()}
             >
               {submitting ? "Saving..." : "Save"}
@@ -619,6 +744,42 @@ export default function AdminUserManagementPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={transferConfirmOpen}
+        onOpenChange={(open) => !transferring && setTransferConfirmOpen(open)}
+      >
+        <AlertDialogContent className="border-white/10 bg-[#0B183D] text-white">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Transfer this account&apos;s email?</AlertDialogTitle>
+            <AlertDialogDescription className="text-white/60">
+              {editForm
+                ? `${editForm.email} will be replaced by ${transferEmail.trim().toLowerCase()}. `
+                : ""}
+              Unsaved name, role or status edits in the previous dialog are discarded. The user is signed out everywhere and cannot log in until the new
+              address is verified with the code we email to it (valid 24 hours).
+              Pending reward claims that depend on the verified email will need
+              to be re-verified.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel
+              disabled={transferring}
+              className="border-white/10 bg-transparent text-white hover:bg-white/10"
+            >
+              Cancel
+            </AlertDialogCancel>
+            <Button
+              type="button"
+              className="bg-[#4EA3FF] text-white hover:bg-[#4098f7]"
+              disabled={transferring || submitting}
+              onClick={() => void handleTransferEmail()}
+            >
+              {transferring ? "Transferring..." : "Transfer and send code"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog
         open={Boolean(deleteTarget)}

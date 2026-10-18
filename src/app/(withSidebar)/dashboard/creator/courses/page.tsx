@@ -89,7 +89,7 @@ export default function CreatorCoursesIndexPage() {
               </div>
 
               {experience.description && (
-                <p className="mt-4 text-sm leading-6 text-white/70">
+                <p className="mt-4 text-sm leading-6 text-white/70 line-clamp-4">
                   {experience.description}
                 </p>
               )}

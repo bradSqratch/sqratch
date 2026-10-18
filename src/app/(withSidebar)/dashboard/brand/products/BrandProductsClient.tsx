@@ -227,7 +227,7 @@ function SyncRunHistory({ connectionId }: { connectionId: string }) {
       ) : runs.length === 0 ? (
         <p className="mt-3 text-sm text-white/65">No sync runs recorded yet for this store.</p>
       ) : (
-        <div className="mt-3 space-y-2">
+        <div className="mt-3 max-h-80 space-y-2 overflow-y-auto pr-1">
           {runs.map((run) => (
             <div key={run.id} className="rounded-xl border border-white/10 bg-black/20 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
@@ -710,7 +710,7 @@ export function BrandProductsClient() {
             </div>
             <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
               <p className="text-sm text-white/55">Connection status</p>
-              <p className="mt-2 text-2xl font-semibold">
+              <p className="mt-2 text-lg font-semibold">
                 {isConnected
                   ? "Connected"
                   : displayConnection?.status === "UNINSTALLED"
