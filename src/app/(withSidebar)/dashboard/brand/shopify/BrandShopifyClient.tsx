@@ -1,5 +1,7 @@
 "use client";
 
+import { useBrandFetch } from "@/components/brand/brand-fetch";
+
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
@@ -69,6 +71,7 @@ export function BrandShopifyClient({
   isPublicShopifyApp,
 }: BrandShopifyClientProps) {
   const searchParams = useSearchParams();
+  const brandFetch = useBrandFetch();
   const [brand, setBrand] = useState<BrandProfileResponse>(null);
   const [shopDomain, setShopDomain] = useState("");
   const [products, setProducts] = useState<ShopifyProduct[]>([]);
@@ -144,7 +147,7 @@ export function BrandShopifyClient({
     setMessage(null);
 
     try {
-      const updated = await fetchJson<{
+      const updated = await brandFetch<{
         shopifyShopDomain: string | null;
         shopifyInstalledAt: string | null;
         shopifyUninstalledAt: string | null;

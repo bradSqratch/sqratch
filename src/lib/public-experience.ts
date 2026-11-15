@@ -110,7 +110,7 @@ export async function loadPublicExperience(
             lesson,
             courseId: course.id,
             experienceSlug: access.experience.slug,
-          }),
+          }).catch(() => null),
         })),
       ),
     )
@@ -232,6 +232,7 @@ export async function loadPublicExperience(
       isLoggedIn: access.isLoggedIn,
       hasUnlockedCampaign: access.hasUnlockedCampaign,
       isCreatorOwner: access.isCreatorOwner,
+      isOwnerPreview: access.isOwnerPreview,
       hasRedeemedQrWarning: access.hasRedeemedQrWarning,
       canAccessPrivate: access.canAccessPrivate,
       canInteract: access.canInteract,

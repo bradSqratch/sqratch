@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getViewerContext } from "@/lib/experience-access";
+import { getViewerContext, isExperienceVisibleToViewer } from "@/lib/experience-access";
 import prisma from "@/lib/prisma";
 import { resolveActiveBrandContext } from "@/lib/brand-context";
 
@@ -56,6 +56,7 @@ export async function DELETE(
           select: {
             experience: {
               select: {
+                isActive: true,
                 creator: { select: { userId: true } },
                 campaigns: {
                   select: {
@@ -72,6 +73,10 @@ export async function DELETE(
     });
 
     if (!comment || comment.postId !== postId) {
+      return NextResponse.json({ error: "Comment not found." }, { status: 404 });
+    }
+
+    if (!isExperienceVisibleToViewer(comment.post.experience, viewer.userId)) {
       return NextResponse.json({ error: "Comment not found." }, { status: 404 });
     }
 

@@ -14,6 +14,7 @@
 // default so `npm test` stays fully mockable and safe without any database
 // available.
 //
+// The disposable URL also must have no query/fragment and a plain _test database name.
 // The documented invariant (mirrors tests/point-account-concurrency.test.ts
 // — do not weaken this without updating both): setting
 // COMMERCE_CONNECTION_LOCK=true alone is NOT sufficient to run these tests
@@ -42,7 +43,7 @@
 //          -o "-p 55432 -k /tmp/sqratch-lock-sock -h 127.0.0.1" start
 //        createdb -h 127.0.0.1 -p 55432 sqratch_lock_test
 //   2. Sync the schema (no migration files, disposable DB only):
-//        npx prisma db push --accept-data-loss \
+//        npx prisma db push \
 //          --url postgresql://postgres@127.0.0.1:55432/sqratch_lock_test
 //   3. Run (database name ends in "_test" — required condition (c);
 //      ALLOW_REAL_DATABASE_TESTS=true is required condition (a);
@@ -58,21 +59,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CommerceProvider } from "@prisma/client";
-import { canUseRealDatabaseUnderTest } from "../src/lib/db-safety";
+import { realDbTest } from "./helpers/real-db";
 import type { CommerceAdapter } from "../src/lib/commerce/adapter";
 import type { CommerceCapabilities, ProductSyncResult } from "../src/lib/commerce/types";
 
-const realDbDecision = canUseRealDatabaseUnderTest({
-  connectionString: process.env.DATABASE_URL ?? "",
-  allowRealDatabaseTestsEnv: process.env.ALLOW_REAL_DATABASE_TESTS,
-});
-
-const ENABLED =
-  process.env.COMMERCE_CONNECTION_LOCK === "true" && realDbDecision.allowed;
-
-const SKIP_REASON = realDbDecision.allowed
-  ? "requires COMMERCE_CONNECTION_LOCK=true and a real disposable Postgres (see file header)"
-  : `requires COMMERCE_CONNECTION_LOCK=true and the full db-safety opt-in (${realDbDecision.reason}) — see file header`;
+const { enabled: ENABLED, skipReason: SKIP_REASON } = realDbTest("COMMERCE_CONNECTION_LOCK");
 
 function zeroCapabilities(overrides: Partial<CommerceCapabilities> = {}): CommerceCapabilities {
   return {

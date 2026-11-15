@@ -1,3 +1,4 @@
+import { assertExpectedBrand } from "@/lib/brand-auth";
 import { NextRequest, NextResponse } from "next/server";
 import {
   getBrandAdminContext,
@@ -139,6 +140,8 @@ export async function POST(
         { status: failure.status },
       );
     }
+    const mismatch = assertExpectedBrand(request, brand);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
 
     const { id } = await context.params;
     const campaign = await getOwnedBrandCampaign(id, brand.membership.brand.id);

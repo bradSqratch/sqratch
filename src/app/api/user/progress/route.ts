@@ -16,6 +16,7 @@ export async function GET() {
       prisma.lessonProgress.findMany({
         where: {
           userId,
+          lesson: { isActive: true, course: { isActive: true, experience: { isActive: true } } },
         },
         orderBy: {
           updatedAt: "desc",

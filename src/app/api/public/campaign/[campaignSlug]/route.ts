@@ -31,6 +31,7 @@ export async function GET(
           },
         },
         experiences: {
+          where: { experience: { isActive: true } },
           orderBy: {
             sortOrder: "asc",
           },

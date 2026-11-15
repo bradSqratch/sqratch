@@ -9,7 +9,7 @@ import {
 } from "@/lib/creator-auth";
 import { Prisma } from "@prisma/client";
 import prisma from "@/lib/prisma";
-import { deleteStorageObjectByUrl } from "@/lib/storage-upload";
+import { cleanupUnreferencedMedia } from "@/lib/media-cleanup";
 
 export async function GET(
   _request: NextRequest,
@@ -159,14 +159,14 @@ export async function PATCH(
       existing.coverImageUrl &&
       existing.coverImageUrl !== experience.coverImageUrl
     ) {
-      await deleteStorageObjectByUrl(existing.coverImageUrl);
+      await cleanupUnreferencedMedia(existing.coverImageUrl);
     }
 
     if (
       existing.whyVideoUploadUrl &&
       existing.whyVideoUploadUrl !== experience.whyVideoUploadUrl
     ) {
-      await deleteStorageObjectByUrl(existing.whyVideoUploadUrl);
+      await cleanupUnreferencedMedia(existing.whyVideoUploadUrl);
     }
 
     return NextResponse.json({

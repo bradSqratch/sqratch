@@ -1,3 +1,4 @@
+import { assertExpectedBrand } from "@/lib/brand-auth";
 import { NextResponse } from "next/server";
 import {
   getBrandContextFailure,
@@ -8,7 +9,7 @@ import { invalidateShopifyCredential } from "@/lib/commerce/providers/shopify-cr
 import { getActiveCommerceConnection } from "@/lib/commerce/connection-service";
 import { CommerceProvider, type Prisma } from "@prisma/client";
 
-export async function POST() {
+export async function POST(request: Request) {
   try {
     const context = await getBrandManagementContext();
 
@@ -19,6 +20,8 @@ export async function POST() {
         { status: failure.status },
       );
     }
+    const mismatch = assertExpectedBrand(request, context);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
 
     const brandId = context.membership.brand.id;
 

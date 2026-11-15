@@ -225,7 +225,7 @@ test("a simulated 68 MB lesson file sends JSON metadata only to Vercel", async (
   assert.doesNotMatch(capturedBody, /FormData|\\x00/);
 });
 
-test("client uploads before lesson persistence and cleans a newly uploaded object after save failure", async () => {
+test("client uploads before persistence and cleans a new object only after definite rejection", async () => {
   const source = await readFile(
     new URL(
       "../src/app/(withSidebar)/dashboard/creator/courses/[id]/lessons/page.tsx",
@@ -244,6 +244,9 @@ test("client uploads before lesson persistence and cleans a newly uploaded objec
   assert.ok(directUploadIndex >= 0);
   assert.ok(lessonSaveIndex > directUploadIndex);
   assert.ok(cleanupIndex > lessonSaveIndex);
+  assert.match(source, /uploadedVideo && isDefiniteSaveRejection\(saveError\)/);
+  assert.match(source, /videoStorageBucket: uploadedVideo!\.bucket/);
+  assert.match(source, /Check the lesson list, then retry/);
   assert.doesNotMatch(
     source,
     /fetchJson<[^>]*>\(\"\/api\/uploads\/video\"[\s\S]*FormData/,

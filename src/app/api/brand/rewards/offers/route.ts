@@ -1,3 +1,4 @@
+import { assertExpectedBrand } from "@/lib/brand-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { saveCommerce7Offer } from "@/lib/commerce7-rewards";
 import { serializeCommerce7OfferResponse } from "@/lib/commerce7-reward-domain";
@@ -180,6 +181,8 @@ export async function POST(request: NextRequest) {
         { status: failure.status },
       );
     }
+    const mismatch = assertExpectedBrand(request, context);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
 
     const brand = context.membership.brand;
     const body = await request.json().catch(() => null);

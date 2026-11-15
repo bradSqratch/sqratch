@@ -1,3 +1,4 @@
+import { publicDisplayName } from "@/lib/display-name";
 import { NextRequest, NextResponse } from "next/server";
 import { getExperienceAccessContext, getViewerContext } from "@/lib/experience-access";
 import prisma from "@/lib/prisma";
@@ -105,7 +106,6 @@ export async function GET(request: NextRequest) {
               select: {
                 id: true,
                 name: true,
-                email: true,
               },
             },
           },
@@ -132,7 +132,6 @@ export async function GET(request: NextRequest) {
               select: {
                 id: true,
                 name: true,
-                email: true,
               },
             },
             answers: {
@@ -145,7 +144,6 @@ export async function GET(request: NextRequest) {
                   select: {
                     id: true,
                     name: true,
-                    email: true,
                   },
                 },
               },
@@ -165,7 +163,7 @@ export async function GET(request: NextRequest) {
             experience: question.experience,
             askedBy: {
               id: question.askedBy.id,
-              name: question.askedBy.name || question.askedBy.email,
+              name: publicDisplayName(question.askedBy),
             },
           })),
           answeredQuestions: answeredQuestions.map((question) => ({
@@ -176,7 +174,7 @@ export async function GET(request: NextRequest) {
             experience: question.experience,
             askedBy: {
               id: question.askedBy.id,
-              name: question.askedBy.name || question.askedBy.email,
+              name: publicDisplayName(question.askedBy),
             },
             answers: question.answers.map((answer) => ({
               id: answer.id,
@@ -184,7 +182,7 @@ export async function GET(request: NextRequest) {
               createdAt: answer.createdAt,
               answeredBy: {
                 id: answer.answeredBy.id,
-                name: answer.answeredBy.name || answer.answeredBy.email,
+                name: publicDisplayName(answer.answeredBy),
               },
             })),
           })),
@@ -237,7 +235,6 @@ export async function GET(request: NextRequest) {
             select: {
               id: true,
               name: true,
-              email: true,
             },
           },
           answers: {
@@ -250,7 +247,6 @@ export async function GET(request: NextRequest) {
                 select: {
                   id: true,
                   name: true,
-                  email: true,
                 },
               },
             },
@@ -288,7 +284,7 @@ export async function GET(request: NextRequest) {
           createdAt: question.createdAt,
           askedBy: {
             id: question.askedBy.id,
-            name: question.askedBy.name || question.askedBy.email,
+            name: publicDisplayName(question.askedBy),
           },
           answers: question.answers.map((answer) => ({
             id: answer.id,
@@ -296,7 +292,7 @@ export async function GET(request: NextRequest) {
             createdAt: answer.createdAt,
             answeredBy: {
               id: answer.answeredBy.id,
-              name: answer.answeredBy.name || answer.answeredBy.email,
+              name: publicDisplayName(answer.answeredBy),
             },
           })),
         })),

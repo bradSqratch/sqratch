@@ -1,5 +1,7 @@
 "use client";
 
+import { useBrandFetch } from "@/components/brand/brand-fetch";
+
 import { useEffect, useState } from "react";
 import { BrandPageShell } from "@/components/brand/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
@@ -33,6 +35,7 @@ export default function BrandCampaignExperiencesPage({
   params: { id: string };
 }) {
   const campaignId = params.id;
+  const brandFetch = useBrandFetch();
   const [query, setQuery] = useState("");
   const [data, setData] = useState<SponsorshipResponse | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
@@ -70,7 +73,7 @@ export default function BrandCampaignExperiencesPage({
     setError(null);
 
     try {
-      await fetchJson(`/api/brand/campaigns/${campaignId}/attach-experience`, {
+      await brandFetch(`/api/brand/campaigns/${campaignId}/attach-experience`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -69,6 +69,11 @@ export function ExperienceShell({
             hero ? "pt-[44px] sm:pt-[52px]" : "pt-28 sm:pt-32",
           )}
         >
+          {experience.isOwnerPreview && (
+            <div role="status" className="mb-6 rounded-2xl border border-amber-300/30 bg-amber-400/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-100">
+              Preview: not published
+            </div>
+          )}
           {hero ? (
             <section>{hero}</section>
           ) : (

@@ -1,5 +1,7 @@
 "use client";
 
+import { useBrandFetch } from "@/components/brand/brand-fetch";
+
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { BrandPageShell } from "@/components/brand/page-shell";
@@ -19,6 +21,7 @@ type CampaignOption = {
 };
 
 export default function BrandNewQRBatchPage() {
+  const brandFetch = useBrandFetch();
   const router = useRouter();
   const [campaigns, setCampaigns] = useState<CampaignOption[]>([]);
   const [campaignId, setCampaignId] = useState("");
@@ -49,7 +52,7 @@ export default function BrandNewQRBatchPage() {
     setError(null);
 
     try {
-      await fetchJson<{
+      await brandFetch<{
         batch: {
           id: string;
           name: string;

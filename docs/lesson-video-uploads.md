@@ -8,7 +8,7 @@ Lesson videos use a server-authorized direct upload:
 2. The route authenticates the creator, verifies course ownership, validates the file, generates a unique object path, and creates a signed upload URL for that exact object.
 3. The browser uploads the file directly to Supabase Storage.
 4. After storage succeeds, the browser sends lesson JSON and the server-issued bucket/path to `POST` or `PATCH /api/creator/lessons`.
-5. If lesson persistence fails, the browser calls the authenticated cleanup route for the newly uploaded course object.
+5. Only a definite 4xx save rejection permits cleanup of the new upload. Network errors, timeouts, malformed success responses and 5xx responses have an unknown outcome: keep the draft and uploaded bucket/path, check the lesson list, then retry with the same reference. Uploaded lesson creation reuses an existing lesson for that course and object; cleanup refuses referenced objects.
 
 No video bytes pass through a Next.js route or Vercel Function. Signed direct upload remains compatible with either a public or private bucket.
 
@@ -24,6 +24,8 @@ Signed direct upload was selected instead of TUS because the repository does not
 - API responses containing signed media URLs use `Cache-Control: private, no-store`.
 - Signed URLs are not stored in Prisma, logs, or analytics.
 - `LESSON_VIDEO_SIGNED_URL_TTL_SECONDS` defaults to 3600 seconds and is clamped between 60 and 14,400 seconds.
+
+Signed playback URLs issued before unpublishing remain valid for up to their TTL.
 
 Signed URLs can be copied and shared until they expire. This is access control, not DRM.
 

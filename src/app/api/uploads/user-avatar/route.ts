@@ -19,7 +19,7 @@ const MIME_TYPE_TO_EXTENSION: Record<string, string> = {
 
 function buildAvatarPath(userId: string, file: File) {
   const extension = MIME_TYPE_TO_EXTENSION[file.type] || "bin";
-  return `users/${userId}/avatar/${Date.now()}.${extension}`;
+  return `users/${userId}/avatar/${crypto.randomUUID()}.${extension}`;
 }
 
 export async function POST(request: NextRequest) {
@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
       path,
       file,
       cacheControl: "3600",
-      upsert: true,
+      upsert: false,
     });
 
     return NextResponse.json({

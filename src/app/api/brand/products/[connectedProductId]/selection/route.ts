@@ -1,3 +1,4 @@
+import { assertExpectedBrand } from "@/lib/brand-auth";
 import { NextRequest, NextResponse } from "next/server";
 import {
   getBrandContextFailure,
@@ -127,6 +128,8 @@ export async function selectionPatchImpl(
         { status: failure.status },
       );
     }
+    const mismatch = assertExpectedBrand(request, authContext);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
 
     // The ONLY brand id ever used below.
     const brand = authContext.membership.brand;

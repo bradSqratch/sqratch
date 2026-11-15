@@ -1,3 +1,4 @@
+import { publicDisplayName } from "@/lib/display-name";
 import { NextRequest, NextResponse } from "next/server";
 import { getExperienceAccessContext, getViewerContext } from "@/lib/experience-access";
 import prisma from "@/lib/prisma";
@@ -70,10 +71,14 @@ export async function GET(
 
     const access = await getExperienceAccessContext(post.experience.slug, request);
 
-    if (!access || !access.canInteract) {
+    if (!access) {
+      return NextResponse.json({ error: "Experience not found." }, { status: 404 });
+    }
+
+    if (!access.canInteract) {
       return NextResponse.json(
         { error: "You do not have access to comments." },
-        { status: access ? 403 : 404 },
+        { status: 403 },
       );
     }
 
@@ -88,7 +93,6 @@ export async function GET(
           select: {
             id: true,
             name: true,
-            email: true,
           },
         },
       },
@@ -113,7 +117,7 @@ export async function GET(
         createdAt: comment.createdAt,
         user: {
           id: comment.user.id,
-          name: comment.user.name || comment.user.email,
+          name: publicDisplayName(comment.user),
         },
         canDelete,
       })),
@@ -174,10 +178,14 @@ export async function POST(
 
     const access = await getExperienceAccessContext(post.experience.slug, request);
 
-    if (!access || !access.canInteract) {
+    if (!access) {
+      return NextResponse.json({ error: "Experience not found." }, { status: 404 });
+    }
+
+    if (!access.canInteract) {
       return NextResponse.json(
         { error: "You do not have access to comment on this post." },
-        { status: access ? 403 : 404 },
+        { status: 403 },
       );
     }
 
@@ -195,7 +203,6 @@ export async function POST(
           select: {
             id: true,
             name: true,
-            email: true,
           },
         },
       },
@@ -221,7 +228,7 @@ export async function POST(
           createdAt: comment.createdAt,
           user: {
             id: comment.user.id,
-            name: comment.user.name || comment.user.email,
+            name: publicDisplayName(comment.user),
           },
           canDelete,
         },

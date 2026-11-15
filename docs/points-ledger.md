@@ -95,3 +95,33 @@ The change was an expand/contract migration: the **application code** stopped re
 ## Historical pre-migration verification record
 
 `prisma/pre-migration-checks-remove-user-points.sql` is retained in the repository as a completed operational runbook and audit record — it references the now-removed `User.points` column and documents the two-gate procedure above for historical context and for any environment that has not yet had this migration applied. It must not be run unchanged against an environment where the column has already been removed (every query in it references `"User"."points"`, which no longer exists once the migration is applied). See the notice at the top of that file.
+
+## Read-only account-versus-ledger drift check
+
+Run this read-only query and save the results for review. Lifetime reconstruction follows `deriveAccountFromLedger`: adjustment rows are included in spendable but excluded from lifetime totals because their lifetime effect is not durably recorded. A lifetime mismatch may therefore need investigation rather than a repair. This query makes no changes.
+
+```sql
+WITH grouped AS (
+  SELECT "userId", "type", "reason", SUM("points") AS points
+  FROM "PointTransaction"
+  GROUP BY "userId", "type", "reason"
+), ledger AS (
+  SELECT "userId", SUM(points) AS spendable,
+    SUM(CASE WHEN "type" = 'EARN' AND "reason" IN ('QR_SCAN', 'BONUS', 'REFERRAL') AND points > 0 THEN points ELSE 0 END) AS earned,
+    SUM(CASE WHEN "type" = 'SPEND' AND "reason" = 'COMMERCE_REWARD_REDEMPTION' AND points < 0 THEN -points ELSE 0 END) AS spent,
+    SUM(CASE WHEN "type" = 'REFUND' AND "reason" = 'COMMERCE_REWARD_REFUND' AND points > 0 THEN points ELSE 0 END) AS refunded
+  FROM grouped GROUP BY "userId"
+)
+SELECT COALESCE(a."userId", l."userId") AS "userId",
+  a."spendablePoints", COALESCE(l.spendable, 0) AS ledger_spendable,
+  a."lifetimeEarnedPoints", COALESCE(l.earned, 0) AS ledger_earned,
+  a."lifetimeSpentPoints", COALESCE(l.spent, 0) AS ledger_spent,
+  a."lifetimeRefundedPoints", COALESCE(l.refunded, 0) AS ledger_refunded
+FROM "UserPointAccount" a FULL JOIN ledger l ON l."userId" = a."userId"
+WHERE a."userId" IS NULL
+   OR a."spendablePoints" <> COALESCE(l.spendable, 0)
+   OR a."lifetimeEarnedPoints" <> COALESCE(l.earned, 0)
+   OR a."lifetimeSpentPoints" <> COALESCE(l.spent, 0)
+   OR a."lifetimeRefundedPoints" <> COALESCE(l.refunded, 0)
+ORDER BY 1;
+```

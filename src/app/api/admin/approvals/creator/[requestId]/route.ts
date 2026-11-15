@@ -40,54 +40,28 @@ export async function POST(
       );
     }
 
+    const creatorRequest = await prisma.creatorRequest.findUnique({
+      where: { id: requestId },
+      select: { id: true, userId: true, user: { select: { id: true, name: true, email: true } } },
+    });
+    if (!creatorRequest) return NextResponse.json({ error: "Creator request not found." }, { status: 404 });
+
     const result = await prisma.$transaction(async (tx) => {
-      const creatorRequest = await tx.creatorRequest.findUnique({
-        where: { id: requestId },
-        select: {
-          id: true,
-          status: true,
-          userId: true,
-          user: {
-            select: {
-              id: true,
-              name: true,
-              email: true,
-            },
-          },
-        },
+      const claim = await tx.creatorRequest.updateMany({
+        where: { id: requestId, status: "PENDING" },
+        data: { status: action === "approve" ? "APPROVED" : "REJECTED", reason, reviewedById: context.userId },
       });
-
-      if (!creatorRequest) {
-        return { error: "Creator request not found.", status: 404 as const };
-      }
-
-      if (creatorRequest.status !== "PENDING") {
-        return {
-          error: "This creator request has already been processed.",
-          status: 409 as const,
-        };
-      }
-
-      const updatedRequest = await tx.creatorRequest.update({
-        where: { id: requestId },
-        data: {
-          status: action === "approve" ? "APPROVED" : "REJECTED",
-          reason,
-          reviewedById: context.userId,
-        },
-        select: {
-          id: true,
-          status: true,
-          reason: true,
-          updatedAt: true,
-        },
+      if (claim.count !== 1) throw new Error("REQUEST_ALREADY_DECIDED");
+      const updatedRequest = await tx.creatorRequest.findUniqueOrThrow({
+        where: { id: requestId }, select: { id: true, status: true, reason: true, updatedAt: true },
       });
 
       if (action === "approve") {
-        await tx.user.update({
-          where: { id: creatorRequest.userId },
+        const promoted = await tx.user.updateMany({
+          where: { id: creatorRequest.userId, role: { not: "ADMIN" } },
           data: { role: "CREATOR" },
         });
+        if (promoted.count !== 1) throw new Error("TARGET_IS_ADMIN");
 
         const displayName =
           creatorRequest.user.name?.trim() ||
@@ -119,13 +93,6 @@ export async function POST(
       };
     });
 
-    if ("error" in result) {
-      return NextResponse.json(
-        { error: result.error },
-        { status: result.status },
-      );
-    }
-
     if (result.approvedUser) {
       try {
         await sendApprovalEmail(
@@ -143,6 +110,9 @@ export async function POST(
 
     return NextResponse.json({ data: result.data });
   } catch (error) {
+    if (error instanceof Error && ["REQUEST_ALREADY_DECIDED", "TARGET_IS_ADMIN"].includes(error.message)) {
+      return NextResponse.json({ code: error.message, error: error.message === "TARGET_IS_ADMIN" ? "Administrators cannot be changed by an approval." : "This request has already been decided." }, { status: 409 });
+    }
     console.error("[admin/approvals/creator][POST] Error:", error);
     return NextResponse.json(
       { error: "Failed to process creator request." },

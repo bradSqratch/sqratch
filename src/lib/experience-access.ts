@@ -19,6 +19,7 @@ type ExperienceAccessBase = {
   id: string;
   slug: string;
   title: string;
+  isActive: boolean;
   description: string | null;
   coverImageUrl: string | null;
   whyVideoSource: "YOUTUBE" | "UPLOAD" | null;
@@ -83,6 +84,8 @@ export type ExperienceAccessContext = {
   entryContext: PublicExperienceEntryContext;
   isLoggedIn: boolean;
   isCreatorOwner: boolean;
+  isPublished: boolean;
+  isOwnerPreview: boolean;
   hasUnlockedCampaign: boolean;
   hasRedeemedQrWarning: boolean;
   canAccessPrivate: boolean;
@@ -142,18 +145,32 @@ export async function getViewerContext(request?: NextRequest): Promise<ViewerCon
   };
 }
 
-export async function getExperienceAccessContext(
-  experienceSlug: string,
-  request?: NextRequest,
-) {
-  const viewer = await getViewerContext(request);
+const accessDependencies = {
+  getViewer: getViewerContext,
+  findExperience: prisma.experience.findUnique.bind(prisma.experience),
+  getViewerSession: getViewerSessionRecord,
+  findUnlock: prisma.campaignUnlock.findFirst.bind(prisma.campaignUnlock),
+};
 
-  const experience = await prisma.experience.findUnique({
+export function isExperienceVisibleToViewer(experience: { isActive: boolean; creator: { userId: string } }, userId: string | null) {
+  return experience.isActive || experience.creator.userId === userId;
+}
+
+export async function getExperienceAccessContextImpl(
+  experienceSlug: string,
+  request: NextRequest | undefined,
+  overrides: Partial<typeof accessDependencies> = {},
+) {
+  const deps = { ...accessDependencies, ...overrides };
+  const viewer = await deps.getViewer(request);
+
+  const experience = await deps.findExperience({
     where: { slug: experienceSlug },
     select: {
       id: true,
       slug: true,
       title: true,
+      isActive: true,
       description: true,
       coverImageUrl: true,
       whyVideoSource: true,
@@ -208,13 +225,18 @@ export async function getExperienceAccessContext(
   const campaignIds = experience.campaigns.map((item) => item.campaignId);
   const isLoggedIn = Boolean(viewer.userId);
   const isCreatorOwner = viewer.userId === experience.creator.userId;
-  const viewerSession = await getViewerSessionRecord(request);
+  // Public viewer routes never expose drafts, including to their owner.
+  // Authenticated creator management uses separate ownership-checked routes.
+  if (!experience.isActive) {
+    return null;
+  }
+  const viewerSession = await deps.getViewerSession(request);
 
   let hasUnlockedCampaign = false;
 
   if (campaignIds.length > 0) {
     if (viewer.userId) {
-      const unlock = await prisma.campaignUnlock.findFirst({
+      const unlock = await deps.findUnlock({
         where: {
           campaignId: {
             in: campaignIds,
@@ -226,7 +248,7 @@ export async function getExperienceAccessContext(
 
       hasUnlockedCampaign = Boolean(unlock);
     } else if (viewer.sessionId) {
-      const unlock = await prisma.campaignUnlock.findFirst({
+      const unlock = await deps.findUnlock({
         where: {
           campaignId: {
             in: campaignIds,
@@ -264,11 +286,17 @@ export async function getExperienceAccessContext(
     entryContext,
     isLoggedIn,
     isCreatorOwner,
+    isPublished: experience.isActive,
+    isOwnerPreview: isCreatorOwner && !experience.isActive,
     hasUnlockedCampaign,
     hasRedeemedQrWarning: showRedeemedQrWarning,
     canAccessPrivate: isCreatorOwner || (isLoggedIn && hasUnlockedCampaign),
     canInteract: isCreatorOwner || (isLoggedIn && hasUnlockedCampaign),
   } satisfies ExperienceAccessContext;
+}
+
+export async function getExperienceAccessContext(experienceSlug: string, request?: NextRequest) {
+  return getExperienceAccessContextImpl(experienceSlug, request);
 }
 
 export async function createAnalyticsEvent(options: {

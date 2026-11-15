@@ -1,10 +1,12 @@
 "use client";
 
+import { useBrandFetch } from "@/components/brand/brand-fetch";
+
 import Link from "next/link";
 import Image from "next/image";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BrandPageShell } from "@/components/brand/page-shell";
-import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
+import { getErrorMessage } from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,6 +55,7 @@ function getVisibilityExplanation(product: ProductRow): string {
 }
 
 export default function BrandCampaignProductsPage({ params }: { params: { id: string } }) {
+  const brandFetch = useBrandFetch();
   const campaignId = params.id;
   const [data, setData] = useState<Response | null>(null);
   const [meta, setMeta] = useState<PageMeta | null>(null);
@@ -135,12 +138,12 @@ export default function BrandCampaignProductsPage({ params }: { params: { id: st
     setError(null);
     try {
       if (product.assignment) {
-        await fetchJson(`/api/brand/campaigns/${campaignId}/commerce-products`, {
+        await brandFetch(`/api/brand/campaigns/${campaignId}/commerce-products`, {
           method: "PATCH", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ assignmentId: product.assignment.id, isActive: !product.assignment.isActive }),
         });
       } else {
-        await fetchJson(`/api/brand/campaigns/${campaignId}/commerce-products`, {
+        await brandFetch(`/api/brand/campaigns/${campaignId}/commerce-products`, {
           method: "POST", headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ brandCommerceProductId: product.brandCommerceProductId, displayOrder: 0 }),
         });
@@ -161,7 +164,7 @@ export default function BrandCampaignProductsPage({ params }: { params: { id: st
     setSaving(product.brandCommerceProductId);
     setError(null);
     try {
-      await fetchJson(`/api/brand/campaigns/${campaignId}/commerce-products`, {
+      await brandFetch(`/api/brand/campaigns/${campaignId}/commerce-products`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ assignmentId: product.assignment.id, displayOrder }),
       });

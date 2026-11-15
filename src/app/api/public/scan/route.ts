@@ -6,6 +6,7 @@ import { redeemQrCodeForUser } from "@/lib/qr-redemption";
 import { rateLimit, getRequestIp, rateLimitResponse } from "@/lib/rate-limit";
 import { AuthResolvers, realAuthResolvers } from "@/lib/auth-session";
 import { isValidSessionId } from "@/lib/session-id";
+import { lockQrCodes } from "@/lib/qr-lifecycle";
 
 const COOKIE_NAME = "sqr_session";
 
@@ -32,7 +33,10 @@ export async function scanImpl(request: NextRequest, deps: AuthResolvers) {
       );
     }
 
-    const qr = await prisma.qRCode.findUnique({
+    return await prisma.$transaction(async (tx) => {
+    const candidate = await tx.qRCode.findUnique({ where: { qrCodeData }, select: { id: true } });
+    if (candidate) await lockQrCodes(tx, [candidate.id]);
+    const qr = await tx.qRCode.findUnique({
       where: { qrCodeData },
       include: {
         campaign: {
@@ -64,7 +68,7 @@ export async function scanImpl(request: NextRequest, deps: AuthResolvers) {
     const isRedeemed = qr.status === "USED";
 
     if (sessionId) {
-      await prisma.userSession.upsert({
+      await tx.userSession.upsert({
         where: { id: sessionId },
         update: {
           lastSeenAt: new Date(),
@@ -83,7 +87,7 @@ export async function scanImpl(request: NextRequest, deps: AuthResolvers) {
     }
 
     if (isRedeemed) {
-      await prisma.analyticsEvent.create({
+      await tx.analyticsEvent.create({
         data: {
           name: "qr_scan_redeemed",
           brandId,
@@ -106,7 +110,7 @@ export async function scanImpl(request: NextRequest, deps: AuthResolvers) {
     }
 
     if (userId) {
-      const redemptionResult = await prisma.$transaction(async (tx) => {
+      const redemptionResult = await (async () => {
         const redemption = await redeemQrCodeForUser({
           qrCodeId: qr.id,
           userId,
@@ -143,10 +147,10 @@ export async function scanImpl(request: NextRequest, deps: AuthResolvers) {
         });
 
         return redemption;
-      });
+      })();
 
       if (!redemptionResult.redeemed) {
-        await prisma.analyticsEvent.create({
+        await tx.analyticsEvent.create({
           data: {
             name: "qr_scan_redeemed",
             brandId,
@@ -168,7 +172,7 @@ export async function scanImpl(request: NextRequest, deps: AuthResolvers) {
         });
       }
     } else if (sessionId) {
-      const existingAnonUnlock = await prisma.campaignUnlock.findFirst({
+      const existingAnonUnlock = await tx.campaignUnlock.findFirst({
         where: {
           campaignId: qr.campaign.id,
           anonKey: sessionId,
@@ -178,29 +182,16 @@ export async function scanImpl(request: NextRequest, deps: AuthResolvers) {
       });
 
       if (!existingAnonUnlock) {
-        try {
-          await prisma.campaignUnlock.create({
-            data: {
-              campaignId: qr.campaign.id,
-              anonKey: sessionId,
-              qrCodeId: qr.id,
-            },
-          });
-        } catch (err) {
-          // P2002: concurrent scan already created this anon unlock — idempotent
-          if (
-            !(
-              err instanceof Prisma.PrismaClientKnownRequestError &&
-              err.code === "P2002"
-            )
-          ) {
-            throw err;
-          }
-        }
+        // Avoid a unique-violation abort inside this transaction when the
+        // same anonymous session races a scan on another code.
+        await tx.campaignUnlock.createMany({
+          data: [{ campaignId: qr.campaign.id, anonKey: sessionId, qrCodeId: qr.id }],
+          skipDuplicates: true,
+        });
       }
     }
 
-    await prisma.analyticsEvent.create({
+    await tx.analyticsEvent.create({
       data: {
         name: "qr_scan",
         brandId,
@@ -220,7 +211,11 @@ export async function scanImpl(request: NextRequest, deps: AuthResolvers) {
       ok: true,
       campaignSlug: qr.campaign.slug || qr.campaign.id,
     });
+    });
   } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2003" && String(error.meta?.field_name || "").includes("qrCodeId")) {
+      return NextResponse.json({ error: "QR code not found." }, { status: 404 });
+    }
     console.error("[public/scan] Error:", error);
     return NextResponse.json(
       { error: "Failed to process QR scan." },

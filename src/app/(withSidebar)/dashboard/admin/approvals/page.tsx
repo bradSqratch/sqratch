@@ -89,6 +89,15 @@ function ApprovalNote({ reason }: { reason: string | null }) {
   );
 }
 
+async function submitDecision(url: string, action: "approve" | "reject") {
+  const response = await fetch(url, { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) });
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    if (response.status === 409 && body?.code === "REQUEST_ALREADY_DECIDED") throw new Error("REQUEST_ALREADY_DECIDED");
+    throw new Error(body?.error || "Request failed.");
+  }
+}
+
 export default function AdminApprovalsPage() {
   const [data, setData] = useState<ApprovalsResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -122,15 +131,14 @@ export default function AdminApprovalsPage() {
     setError(null);
 
     try {
-      await fetchJson(`/api/admin/approvals/creator/${requestId}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ action }),
-      });
+      await submitDecision(`/api/admin/approvals/creator/${requestId}`, action);
       await loadApprovals();
     } catch (requestError) {
+      if (requestError instanceof Error && requestError.message === "REQUEST_ALREADY_DECIDED") {
+        await loadApprovals();
+        setError("This request has already been decided.");
+        return;
+      }
       setError(
         getErrorMessage(requestError, "Failed to process creator request."),
       );
@@ -148,15 +156,14 @@ export default function AdminApprovalsPage() {
     setError(null);
 
     try {
-      await fetchJson(`/api/admin/approvals/brand/${requestId}`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ action }),
-      });
+      await submitDecision(`/api/admin/approvals/brand/${requestId}`, action);
       await loadApprovals();
     } catch (requestError) {
+      if (requestError instanceof Error && requestError.message === "REQUEST_ALREADY_DECIDED") {
+        await loadApprovals();
+        setError("This request has already been decided.");
+        return;
+      }
       setError(
         getErrorMessage(requestError, "Failed to process brand request."),
       );
@@ -243,7 +250,7 @@ export default function AdminApprovalsPage() {
                         <Button
                           type="button"
                           disabled={
-                            processingKey === `creator:${request.id}:approve`
+                            processingKey !== null
                           }
                           onClick={() =>
                             void handleCreatorAction(request.id, "approve")
@@ -258,7 +265,7 @@ export default function AdminApprovalsPage() {
                           type="button"
                           variant="outline"
                           disabled={
-                            processingKey === `creator:${request.id}:reject`
+                            processingKey !== null
                           }
                           onClick={() =>
                             void handleCreatorAction(request.id, "reject")
@@ -318,7 +325,7 @@ export default function AdminApprovalsPage() {
                         <Button
                           type="button"
                           disabled={
-                            processingKey === `brand:${request.id}:approve`
+                            processingKey !== null
                           }
                           onClick={() =>
                             void handleBrandAction(request.id, "approve")
@@ -333,7 +340,7 @@ export default function AdminApprovalsPage() {
                           type="button"
                           variant="outline"
                           disabled={
-                            processingKey === `brand:${request.id}:reject`
+                            processingKey !== null
                           }
                           onClick={() =>
                             void handleBrandAction(request.id, "reject")

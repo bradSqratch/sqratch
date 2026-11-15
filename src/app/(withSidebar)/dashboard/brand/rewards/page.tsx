@@ -1,5 +1,7 @@
 "use client";
 
+import { useBrandFetch } from "@/components/brand/brand-fetch";
+
 import Image from "next/image";
 import { Commerce7BrandRewardsPanel, type Commerce7BrandRewardData } from "@/components/rewards/commerce7-brand-rewards";
 import { useEffect, useMemo, useState } from "react";
@@ -225,6 +227,7 @@ function getCompatibilityBadges(
 }
 
 function ShopifyBrandRewardsPanel() {
+  const brandFetch = useBrandFetch();
   const [brand, setBrand] = useState<ShopifyStatus>(null);
   const [offers, setOffers] = useState<RewardOffer[]>([]);
   const [products, setProducts] = useState<ShopifyProduct[]>([]);
@@ -475,7 +478,7 @@ function ShopifyBrandRewardsPanel() {
     });
 
     try {
-      await fetchJson(
+      await brandFetch(
         editingOfferId
           ? `/api/brand/rewards/offers/${editingOfferId}`
           : "/api/brand/rewards/offers",
@@ -532,7 +535,7 @@ function ShopifyBrandRewardsPanel() {
     setMessage(null);
 
     try {
-      await fetchJson(`/api/brand/rewards/offers/${offerId}`, {
+      await brandFetch(`/api/brand/rewards/offers/${offerId}`, {
         method: "PATCH",
       });
       setMessage("Reward offer disabled.");

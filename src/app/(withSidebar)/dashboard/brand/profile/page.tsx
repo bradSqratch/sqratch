@@ -1,9 +1,12 @@
 "use client";
 
+import { useBrandFetch, useBrandRawFetch } from "@/components/brand/brand-fetch";
+
 import { useEffect, useRef, useState } from "react";
 import { BrandPageShell } from "@/components/brand/page-shell";
 import {
   deleteUploadedAsset,
+  isDefiniteSaveRejection,
   fetchJson,
   getErrorMessage,
 } from "@/components/experience/client-utils";
@@ -32,6 +35,8 @@ function slugifyValue(value: string) {
 }
 
 export default function BrandProfilePage() {
+  const brandFetch = useBrandFetch();
+  const brandRawFetch = useBrandRawFetch();
   const [form, setForm] = useState<BrandProfile>({
     name: "",
     slug: "",
@@ -124,7 +129,7 @@ export default function BrandProfilePage() {
         uploadedCoverUrl = coverImageUrl;
       }
 
-      await fetchJson("/api/brand/profile", {
+      await brandFetch("/api/brand/profile", {
         method: exists ? "PATCH" : "POST",
         headers: {
           "Content-Type": "application/json",
@@ -152,10 +157,18 @@ export default function BrandProfilePage() {
       }
       setExists(true);
     } catch (submitError) {
-      await Promise.allSettled([
-        uploadedLogoUrl ? deleteUploadedAsset(uploadedLogoUrl) : Promise.resolve(false),
-        uploadedCoverUrl ? deleteUploadedAsset(uploadedCoverUrl) : Promise.resolve(false),
-      ]);
+      if (isDefiniteSaveRejection(submitError)) {
+        await Promise.allSettled([
+          uploadedLogoUrl ? deleteUploadedAsset(uploadedLogoUrl, { fetcher: brandRawFetch }) : Promise.resolve(false),
+          uploadedCoverUrl ? deleteUploadedAsset(uploadedCoverUrl, { fetcher: brandRawFetch }) : Promise.resolve(false),
+        ]);
+      } else {
+        setForm((current) => ({ ...current,
+          logoUrl: uploadedLogoUrl || current.logoUrl,
+          coverImageUrl: uploadedCoverUrl || current.coverImageUrl }));
+        if (uploadedLogoUrl) setLogoFile(null);
+        if (uploadedCoverUrl) setCoverFile(null);
+      }
       setError(getErrorMessage(submitError, "Failed to save brand profile."));
     } finally {
       setSaving(false);
@@ -170,7 +183,7 @@ export default function BrandProfilePage() {
     formData.append("file", file);
     formData.append("assetType", assetType);
 
-    const result = await fetchJson<{ fileUrl: string }>(
+    const result = await brandFetch<{ fileUrl: string }>(
       "/api/uploads/brand-asset",
       {
         method: "POST",

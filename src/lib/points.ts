@@ -578,10 +578,10 @@ export async function awardLessonCompletionPoints(options: {
   const client = options.db ?? prisma;
   const lesson = await client.lesson.findUnique({
     where: { id: options.lessonId },
-    select: { completionPointsReward: true },
+    select: { completionPointsReward: true, isActive: true, course: { select: { isActive: true, experience: { select: { isActive: true, creator: { select: { userId: true } } } } } } },
   });
   const reward = lesson?.completionPointsReward ?? 0;
-  if (reward <= 0) {
+  if (reward <= 0 || !lesson?.isActive || !lesson.course.isActive || !lesson.course.experience.isActive || lesson.course.experience.creator.userId === options.userId) {
     return { applied: false, reason: "INVALID" };
   }
 
@@ -613,6 +613,8 @@ export async function awardCourseCompletionPoints(options: {
     where: { id: options.courseId },
     select: {
       completionPointsReward: true,
+      isActive: true,
+      experience: { select: { isActive: true, creator: { select: { userId: true } } } },
       lessons: { where: { isActive: true }, select: { id: true } },
     },
   });
@@ -620,7 +622,7 @@ export async function awardCourseCompletionPoints(options: {
   const reward = course?.completionPointsReward ?? 0;
   const activeLessonIds = course?.lessons.map((lesson) => lesson.id) ?? [];
 
-  if (reward <= 0 || activeLessonIds.length === 0) {
+  if (reward <= 0 || !course?.isActive || !course.experience.isActive || course.experience.creator.userId === options.userId || activeLessonIds.length === 0) {
     return { applied: false, reason: "INVALID" };
   }
 

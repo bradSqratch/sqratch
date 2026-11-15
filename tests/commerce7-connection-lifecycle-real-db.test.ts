@@ -51,18 +51,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CommerceInstallationStatus, CommerceProvider, type Prisma } from "@prisma/client";
-import { canUseRealDatabaseUnderTest } from "../src/lib/db-safety";
+import { realDbTest } from "./helpers/real-db";
 
-const realDbDecision = canUseRealDatabaseUnderTest({
-  connectionString: process.env.DATABASE_URL ?? "",
-  allowRealDatabaseTestsEnv: process.env.ALLOW_REAL_DATABASE_TESTS,
-});
-
-const ENABLED = process.env.COMMERCE7_CONNECTION_LIFECYCLE === "true" && realDbDecision.allowed;
-
-const SKIP_REASON = realDbDecision.allowed
-  ? "requires COMMERCE7_CONNECTION_LIFECYCLE=true and a real disposable Postgres (see file header)"
-  : `requires COMMERCE7_CONNECTION_LIFECYCLE=true and the full db-safety opt-in (${realDbDecision.reason}) — see file header`;
+const { enabled: ENABLED, skipReason: SKIP_REASON } = realDbTest("COMMERCE7_CONNECTION_LIFECYCLE");
 
 async function cleanup(
   prisma: typeof import("../src/lib/prisma").default,

@@ -72,8 +72,8 @@ interface FakeSeed {
   userIds?: string[];
   accounts?: AccountRow[];
   transactions?: Partial<TxRow>[];
-  lessons?: Record<string, { completionPointsReward: number }>;
-  courses?: Record<string, { completionPointsReward: number; lessonIds: string[] }>;
+  lessons?: Record<string, { completionPointsReward: number; active?: boolean; courseActive?: boolean; experienceActive?: boolean; creatorId?: string }>;
+  courses?: Record<string, { completionPointsReward: number; lessonIds: string[]; active?: boolean; experienceActive?: boolean; creatorId?: string }>;
   completedLessons?: Record<string, string[]>; // userId -> completed lessonIds
 }
 
@@ -216,7 +216,7 @@ function makeFakeDb(seed: FakeSeed = {}) {
     },
     lesson: {
       findUnique: async ({ where }: { where: { id: string } }) =>
-        lessons[where.id] ? { completionPointsReward: lessons[where.id].completionPointsReward } : null,
+        lessons[where.id] ? { completionPointsReward: lessons[where.id].completionPointsReward, isActive: lessons[where.id].active ?? true, course: { isActive: lessons[where.id].courseActive ?? true, experience: { isActive: lessons[where.id].experienceActive ?? true, creator: { userId: lessons[where.id].creatorId ?? "creator" } } } } : null,
     },
     course: {
       findUnique: async ({ where }: { where: { id: string } }) => {
@@ -224,6 +224,8 @@ function makeFakeDb(seed: FakeSeed = {}) {
         return c
           ? {
               completionPointsReward: c.completionPointsReward,
+              isActive: c.active ?? true,
+              experience: { isActive: c.experienceActive ?? true, creator: { userId: c.creatorId ?? "creator" } },
               lessons: c.lessonIds.map((id) => ({ id })),
             }
           : null;
@@ -611,6 +613,15 @@ describe("Course completion", () => {
     assert.equal(f.accounts.get("u1")!.spendablePoints, 100);
     assert.equal(f.txs.length, 1);
   });
+});
+
+test("owner and unpublished lesson/course completions never award during a merge", async () => {
+  for (const variant of [{ creatorId: "u1" }, { active: false }, { experienceActive: false }, { courseActive: false }]) {
+    const f = makeFakeDb({ userIds: ["u1"], accounts: [seededAccount("u1", 0)], lessons: { l1: { completionPointsReward: 10, ...variant } }, courses: { c1: { completionPointsReward: 10, lessonIds: ["l1"], ...variant, ...(variant.courseActive === false ? { active: false } : {}) } }, completedLessons: { u1: ["l1"] } });
+    assert.equal((await awardLessonCompletionPoints({ userId: "u1", lessonId: "l1", db: f.db })).applied, false);
+    assert.equal((await awardCourseCompletionPoints({ userId: "u1", courseId: "c1", db: f.db })).applied, false);
+    assert.equal(f.txs.length, 0);
+  }
 });
 
 describe("Progress-merge idempotency guarantee", () => {

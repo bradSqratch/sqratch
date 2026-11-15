@@ -3,6 +3,7 @@ import React from "react";
 import { getBrandAdminContext } from "@/lib/brand-auth";
 import { AccessDeniedPanel } from "@/components/auth/access-denied-panel";
 import { SwitchAccountButton } from "@/components/auth/switch-account-button";
+import { LoadedBrandProvider } from "@/components/brand/brand-fetch";
 
 const SHOPIFY_ADMIN_URL = "https://admin.shopify.com";
 
@@ -44,5 +45,6 @@ export default async function BrandLayout({
     );
   }
 
-  return <>{children}</>;
+  const brand = context.membership?.brand;
+  return <LoadedBrandProvider brand={brand ? { id: brand.id, name: brand.name } : null}>{children}</LoadedBrandProvider>;
 }

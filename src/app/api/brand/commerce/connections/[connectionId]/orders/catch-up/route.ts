@@ -1,3 +1,4 @@
+import { assertExpectedBrand } from "@/lib/brand-auth";
 import { Commerce7ReconciliationBusyError } from "@/lib/commerce/providers/commerce7-reconciliation-claim";
 import { NextResponse, type NextRequest } from "next/server";
 import {
@@ -41,12 +42,13 @@ export async function POST(
   context: { params: Promise<{ connectionId: string }> },
 ) {
   const { connectionId } = await context.params;
-  return brandCommerceCatchUpPostImpl({}, connectionId);
+  return brandCommerceCatchUpPostImpl({}, connectionId, request);
 }
 
 export async function brandCommerceCatchUpPostImpl(
   overrides: Partial<BrandCommerceCatchUpDeps> = {},
   connectionId?: string,
+  request?: Request,
 ) {
   const deps: BrandCommerceCatchUpDeps = { ...DEFAULT_DEPS, ...overrides };
 
@@ -59,6 +61,8 @@ export async function brandCommerceCatchUpPostImpl(
         { status: failure.status },
       );
     }
+    const mismatch = request && assertExpectedBrand(request, context);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
 
     if (!connectionId || typeof connectionId !== "string" || !connectionId.trim()) {
       return NextResponse.json({ error: "A commerce connection id is required." }, { status: 400 });

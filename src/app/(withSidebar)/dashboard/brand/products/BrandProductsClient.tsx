@@ -1,5 +1,7 @@
 "use client";
 
+import { useBrandRawFetch } from "@/components/brand/brand-fetch";
+
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Package, RefreshCw } from "lucide-react";
@@ -256,6 +258,7 @@ function SyncRunHistory({ connectionId }: { connectionId: string }) {
 const PAGE_LIMIT = 50;
 
 export function BrandProductsClient() {
+  const brandFetch = useBrandRawFetch();
   const [brandStatus, setBrandStatus] = useState<BrandCommerceStatus>(null);
   const [connections, setConnections] = useState<LiveConnection[]>([]);
   const [connectionId, setConnectionId] = useState<string>("");
@@ -482,7 +485,7 @@ export function BrandProductsClient() {
       // PHASE 16C2: send the EXACT connection identity the brand is actually
       // using — never rely on the backend's "missing provider => Shopify"
       // default, which exists only for legacy callers.
-      const response = await fetch("/api/brand/products/sync", {
+      const response = await brandFetch("/api/brand/products/sync", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -552,7 +555,7 @@ export function BrandProductsClient() {
       shortDescriptionOverride: string | null;
     }>,
   ) {
-    const response = await fetch(`/api/brand/products/${productId}/selection`, {
+    const response = await brandFetch(`/api/brand/products/${productId}/selection`, {
       method: "PATCH",
       credentials: "include",
       headers: { "Content-Type": "application/json" },

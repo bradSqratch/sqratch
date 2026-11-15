@@ -1,3 +1,4 @@
+import { assertExpectedBrand } from "@/lib/brand-auth";
 import { NextRequest, NextResponse } from "next/server";
 import {
   getBrandContextFailure,
@@ -43,12 +44,13 @@ export async function POST(
   context: { params: Promise<{ connectionId: string }> },
 ) {
   const { connectionId } = await context.params;
-  return commerce7DisconnectPostImpl({}, connectionId);
+  return commerce7DisconnectPostImpl({}, connectionId, request);
 }
 
 export async function commerce7DisconnectPostImpl(
   overrides: Partial<Commerce7DisconnectDeps> = {},
   connectionId?: string,
+  request?: Request,
 ) {
   const deps: Commerce7DisconnectDeps = { ...DEFAULT_DEPS, ...overrides };
 
@@ -62,6 +64,8 @@ export async function commerce7DisconnectPostImpl(
         { status: failure.status },
       );
     }
+    const mismatch = request && assertExpectedBrand(request, context);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
 
     if (!connectionId || typeof connectionId !== "string" || !connectionId.trim()) {
       return NextResponse.json(

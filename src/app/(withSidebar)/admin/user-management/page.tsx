@@ -132,6 +132,7 @@ export default function AdminUserManagementPage() {
   const [error, setError] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [editForm, setEditForm] = useState<EditForm | null>(null);
+  const [editError, setEditError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<UserRecord | null>(null);
   const [createForm, setCreateForm] = useState<CreateForm>(emptyCreateForm);
   const [submitting, setSubmitting] = useState(false);
@@ -212,7 +213,7 @@ export default function AdminUserManagementPage() {
     }
 
     setSubmitting(true);
-    setError(null);
+    setEditError(null);
 
     try {
       await fetchJson(
@@ -228,13 +229,14 @@ export default function AdminUserManagementPage() {
       setEditForm(null);
       await loadUsers(query);
     } catch (saveError) {
-      setError(getErrorMessage(saveError, "Failed to update user."));
+      setEditError(getErrorMessage(saveError, "Failed to update user."));
     } finally {
       setSubmitting(false);
     }
   }
 
   useEffect(() => {
+    setEditError(null);
     setTransferEmail("");
     setTransferError(null);
     setTransferConfirmOpen(false);
@@ -590,6 +592,12 @@ export default function AdminUserManagementPage() {
               Update user details, role, and active state.
             </DialogDescription>
           </DialogHeader>
+
+          {editError && (
+            <div role="alert" className="rounded-xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm text-red-700 dark:text-red-200">
+              {editError}
+            </div>
+          )}
 
           {editForm && (
             <div className="grid gap-4 py-2">

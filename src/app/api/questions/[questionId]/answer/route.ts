@@ -1,5 +1,6 @@
+import { publicDisplayName } from "@/lib/display-name";
 import { NextRequest, NextResponse } from "next/server";
-import { getViewerContext } from "@/lib/experience-access";
+import { getViewerContext, isExperienceVisibleToViewer } from "@/lib/experience-access";
 import prisma from "@/lib/prisma";
 
 export async function POST(
@@ -32,6 +33,7 @@ export async function POST(
         id: true,
         experience: {
           select: {
+            isActive: true,
             creator: {
               select: {
                 userId: true,
@@ -47,6 +49,10 @@ export async function POST(
         { error: "Question not found." },
         { status: 404 },
       );
+    }
+
+    if (!isExperienceVisibleToViewer(question.experience, viewer.userId)) {
+      return NextResponse.json({ error: "Question not found." }, { status: 404 });
     }
 
     if (question.experience.creator.userId !== viewer.userId) {
@@ -105,7 +111,6 @@ export async function POST(
             select: {
               id: true,
               name: true,
-              email: true,
             },
           },
         },
@@ -119,7 +124,7 @@ export async function POST(
         createdAt: answer.createdAt,
         answeredBy: {
           id: answer.answeredBy.id,
-          name: answer.answeredBy.name || answer.answeredBy.email,
+          name: publicDisplayName(answer.answeredBy),
         },
       },
     });

@@ -161,6 +161,8 @@ before(async () => {
     prismaModule[m] = unwrapped;
   }
 
+  // Transaction tests model row locks without opening a real database connection.
+  prismaModule.$queryRaw = async () => [];
   prismaModule.$transaction = (arg: unknown) => {
     if (typeof arg === "function") {
       return arg(prismaModule);

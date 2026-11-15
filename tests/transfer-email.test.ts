@@ -269,6 +269,9 @@ describe("admin user PATCH route", () => {
       "utf8",
     );
     assert.match(source, /EMAIL_CHANGE_NOT_ALLOWED/);
-    assert.match(source, /data: \{ name, role, isActive \}/);
+    assert.match(source, /changeUserAccess\(\{ actorId: session.userId, targetId: id, name, email, role, isActive \}\)/);
+    const service = readFileSync(join(process.cwd(), "src/lib/admin-user-mutations.ts"), "utf8");
+    assert.match(service, /existing.email.toLowerCase\(\) !== input.email/);
+    assert.match(service, /throw new Error\("EMAIL_CHANGE_NOT_ALLOWED"\)/);
   });
 });

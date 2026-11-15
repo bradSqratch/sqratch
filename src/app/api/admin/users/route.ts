@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAdminContext, normalizeUserRole } from "@/lib/admin-auth";
 import prisma from "@/lib/prisma";
+import { changeUserAccess, adminMutationError } from "@/lib/admin-user-mutations";
 
 export async function GET(request: NextRequest) {
   try {
@@ -124,69 +125,13 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
-    const updatedUser = await prisma.$transaction(async (tx) => {
-      const existingUser = await tx.user.findUnique({
-        where: { id: userId },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-        },
-      });
-
-      if (!existingUser) {
-        throw new Error("USER_NOT_FOUND");
-      }
-
-      const userUpdateData: {
-        role?: typeof nextRole extends undefined ? never : NonNullable<typeof nextRole>;
-        isActive?: boolean;
-      } = {};
-
-      if (nextRole) {
-        userUpdateData.role = nextRole;
-      }
-
-      if (isActive !== undefined) {
-        userUpdateData.isActive = isActive;
-      }
-
-      const user = await tx.user.update({
-        where: { id: userId },
-        data: userUpdateData,
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          isEmailVerified: true,
-          createdAt: true,
-          isActive: true,
-        },
-      });
-
-      if (nextRole === "CREATOR") {
-        await tx.creatorProfile.upsert({
-          where: { userId },
-          update: {
-            displayName:
-              existingUser.name?.trim() || existingUser.email.split("@")[0],
-            isActive: true,
-          },
-          create: {
-            userId,
-            displayName:
-              existingUser.name?.trim() || existingUser.email.split("@")[0],
-            isActive: true,
-          },
-        });
-      }
-
-      return user;
-    });
+    const updatedUser = await changeUserAccess({ actorId: context.userId, targetId: userId, role: nextRole || undefined, isActive });
 
     return NextResponse.json({ data: updatedUser });
   } catch (error) {
+    if (error instanceof Error && error.message === "ACTOR_NOT_ADMIN") return NextResponse.json({ error: "Administrator access is no longer active." }, { status: 403 });
+    const conflict = adminMutationError(error);
+    if (conflict) return NextResponse.json(conflict, { status: 409 });
     if (error instanceof Error && error.message === "USER_NOT_FOUND") {
       return NextResponse.json({ error: "User not found." }, { status: 404 });
     }

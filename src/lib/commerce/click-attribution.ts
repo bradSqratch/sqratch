@@ -847,6 +847,14 @@ export async function handleCommerceClick(
       return genericNotFound();
     }
 
+    // Creator previews must not generate commerce attribution evidence.
+    if (access.isCreatorOwner) {
+      const response = NextResponse.redirect(destination.toString(), 302);
+      response.headers.set("Cache-Control", "private, no-store");
+      response.headers.set("Referrer-Policy", "no-referrer");
+      return response;
+    }
+
     const now = new Date();
     let token: string | null = null;
 

@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useBrandRawFetch } from "@/components/brand/brand-fetch";
+import { getErrorMessage } from "@/components/experience/client-utils";
 
 type BrandOption = {
   id: string;
@@ -10,6 +12,7 @@ type BrandOption = {
 };
 
 export function BrandSelector() {
+  const brandFetch = useBrandRawFetch();
   const [brands, setBrands] = useState<BrandOption[]>([]);
   const [activeBrandId, setActiveBrandId] = useState("");
   const [selectionRequired, setSelectionRequired] = useState(false);
@@ -49,15 +52,15 @@ export function BrandSelector() {
     setSaving(true);
     setError(null);
     try {
-      const response = await fetch("/api/brand/context", {
+      const response = await brandFetch("/api/brand/context", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ brandId }),
       });
       if (!response.ok) throw new Error("Brand selection failed");
       window.location.reload();
-    } catch {
-      setError("Could not switch brands. Please try again.");
+    } catch (err) {
+      setError(getErrorMessage(err, "Could not switch brands. Please try again."));
     } finally {
       setSaving(false);
     }

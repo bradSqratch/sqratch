@@ -1,3 +1,4 @@
+import { assertExpectedBrand } from "@/lib/brand-auth";
 import { NextRequest, NextResponse } from "next/server";
 import {
   getBrandContextFailure,
@@ -50,13 +51,14 @@ export async function PUT(
 ) {
   const { connectionId } = await context.params;
   const body = await request.json().catch(() => null);
-  return commerce7ConfigurationPutImpl({}, connectionId, body);
+  return commerce7ConfigurationPutImpl({}, connectionId, body, request);
 }
 
 export async function commerce7ConfigurationPutImpl(
   overrides: Partial<Commerce7ConfigurationDeps> = {},
   connectionId?: string,
   body?: unknown,
+  request?: Request,
 ) {
   const deps: Commerce7ConfigurationDeps = { ...DEFAULT_DEPS, ...overrides };
 
@@ -70,6 +72,8 @@ export async function commerce7ConfigurationPutImpl(
         { status: failure.status },
       );
     }
+    const mismatch = request && assertExpectedBrand(request, context);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
 
     if (!connectionId || typeof connectionId !== "string" || !connectionId.trim()) {
       return NextResponse.json(

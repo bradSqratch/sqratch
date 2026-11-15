@@ -25,6 +25,7 @@ export type ExperienceShellData = {
   isLoggedIn: boolean;
   hasUnlockedCampaign: boolean;
   isCreatorOwner: boolean;
+  isOwnerPreview?: boolean;
   hasRedeemedQrWarning: boolean;
   /** Server-resolved public acquisition context, never inferred client-side. */
   resolvedCampaignId?: string | null;

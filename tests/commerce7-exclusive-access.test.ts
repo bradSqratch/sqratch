@@ -1,4 +1,5 @@
 import "./env-setup";
+import { assertExpectedBrand } from "../src/lib/brand-auth";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
@@ -140,7 +141,7 @@ function brandRoute(products: Row[], offers: Row[] = []) {
     exports, require(name: string) {
       const dependencies: Record<string, unknown> = {
         "next/server": { NextResponse }, "@/lib/prisma": { __esModule: true, default: db }, "@/lib/commerce7-reward-eligibility": eligibility, "@/lib/commerce7-reward-domain": domain,
-        "@/lib/brand-auth": { getBrandManagementContext: async () => ({ membership: { brand: { id: "brand" } } }), getBrandContextFailure: () => ({ error: "no", status: 403 }) },
+        "@/lib/brand-auth": { assertExpectedBrand, getBrandManagementContext: async () => ({ membership: { brand: { id: "brand" } } }), getBrandContextFailure: () => ({ error: "no", status: 403 }) },
         "@/lib/commerce/connection-service": { getActiveCommerceConnection: async (_brand: string, provider: string) => provider === "COMMERCE7" ? { id: "connection", displayName: "Winery", currencyCode: "CAD", status: "CONNECTED" } : null, isConnectionUsable: () => true },
         "@/lib/commerce/providers/commerce7": { getCommerce7AppConfig: () => ({}) }, "@/lib/commerce/providers/commerce7-rewards-client": { claimTagTitle: () => "SQRATCH-x" },
         "@/lib/commerce7-reward-http": { rewardErrorResponse: (error: Error) => NextResponse.json({ error: error.message }, { status: 500 }) },
@@ -192,7 +193,7 @@ function tagOptionsRoute(options: { products?: Row[]; tags?: Record<string, Row 
   class FakeClient { constructor(readonly tenant: string) { reads.push(`tenant:${tenant}`); } async customerTag(id: string) { reads.push(`GET tag ${id}`); if (options.tags && id in options.tags) return options.tags[id]; return ({ [TAG]: { id: TAG, title: "SQRATCH Rare Wine Test", type: "Manual", objectType: "Customer" }, [SECOND]: { id: SECOND, title: "Library Members", type: "Manual", objectType: "Customer" }, [AUTO]: { id: AUTO, title: "Big Spenders", type: "Dynamic", objectType: "Customer" } } as Record<string, Row>)[id] ?? null; } }
   const handler = loadRoute("src/app/api/brand/rewards/commerce7/exclusive-tags/route.ts", {
     "@/lib/prisma": { __esModule: true, default: { connectedCommerceProduct: { findMany: async ({ where }: { where: Row }) => products.filter((p) => p.brandId === where.brandId && p.connectionId === where.connectionId && p.isAvailable) }, brandRewardOffer: { findFirst: async ({ where }: { where: Row }) => (options.offers ?? []).find((o) => o.id === where.id && o.brandId === where.brandId) ?? null } } },
-    "@/lib/brand-auth": { getBrandManagementContext: async () => options.brand === false ? null : { membership: { brand: { id: "brand" } } }, getBrandContextFailure: () => ({ error: "Brand admin access required.", status: 403 }) },
+    "@/lib/brand-auth": { assertExpectedBrand, getBrandManagementContext: async () => options.brand === false ? null : { membership: { brand: { id: "brand" } } }, getBrandContextFailure: () => ({ error: "Brand admin access required.", status: 403 }) },
     "@/lib/commerce/connection-service": { getActiveCommerceConnection: async () => ({ id: "connection", externalAccountId: "synthetic-tenant" }), isConnectionUsable: () => true },
     "@/lib/commerce/providers/commerce7": { getCommerce7AppConfig: () => options.backend === false ? null : {} },
     "@/lib/commerce/providers/commerce7-rewards-client": { Commerce7RewardsClient: FakeClient },
@@ -238,13 +239,13 @@ test("the Brand claim route refuses to revoke exclusive access: SQRATCH never de
   const calls: string[] = [];
   const handler = loadRoute("src/app/api/brand/rewards/commerce7/claims/[claimId]/route.ts", {
     "@/lib/prisma": { __esModule: true, default: { commerceRewardRedemption: { findFirst: async () => ({ id: "claim", brandId: "brand", provider: "COMMERCE7", rewardMode: "EXCLUSIVE_PRODUCT_ACCESS", status: "ISSUED", externalDiscountId: "coupon-1", provisioningOwner: null }), updateMany: async () => { calls.push("update"); return { count: 1 }; } }, commerceConnection: { findFirst: async () => { calls.push("connection"); return {}; } } } },
-    "@/lib/brand-auth": { getBrandManagementContext: async () => ({ membership: { brand: { id: "brand" } } }), getBrandContextFailure: () => ({ error: "no", status: 403 }) },
+    "@/lib/brand-auth": { assertExpectedBrand, getBrandManagementContext: async () => ({ membership: { brand: { id: "brand" } } }), getBrandContextFailure: () => ({ error: "no", status: 403 }) },
     "@/lib/commerce7-rewards": { provisionCommerce7Claim: async () => { calls.push("provision"); } },
     "@/lib/commerce/providers/commerce7-rewards-client": { Commerce7RewardsClient: class { constructor() { calls.push("client"); } }, object: (value: unknown) => value && typeof value === "object" ? value : null },
     "@/lib/commerce7-reward-domain": domain,
     "@/lib/commerce7-reward-http": { rewardErrorResponse: (error: { message: string; status?: number }) => NextResponse.json({ error: error.message }, { status: error.status ?? 409 }) },
   });
-  const response = await handler.POST({ json: async () => ({ action: "REVOKE" }) }, { params: Promise.resolve({ claimId: "claim" }) });
+  const response = await handler.POST({ headers: new Headers(), json: async () => ({ action: "REVOKE" }) }, { params: Promise.resolve({ claimId: "claim" }) });
   assert.equal(response.status, 409); assert.match((await response.json()).error, /does not revoke Commerce7 Customer Tag access/); assert.deepEqual(calls, []);
 });
 
@@ -254,7 +255,7 @@ test("Brand claims hide the merchant's tag UUID for exclusive claims and report 
   const db = { brandRewardOffer: { findMany: async () => [] }, connectedCommerceProduct: { findMany: async () => [] }, commerceRewardRedemption: { findMany: async () => [claim], groupBy: async ({ by }: { by: string[] }) => by.includes("providerTagId") ? [{ connectionId: "connection", providerCustomerId: "customer-1", providerTagId: TAG, _count: { _all: 2 } }] : [] } };
   runInNewContext(ts.transpileModule(readFileSync("src/app/api/brand/rewards/commerce7/route.ts", "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, { exports, require(name: string) {
     const dependencies: Record<string, unknown> = { "next/server": { NextResponse }, "@/lib/prisma": { __esModule: true, default: db }, "@/lib/commerce7-reward-eligibility": eligibility, "@/lib/commerce7-reward-domain": domain,
-      "@/lib/brand-auth": { getBrandManagementContext: async () => ({ membership: { brand: { id: "brand" } } }), getBrandContextFailure: () => ({ error: "no", status: 403 }) },
+      "@/lib/brand-auth": { assertExpectedBrand, getBrandManagementContext: async () => ({ membership: { brand: { id: "brand" } } }), getBrandContextFailure: () => ({ error: "no", status: 403 }) },
       "@/lib/commerce/connection-service": { getActiveCommerceConnection: async () => null, isConnectionUsable: () => true }, "@/lib/commerce/providers/commerce7": { getCommerce7AppConfig: () => ({}) },
       "@/lib/commerce/providers/commerce7-rewards-client": { claimTagTitle: () => "SQRATCH-per-claim" }, "@/lib/commerce7-reward-http": { rewardErrorResponse: (error: Error) => NextResponse.json({ error: error.message }, { status: 500 }) } };
     return dependencies[name];

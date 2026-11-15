@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
-import { deleteStorageObjectByUrl } from "@/lib/storage-upload";
+import { cleanupUnreferencedMedia } from "@/lib/media-cleanup";
 
 export async function GET() {
   try {
@@ -72,7 +72,7 @@ export async function PATCH(request: NextRequest) {
     });
 
     if (existing?.imageUrl && existing.imageUrl !== user.imageUrl) {
-      await deleteStorageObjectByUrl(existing.imageUrl);
+      await cleanupUnreferencedMedia(existing.imageUrl);
     }
 
     return NextResponse.json({ data: user });
