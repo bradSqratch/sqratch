@@ -12,6 +12,7 @@ import {
   getViewerSessionRecord,
 } from "@/lib/session";
 import { resolveValidatedPublicCampaignContext } from "@/lib/campaign-context";
+import { raiseLessonProgress } from "@/lib/lesson-progress";
 import {
   awardLessonCompletionPoints,
   awardCourseCompletionPoints,
@@ -400,61 +401,16 @@ export async function POST(request: NextRequest) {
           }),
     });
 
-    const progressWhere = access.viewer.userId
-      ? {
-          userId_lessonId: {
-            userId: access.viewer.userId,
-            lessonId,
-          },
-        }
-      : {
-          sessionId_lessonId: {
-            sessionId,
-            lessonId,
-          },
-        };
-
-    const existing = await prisma.lessonProgress.findUnique({
-      where: progressWhere,
-      select: {
-        id: true,
-        lastPositionSeconds: true,
-        isCompleted: true,
-      },
-    });
-
-    const progress = existing
-      ? await prisma.lessonProgress.update({
-          where: { id: existing.id },
-          data: {
-            lastPositionSeconds: Math.max(
-              existing.lastPositionSeconds,
-              lastPositionSeconds,
-            ),
-            isCompleted: existing.isCompleted || isCompleted,
-          },
-          select: {
-            lessonId: true,
-            lastPositionSeconds: true,
-            isCompleted: true,
-            updatedAt: true,
-          },
-        })
-      : await prisma.lessonProgress.create({
-          data: {
-            lessonId,
-            userId: access.viewer.userId || undefined,
-            sessionId: access.viewer.userId ? undefined : sessionId,
-            lastPositionSeconds,
-            isCompleted,
-          },
-          select: {
-            lessonId: true,
-            lastPositionSeconds: true,
-            isCompleted: true,
-            updatedAt: true,
-          },
-        });
+    // Raise-only write: the stored position never decreases and a completed
+    // lesson never reverts, even when a sign-in transfer or another tab writes
+    // the same row at the same time.
+    const progress = await raiseLessonProgress(
+      prisma,
+      access.viewer.userId
+        ? { userId: access.viewer.userId }
+        : { sessionId },
+      { lessonId, lastPositionSeconds, isCompleted },
+    );
 
     // Award creator-configured completion rewards for logged-in users only.
     // Anonymous completions are rewarded later, on progress merge. Awards are

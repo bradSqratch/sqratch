@@ -1735,6 +1735,16 @@ describe("Phase 10 write-once durability: no code path rewrites surface or attri
           checked = checked.replace(statement, "");
         }
       }
+      if (relative === "src/lib/anonymous-transfer.ts") {
+        // Exact row locks only: the claim of one anonymous row, taken before its values are read.
+        for (const statement of [
+          'tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM "LessonProgress"\n    WHERE id = ${rowId} AND "sessionId" = ${sessionId} FOR UPDATE`',
+          'tx.$queryRaw<Array<{ id: string }>>`SELECT id FROM "CampaignUnlock"\n    WHERE id = ${unlockId} AND "userId" IS NULL FOR UPDATE`',
+        ]) {
+          assert.equal(checked.split(statement).length, 2, `missing or duplicate transfer lock: ${statement}`);
+          checked = checked.replace(statement, "");
+        }
+      }
       if (relative === "src/lib/lesson-create.ts") {
         const statement = 'tx.$queryRaw`SELECT id FROM "Course" WHERE id = ${data.courseId} FOR UPDATE`';
         assert.equal(checked.split(statement).length, 2, "missing or duplicate course lock");

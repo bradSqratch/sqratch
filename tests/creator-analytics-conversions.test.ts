@@ -56,9 +56,10 @@ describe("Creator Analytics — attributed conversions & revenue panel", () => {
 
   test("4. creator attributed revenue renders per currency via the same never-summed helper as the Brand page", () => {
     assert.match(source, /formatMoneyRows/);
-    assert.match(source, /<MoneyRowsCard title="Gross attributed revenue"/);
-    assert.match(source, /<MoneyRowsCard title="Refunded attributed revenue"/);
-    assert.match(source, /<MoneyRowsCard title="Net attributed revenue"/);
+    assert.match(source, /<MoneyRowsCard \{\.\.\.ORDER_VALUE_LABELS\.attributedOrderValue\} rows=\{data\.attributedOrderValueByCurrency\}/);
+    assert.match(source, /<MoneyRowsCard \{\.\.\.ORDER_VALUE_LABELS\.refunded\} rows=\{data\.refundedAttributedValueByCurrency\}/);
+    assert.match(source, /<MoneyRowsCard \{\.\.\.ORDER_VALUE_LABELS\.currentNet\} rows=\{data\.currentNetAttributedOrderValueByCurrency\}/);
+    assert.doesNotMatch(source, /Gross attributed revenue|Net attributed revenue/);
     const cardStart = source.indexOf("function MoneyRowsCard(");
     const cardBody = source.slice(cardStart, cardStart + 700);
     assert.doesNotMatch(cardBody, /\.reduce\(/);
@@ -116,8 +117,12 @@ describe("Creator Analytics — attributed conversions & revenue panel", () => {
   });
 
   test("a race-safety sequence guard exists on the conversion request", () => {
-    assert.match(source, /conversionRequestSeq/);
-    assert.match(source, /seq !== conversionRequestSeq\.current/);
+    // The per-panel sequence counter was replaced by the shared latest-request
+    // guard, which also aborts the superseded request on the network.
+    assert.match(source, /const beginConversion = useLatestRequest\(\)/);
+    assert.match(source, /const request = beginConversion\(\)/);
+    assert.match(source, /if \(!request\.isCurrent\(\)\) return/);
+    assert.match(source, /signal: request\.signal/);
   });
 
   test("no naive conversion-rate (attributed orders / clicks) is ever computed", () => {

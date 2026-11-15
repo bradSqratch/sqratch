@@ -17,6 +17,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import CommonNavbar from "@/components/commonNavbar";
 import { normalizeInternalRedirectPath } from "@/lib/safe-redirect";
+import {
+  requestAnonymousTransfer,
+  withTransferPending,
+} from "@/lib/anonymous-transfer-client";
 
 type Message = { type: "error" | "success"; text: React.ReactNode };
 
@@ -142,19 +146,20 @@ function LoginPageInner() {
       //   return;
       // }
 
-      try {
-        await fetch("/api/progress/merge", {
-          method: "POST",
-          credentials: "include",
-        });
-      } catch (mergeError) {
-        console.error("Failed to merge anonymous progress:", mergeError);
-      }
-
-      setMessage({ type: "success", text: "Login successful! Redirecting…" });
-      setTimeout(() => {
-        router.push(nextPath);
-      }, 600);
+      // Signing in and attaching earlier anonymous progress are separate
+      // outcomes. Never hold the redirect on a timer: attach once, then go.
+      // If attaching could not finish, the destination shows a retry notice.
+      const transferStatus = await requestAnonymousTransfer();
+      setMessage({
+        type: "success",
+        text:
+          transferStatus === "complete"
+            ? "Login successful! Redirecting…"
+            : "Login successful! Your earlier progress is still being attached — you can retry from the next page.",
+      });
+      router.push(
+        transferStatus === "complete" ? nextPath : withTransferPending(nextPath),
+      );
     } else if (attempt < MAX_ATTEMPTS) {
       // retry briefly
       setTimeout(() => checkSession(attempt + 1), 500);

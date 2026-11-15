@@ -17,6 +17,8 @@ export type ConversionAnalyticsOrder = {
   totalMinor: bigint | null;
   totalRefundedMinor: bigint | null;
   netRevenueMinor: bigint | null;
+  /** Set when the provider reports the order cancelled. Not read by any money figure; only counted. */
+  cancelledAt?: Date | null;
   attribution: {
     entryCampaignId: string | null;
     productCampaignId: string | null;
@@ -148,8 +150,21 @@ export type ConversionDailyPoint = {
    * CAD to USD produces a number denominated in nothing. `UNKNOWN` stays
    * `UNKNOWN`.
    */
+  /**
+   * Order value of every attributed order that day, whatever its payment
+   * status (pending, authorized and voided orders included). It is NOT money
+   * collected.
+   */
+  attributedOrderValueByCurrency: MinorByCurrencyRow[];
+  /** Cumulative refunded value of those orders as last reported. */
+  refundedAttributedValueByCurrency: MinorByCurrencyRow[];
+  /** Current net value of paid, partially paid and partially refunded orders only. Not a payment total. */
+  currentNetAttributedOrderValueByCurrency: MinorByCurrencyRow[];
+  /** @deprecated Same values as `attributedOrderValueByCurrency`; kept for one release. */
   grossRevenueByCurrency: MinorByCurrencyRow[];
+  /** @deprecated Same values as `refundedAttributedValueByCurrency`; kept for one release. */
   refundedRevenueByCurrency: MinorByCurrencyRow[];
+  /** @deprecated Same values as `currentNetAttributedOrderValueByCurrency`; kept for one release. */
   netRevenueByCurrency: MinorByCurrencyRow[];
 };
 
@@ -213,15 +228,21 @@ export function buildConversionDailyTrend(
   ) {
     const key = toUtcDayKey(new Date(bucket));
     const dayRows = byDay.get(key) ?? [];
+    // The SAME currency-grouping function the headline figures use, so a
+    // trend point can never diverge from the summary's currency semantics.
+    const orderValue = sumMinorByCurrency(dayRows, "totalMinor");
+    const refundedValue = sumMinorByCurrency(dayRows, "totalRefundedMinor");
+    const currentNetValue = sumMinorByCurrency(dayRows, "netRevenueMinor", isCurrentNetPositive);
     series.push({
       date: key,
       attributedOrders: dayRows.length,
       currentlyNetPositivePaidOrders: dayRows.filter(isCurrentNetPositive).length,
-      // The SAME currency-grouping function the headline figures use, so a
-      // trend point can never diverge from the summary's currency semantics.
-      grossRevenueByCurrency: sumMinorByCurrency(dayRows, "totalMinor"),
-      refundedRevenueByCurrency: sumMinorByCurrency(dayRows, "totalRefundedMinor"),
-      netRevenueByCurrency: sumMinorByCurrency(dayRows, "netRevenueMinor", isCurrentNetPositive),
+      attributedOrderValueByCurrency: orderValue,
+      refundedAttributedValueByCurrency: refundedValue,
+      currentNetAttributedOrderValueByCurrency: currentNetValue,
+      grossRevenueByCurrency: orderValue,
+      refundedRevenueByCurrency: refundedValue,
+      netRevenueByCurrency: currentNetValue,
     });
   }
 
@@ -242,6 +263,39 @@ function startOfUtcDayMs(value: Date): number | null {
   return Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
 }
 
+/** Canonical display order for the payment-status breakdown; unknown status last. */
+const FINANCIAL_STATUS_ORDER = [
+  "PENDING",
+  "AUTHORIZED",
+  "PARTIALLY_PAID",
+  "PAID",
+  "PARTIALLY_REFUNDED",
+  "REFUNDED",
+  "VOIDED",
+] as const;
+
+export type FinancialStatusCountRow = {
+  /** A payment status, or `"UNKNOWN"` when the provider reported none. */
+  status: string;
+  orders: number;
+};
+
+/**
+ * How many attributed orders sit in each payment status, so a reader can see
+ * exactly what the order-value figures contain (an order-value total includes
+ * pending, authorized and voided orders). Zero rows are omitted.
+ */
+function buildFinancialStatusBreakdown(rows: readonly ConversionAnalyticsOrder[]): FinancialStatusCountRow[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const status = row.financialStatus ?? "UNKNOWN";
+    counts.set(status, (counts.get(status) ?? 0) + 1);
+  }
+  return [...FINANCIAL_STATUS_ORDER, "UNKNOWN"]
+    .filter((status) => (counts.get(status) ?? 0) > 0)
+    .map((status) => ({ status, orders: counts.get(status) ?? 0 }));
+}
+
 export function buildConversionAnalytics(rows: ConversionAnalyticsOrder[]) {
   const attributed = rows.filter(
     (row): row is AttributedConversionOrder => row.attribution !== null,
@@ -251,6 +305,16 @@ export function buildConversionAnalytics(rows: ConversionAnalyticsOrder[]) {
     (row) => row.financialStatus === "PENDING" || row.financialStatus === "AUTHORIZED",
   );
 
+  // `attributedOrderValue` is the sum of order totals for EVERY attributed
+  // order regardless of payment status. It is not collected money: SQRATCH has
+  // no captured-payment amount, only the order total, cumulative refunds and a
+  // status. `currentNet…` counts paid, partially paid and partially refunded
+  // orders only, at their order total minus refunds (a partially paid order
+  // contributes its full order total, not the amount paid so far).
+  const attributedOrderValue = sumMinorByCurrency(attributed, "totalMinor");
+  const refundedAttributedValue = sumMinorByCurrency(attributed, "totalRefundedMinor");
+  const currentNetAttributedOrderValue = sumMinorByCurrency(attributed, "netRevenueMinor", isCurrentNetPositive);
+
   return {
     totalIngestedOrders: rows.length,
     attributedOrders: attributed.length,
@@ -258,12 +322,23 @@ export function buildConversionAnalytics(rows: ConversionAnalyticsOrder[]) {
     pendingOrAuthorizedOrders: pendingOrAuthorized.length,
     partiallyRefundedOrders: attributed.filter((row) => row.financialStatus === "PARTIALLY_REFUNDED").length,
     fullyRefundedOrders: attributed.filter((row) => row.financialStatus === "REFUNDED").length,
+    // What the order-value figures contain, by payment status. Cancelled is a
+    // separate flag (an order can be cancelled in any status), so it is its
+    // own count and overlaps the statuses above rather than adding to them.
+    financialStatusBreakdown: buildFinancialStatusBreakdown(attributed),
+    cancelledAttributedOrders: attributed.filter((row) => row.cancelledAt != null).length,
     // Every money figure below is an ARRAY, one entry per currency present
     // in the underlying rows — see sumMinorByCurrency's doc comment for why
     // this can never be a single flat number.
-    grossAttributedRevenueByCurrency: sumMinorByCurrency(attributed, "totalMinor"),
-    refundedRevenueByCurrency: sumMinorByCurrency(attributed, "totalRefundedMinor"),
-    netAttributedRevenueByCurrency: sumMinorByCurrency(attributed, "netRevenueMinor", isCurrentNetPositive),
+    attributedOrderValueByCurrency: attributedOrderValue,
+    refundedAttributedValueByCurrency: refundedAttributedValue,
+    currentNetAttributedOrderValueByCurrency: currentNetAttributedOrderValue,
+    /** @deprecated Same values as `attributedOrderValueByCurrency`; kept for one release. */
+    grossAttributedRevenueByCurrency: attributedOrderValue,
+    /** @deprecated Same values as `refundedAttributedValueByCurrency`; kept for one release. */
+    refundedRevenueByCurrency: refundedAttributedValue,
+    /** @deprecated Same values as `currentNetAttributedOrderValueByCurrency`; kept for one release. */
+    netAttributedRevenueByCurrency: currentNetAttributedOrderValue,
     attributedOrdersByProvider: group(attributed.map((row) => row.provider)),
     attributedOrdersByEntryCampaign: group(attributed.map((row) => row.attribution.entryCampaignId)),
     attributedOrdersByProductCampaign: group(attributed.map((row) => row.attribution.productCampaignId)),

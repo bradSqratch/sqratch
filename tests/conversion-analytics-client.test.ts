@@ -27,9 +27,11 @@ function validBrandFixture(): BrandConversionAnalytics {
     pendingOrAuthorizedOrders: 1,
     partiallyRefundedOrders: 1,
     fullyRefundedOrders: 0,
-    grossAttributedRevenueByCurrency: [{ currencyCode: "USD", minor: "123456" }],
-    refundedRevenueByCurrency: [],
-    netAttributedRevenueByCurrency: [{ currencyCode: "USD", minor: "123456" }],
+    attributedOrderValueByCurrency: [{ currencyCode: "USD", minor: "123456" }],
+    refundedAttributedValueByCurrency: [],
+    currentNetAttributedOrderValueByCurrency: [{ currencyCode: "USD", minor: "123456" }],
+    financialStatusBreakdown: [{ status: "PAID", orders: 4 }, { status: "PENDING", orders: 2 }],
+    cancelledAttributedOrders: 0,
     attributedOrdersByProvider: [{ id: "SHOPIFY", orders: 6 }],
     attributedOrdersByEntryCampaign: [{ id: "campaign-1", name: "Spring", orders: 3 }],
     attributedOrdersByProductCampaign: [{ id: "campaign-2", name: "Push", orders: 3 }],
@@ -61,42 +63,42 @@ describe("parseBrandConversionAnalytics", () => {
   });
 
   test("3. a malformed revenue row (missing minor) is rejected safely", () => {
-    const fixture = validBrandFixture() as unknown as { grossAttributedRevenueByCurrency: unknown };
-    fixture.grossAttributedRevenueByCurrency = [{ currencyCode: "USD" }];
+    const fixture = validBrandFixture() as unknown as { attributedOrderValueByCurrency: unknown };
+    fixture.attributedOrderValueByCurrency = [{ currencyCode: "USD" }];
     assert.equal(parseBrandConversionAnalytics(fixture), null);
   });
 
   test("3b. a revenue row whose minor is a number (not a string) is rejected — BigInt-safe transport requires a decimal string", () => {
-    const fixture = validBrandFixture() as unknown as { grossAttributedRevenueByCurrency: unknown };
-    fixture.grossAttributedRevenueByCurrency = [{ currencyCode: "USD", minor: 123456 }];
+    const fixture = validBrandFixture() as unknown as { attributedOrderValueByCurrency: unknown };
+    fixture.attributedOrderValueByCurrency = [{ currencyCode: "USD", minor: 123456 }];
     assert.equal(parseBrandConversionAnalytics(fixture), null);
   });
 
   test("4. a large BigInt-derived minor value survives as a decimal string, unchanged", () => {
     const fixture = validBrandFixture();
-    fixture.grossAttributedRevenueByCurrency = [
+    fixture.attributedOrderValueByCurrency = [
       { currencyCode: "USD", minor: "9007199254740993" }, // one past Number.MAX_SAFE_INTEGER
     ];
     const parsed = parseBrandConversionAnalytics(fixture);
-    assert.equal(parsed?.grossAttributedRevenueByCurrency[0]?.minor, "9007199254740993");
+    assert.equal(parsed?.attributedOrderValueByCurrency[0]?.minor, "9007199254740993");
   });
 
   test("5. a multi-currency array parses with every row intact, never collapsed", () => {
     const fixture = validBrandFixture();
-    fixture.netAttributedRevenueByCurrency = [
+    fixture.currentNetAttributedOrderValueByCurrency = [
       { currencyCode: "CAD", minor: "132257" },
       { currencyCode: "USD", minor: "95300" },
     ];
     const parsed = parseBrandConversionAnalytics(fixture);
-    assert.equal(parsed?.netAttributedRevenueByCurrency.length, 2);
-    assert.deepEqual(parsed?.netAttributedRevenueByCurrency, fixture.netAttributedRevenueByCurrency);
+    assert.equal(parsed?.currentNetAttributedOrderValueByCurrency.length, 2);
+    assert.deepEqual(parsed?.currentNetAttributedOrderValueByCurrency, fixture.currentNetAttributedOrderValueByCurrency);
   });
 
   test("6. an UNKNOWN currency row parses and remains explicitly labelled UNKNOWN", () => {
     const fixture = validBrandFixture();
-    fixture.grossAttributedRevenueByCurrency = [{ currencyCode: "UNKNOWN", minor: "500" }];
+    fixture.attributedOrderValueByCurrency = [{ currencyCode: "UNKNOWN", minor: "500" }];
     const parsed = parseBrandConversionAnalytics(fixture);
-    assert.equal(parsed?.grossAttributedRevenueByCurrency[0]?.currencyCode, "UNKNOWN");
+    assert.equal(parsed?.attributedOrderValueByCurrency[0]?.currencyCode, "UNKNOWN");
   });
 
   test("the creator variant also parses its own valid shape and requires filters.experienceId", () => {
@@ -169,5 +171,45 @@ describe("providerLabel", () => {
   test("9. an unknown/future provider value never crashes presentation — falls back to the raw value", () => {
     assert.equal(providerLabel("SOME_FUTURE_PROVIDER"), "SOME_FUTURE_PROVIDER");
     assert.doesNotThrow(() => providerLabel(""));
+  });
+});
+
+describe("P36 — money field names (current names, and older names from a server not yet updated)", () => {
+  const older = () => {
+    const fixture = validBrandFixture() as unknown as Record<string, unknown>;
+    fixture.grossAttributedRevenueByCurrency = fixture.attributedOrderValueByCurrency;
+    fixture.refundedRevenueByCurrency = fixture.refundedAttributedValueByCurrency;
+    fixture.netAttributedRevenueByCurrency = fixture.currentNetAttributedOrderValueByCurrency;
+    delete fixture.attributedOrderValueByCurrency;
+    delete fixture.refundedAttributedValueByCurrency;
+    delete fixture.currentNetAttributedOrderValueByCurrency;
+    delete fixture.financialStatusBreakdown;
+    delete fixture.cancelledAttributedOrders;
+    return fixture;
+  };
+
+  test("older field names normalize to the current names with identical values", () => {
+    const parsed = parseBrandConversionAnalytics(older());
+    assert.deepEqual(parsed?.attributedOrderValueByCurrency, [{ currencyCode: "USD", minor: "123456" }]);
+    assert.deepEqual(parsed?.refundedAttributedValueByCurrency, []);
+    assert.deepEqual(parsed?.currentNetAttributedOrderValueByCurrency, [{ currencyCode: "USD", minor: "123456" }]);
+    // A server that predates the breakdown simply has none; it is never invented.
+    assert.deepEqual(parsed?.financialStatusBreakdown, []);
+    assert.equal(parsed?.cancelledAttributedOrders, 0);
+  });
+
+  test("a payload with neither the current nor the older money field is rejected", () => {
+    const fixture = older();
+    delete fixture.grossAttributedRevenueByCurrency;
+    assert.equal(parseBrandConversionAnalytics(fixture), null);
+  });
+
+  test("a malformed older-name field is still rejected, and a malformed status breakdown is rejected", () => {
+    const fixture = older();
+    fixture.netAttributedRevenueByCurrency = [{ currencyCode: "USD" }];
+    assert.equal(parseBrandConversionAnalytics(fixture), null);
+    const bad = validBrandFixture() as unknown as Record<string, unknown>;
+    bad.financialStatusBreakdown = [{ status: "PAID" }];
+    assert.equal(parseBrandConversionAnalytics(bad), null);
   });
 });

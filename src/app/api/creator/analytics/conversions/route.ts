@@ -145,7 +145,7 @@ export async function GET(request: NextRequest) {
       },
     },
     select: {
-      provider: true, financialStatus: true, currencyCode: true, totalMinor: true, totalRefundedMinor: true, netRevenueMinor: true,
+      provider: true, financialStatus: true, currencyCode: true, totalMinor: true, totalRefundedMinor: true, netRevenueMinor: true, cancelledAt: true,
       // PHASE D — bucket key for the daily trend; the SAME column this
       // query's `where` filters on. Still no campaign id and no line item.
       createdAt: true,
@@ -163,6 +163,7 @@ export async function GET(request: NextRequest) {
     totalMinor: row.totalMinor,
     totalRefundedMinor: row.totalRefundedMinor,
     netRevenueMinor: row.netRevenueMinor,
+    cancelledAt: row.cancelledAt,
     lineItems: [],
     attribution: row.attribution
       ? {

@@ -29,6 +29,7 @@ type Batch = {
   createdAt: string;
   quantity: number;
   canDelete: boolean;
+  archivedAt?: string | null;
   campaign: {
     id: string;
     name: string;
@@ -60,6 +61,14 @@ type QRBatchPageData = {
   batches: Batch[];
   campaigns: CampaignOption[];
   qrCodes: QRCodeRow[];
+};
+
+type ArchivedView = "exclude" | "only" | "include";
+
+const ARCHIVED_VIEW_LABELS: Record<ArchivedView, string> = {
+  exclude: "Active batches",
+  only: "Archived batches",
+  include: "All batches",
 };
 
 type EditQRForm = {
@@ -98,24 +107,34 @@ export default function BrandQRBatchesPage() {
   const [editForm, setEditForm] = useState<EditQRForm | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [deletingBatchId, setDeletingBatchId] = useState<string | null>(null);
+  const [archivingBatchId, setArchivingBatchId] = useState<string | null>(null);
+  const [archivedView, setArchivedView] = useState<ArchivedView>("exclude");
+  const listUrl = `/api/brand/qr-batches?archived=${archivedView}`;
 
   useEffect(() => {
+    // Switching views quickly must never let a slow earlier response replace
+    // the current view's rows: a response is applied only while its effect
+    // is still the latest.
+    let cancelled = false;
     async function load() {
       setLoading(true);
       setError(null);
 
       try {
-        const response = await fetchJson<QRBatchPageData>("/api/brand/qr-batches");
-        setData(response);
+        const response = await fetchJson<QRBatchPageData>(listUrl);
+        if (!cancelled) setData(response);
       } catch (loadError) {
-        setError(getErrorMessage(loadError, "Failed to load QR batches."));
+        if (!cancelled) setError(getErrorMessage(loadError, "Failed to load QR batches."));
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     }
 
     void load();
-  }, []);
+    return () => {
+      cancelled = true;
+    };
+  }, [listUrl]);
 
   const visibleBatches = useMemo(() => {
     const batches = data?.batches || [];
@@ -158,7 +177,7 @@ export default function BrandQRBatchesPage() {
 
   async function reloadData() {
     try {
-      const response = await fetchJson<QRBatchPageData>("/api/brand/qr-batches");
+      const response = await fetchJson<QRBatchPageData>(listUrl);
       setData(response);
     } catch (loadError) {
       setActionError(getErrorMessage(loadError, "Failed to refresh QR batches."));
@@ -218,6 +237,28 @@ export default function BrandQRBatchesPage() {
       setActionError(getErrorMessage(deleteError, "Failed to delete QR code."));
     } finally {
       setSavingId(null);
+    }
+  }
+
+  async function handleSetArchived(batchId: string, archive: boolean) {
+    setArchivingBatchId(batchId);
+    setActionError(null);
+
+    try {
+      await brandFetch(`/api/brand/qr-batches/${batchId}/${archive ? "archive" : "unarchive"}`, {
+        method: "POST",
+      });
+      if (selectedBatchId === batchId && archivedView !== "include") {
+        setSelectedBatchId("all");
+      }
+      await reloadData();
+    } catch (archiveError) {
+      await reloadData();
+      setActionError(
+        getErrorMessage(archiveError, archive ? "Failed to archive batch." : "Failed to restore batch."),
+      );
+    } finally {
+      setArchivingBatchId(null);
     }
   }
 
@@ -283,6 +324,28 @@ export default function BrandQRBatchesPage() {
         <div className="space-y-6">
           {actionError && !editForm && <p role="alert" className="text-sm text-red-700 dark:text-red-300">{actionError}</p>}
           <PageCard>
+            <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+              <p className="text-sm text-copy-60">
+                Archiving only hides a batch from this list. Its printed QR links, scans, rewards and exports keep working.
+              </p>
+              <label className="flex items-center gap-3 text-sm text-copy-70">
+                <span>Show</span>
+                <select
+                  value={archivedView}
+                  onChange={(event) => {
+                    setArchivedView(event.target.value as ArchivedView);
+                    setSelectedBatchId("all");
+                  }}
+                  className="h-10 min-w-[180px] rounded-xl border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
+                >
+                  {(Object.keys(ARCHIVED_VIEW_LABELS) as ArchivedView[]).map((view) => (
+                    <option key={view} value={view}>
+                      {ARCHIVED_VIEW_LABELS[view]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[720px] text-left text-sm">
                 <thead className="text-copy-55">
@@ -301,7 +364,14 @@ export default function BrandQRBatchesPage() {
                       className="cursor-pointer transition hover:bg-white/[0.03]"
                       onClick={() => setSelectedBatchId(batch.id)}
                     >
-                      <td className="py-3">{batch.name}</td>
+                      <td className="py-3">
+                        {batch.name}
+                        {batch.archivedAt ? (
+                          <span className="ml-2 rounded-full border border-edge/20 px-2 py-0.5 text-xs text-copy-65">
+                            Archived
+                          </span>
+                        ) : null}
+                      </td>
                       <td className="py-3">{batch.campaign?.name || "Unknown"}</td>
                       <td className="py-3">{formatDateTime(batch.createdAt)}</td>
                       <td className="py-3">{batch.quantity}</td>
@@ -320,6 +390,22 @@ export default function BrandQRBatchesPage() {
                           </Button>
                           <Button
                             type="button"
+                            variant="outline"
+                            disabled={archivingBatchId === batch.id}
+                            className="h-8 rounded-xl border-edge/20 bg-glass-10 px-4 text-ink hover:bg-glass-20"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleSetArchived(batch.id, !batch.archivedAt);
+                            }}
+                          >
+                            {archivingBatchId === batch.id
+                              ? "Saving..."
+                              : batch.archivedAt
+                                ? "Unarchive"
+                                : "Archive"}
+                          </Button>
+                          <Button
+                            type="button"
                             variant="destructive"
                             disabled={!batch.canDelete || deletingBatchId === batch.id}
                             aria-describedby={!batch.canDelete ? `batch-delete-reason-${batch.id}` : undefined}
@@ -334,7 +420,7 @@ export default function BrandQRBatchesPage() {
                               : "Delete Batch"}
                           </Button>
                         </div>
-                        {!batch.canDelete && <p id={`batch-delete-reason-${batch.id}`} className="mt-1 text-xs text-copy-65">Cannot delete — QR codes have already been used or distributed.</p>}
+                        {!batch.canDelete && <p id={`batch-delete-reason-${batch.id}`} className="mt-1 text-xs text-copy-65">Cannot delete — QR codes have already been used or distributed. Archive this batch to hide it from the list; its printed links keep working.</p>}
                       </td>
                     </tr>
                   ))}
@@ -343,7 +429,9 @@ export default function BrandQRBatchesPage() {
 
               {visibleBatches.length === 0 && (
                 <p className="pt-4 text-sm text-copy-60">
-                  No batches match the selected filters.
+                  {archivedView === "only"
+                    ? "No archived batches."
+                    : "No batches match the selected filters."}
                 </p>
               )}
             </div>

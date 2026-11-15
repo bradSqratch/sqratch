@@ -78,13 +78,17 @@ describe("Brand Analytics — attributed conversions & revenue panel", () => {
     assert.match(source, /Fully refunded/);
   });
 
-  test("9. gross/refunded/net revenue are rendered as three separate cards, never combined", () => {
-    assert.match(source, /Gross attributed revenue/);
-    assert.match(source, /Refunded attributed revenue/);
-    assert.match(source, /Net attributed revenue/);
-    assert.match(source, /<MoneyRowsCard title="Gross attributed revenue"/);
-    assert.match(source, /<MoneyRowsCard title="Refunded attributed revenue"/);
-    assert.match(source, /<MoneyRowsCard title="Net attributed revenue"/);
+  test("9. order value, refunded and current net order value are rendered as three separate, honestly named cards, never combined", () => {
+    // Labels come from one shared definition so the brand and creator pages
+    // cannot drift apart (see src/lib/commerce/analytics-labels.ts).
+    assert.match(source, /<MoneyRowsCard \{\.\.\.ORDER_VALUE_LABELS\.attributedOrderValue\} rows=\{data\.attributedOrderValueByCurrency\}/);
+    assert.match(source, /<MoneyRowsCard \{\.\.\.ORDER_VALUE_LABELS\.refunded\} rows=\{data\.refundedAttributedValueByCurrency\}/);
+    assert.match(source, /<MoneyRowsCard \{\.\.\.ORDER_VALUE_LABELS\.currentNet\} rows=\{data\.currentNetAttributedOrderValueByCurrency\}/);
+    assert.doesNotMatch(source, /Gross attributed revenue|Net attributed revenue|Refunded attributed revenue/);
+    const labels = readFileSync("src/lib/commerce/analytics-labels.ts", "utf8");
+    assert.match(labels, /title: "Attributed order value"/);
+    assert.match(labels, /title: "Current net attributed order value"/);
+    assert.match(labels, /not money collected/);
   });
 
   test("10. currency rows are never summed — MoneyRowsCard renders formatMoneyRows' per-currency lines, and no reduce/sum appears near revenue rendering", () => {
@@ -124,7 +128,7 @@ describe("Brand Analytics — attributed conversions & revenue panel", () => {
 
   test("13b. an empty state exists for zero ingested orders, and an UNKNOWN-currency-safe empty revenue message exists", () => {
     assert.match(source, /No commerce orders were recorded in this date range\./);
-    assert.match(source, /No attributed revenue in this range\./);
+    assert.match(source, /No attributed order value in this range\./);
   });
 
   test("14. no customer PII vocabulary or fields are introduced", () => {

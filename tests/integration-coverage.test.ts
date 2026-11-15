@@ -3489,45 +3489,55 @@ describe("Route Scenario 5: QR Redemption and Unlock", () => {
     assert.ok(!updateManyCalled);
   });
 
-  test("anonymous progress merge merges lessons and unlocks to user", async (t) => {
+  test("anonymous progress merge delegates to the shared transfer service and reports its status", async (t) => {
     setupMocks({ user: { id: "user-123", role: "USER", email: "test@user.com" } });
+    const session = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-    t.mock.method(prisma.lessonProgress, "findMany", async () => [
-      { id: "anon-progress-1", lessonId: "lesson-1", lastPositionSeconds: 120, isCompleted: true },
-    ]);
-
-    t.mock.method(prisma.campaignUnlock, "findMany", async () => [
-      { id: "anon-unlock-1", campaignId: "campaign-123", qrCodeId: "qr-123", anonKey: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" },
-    ]);
-
-    t.mock.method(prisma.lessonProgress, "findUnique", async () => null);
-    t.mock.method(prisma.lessonProgress, "create", async () => ({}));
-    t.mock.method(prisma.lessonProgress, "deleteMany", async () => ({ count: 1 }));
-
-    t.mock.method(prisma.campaignUnlock, "findFirst", async () => null);
-    t.mock.method(prisma.qRCode, "updateMany", async () => ({ count: 1 }));
-    t.mock.method(prisma.qRCode, "findUnique", async () => ({ status: "USED", redeemedById: "user-123" }));
-    t.mock.method(prisma.user, "update", async () => ({ id: "user-123" }));
-    t.mock.method(prisma.pointTransaction, "create", async () => ({}));
-
-    let unlockUpdated = false;
-    t.mock.method(prisma.campaignUnlock, "update", async () => {
-      unlockUpdated = true;
-      return { id: "anon-unlock-1" };
+    const seen: unknown[] = [];
+    t.mock.method(prisma.lessonProgress, "findMany", async (args: unknown) => {
+      seen.push(args);
+      return [];
     });
-
+    t.mock.method(prisma.campaignUnlock, "findMany", async (args: unknown) => {
+      seen.push(args);
+      return [];
+    });
+    t.mock.method(prisma.pointTransaction, "findMany", async () => []);
     t.mock.method(prisma.userSession, "updateMany", async () => ({ count: 1 }));
+
+    const req = makeJsonRequest("http://localhost/api/progress/merge", {}, "POST", { sqr_session: session });
+    const res = await mergePOST(req);
+    assert.equal(res.status, 200);
+    const json = await res.json();
+    assert.deepEqual(json.data, { status: "complete", mergedLessons: 0, mergedUnlocks: 0, pointsAwarded: 0 });
+    // The browser session comes from the caller's own cookie, and rows are looked up by it.
+    assert.ok(JSON.stringify(seen).includes(session));
+  });
+
+  test("anonymous progress merge answers 200 retry_required, not 500, when a step fails", async (t) => {
+    setupMocks({ user: { id: "user-123", role: "USER", email: "test@user.com" } });
+    t.mock.method(prisma.lessonProgress, "findMany", async () => {
+      throw new Error("database unavailable");
+    });
+    t.mock.method(prisma.campaignUnlock, "findMany", async () => []);
+    t.mock.method(prisma.pointTransaction, "findMany", async () => []);
+    t.mock.method(prisma.userSession, "updateMany", async () => ({ count: 1 }));
+    t.mock.method(console, "error", () => undefined);
 
     const req = makeJsonRequest("http://localhost/api/progress/merge", {}, "POST", {
       sqr_session: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     });
-
     const res = await mergePOST(req);
     assert.equal(res.status, 200);
-    const json = await res.json();
-    assert.equal(json.data.mergedLessons, 1);
-    assert.equal(json.data.mergedUnlocks, 1);
-    assert.ok(unlockUpdated);
+    assert.equal((await res.json()).data.status, "retry_required");
+  });
+
+  test("anonymous progress merge requires a signed-in user", async () => {
+    setupMocks(null);
+    const req = makeJsonRequest("http://localhost/api/progress/merge", {}, "POST", {
+      sqr_session: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    });
+    assert.equal((await mergePOST(req)).status, 401);
   });
 });
 

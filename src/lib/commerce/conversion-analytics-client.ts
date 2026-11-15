@@ -60,31 +60,53 @@ export type ConversionDailyPoint = {
   date: string;
   attributedOrders: number;
   currentlyNetPositivePaidOrders: number;
-  grossRevenueByCurrency: MoneyRow[];
-  refundedRevenueByCurrency: MoneyRow[];
-  netRevenueByCurrency: MoneyRow[];
+  /** Order value of every attributed order that day, whatever its payment status. Not money collected. */
+  attributedOrderValueByCurrency: MoneyRow[];
+  refundedAttributedValueByCurrency: MoneyRow[];
+  /** Paid, partially paid and partially refunded orders only. Not a payment total. */
+  currentNetAttributedOrderValueByCurrency: MoneyRow[];
+  /** @deprecated Older name for `attributedOrderValueByCurrency`; accepted from an older server and kept for one release. */
+  grossRevenueByCurrency?: MoneyRow[];
+  /** @deprecated Older name for `refundedAttributedValueByCurrency`. */
+  refundedRevenueByCurrency?: MoneyRow[];
+  /** @deprecated Older name for `currentNetAttributedOrderValueByCurrency`. */
+  netRevenueByCurrency?: MoneyRow[];
 };
 
-function isConversionDailyPoint(value: unknown): value is ConversionDailyPoint {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+/**
+ * Accepts the new names or, from a server that has not been updated yet, the
+ * older ones, and normalizes to the new names. A field that is present must be
+ * well-formed; one that is absent under both names is invalid.
+ */
+function moneyField(record: Record<string, unknown>, current: string, older: string): MoneyRow[] | null {
+  const candidates = [record[current], record[older]].filter((value) => value !== undefined);
+  if (candidates.length === 0 || !candidates.every(isMoneyRowArray)) return null;
+  return candidates[0] as MoneyRow[];
+}
+
+function normalizeConversionDailyPoint(value: unknown): ConversionDailyPoint | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const point = value as Record<string, unknown>;
   // A strict `YYYY-MM-DD` bucket key — a malformed one would silently
   // mis-order the series.
-  if (typeof point.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(point.date)) return false;
-  if (typeof point.attributedOrders !== "number" || !Number.isFinite(point.attributedOrders)) {
-    return false;
-  }
+  if (typeof point.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(point.date)) return null;
+  if (typeof point.attributedOrders !== "number" || !Number.isFinite(point.attributedOrders)) return null;
   if (
     typeof point.currentlyNetPositivePaidOrders !== "number" ||
     !Number.isFinite(point.currentlyNetPositivePaidOrders)
   ) {
-    return false;
+    return null;
   }
-  return (
-    isMoneyRowArray(point.grossRevenueByCurrency) &&
-    isMoneyRowArray(point.refundedRevenueByCurrency) &&
-    isMoneyRowArray(point.netRevenueByCurrency)
-  );
+  const orderValue = moneyField(point, "attributedOrderValueByCurrency", "grossRevenueByCurrency");
+  const refunded = moneyField(point, "refundedAttributedValueByCurrency", "refundedRevenueByCurrency");
+  const currentNet = moneyField(point, "currentNetAttributedOrderValueByCurrency", "netRevenueByCurrency");
+  if (!orderValue || !refunded || !currentNet) return null;
+  return {
+    ...(point as unknown as ConversionDailyPoint),
+    attributedOrderValueByCurrency: orderValue,
+    refundedAttributedValueByCurrency: refunded,
+    currentNetAttributedOrderValueByCurrency: currentNet,
+  };
 }
 
 /**
@@ -97,8 +119,9 @@ function isConversionDailyPoint(value: unknown): value is ConversionDailyPoint {
 export function parseConversionDailyTrend(value: unknown): ConversionDailyPoint[] | null {
   if (value === undefined || value === null) return [];
   if (!Array.isArray(value)) return null;
-  if (!value.every(isConversionDailyPoint)) return null;
-  return value as ConversionDailyPoint[];
+  const points = value.map(normalizeConversionDailyPoint);
+  if (points.some((point) => point === null)) return null;
+  return points as ConversionDailyPoint[];
 }
 
 /**
@@ -113,9 +136,9 @@ export function currenciesInTrend(trend: readonly ConversionDailyPoint[]): strin
   const codes = new Set<string>();
   for (const point of trend) {
     for (const row of [
-      ...point.grossRevenueByCurrency,
-      ...point.refundedRevenueByCurrency,
-      ...point.netRevenueByCurrency,
+      ...(point.attributedOrderValueByCurrency ?? point.grossRevenueByCurrency ?? []),
+      ...(point.refundedAttributedValueByCurrency ?? point.refundedRevenueByCurrency ?? []),
+      ...(point.currentNetAttributedOrderValueByCurrency ?? point.netRevenueByCurrency ?? []),
     ]) {
       codes.add(row.currencyCode);
     }
@@ -185,21 +208,67 @@ function isRange(value: unknown): value is ConversionRange {
   return typeof range.start === "string" && typeof range.end === "string";
 }
 
-const REVENUE_FIELDS = [
-  "grossAttributedRevenueByCurrency",
-  "refundedRevenueByCurrency",
-  "netAttributedRevenueByCurrency",
+/**
+ * `[current name, older name]`. A server that has not been updated yet sends
+ * only the older names; both carry identical values. The older names are
+ * accepted for one release and then removed.
+ */
+const MONEY_FIELD_PAIRS = [
+  ["attributedOrderValueByCurrency", "grossAttributedRevenueByCurrency"],
+  ["refundedAttributedValueByCurrency", "refundedRevenueByCurrency"],
+  ["currentNetAttributedOrderValueByCurrency", "netAttributedRevenueByCurrency"],
 ] as const;
+
+export type FinancialStatusCountRow = { status: string; orders: number };
+
+type NormalizedMoney = {
+  attributedOrderValueByCurrency: MoneyRow[];
+  refundedAttributedValueByCurrency: MoneyRow[];
+  currentNetAttributedOrderValueByCurrency: MoneyRow[];
+  financialStatusBreakdown: FinancialStatusCountRow[];
+  cancelledAttributedOrders: number;
+};
+
+/** Validates every money field (under either name) and returns the normalized, current-named fields. */
+function normalizeMoney(record: Record<string, unknown>): NormalizedMoney | null {
+  const [orderValue, refunded, currentNet] = MONEY_FIELD_PAIRS.map(([current, older]) => moneyField(record, current, older));
+  if (!orderValue || !refunded || !currentNet) return null;
+  const breakdown = record.financialStatusBreakdown;
+  if (
+    breakdown !== undefined &&
+    !(
+      Array.isArray(breakdown) &&
+      breakdown.every(
+        (row) =>
+          row && typeof row === "object" && typeof row.status === "string" && typeof row.orders === "number" && Number.isFinite(row.orders),
+      )
+    )
+  ) {
+    return null;
+  }
+  const cancelled = record.cancelledAttributedOrders;
+  if (cancelled !== undefined && !(typeof cancelled === "number" && Number.isFinite(cancelled))) return null;
+  return {
+    attributedOrderValueByCurrency: orderValue,
+    refundedAttributedValueByCurrency: refunded,
+    currentNetAttributedOrderValueByCurrency: currentNet,
+    financialStatusBreakdown: (breakdown as FinancialStatusCountRow[] | undefined) ?? [],
+    cancelledAttributedOrders: (cancelled as number | undefined) ?? 0,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Brand response — GET /api/brand/analytics/conversions
 // ---------------------------------------------------------------------------
 
-export type BrandConversionAnalytics = ConversionCounts & {
+export type BrandConversionAnalytics = ConversionCounts & NormalizedMoney & {
   range: ConversionRange;
-  grossAttributedRevenueByCurrency: MoneyRow[];
-  refundedRevenueByCurrency: MoneyRow[];
-  netAttributedRevenueByCurrency: MoneyRow[];
+  /** @deprecated Older name for `attributedOrderValueByCurrency`; kept for one release. */
+  grossAttributedRevenueByCurrency?: MoneyRow[];
+  /** @deprecated Older name for `refundedAttributedValueByCurrency`. */
+  refundedRevenueByCurrency?: MoneyRow[];
+  /** @deprecated Older name for `currentNetAttributedOrderValueByCurrency`. */
+  netAttributedRevenueByCurrency?: MoneyRow[];
   attributedOrdersByProvider: ProviderBreakdownRow[];
   /**
    * Already brand-owned-only by construction (the route drops a foreign
@@ -223,7 +292,8 @@ export function parseBrandConversionAnalytics(data: unknown): BrandConversionAna
   const record = data as Record<string, unknown>;
   if (!isRange(record.range)) return null;
   if (!isValidCounts(record)) return null;
-  if (!REVENUE_FIELDS.every((field) => isMoneyRowArray(record[field]))) return null;
+  const money = normalizeMoney(record);
+  if (!money) return null;
   if (!isProviderBreakdownArray(record.attributedOrdersByProvider)) return null;
   const namedFields = [
     "attributedOrdersByEntryCampaign",
@@ -236,7 +306,7 @@ export function parseBrandConversionAnalytics(data: unknown): BrandConversionAna
   if (!namedFields.every((field) => isNamedBreakdownArray(record[field]))) return null;
   const dailyTrend = parseConversionDailyTrend(record.dailyTrend);
   if (dailyTrend === null) return null;
-  return { ...(data as BrandConversionAnalytics), dailyTrend };
+  return { ...(data as BrandConversionAnalytics), ...money, dailyTrend };
 }
 
 // ---------------------------------------------------------------------------
@@ -254,11 +324,14 @@ export function parseBrandConversionAnalytics(data: unknown): BrandConversionAna
 // as "deliberately withheld").
 // ---------------------------------------------------------------------------
 
-export type CreatorConversionAnalytics = ConversionCounts & {
+export type CreatorConversionAnalytics = ConversionCounts & NormalizedMoney & {
   range: ConversionRange;
-  grossAttributedRevenueByCurrency: MoneyRow[];
-  refundedRevenueByCurrency: MoneyRow[];
-  netAttributedRevenueByCurrency: MoneyRow[];
+  /** @deprecated Older name for `attributedOrderValueByCurrency`; kept for one release. */
+  grossAttributedRevenueByCurrency?: MoneyRow[];
+  /** @deprecated Older name for `refundedAttributedValueByCurrency`. */
+  refundedRevenueByCurrency?: MoneyRow[];
+  /** @deprecated Older name for `currentNetAttributedOrderValueByCurrency`. */
+  netAttributedRevenueByCurrency?: MoneyRow[];
   attributedOrdersByProvider: ProviderBreakdownRow[];
   attributedOrdersByExperience: NamedBreakdownRow[];
   attributedOrdersByLesson: NamedBreakdownRow[];
@@ -274,7 +347,8 @@ export function parseCreatorConversionAnalytics(data: unknown): CreatorConversio
   const record = data as Record<string, unknown>;
   if (!isRange(record.range)) return null;
   if (!isValidCounts(record)) return null;
-  if (!REVENUE_FIELDS.every((field) => isMoneyRowArray(record[field]))) return null;
+  const money = normalizeMoney(record);
+  if (!money) return null;
   if (!isProviderBreakdownArray(record.attributedOrdersByProvider)) return null;
   const namedFields = [
     "attributedOrdersByExperience",
@@ -286,7 +360,7 @@ export function parseCreatorConversionAnalytics(data: unknown): CreatorConversio
   if (!filters || (filters.experienceId !== null && typeof filters.experienceId !== "string")) return null;
   const dailyTrend = parseConversionDailyTrend(record.dailyTrend);
   if (dailyTrend === null) return null;
-  return { ...(data as CreatorConversionAnalytics), dailyTrend };
+  return { ...(data as CreatorConversionAnalytics), ...money, dailyTrend };
 }
 
 // ---------------------------------------------------------------------------

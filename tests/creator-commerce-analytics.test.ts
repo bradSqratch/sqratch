@@ -738,7 +738,14 @@ describe("creator commerce analytics — forbidden fields and vocabulary", () =>
     // Phase 11 is purely additive on the creator side: the older endpoint must
     // still carry no commerce-click involvement whatsoever.
     const existing = readFileSync(EXISTING_ROUTE_PATH, "utf8");
-    assert.doesNotMatch(existing, /commerce/i);
+    // The one commerce-named import is the shared UTC date-range resolver (P36
+    // gave the engagement panel the same strict period as the commerce panels).
+    // The route still performs no commerce aggregation of its own.
+    const withoutDateResolver = existing.replace(
+      /import \{ resolveCommerceClickAnalyticsDateRange \} from "@\/lib\/commerce\/commerce-click-analytics";\n/,
+      "",
+    ).replace(/resolveCommerceClickAnalyticsDateRange/g, "resolveDateRange");
+    assert.doesNotMatch(withoutDateResolver, /commerce/i);
     assert.doesNotMatch(existing, /commerceClickAttribution/);
   });
 });

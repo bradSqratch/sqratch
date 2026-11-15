@@ -60,8 +60,14 @@ function VerifyEmailPageInner() {
         code: code.trim(),
       });
 
+      // Verification succeeded: the code is spent and the account is verified.
+      // Attaching earlier anonymous progress is a separate outcome; when it
+      // could not finish it completes at sign-in, so never report a failure.
+      const baseMessage = response.data?.message || "Email verified successfully.";
       const successMessage =
-        response.data?.message || "Email verified successfully.";
+        response.data?.transfer?.status === "retry_required"
+          ? `${baseMessage} Any earlier progress from this browser will be attached when you sign in.`
+          : baseMessage;
 
       setMessage({
         type: "success",

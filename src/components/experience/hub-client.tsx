@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { resolveExperienceDisplayCampaign } from "@/lib/campaign-context";
+import { describePlaybackTime } from "@/lib/playback-time";
 import { cn } from "@/lib/utils";
 
 type HubYouTubePlayer = {
@@ -911,9 +912,11 @@ function ExperienceWhyHero({
                     />
                     <input
                       type="range"
+                      aria-label="Seek"
+                      aria-valuetext={`${describePlaybackTime(currentTime)} of ${describePlaybackTime(duration)}`}
                       min={0}
                       max={duration || 0}
-                      step={0.1}
+                      step={1}
                       value={Math.min(currentTime, duration || currentTime)}
                       onChange={(event) =>
                         handleSeek(Number(event.target.value))
