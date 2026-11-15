@@ -138,6 +138,8 @@ chooses a tenant or grants access.
 - Legacy QR mutation endpoints are removed; keep the read routes and printed `/redeemQR/...` redirect.
 - `CampaignUnlock` has `@@unique([campaignId, userId])` — one unlock per user per campaign
 - Anonymous unlock dedup uses a partial unique index (Postgres-only, migration `20260615113320`)
+- `QRCodeBatch.archivedAt` is list hygiene only. Scan, redemption, `/q/*`, public routes, the transfer service, deletion guards and CSV export must never read it. Archiving is separate from `isActive` and from stopping redemptions.
+- Anonymous progress and unlocks move to an account only through `transferAnonymousState()` (`src/lib/anonymous-transfer.ts`), using the browser's own cookies — never a request-body identifier.
 
 ---
 

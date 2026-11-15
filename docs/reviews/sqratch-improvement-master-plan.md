@@ -6,8 +6,14 @@ This is the remaining implementation backlog. Original review evidence is histor
 
 P00–P08 implement disposable database tests, QR history safeguards, publication enforcement, atomic approvals, active-administrator protection, safer media persistence, brand-context preconditions and community display-name privacy. Manual acceptance covered the principal QR conflicts, private/public access, approval conflict, administrator self-demotion, cross-tab brand conflict and display-name privacy. Some browser and provider checks remain below. Draft experiences must return 404 on public viewer routes for everyone; authenticated creator-management screens retain editing and publishing access. Owner activity must not earn points or count as learner activity.
 
+P09, P10, P11, P22, P25 and P36 are implemented: one shared anonymous-transfer service (with outstanding-award settlement, raise-only progress writes and no new table), truthful sign-in and verification transfer status with a Retry notice, QR batch archive (`archivedAt`, migration `20261114120000_add_qr_batch_archive`), independent product/reward states with Retry, explicit comment refresh and a labelled seek control, stable creator selectors with stale-response guards and an inline-error post editor, and honest analytics names (order value, not revenue) with a UTC 30-day default for creator engagement. Their specifications were removed from this backlog; the contracts now live in `docs/points-ledger.md`, `docs/prisma-migrations.md` and `docs/agent-context.md`.
+
 ## 2. Outstanding issues
 
+- **P1 — Migration rollout, P11:** `20261114120000_add_qr_batch_archive` is authored and verified only on a disposable database. The owner applies it to production before deploying this release, after the preflight in `docs/prisma-migrations.md`; it was never run against a connected database.
+- **P2 — P36 follow-up (A-08):** the deprecated analytics field names (`grossAttributedRevenueByCurrency`, `refundedRevenueByCurrency`, `netAttributedRevenueByCurrency`, and the three trend `…RevenueByCurrency` fields) and the client parser's fallback for them are removed one release after this release is live.
+- **P2 — D-02 accepted default:** sign-in now also pays completion rewards an account has earned but not been paid (see `docs/points-ledger.md`); confirm the retroactive-payment consequence is acceptable.
+- **P2 — Residual acceptance gaps for P09–P36:** exercised in the in-app browser against a disposable database: blocked-transfer sign-in, Retry, normal sign-in, post-failure editor, selector and stale-response behavior, archive/filter/scan/unarchive, shop failure states and recovery, comment refresh, seek keyboard control, analytics labels against synthetic orders. Also exercised against a disposable database with a synthetic code (no mail sent): wrong code (nothing consumed or transferred), correct code (verified, transfer and rewards applied once, redirect to `/login` with `next` kept) and the following sign-in (no duplicate awards). Not exercised: the verification email delivery itself, claiming a reward from the shop UI with real provider offers, a screen-reader pass of the seek control, and live Shopify/Commerce7 behavior.
 - **P1 — P13 / F-03b, C-04:** Media reference checks are not atomic with attachment; staged asset claiming is needed. Unknown save outcomes can leave orphans. Real isolated object-storage integration, response-loss and failure-path browser verification remain outstanding (X-12); do not claim immediate signed-URL revocation.
 - **P1 — P07 / F-08:** Expected-brand headers remain optional for old tabs. After the compatibility release require them on all applicable brand mutations, retaining membership authorization and clear 409 conflicts. Browser-check rewards, products, uploads, global ADMIN and VIEWER cases.
 - **P1 — P01/P02:** Browser-check deletion of untouched batches, individual deletion, all history blockers, stale eligibility conflicts, image failure and legacy printed redirects. Never destroy historical QR evidence.
@@ -16,7 +22,7 @@ P00–P08 implement disposable database tests, QR history safeguards, publicatio
 - **P2 — X-16:** Design global security headers with Shopify/Commerce7 embedding exemptions and report-only CSP; separate work, not part of the numbered phases.
 - **P1 — D-16 / X-11:** Decide reward funding and budget; creator self-award prevention does not stop collusion with another account.
 - **P2 — Past ledger drift:** Owner should run the read-only drift query in `docs/points-ledger.md`; any repair requires a separate data decision.
-- **P2 — Deferred analytics:** C-07/A-04/A-05 captured payments and A-11 payment/refund activity need provider sandbox evidence and appropriate timestamps. A-17 conversion rates need a defined cohort, window and anonymous/account deduplication. A-22 product-health measures need instrumentation and baselines.
+- **P2 — Deferred analytics:** C-07 captured payments (the order-value labels shipped in P36) and A-11 payment/refund activity need provider sandbox evidence and appropriate timestamps. A-17 conversion rates need a defined cohort, window and anonymous/account deduplication. A-22 product-health measures need instrumentation and baselines.
 - **P2 — External verification:** GA4 live provider receipt, real storage behavior and deployed provider journeys require owner-authorized sandbox verification. Do not use production for automated QA.
 - **P3 — O-06 / O-04 / F-08a:** Defer worker throughput changes until P40 measurements; any future cache keys include brand, connection, filters and permission-sensitive state. Retryable QR/profile-image cleanup remains future work beyond P13.
 - Other previously noted but unverified issues (signup enumeration, comment length/author deletion, upload content sniffing) require separate verification; do not silently classify as resolved.
@@ -28,21 +34,15 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 | ID | Outstanding finding | Priority | Action | Phase |
 |---|---|---|---|---|
 | C-01 | QR list limits are 100 codes, 500 batch and campaign options | P2 | Paginate and search codes; load options independently | P26 |
-| C-03 | Archive and revocation differ | P1 | Separate archive state from redemption availability | P11, P12 |
+| C-03 | Archive and revocation differ | P1 | Add redemption stop as separate state from archive (archive shipped in P11) | P12 |
 | C-04 | A reference check alone is not race-safe | P1 | Stop unsafe cleanup first, then claim-based cleanup | P06, P13 |
 | C-05 | Qualification must be a staged transition | P1 | Additive policy per lesson, default legacy | P16–P19 |
-| C-06 | Route verification-time awards through the qualification contract | P1 | One policy-aware award service used by both transfer paths now | P09 |
-| C-07 | Correct labels first; captured-payment metrics later | P2 | Rename labels; defer payment metrics | P36, H |
+| C-07 | Correct labels first; captured-payment metrics later | P2 | Captured-payment metrics remain deferred pending provider evidence (labels shipped in P36) | H |
 | C-08 | Filters are not identical across panels | P2 | Share controls only where semantics match | P39 |
 | C-09 | Fix behavior before reorganizing navigation | — | Navigation consolidation is last | P43 |
-| F-01b | Archive, stop-new-redemptions, delete-unused-draft semantics | P1 | Additive archive state; per-code revocation; retain the existing strict unused-draft deletion predicate | P01, P11, P12 |
+| F-01b | Archive, stop-new-redemptions, delete-unused-draft semantics | P1 | Per-code revocation; keep the strict unused-draft deletion predicate (archive shipped in P11) | P12 |
 | F-01c | `isActive` is not enforced by scan or redemption; inspect values first | P1 | Do not reuse `isActive`. Add explicit state after a read-only value audit | P12 |
 | F-01d | External image cleanup must follow persistence and be retryable | P1 | Reorder; make cleanup best-effort and later retryable | P01, P02, P13 |
-| F-02 | Verification and login use different merge paths | P1 | One idempotent transfer service | P09 |
-| F-02a | Verification consumes anonymous completions without awards | P1 | Shared policy-aware award step | P09 |
-| F-02b | Merge consumes rows before awards and does not recover | P1 | Claim rows by id inside a transaction; settle awards idempotently | P09 |
-| F-02c | Verification code is consumed before merge work | P1 | Separate verification outcome from transfer outcome | P09, P10 |
-| F-02d | Authentication success and transfer success are separate outcomes | P2 | Report transfer state truthfully | P10 |
 | F-03b | Staged assets, claim-before-delete, retryable deletion | P2 | Staged-asset table and sweeper | P13 |
 | F-04b | Record actor, time and reason; separate applicant and internal notes | P2 | Additive fields | P15 |
 | F-05 | Client completion authorizes spendable rewards | P1 | Server-evaluated checkpoint policy, staged | P16–P19 |
@@ -51,14 +51,7 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 | F-08a | Brand scope in caches and request identities; clear on switch | P3 | Guard covers the risk today; keep as a rule for future caching | P07 |
 | U-01 | Customer home shows counts without destinations | P2 | Return resume targets and link them | P23 |
 | U-02 | No forgotten-password recovery | P1 | Token-based recovery with session invalidation | P20 |
-| U-03 | Login ignores transfer response; artificial delay | P2 | Check response; remove delay | P10 |
 | U-04 | Pending approval is a static screen | P3 | Refreshable status | P24 |
-| U-05 | Product failure hides rewards; reward errors look empty | P2 | Independent panel states | P22 |
-| U-07 | Comment refresh returns early | P3 | Explicit refetch with in-flight guard | P22 |
-| U-08 | Featured-video seek input has no accessible name | P3 | Label and `aria-valuetext` | P22 |
-| U-09 | Creator post errors hide the editor | P2 | Inline error; keep form mounted | P25 |
-| U-10 | Filtered results narrow selector options | P2 | Load options independently of the filter | P25 |
-| U-11 | Late responses overwrite newer filters | P2 | Apply the existing guard pattern | P25 |
 | U-12 | Q&A count then create allows overrun | P2 | Atomic capacity check | P21 |
 | U-13 | QR inventory shows first 100 codes | P2 | See C-01 | P26 |
 | U-14 | 50-result discovery can omit attached experiences | P2 | Separate attached list from discovery | P27 |
@@ -84,21 +77,18 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 | K-03 | Do not block content campaigns lacking commerce | — | Acceptance criterion | P33 |
 | K-04 | Attachment stays immediate; show creator identity | P3 | Show creator name in attach UI | P27 |
 | S-01 | Preserve filters in URLs | P3 | URL-backed filters | P32 |
-| S-02 | Preserve unsaved work after recoverable errors | P2 | Covered per surface | P25, P31 |
+| S-02 | Preserve unsaved work after recoverable errors | P2 | Covered per surface | P31 |
 | S-03 | Warn before brand switch or navigation that discards edits | P3 | Dirty-form guard | P31 |
 | S-04 | Consistent destructive confirmation | P3 | Shared AlertDialog with stated consequences | P31 |
 | S-05 | Show partial success explicitly | P3 | Per surface | P14, P31 |
-| S-06 | Panel-level retries | P3 | Per surface | P22, P25, P31 |
+| S-06 | Panel-level retries | P3 | Per surface | P31 |
 | S-07 | Consolidate Contact and Support | P3 | Merge content, keep both URLs | P43 |
 | S-08 | Consolidate overlapping admin routes after parity | P3 | Consolidate with redirects | P43 |
-| A-01 | Creator engagement and commerce default to different periods | P2 | Explicit shared default, displayed | P36 |
-| A-02 | Completion counts use mutable timestamps | P2 | Label current state; add immutable timestamp | P36, P37 |
-| A-03 | Conversion reporting uses ingestion date | P2 | Label now; provider-date basis next | P36, P38 |
-| A-04 | "Gross revenue" includes unpaid order totals | P2 | Rename to attributed order value | P36 |
-| A-05 | Partially paid orders contribute full value | P2 | Rename to current net attributed order value | P36 |
+| A-02 | Completion counts use mutable timestamps | P2 | Add an immutable `completedAt`; the mutable-timestamp label shipped in P36 | P37 |
+| A-03 | Conversion reporting uses ingestion date | P2 | Provider-order-date basis; the ingestion-date label shipped in P36 | P38 |
 | A-06 | Drilldown loses date and filter context | P3 | Carry supported scope | P39 |
 | A-07 | All matching orders are materialized | P3 | Measure first | P42 |
-| A-08 | Do not silently change a field's financial meaning | — | Additive names, deprecate old | P36 |
+| A-08 | Do not silently change a field's financial meaning | — | Remove the deprecated `gross*`/`net*` analytics field names one release after P36 shipped | P36 follow-up |
 | A-09 | Every report states period, timezone, basis, scope, statuses, currency, freshness | P3 | Shared response metadata | P39 |
 | A-10 | Provider order date with visible fallback and count | P2 | Basis parameter and fallback count | P38 |
 | A-11 | Separate order cohort from payment and refund activity | P3 | Cohort in P38; activity reporting deferred pending provider evidence | P38, H |
@@ -110,14 +100,13 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 | A-18 | Attribution is not incrementality or commission | — | Acceptance criterion | P39, P41 |
 | A-19 | Minimum reporting response contract | P3 | Shared metadata type | P39 |
 | A-20 | Immutable business events; no manufactured history | P2 | Add `completedAt`, set once, never backfilled | P37 |
-| ST-B | Stage B: shared correctness contracts | P1–P2 | Kept; qualification split into four phases | P09–P19 |
-| ST-C | Stage C: daily workflow friction | P2–P3 | Kept | P20–P35 |
-| ST-D | Stage D: correct analytics | P2–P3 | Kept | P36–P41 |
+| ST-B | Stage B: shared correctness contracts | P1–P2 | Kept; qualification split into four phases | P12–P19 |
+| ST-C | Stage C: daily workflow friction | P2–P3 | Kept | P20, P21, P23, P24, P26–P35 |
+| ST-D | Stage D: correct analytics | P2–P3 | Kept | P37–P41 |
 | ST-E | Stage E: consolidate and optimize | P3 | Conditional phases | P42–P45 |
-| I-03 | Shared anonymous-transfer state and pending award work | P1 | Derived status; no new table (D-02) | P09 |
 | I-04 | Versioned qualification and checkpoint records | P1 | Additive models | P16 |
-| I-05 | Separate archival and redemption-availability semantics | P1 | Additive columns | P11, P12 |
-| I-06 | Accurate analytics names, basis, coverage, pagination metadata | P2 | Additive fields | P36–P39 |
+| I-05 | Separate archival and redemption-availability semantics | P1 | Additive redemption-stop columns (archive columns shipped in P11) | P12 |
+| I-06 | Accurate analytics names, basis, coverage, pagination metadata | P2 | Additive fields | P37–P39 |
 | O-01 | Sidebar uses plain anchors | P3 | `next/link` | P35 |
 | O-02 | Workspace loading and error boundaries | P3 | Add at dashboard segment level | P35 |
 | O-03 | Debounce searches; reject superseded results | P3 | Apply to remaining lists | P32 |
@@ -125,22 +114,17 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 | O-07 | Shared rate limiting where deployment-wide enforcement is required | P2 | Shared store; login throttle | P44 |
 | O-08 | Keep revocation checks; remove redundant per-request work | P3 | Conditional on measurement | P45 |
 | O-09 | Scale risks are not measured outages | — | Baselines before optimizing | P42 |
-| T-01 | QR lifecycle acceptance | — | Phase tests | P11, P12 |
+| T-01 | QR lifecycle acceptance | — | Phase tests | P12 |
 | T-02 | QR concurrency: consistent winner | — | Phase tests | P12 |
-| T-03 | Transfer retries and concurrent progress award once | — | Phase tests | P09 |
-| T-04 | Recovery without reusing a consumed code | — | Phase tests | P09, P10 |
 | T-05 | Participation: client completion and seeking do not qualify | — | Phase tests | P16–P18 |
 | T-06 | Media: lost response keeps committed media; cleanup cannot race | — | Phase tests | P06, P13 |
 | T-10 | List completeness beyond 100, 500, 50, 100 | — | Phase tests | P26, P27, P29 |
 | T-11 | Provider failures preserve history and context | — | Phase tests | P28, P29 |
-| T-12 | Analytics truthfulness cases | — | Phase tests | P36–P39 |
-| T-13 | UI recovery | — | Phase tests | P25, P31, P32 |
-| T-14 | Accessibility | — | Manual browser pass | P22, P31 |
+| T-12 | Analytics truthfulness cases | — | Phase tests | P37–P39 |
+| T-13 | UI recovery | — | Phase tests | P31, P32 |
+| T-14 | Accessibility | — | Manual browser pass | P31 |
 | T-15 | Performance comparison before and after | — | Baseline first | P42 |
 | X-04 | Scan and public campaign ignore `Campaign.isActive` and `Brand.isActive` | P2 | Product decision D-04 before any enforcement | P12 |
-| X-06 | Verification accepts a body-supplied anonymous key | P2 | Accept cookie-bound keys only | P09 |
-| X-08 | Creator analytics end-of-day uses server-local time; no date validation | P2 | Use the strict UTC resolver | P36 |
-| X-09 | Voided and cancelled orders count in "gross"; `cancelledAt` is unread | P2 | Covered by renaming plus a status breakdown | P36 |
 | X-10 | `(brandId, createdAt)` order index is documented as not applied | P2 | Confirm before analytics phases | E |
 | X-11 | Creator reward budgets remain undecided; colluding accounts can earn points | P1 | Preserve the owner-award exclusion and decide funding and limits | D-16 |
 | X-12 | Missing-object behavior of storage signing remains unverified | P2 | Verify per-lesson fallback with isolated storage | P06, P13 |
@@ -151,76 +135,6 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 | DEP-02 | Moderate advisories in `@typescript-eslint/*` and `minimatch` | P3 | Align versions | P46 |
 
 ## 3. Remaining implementation phases
-
-### P09 — Unified anonymous transfer service
-
-- **Priority and complexity:** P1, L. Reward correctness and durable recovery across two entry points.
-- **Problem and evidence:** Two implementations exist. Verification (`src/app/api/auth/verify-email/route.ts:11-106,184-234`) transfers lesson progress with no award call and wraps a ledger call in `try/catch` inside a transaction (`:93-103`), which cannot recover in PostgreSQL once a statement has failed. Login (`src/app/api/progress/merge/route.ts:59-131`) upserts without a transaction, deletes every row for the session at `:101-105` including rows written after the read at `:39`, and only logs award errors at `:126-131`. A merge error during verification returns 500 "error during verification" although the code is consumed and the account verified (`:130-137,241-246`). Verification also merges a body-supplied key (`:114,164`).
-- **Desired outcome:** One service moves anonymous progress and unlocks to an account. It is safe to call repeatedly and concurrently, never deletes rows it did not claim, awards once, and reports `complete` or `retry_required`. Verification success never depends on transfer success.
-- **Scope:** new `src/lib/anonymous-transfer.ts`; `src/app/api/auth/verify-email/route.ts`; `src/app/api/progress/merge/route.ts`; `src/app/api/progress/lesson/route.ts` (atomic progress merge only); `src/lib/anon-merge-keys.ts`; `tests/integration-coverage.test.ts` merge scenario; `tests/anon-merge-keys.test.ts`.
-- **Implementation requirements:**
-  1. `transferAnonymousState({ userId, userEmail, sessionId, legacyUnlockKeys })` returns `{ status, mergedLessons, mergedUnlocks, pointsAwarded }`.
-  2. Lesson rows: read the session's row ids, then for each row run one transaction that (a) claims it with `deleteMany({ where: { id, sessionId } })` and continues only when `count === 1`, and (b) merges it into the user's row atomically. The merge must not be a read followed by a write, because two transfers or a concurrent progress save could lose an update. Use one raw statement: `INSERT ... ON CONFLICT ("userId", "lessonId") DO UPDATE SET "lastPositionSeconds" = GREATEST(...), "isCompleted" = "LessonProgress"."isCompleted" OR EXCLUDED."isCompleted"`. Never delete by `sessionId` alone.
-  3. The progress route has the same read-then-write shape (`src/app/api/progress/lesson/route.ts:400-420`) and can write a stale `isCompleted: false` over a value the transfer just set. Change it to use the same atomic merge helper, so `isCompleted` is only ever raised, never lowered.
-  4. Unlocks: move the existing per-unlock transaction logic from the two routes into the service unchanged in behavior, with two corrections. First, no `try/catch` around ledger calls inside a transaction: a failure rolls that unlock's transaction back, leaves the anonymous unlock in place, and marks the result `retry_required`. Second, before `awardQrScanPoint`, check for an existing ledger row with the same `userId` and `qrCodeId`. Historical rows can lack an `idempotencyKey`, slip past the key pre-check (`src/lib/points.ts:336-349`) and then fail on `@@unique([userId, qrCodeId])` (`prisma/schema.prisma:1520`) on every retry. Treat that case as already awarded.
-  5. Awards: after the row moves, call `settleOutstandingCompletionAwards(userId)`. It finds the user's completed lessons that have a positive reward and no ledger row for `lesson-completion:{lessonId}`, awards them, then evaluates the affected courses. It considers only lessons that are active, in an active course, in a published experience that the user does not own. Without that filter it would undo the P03 rules at every sign-in. Both awards use the existing idempotent helpers (`src/lib/points.ts:573-649`). Any error marks the result `retry_required`. Because the function derives its work from committed user rows, a later call finishes what an earlier call could not.
-  6. Known consequence, to confirm under D-02: if a creator adds a reward to a lesson after a learner completed it, that learner is paid at their next sign-in. Today the same learner is paid on their next progress save for that lesson, so the outcome is the same and only the timing differs.
-  7. Durable state is the unconsumed source rows plus the existing `UserSession.userId` link. No transfer table is added (D-02).
-  8. `POST /api/progress/merge` becomes a thin wrapper and returns `{ data: { status, mergedLessons, mergedUnlocks, pointsAwarded } }`. Existing fields keep their names.
-  9. Verification: after `verifyAndConsumeEmailVerificationCode` returns `verified`, call the service inside its own `try/catch`. Always return 200 with `{ ok: true, transfer: { status } }` once verified. A thrown transfer yields `retry_required`.
-  10. Verification uses cookie-derived keys only. Drop `bodyAnonKey` from `collectAnonMergeKeys` input. Keep the legacy `anonKey` and `deviceKey` cookies for unlocks. The current verification page does not send a body key, so no client change is needed.
-  11. Policy: both entry points award under the lesson's current policy. Today that is the legacy self-reported policy for every lesson. P16 replaces the award call with the policy-aware service without changing this file's structure.
-- **Dependencies:** P00.
-- **Compatibility and migration:** no schema change. Accounts verified before this phase whose completions were never awarded are healed the next time they sign in, because item 5 settles outstanding awards. That is a behavior change in the user's favor and is consistent with what a progress save already does (`src/app/api/progress/lesson/route.ts:446-455`). Rollback is a code revert.
-- **Acceptance criteria:**
-  - Running the transfer twice, or twice concurrently, yields one user progress row per lesson, one ledger row per reward, and no error.
-  - A progress row written by the anonymous session during the transfer is still present afterward and moves on the next call.
-  - A forced transient ledger failure leaves anonymous unlock rows intact, returns `retry_required`, and a second call completes.
-  - A historical ledger row for the same user and code with no idempotency key does not leave the unlock in `retry_required` forever.
-  - Signing in never awards points to an owner for their own lesson, or for an inactive lesson or a draft experience.
-  - Two concurrent writers to the same user progress row never lower `isCompleted` or `lastPositionSeconds`.
-  - Verification returns 200 `ok: true` when the code is valid even if the transfer throws.
-  - A request body cannot nominate a session to merge.
-- **Testing:** L1 for wrapper contracts and key collection. L2: concurrent double transfer; transfer racing a progress save; forced failure then retry; duplicate-award check against the unique index. Update the mock merge scenario in `tests/integration-coverage.test.ts`.
-- **Regression risks:** QR redemption on login for anonymous scanners (`redeemQrCodeForUser` inside the unlock transaction); the redeemed-by-someone-else path, which deletes the anonymous unlock today and must keep doing so; `UserSession.campaignId` must not be overwritten.
-- **Decision blockers:** D-02. Proposed default: award in both paths now under current policy, with no new table.
-
-### P10 — Truthful transfer status in sign-in flows
-
-- **Priority and complexity:** P2, S.
-- **Problem and evidence:** The login page awaits the merge call but never reads the response, then shows "Login successful! Redirecting…" and waits 600 ms (`src/app/(auth)/login/page.tsx:145-157`). The verification page shows a generic failure for a 500 from the merge step.
-- **Desired outcome:** Sign-in proceeds immediately. If the transfer needs a retry, the user is told their earlier progress is still being attached and can retry from the destination page.
-- **Scope:** `src/app/(auth)/login/page.tsx`; `src/app/(auth)/verify-email/page.tsx`; a small retry notice component used on `src/app/(withSidebar)/dashboard/page.tsx`.
-- **Implementation requirements:**
-  1. Read the merge response. On `complete`, redirect with no timer. On `retry_required` or a failed request, redirect and pass a non-sensitive flag (for example `?transfer=pending`) that the dashboard notice reads.
-  2. The notice offers "Retry" (calls `POST /api/progress/merge`) and disappears on `complete`.
-  3. Verification page: when the response is `ok: true` with `transfer.status: "retry_required"`, show "Email verified" and continue to sign-in. Never show "unable to verify" for a verified account.
-  4. Remove the 600 ms timer. Keep the bounded session poll.
-- **Dependencies:** P09.
-- **Compatibility and migration:** none.
-- **Acceptance criteria:** sign-in with a failing merge still lands on the destination and shows the notice; a successful retry clears it; no artificial delay remains.
-- **Testing:** L1 component tests for the three states. L3: block the merge request in dev tools and sign in.
-- **Regression risks:** `next` path handling and approval-pending redirects on login.
-- **Decision blockers:** none.
-
-### P11 — QR batch archive
-
-- **Priority and complexity:** P2, S. Restores list hygiene removed by P01.
-- **Problem and evidence:** There is no archive state. `QRCodeBatch.isActive` exists but nothing reads or writes it (`prisma/schema.prisma:167`).
-- **Desired outcome:** A brand can archive a batch. Archived batches and their codes leave default lists. Scanning, redemption, existing access, history and exports are unchanged.
-- **Scope:** migration adding `QRCodeBatch.archivedAt DateTime?` and `archivedById String?`; `src/app/api/brand/qr-batches/route.ts` (GET filter); new `POST src/app/api/brand/qr-batches/[id]/archive` and `.../unarchive`; `src/app/(withSidebar)/dashboard/brand/qr-batches/page.tsx`.
-- **Implementation requirements:**
-  1. Do not reuse `isActive`. Leave it untouched.
-  2. GET excludes archived batches and their codes by default. `?archived=include|only` shows them.
-  3. Archive and unarchive are conditional updates scoped by `campaign: { brandId }` and call `assertExpectedBrand` (P07).
-  4. No scan, redemption or public route reads `archivedAt`. Add a test that fails if `archivedAt` appears under `src/app/api/public` or `src/lib/qr-redemption.ts`.
-  5. The blocked-delete message from P01 offers "Archive instead".
-- **Dependencies:** P01. P07 if already shipped.
-- **Compatibility and migration:** additive nullable columns; no backfill. Rollback: stop reading the column.
-- **Acceptance criteria:** an archived batch's code still scans, redeems, awards and exports; the batch is absent from the default list and present with the filter.
-- **Testing:** L1 route tests. L3: archive, scan a code from that batch.
-- **Regression risks:** the 500-batch option list and the code pagination totals in the same GET.
-- **Decision blockers:** none.
 
 ### P12 — Stop new QR redemptions
 
@@ -447,23 +361,6 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 - **Regression risks:** `remainingToday` in the GET response must use the same window.
 - **Decision blockers:** none.
 
-### P22 — Experience viewer recovery fixes
-
-- **Priority and complexity:** P2, S. Three small viewer-facing defects in the same component family.
-- **Problem and evidence:** Reward cards render only in the product success branch, so a product failure hides rewards (`src/components/experience/shop-client.tsx:215-249`). Reward load errors render nothing (`src/components/rewards/shopify-shop-reward-card.tsx:111-118,188-189`; `src/components/rewards/commerce7-rewards-client.tsx:30,61,83`). Comments cannot be refetched (`src/components/experience/posts-client.tsx:64-67`). The featured-video seek range has no accessible name (`src/components/experience/hub-client.tsx:912-922`).
-- **Desired outcome:** Products and rewards each show loading, empty, failed or unavailable on their own, with a retry. Comments can be refreshed without duplicate requests. The seek control is announced with a name and readable time.
-- **Scope:** the four components named above.
-- **Implementation requirements:**
-  1. Render the reward section regardless of product state. Give each reward component an explicit failed state with a Retry button and a distinct "no rewards available" state.
-  2. `loadComments({ force })`: skip only while a request is in flight; `force` bypasses the cached check. Add a Refresh control.
-  3. Seek input: `aria-label="Seek"`, `aria-valuetext` such as "1 minute 20 seconds of 4 minutes". Confirm arrow keys move it.
-- **Dependencies:** none.
-- **Compatibility and migration:** none.
-- **Acceptance criteria:** with the products request failing, rewards still render; with a rewards request failing, an error and retry appear instead of an empty area; a second click on Refresh while loading sends no second request.
-- **Testing:** L1 component tests. L3: keyboard and screen-reader spot check of the seek control.
-- **Regression risks:** reward claim flows inside the same components.
-- **Decision blockers:** none.
-
 ### P23 — Actionable customer home
 
 - **Priority and complexity:** P2, M.
@@ -495,24 +392,6 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 - **Acceptance criteria:** status changes appear after Refresh without signing out; the response contains no other user's data and no internal note.
 - **Testing:** L1.
 - **Regression risks:** the layout redirect loop conditions.
-- **Decision blockers:** none.
-
-### P25 — Creator dashboard recovery and filters
-
-- **Priority and complexity:** P2, M.
-- **Problem and evidence:** A failed post save replaces the editor with an error card (`src/app/(withSidebar)/dashboard/creator/experiences/[id]/posts/page.tsx:130,165-168`). The analytics and Q&A selectors are built from the filtered response, so choosing one experience removes the others (`src/app/api/creator/analytics/route.ts:33-41,186`; `src/app/api/questions/route.ts:55`). Engagement, click and Q&A loads have no stale-response guard (`src/app/(withSidebar)/dashboard/creator/analytics/page.tsx:113-174`; `src/app/(withSidebar)/dashboard/creator/qa/page.tsx:56-77`), while the conversion load already has one (`:188-220`).
-- **Desired outcome:** A failed save shows an inline message and keeps the form and its text. Selectors always list every experience the creator owns. A slow old response never overwrites a newer selection.
-- **Scope:** the creator posts page; the two API routes; the analytics and Q&A pages.
-- **Implementation requirements:**
-  1. Split load errors from mutation errors in the posts page. Mutation errors render above the still-mounted form.
-  2. Both routes return an `options.experiences` list computed without the `experienceId` filter. Pages read selectors from it.
-  3. Extract the existing sequence-guard pattern into a small hook and apply it to all four loads.
-  4. Each panel shows its own loading, empty and failed state with a retry.
-- **Dependencies:** none.
-- **Compatibility and migration:** additive response field.
-- **Acceptance criteria:** after selecting one experience the selector still lists all; with responses forced to arrive out of order the UI shows the latest selection's data; a failed post save leaves the typed text visible.
-- **Testing:** L1 for routes and the hook. L3: throttled network check.
-- **Regression risks:** deep link `creator/qa?experienceId=` (`src/app/(withSidebar)/dashboard/creator/qa/page.tsx:47-49`).
 - **Decision blockers:** none.
 
 ### P26 — QR inventory pagination and search
@@ -676,27 +555,6 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 - **Testing:** L1 for middleware header forwarding. L3 for navigation.
 - **Regression risks:** middleware matcher and auth redirects; webhook early return (`src/middleware.ts:25-27`).
 - **Decision blockers:** none.
-
-### P36 — Analytics naming and date-range truthfulness
-
-- **Priority and complexity:** P2, M. Financial labels currently overstate what the data shows.
-- **Problem and evidence:** "Gross attributed revenue" sums `totalMinor` for every attributed order regardless of status, including pending, authorized, voided and cancelled orders (`src/lib/commerce/order-analytics.ts:264`; labels at `src/app/(withSidebar)/dashboard/brand/analytics/page.tsx:822-824` and `src/app/(withSidebar)/dashboard/creator/analytics/page.tsx:683-685`). "Net attributed revenue" includes partially paid orders at full remaining value (`src/lib/commerce/order-analytics.ts:78-85,266`). The period is filtered on SQRATCH's ingestion time (`src/app/api/brand/analytics/conversions/route.ts:201-203`). Creator engagement is all-time when no dates are given while the commerce panels default to 30 UTC days (`src/app/api/creator/analytics/route.ts:52-64`; `src/lib/commerce/commerce-click-analytics.ts:98`). The creator engagement end date uses server-local time and no validation (`src/app/api/creator/analytics/route.ts:9-14`). "Completed lessons" counts rows by mutable `updatedAt` (`:133-152`).
-- **Desired outcome:** Every money figure is named for what it is. Every panel states its period, timezone and date basis. Creator panels share one default period. No number changes meaning silently.
-- **Scope:** `src/lib/commerce/order-analytics.ts`; brand and creator conversions routes; `src/app/api/creator/analytics/route.ts`; both analytics pages; `tests/conversion-breakdown-naming.test.ts`, `tests/order-analytics.test.ts`, `tests/brand-analytics-ux.test.ts`, `tests/creator-analytics-conversions.test.ts`.
-- **Implementation requirements:**
-  1. Add response fields `attributedOrderValueByCurrency`, `refundedAttributedValueByCurrency` and `currentNetAttributedOrderValueByCurrency` with the same values as today's three fields. Keep the old fields for one release, marked deprecated in the type. Do the same for the trend series fields (`src/lib/commerce/order-analytics.ts:222-224`).
-  2. UI labels: "Attributed order value", "Refunded", "Current net attributed order value". Each has a one-line definition stating that order value is not captured payment.
-  3. Add a count breakdown by `financialStatus` including voided, cancelled (`cancelledAt` set) and unknown status, so readers can see what the order value contains.
-  4. Conversion panels state "Orders by date received by SQRATCH (UTC)" until P38.
-  5. Creator engagement uses the strict UTC resolver already used by the commerce panels, defaults to the same 30 days, validates input with a 400 response, and displays the applied range.
-  6. Rename the completion figure to "Lessons marked complete, last updated in period" until P37.
-  7. Keep per-currency separation and the `UNKNOWN` bucket exactly as they are.
-- **Dependencies:** none.
-- **Compatibility and migration:** additive response fields; no schema change. Creator engagement no longer defaults to all-time; a longer range is still selectable within the existing 400-day cap.
-- **Acceptance criteria:** no UI string says "revenue" for an order-value figure; old and new field values are equal in tests; an invalid creator date returns 400; all creator panels show the same default range.
-- **Testing:** L1, including updates to tests that assert label text.
-- **Regression risks:** `tests/analytics-privacy.test.ts` must stay green; daily trend totals must still sum to the headline.
-- **Decision blockers:** D-14 (deprecation window; proposed one release).
 
 ### P37 — Immutable completion time
 
@@ -864,7 +722,6 @@ Each has a proposed default. Phases proceed on the default unless you say otherw
 
 | ID | Decision | Proposed default | Consequence of the alternative | Blocks |
 |---|---|---|---|---|
-| D-02 | Should verification-time and login-time transfers both award completion rewards now, with no new transfer table? | Yes. One service awards under the lesson's current policy, and status is derived from unconsumed rows | Waiting for qualification leaves the two paths inconsistent for several phases; a dedicated table adds a migration with little benefit | P09 |
 | D-03 | After redemptions are stopped, does an anonymous unlock that already exists still convert on sign-in? | Yes | No means people who scanned before the stop lose access when they sign in | P12 |
 | D-04 | Should `Campaign.isActive` or `Brand.isActive` block scans or public campaign pages? | Not in this plan. Decide after seeing the row counts | Enforcing now could invalidate printed codes for campaigns marked inactive for unrelated reasons | P12 |
 | D-05 | Checkpoint format and limits | One multiple-choice question per lesson, answer held server-side, sign-in required to submit, 3 attempts per 10 minutes | Free-text or multi-question checkpoints need a larger authoring tool; allowing anonymous submission needs qualification transfer in P09 | P16, P18 |
@@ -894,7 +751,6 @@ All are additive and nullable or defaulted. None has a backfill.
 
 | Phase | Change | Preflight | Dual-format period |
 |---|---|---|---|
-| P11 | `QRCodeBatch.archivedAt`, `archivedById` | none | Readers treat null as not archived |
 | P12 | `QRCode.redemptionStoppedAt`; `QRCodeBatch.redemptionStoppedAt`, `redemptionStoppedById` | count of `isActive = false` rows for information | Null means redeemable; scan page and API ship together |
 | P13 | `StagedAsset` table | none | Uploads authorized before deploy have no row; attach falls back and inserts one |
 | P15 | `AdminAuditEvent`; `reviewedAt`, `internalNote` on both request models | none | Null `reviewedAt` shown as not recorded |
@@ -908,12 +764,9 @@ Rules for every migration: one folder per phase; enum additions are not reversib
 
 ### E.3 Sequencing constraints
 
-- **P01 before P11.** Between them brands cannot remove distributed batches from lists. This is intended and temporary.
 - **P06 before P13.** After P06, uploads with unknown outcomes are kept and accumulate until P13's sweeper exists. Storage growth is the accepted cost of not losing media.
-- **P09 before P12 and P16.** Revocation needs the transfer service to honor earlier anonymous unlocks. The qualification service replaces award calls that P09 centralizes.
 - **P16 to P19 in order.** P16 changes nothing visible. P18 is the first phase that changes how a reward is earned, and only for lessons a creator has switched.
 - **P04 and P05 before P15.** Audit rows are written inside the transactions those phases create.
-- **P36 before P37 to P39.** Labels first, then new bases and metadata.
 - **P03 before P23, P27 and P37.** They rely on the publication and owner rules.
 - **P07 before P31.** The dirty-form guard uses the shell context P07 introduces.
 
@@ -922,7 +775,6 @@ Rules for every migration: one folder per phase; enum additions are not reversib
 | Phase | Old clients or data | New behavior | When to close the transition |
 |---|---|---|---|
 | P07 | Tabs loaded before deploy send no expected-brand header | Enforced only when present | One release later, require the header on brand mutations |
-| P09 | `POST /api/progress/merge` consumers reading counts only | Adds `status` | No close needed; additive |
 | P12 | Scan page treating any non-OK as invalid | New 409 code with message | Same release |
 | P13 | Objects without a staged row | Fallback insert at attach | Remove fallback after one release |
 | P16 | Lessons with rewards under self-reported completion | Policy column, default legacy | Per lesson, when its creator switches |
@@ -931,7 +783,7 @@ Rules for every migration: one folder per phase; enum additions are not reversib
 
 ### E.5 Rollback notes
 
-- Code-only phases (P01 to P10, P14, P21 to P36, P38 to P43, P45) roll back by revert. P02 deletes route files; revert restores them.
+- Code-only phases (P14, P21, P23, P24, P26 to P35, P38 to P43, P45) roll back by revert. P02 deletes route files; revert restores them.
 - P01 and P02 must not be reverted independently of each other once shipped, or the legacy routes return without the guard.
 - Migration phases roll back by reverting code and leaving columns in place.
 - P12 is the one phase where a rollback changes user-visible state: codes stopped while it was live become redeemable again if the predicate is removed. Resume them deliberately before reverting, or keep the predicate.
