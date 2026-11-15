@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { resolveSession, resolveBrandAdminContext } from "@/lib/auth-session";
+import { realAuthResolvers, resolveSession, resolveBrandAdminContext, type AuthResolvers } from "@/lib/auth-session";
 import { assertExpectedBrand } from "@/lib/brand-auth";
 import { getBrandContextFailure } from "@/lib/brand-auth";
 
 import prisma from "@/lib/prisma";
 import { unusedQrWhere } from "@/lib/qr-lifecycle";
+import { archivedBatchWhere, archivedCodeWhere, parseArchivedFilter } from "@/lib/qr-archive";
 import QRCode from "qrcode";
 import { v2 as cloudinary } from "cloudinary";
 import { nanoid } from "nanoid";
@@ -22,14 +23,18 @@ function buildBatchName(baseName: string) {
 }
 
 export async function GET(request: NextRequest) {
+  return listQrBatchesImpl(request, realAuthResolvers);
+}
+
+export async function listQrBatchesImpl(request: NextRequest, deps: AuthResolvers) {
   try {
-    const session = await resolveSession();
+    const session = await deps.resolveSession();
 
     if (!session) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const brand = await resolveBrandAdminContext();
+    const brand = await deps.resolveBrandAdminContext();
     if (!brand?.membership?.brand) {
       const failure = getBrandContextFailure(brand);
       return NextResponse.json(
@@ -47,6 +52,13 @@ export async function GET(request: NextRequest) {
       MAX_PAGE_SIZE,
     );
     const skip = (page - 1) * take;
+    const archived = parseArchivedFilter(request.nextUrl.searchParams.get("archived"));
+    if (!archived) {
+      return NextResponse.json(
+        { error: "archived must be one of: exclude, include, only." },
+        { status: 400 },
+      );
+    }
 
     const [batches, campaigns, qrCodes, qrCodeTotal] = await Promise.all([
       prisma.qRCodeBatch.findMany({
@@ -54,6 +66,7 @@ export async function GET(request: NextRequest) {
           campaign: {
             brandId,
           },
+          ...archivedBatchWhere(archived),
         },
         orderBy: [
           { createdAt: "desc" },
@@ -64,6 +77,7 @@ export async function GET(request: NextRequest) {
           id: true,
           name: true,
           createdAt: true,
+          archivedAt: true,
           csvExportedAt: true,
           printedAt: true,
           qrCodes: { where: { NOT: { ...unusedQrWhere, campaign: { brandId } } }, select: { id: true }, take: 1 },
@@ -101,6 +115,7 @@ export async function GET(request: NextRequest) {
           campaign: {
             brandId,
           },
+          ...archivedCodeWhere(archived),
         },
         orderBy: [
           { createdAt: "desc" },
@@ -138,7 +153,7 @@ export async function GET(request: NextRequest) {
           },
         },
       }),
-      prisma.qRCode.count({ where: { campaign: { brandId } } }),
+      prisma.qRCode.count({ where: { campaign: { brandId }, ...archivedCodeWhere(archived) } }),
     ]);
 
     return NextResponse.json({
@@ -147,6 +162,7 @@ export async function GET(request: NextRequest) {
           id: batch.id,
           name: batch.name,
           createdAt: batch.createdAt,
+          archivedAt: batch.archivedAt,
           quantity: batch._count.qrCodes,
           canDelete: !batch.csvExportedAt && !batch.printedAt && batch.qrCodes.length === 0,
           campaign: batch.campaign,
@@ -167,6 +183,7 @@ export async function GET(request: NextRequest) {
             null,
           usedByEmail: qrCode.redeemedBy?.email || qrCode.email || null,
         })),
+        archived,
         pagination: {
           page,
           pageSize: take,

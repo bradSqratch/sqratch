@@ -36,6 +36,7 @@ model User {
   postComments              PostComment[]
   qrCodesCreated            QRCode[]                   @relation("QRCodeCreatedByUser")
   qrRedemptions             QRCode[]                   @relation("QRCodeRedeemedByUser")
+  archivedQrBatches         QRCodeBatch[]              @relation("QRCodeBatchArchivedBy")
   questions                 Question[]
   questionAnswers           QuestionAnswer[]
   commerceRewardRedemptions CommerceRewardRedemption[]
@@ -168,8 +169,14 @@ model QRCodeBatch {
   campaignId    String?
   createdAt     DateTime  @default(now())
   csvExportedAt DateTime?
+  /// Operational list hygiene only. Archiving never affects scanning,
+  /// redemption, unlocks, ledger history, attribution or exports. It is
+  /// deliberately separate from `isActive` and from any redemption stop.
+  archivedAt    DateTime?
+  archivedById  String?
   qrCodes       QRCode[]
   campaign      Campaign? @relation(fields: [campaignId], references: [id])
+  archivedBy    User?     @relation("QRCodeBatchArchivedBy", fields: [archivedById], references: [id], onDelete: SetNull)
 
   @@index([campaignId])
 }

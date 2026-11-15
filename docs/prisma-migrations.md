@@ -254,6 +254,30 @@ only the database behavior for future omitted provider values. The migration is
 forward-compatible with both the 15C2 and 15C3 runtimes because their Shopify
 writers already explicitly set `provider = SHOPIFY`.
 
+## QR batch archive (P11)
+
+`20261114120000_add_qr_batch_archive` adds two nullable columns to `QRCodeBatch` (`archivedAt`, `archivedById`) and one foreign key from `archivedById` to `User(id)` with `ON DELETE SET NULL`. It is additive, has no backfill and rewrites no row. Existing batches have `archivedAt IS NULL`, which means "not archived". `QRCodeBatch."isActive"` is not touched and is not read or written by the archive feature.
+
+**Preflight (read-only, run first):**
+
+```sql
+-- Expect zero rows: the columns must not exist yet.
+SELECT column_name FROM information_schema.columns
+WHERE table_name = 'QRCodeBatch' AND column_name IN ('archivedAt', 'archivedById');
+-- Note the count for the post-deploy comparison.
+SELECT count(*) FROM "QRCodeBatch";
+```
+
+Then `npx prisma migrate status` must list this migration as the only pending one (see "How to determine migration status" above before trusting a clean result).
+
+**Deployment order:** back up, apply `npx prisma migrate deploy` once from a controlled release job, then deploy the application release. The new application code reads and writes the columns and must not run before the migration. The migration takes a brief `ACCESS EXCLUSIVE` lock on `QRCodeBatch` and `User` (adding nullable columns and a foreign key on an empty column); run it in a normal release window.
+
+**Post-deploy verification:** `npx prisma migrate status` reports up to date, `npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script` returns an empty migration, the preflight query now returns both columns, `SELECT count(*) FROM "QRCodeBatch"` matches the earlier count, and `SELECT count(*) FROM "QRCodeBatch" WHERE "archivedAt" IS NOT NULL` is `0` until a brand archives one.
+
+**Rollback:** roll the application back at any time; the older release ignores the columns. The columns may stay. Do not drop them while any batch is archived, because older versions would simply list those batches again (archiving never affects scanning, redemption, exports or history, so nothing else changes). If the migration must be reversed after archived batches exist, first decide with the owner whether to keep the archive markers.
+
+**Verified locally only** against a disposable PostgreSQL database: the migration applied to a schema pushed from the previous `schema.prisma`, then `prisma migrate diff` reported no drift against the new schema. It has not been run against any connected, shared or production database.
+
 ## Deployment procedure
 
 Back up first, pause reward issuance briefly, run reviewed preflight SQL, then run `npx prisma migrate deploy` once from a controlled release job. Immediately after, run `npx prisma migrate status` and `npx prisma migrate diff` to confirm the expected state (do not assume success from the deploy command's exit code alone). Validate schema, token refresh, QR unlock deduplication, redemption/refund, and query plans afterward.
