@@ -53,6 +53,11 @@ test("signup, verification, and login retain next", () => {
   assert.match(signup, /verify-email\?email=.*&next=/);
   assert.match(signup, /login\?next=\$\{encodeURIComponent\(nextPath\)\}/);
   assert.match(verify, /login\?next=\$\{encodeURIComponent\(nextPath\)\}/);
-  assert.match(login, /router\.push\(nextPath\)/);
-  assert.match(login, /api\/progress\/merge/);
+  assert.match(login, /router\.push\(\s*transferStatus === "complete" \? nextPath : withTransferPending\(nextPath\)/);
+  // The merge request now lives in the shared transfer helper that sign-in calls.
+  assert.match(login, /requestAnonymousTransfer\(\)/);
+  assert.match(
+    readFileSync(new URL("../src/lib/anonymous-transfer-client.ts", import.meta.url), "utf8"),
+    /api\/progress\/merge/,
+  );
 });

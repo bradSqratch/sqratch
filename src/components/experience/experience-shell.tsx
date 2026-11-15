@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { ReactNode } from "react";
 import CommonNavbar from "@/components/commonNavbar";
+import { TransferPendingNotice } from "@/components/auth/transfer-pending-notice";
 import {
   experienceTabHref,
   type ExperienceTab,
@@ -160,6 +161,7 @@ export function ExperienceShell({
             </section>
           )}
 
+          <TransferPendingNotice className="mt-6" />
           <div className="mt-8">{children}</div>
         </main>
 

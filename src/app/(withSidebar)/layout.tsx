@@ -13,6 +13,7 @@ import { DashboardTopbarUser } from "@/components/dashboard-topbar-user";
 import { SqratchLogo } from "@/components/brand/sqratch-logo";
 import { hasPendingApproval } from "@/lib/approval-gating";
 import { ThemeSelect } from "@/components/theme-select";
+import { TransferPendingNotice } from "@/components/auth/transfer-pending-notice";
 
 export const metadata: Metadata = {
   title: "Dashboard",
@@ -90,6 +91,7 @@ export default async function DashboardLayout({
             <Suspense
               fallback={<div className="p-6 text-copy-70">Loading...</div>}
             >
+              <TransferPendingNotice className="mx-8 mt-6" />
               <div>{children}</div>
               <Toaster richColors />
             </Suspense>
