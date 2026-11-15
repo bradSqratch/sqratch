@@ -990,7 +990,8 @@ describe("response boundary tripwires", () => {
   });
 
   test("the brand dashboard's ATTRIBUTED CONVERSIONS section exists and is where outcome vocabulary now legitimately lives", () => {
-    assert.match(pageSource, /Attributed conversions &amp; revenue/);
+    assert.match(pageSource, /\{CONVERSION_SECTION_TITLE\}/);
+    assert.match(readFileSync("src/lib/commerce/analytics-labels.ts", "utf8"), /Attributed conversions & order value/);
     assert.match(pageSource, /function ConversionAnalyticsSection\(/);
   });
 

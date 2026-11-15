@@ -95,7 +95,7 @@ const clicks = { range: { start: "2026-09-07", end: "2026-10-06" }, totals: { cl
 const conversion = (attributed = 0): conversionHelpers.BrandConversionAnalytics => ({
   range: clicks.range, totalIngestedOrders: 1, attributedOrders: attributed, currentlyNetPositivePaidOrders: attributed,
   pendingOrAuthorizedOrders: 0, partiallyRefundedOrders: 0, fullyRefundedOrders: 0,
-  grossAttributedRevenueByCurrency: [], refundedRevenueByCurrency: [], netAttributedRevenueByCurrency: [],
+  attributedOrderValueByCurrency: [], refundedAttributedValueByCurrency: [], currentNetAttributedOrderValueByCurrency: [], financialStatusBreakdown: [], cancelledAttributedOrders: 0,
   attributedOrdersByProvider: [], attributedOrdersByEntryCampaign: [], attributedOrdersByProductCampaign: [], attributedOrdersByExperience: [], attributedOrdersByCreator: [], attributedOrdersByLesson: [], attributedOrdersByProduct: [], dailyTrend: [],
 });
 const settle = () => new Promise<void>((resolve) => setImmediate(resolve));
@@ -164,11 +164,11 @@ test("empty panels are concise; currencies, UNKNOWN, and daily trends stay separ
   h.requests[0].resolve(engagement(0)); h.requests[1].resolve(clicks); h.requests[2].resolve(conversion());
   await settle(); let tree = h.render();
   assert.match(textOf(tree), /No engagement|No product clicks|none in this range have exact SQRATCH/);
-  assert.doesNotMatch(textOf(tree), /By provider|By Creator|By Lesson|Gross attributed revenue/);
+  assert.doesNotMatch(textOf(tree), /By provider|By Creator|By Lesson|Attributed order value/);
   change(tree, "analytics-from", "2026-08-01"); h.render(); h.flush();
   const c = conversion(2);
-  c.netAttributedRevenueByCurrency = [{ currencyCode: "USD", minor: "4200" }, { currencyCode: "CAD", minor: "9831" }, { currencyCode: "UNKNOWN", minor: "123" }];
-  c.dailyTrend = [{ date: "2026-10-06", attributedOrders: 2, currentlyNetPositivePaidOrders: 2, grossRevenueByCurrency: c.netAttributedRevenueByCurrency, refundedRevenueByCurrency: [], netRevenueByCurrency: c.netAttributedRevenueByCurrency }];
+  c.currentNetAttributedOrderValueByCurrency = [{ currencyCode: "USD", minor: "4200" }, { currencyCode: "CAD", minor: "9831" }, { currencyCode: "UNKNOWN", minor: "123" }];
+  c.dailyTrend = [{ date: "2026-10-06", attributedOrders: 2, currentlyNetPositivePaidOrders: 2, attributedOrderValueByCurrency: c.currentNetAttributedOrderValueByCurrency, refundedAttributedValueByCurrency: [], currentNetAttributedOrderValueByCurrency: c.currentNetAttributedOrderValueByCurrency }];
   h.requests[3].resolve(engagement(0)); h.requests[4].resolve(clicks); h.requests[5].resolve(c);
   await settle(); tree = h.render();
   assert.match(textOf(tree), /USD 42\.00/); assert.match(textOf(tree), /CAD 98\.31/); assert.match(textOf(tree), /Unknown currency/);

@@ -18,6 +18,13 @@ import {
   type NamedBreakdownRow,
   type ProviderBreakdownRow,
 } from "@/lib/commerce/conversion-analytics-client";
+import {
+  CONVERSION_DATE_BASIS_NOTE,
+  CONVERSION_SECTION_TITLE,
+  ORDER_VALUE_LABELS,
+  TREND_COLUMN_LABELS,
+} from "@/lib/commerce/analytics-labels";
+import { FinancialStatusBreakdown } from "@/components/commerce/financial-status-breakdown";
 
 import { defaultBrandAnalyticsDates, brandAnalyticsDateError } from "@/lib/commerce/brand-analytics-filters";
 
@@ -267,7 +274,7 @@ export default function BrandAnalyticsPage() {
         if (!active || seq !== conversionRequestSeq.current) return;
         setConversion(null);
         setConversionError(
-          getErrorMessage(loadError, "Failed to load conversion and revenue analytics."),
+          getErrorMessage(loadError, "Failed to load conversion and order value analytics."),
         );
       } finally {
         if (active && seq === conversionRequestSeq.current) setConversionLoading(false);
@@ -445,9 +452,9 @@ function CommerceClickSection({
         </p>
         <p className="mt-2 text-xs text-copy-45">
           Product clicks record outbound traffic separately from attributed
-          conversions. Orders and revenue are counted only when SQRATCH has
+          conversions. Orders and order value are counted only when SQRATCH has
           exact attribution evidence from the commerce integration — see
-          &quot;Attributed conversions &amp; revenue&quot; below.
+          &quot;{CONVERSION_SECTION_TITLE}&quot; below.
         </p>
       </PageCard>
 
@@ -699,7 +706,7 @@ const CONVERSION_COUNT_CARDS: Array<{
     key: "currentlyNetPositivePaidOrders",
     label: "Current paid conversions",
     subtext:
-      "Attributed orders that currently retain positive net revenue. Evidence of attribution, not a claim that SQRATCH caused the sale.",
+      "Attributed orders that currently retain a positive net order value. Evidence of attribution, not a claim that SQRATCH caused the sale.",
   },
   {
     key: "pendingOrAuthorizedOrders",
@@ -731,7 +738,7 @@ function ConversionAnalyticsSection({
   if (error) {
     return (
       <PageCard>
-        <h2 className="text-xl font-semibold">Attributed conversions &amp; revenue</h2>
+        <h2 className="text-xl font-semibold">{CONVERSION_SECTION_TITLE}</h2>
         <p className="mt-3 text-sm text-red-700 dark:text-red-300">{error}</p>
       </PageCard>
     );
@@ -740,7 +747,7 @@ function ConversionAnalyticsSection({
   if (loading || !data) {
     return (
       <PageCard>
-        <h2 className="text-xl font-semibold">Attributed conversions &amp; revenue</h2>
+        <h2 className="text-xl font-semibold">{CONVERSION_SECTION_TITLE}</h2>
         <p className="mt-3 text-sm text-copy-65">Loading conversion analytics...</p>
       </PageCard>
     );
@@ -754,13 +761,14 @@ function ConversionAnalyticsSection({
       <PageCard>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <h2 className="text-xl font-semibold">Attributed conversions &amp; revenue</h2>
+            <h2 className="text-xl font-semibold">{CONVERSION_SECTION_TITLE}</h2>
             <p className="mt-2 text-sm text-copy-65">
-              Orders and revenue for {formatDay(data.range.start)} to{" "}
-              {formatDay(data.range.end)}, counted only when SQRATCH has exact
+              Orders and order value for {formatDay(data.range.start)} to{" "}
+              {formatDay(data.range.end)} (UTC), counted only when SQRATCH has exact
               attribution evidence from the commerce integration. Counted for your
               whole brand, so the campaign filter above does not apply here.
             </p>
+            <p className="mt-2 text-xs text-copy-45">{CONVERSION_DATE_BASIS_NOTE}</p>
           </div>
           <div className="flex flex-wrap gap-2">
             {/* PHASE D7 — deep-links into the Order Explorer already filtered
@@ -819,10 +827,15 @@ function ConversionAnalyticsSection({
 
           {!noAttributionYet && <>
           <div className="grid gap-4 lg:grid-cols-3">
-            <MoneyRowsCard title="Gross attributed revenue" rows={data.grossAttributedRevenueByCurrency} />
-            <MoneyRowsCard title="Refunded attributed revenue" rows={data.refundedRevenueByCurrency} />
-            <MoneyRowsCard title="Net attributed revenue" rows={data.netAttributedRevenueByCurrency} />
+            <MoneyRowsCard {...ORDER_VALUE_LABELS.attributedOrderValue} rows={data.attributedOrderValueByCurrency} />
+            <MoneyRowsCard {...ORDER_VALUE_LABELS.refunded} rows={data.refundedAttributedValueByCurrency} />
+            <MoneyRowsCard {...ORDER_VALUE_LABELS.currentNet} rows={data.currentNetAttributedOrderValueByCurrency} />
           </div>
+
+          <FinancialStatusBreakdown
+            rows={data.financialStatusBreakdown}
+            cancelledOrders={data.cancelledAttributedOrders}
+          />
 
           <ConversionTrendSection data={data} />
 
@@ -1018,21 +1031,21 @@ function ConversionTrendCurrencyTable({
 
   const daysWithActivity = trend.filter(
     (point) =>
-      minorForCurrency(point.grossRevenueByCurrency, currencyCode) !== null ||
-      minorForCurrency(point.refundedRevenueByCurrency, currencyCode) !== null ||
-      minorForCurrency(point.netRevenueByCurrency, currencyCode) !== null,
+      minorForCurrency(point.attributedOrderValueByCurrency, currencyCode) !== null ||
+      minorForCurrency(point.refundedAttributedValueByCurrency, currencyCode) !== null ||
+      minorForCurrency(point.currentNetAttributedOrderValueByCurrency, currencyCode) !== null,
   );
 
   return (
     <PageCard>
       <h3 className="text-lg font-semibold">
-        {currencyCode === "UNKNOWN" ? "Revenue per day — unknown currency" : `Revenue per day — ${currencyCode}`}
+        {currencyCode === "UNKNOWN" ? "Order value per day — unknown currency" : `Order value per day — ${currencyCode}`}
       </h3>
       <p className="mt-1 text-xs text-copy-45">
         Shown separately per currency. Amounts in different currencies are never added together.
       </p>
       {daysWithActivity.length === 0 ? (
-        <p className="mt-4 text-sm text-copy-65">No revenue in this currency in this range.</p>
+        <p className="mt-4 text-sm text-copy-65">No order value in this currency in this range.</p>
       ) : (
         // Wide money tables scroll INSIDE their own container so the page
         // itself never overflows horizontally on mobile.
@@ -1041,9 +1054,9 @@ function ConversionTrendCurrencyTable({
             <thead className="text-copy-55">
               <tr>
                 <th scope="col" className="pb-3">Day (UTC)</th>
-                <th scope="col" className="pb-3 text-right">Gross</th>
-                <th scope="col" className="pb-3 text-right">Refunded</th>
-                <th scope="col" className="pb-3 text-right">Net</th>
+                <th scope="col" className="pb-3 text-right">{TREND_COLUMN_LABELS.orderValue}</th>
+                <th scope="col" className="pb-3 text-right">{TREND_COLUMN_LABELS.refunded}</th>
+                <th scope="col" className="pb-3 text-right">{TREND_COLUMN_LABELS.currentNet}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-edge/10">
@@ -1051,13 +1064,13 @@ function ConversionTrendCurrencyTable({
                 <tr key={point.date}>
                   <td className="py-2 whitespace-nowrap pr-4">{point.date}</td>
                   <td className="py-2 text-right tabular-nums whitespace-nowrap">
-                    {format(point.grossRevenueByCurrency)}
+                    {format(point.attributedOrderValueByCurrency)}
                   </td>
                   <td className="py-2 text-right tabular-nums whitespace-nowrap text-amber-700 dark:text-amber-200/80">
-                    {format(point.refundedRevenueByCurrency)}
+                    {format(point.refundedAttributedValueByCurrency)}
                   </td>
                   <td className="py-2 text-right tabular-nums whitespace-nowrap">
-                    {format(point.netRevenueByCurrency)}
+                    {format(point.currentNetAttributedOrderValueByCurrency)}
                   </td>
                 </tr>
               ))}
@@ -1094,13 +1107,22 @@ function ConversionMetricCard({
  * fabricated `$0.00`, since an empty array is not evidence of a known
  * currency at zero.
  */
-function MoneyRowsCard({ title, rows }: { title: string; rows: MoneyRow[] }) {
+function MoneyRowsCard({
+  title,
+  definition,
+  rows,
+}: {
+  title: string;
+  definition: string;
+  rows: MoneyRow[];
+}) {
   const lines = formatMoneyRows(rows);
   return (
     <PageCard>
       <h3 className="text-lg font-semibold">{title}</h3>
+      <p className="mt-1 text-xs text-copy-45">{definition}</p>
       {lines.length === 0 ? (
-        <p className="mt-3 text-sm text-copy-65">No attributed revenue in this range.</p>
+        <p className="mt-3 text-sm text-copy-65">No attributed order value in this range.</p>
       ) : (
         <ul className="mt-3 space-y-1 text-sm">
           {lines.map((line) => (

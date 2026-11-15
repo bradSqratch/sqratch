@@ -1,24 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCreatorContext } from "@/lib/creator-auth";
 import prisma from "@/lib/prisma";
-
-function getDateRange(request: NextRequest) {
-  const dateFrom = request.nextUrl.searchParams.get("dateFrom");
-  const dateTo = request.nextUrl.searchParams.get("dateTo");
-
-  const start = dateFrom ? new Date(dateFrom) : null;
-  const end = dateTo ? new Date(dateTo) : null;
-
-  if (end) {
-    end.setHours(23, 59, 59, 999);
-  }
-
-  return { start, end };
-}
+import { resolveCommerceClickAnalyticsDateRange } from "@/lib/commerce/commerce-click-analytics";
 
 export async function GET(request: NextRequest) {
+  return creatorAnalyticsGetImpl(request, getCreatorContext);
+}
+
+export async function creatorAnalyticsGetImpl(
+  request: NextRequest,
+  getContext: typeof getCreatorContext,
+) {
   try {
-    const creator = await getCreatorContext();
+    const creator = await getContext();
 
     if (!creator) {
       return NextResponse.json(
@@ -28,17 +22,24 @@ export async function GET(request: NextRequest) {
     }
 
     const experienceId = request.nextUrl.searchParams.get("experienceId");
-    const { start, end } = getDateRange(request);
+    // The same strict UTC resolver the click and conversion panels use: valid
+    // YYYY-MM-DD only, UTC calendar days, last 30 days when no dates are
+    // given, and at most the shared maximum range. A malformed date is a 400,
+    // not a 500 or a silently different period.
+    const resolved = resolveCommerceClickAnalyticsDateRange({
+      dateFrom: request.nextUrl.searchParams.get("dateFrom"),
+      dateTo: request.nextUrl.searchParams.get("dateTo"),
+      now: new Date(),
+    });
+    if (!resolved.ok) {
+      return NextResponse.json({ error: resolved.error }, { status: 400 });
+    }
+    const { start, end } = resolved.range;
 
-    const experiences = await prisma.experience.findMany({
-      where: {
-        creatorId: creator.creatorProfile.id,
-        ...(experienceId
-          ? {
-              id: experienceId,
-            }
-          : {}),
-      },
+    // Every experience this creator owns. The selector is built from this
+    // list, so choosing one experience never removes the others from it.
+    const ownedExperiences = await prisma.experience.findMany({
+      where: { creatorId: creator.creatorProfile.id },
       orderBy: { title: "asc" },
       select: {
         id: true,
@@ -46,6 +47,11 @@ export async function GET(request: NextRequest) {
         slug: true,
       },
     });
+    // The filter narrows the metrics, never the options. An id the creator
+    // does not own matches nothing, exactly as before.
+    const experiences = experienceId
+      ? ownedExperiences.filter((experience) => experience.id === experienceId)
+      : ownedExperiences;
 
     const experienceIds = experiences.map((experience) => experience.id);
 
@@ -53,28 +59,14 @@ export async function GET(request: NextRequest) {
       experienceId: {
         in: experienceIds,
       },
-      ...(start || end
-        ? {
-            createdAt: {
-              ...(start ? { gte: start } : {}),
-              ...(end ? { lte: end } : {}),
-            },
-          }
-        : {}),
+      createdAt: { gte: start, lte: end },
     };
 
     const questionWhere = {
       experienceId: {
         in: experienceIds,
       },
-      ...(start || end
-        ? {
-            createdAt: {
-              ...(start ? { gte: start } : {}),
-              ...(end ? { lte: end } : {}),
-            },
-          }
-        : {}),
+      createdAt: { gte: start, lte: end },
     };
 
     const [
@@ -140,14 +132,7 @@ export async function GET(request: NextRequest) {
                   },
                 },
               },
-              ...(start || end
-                ? {
-                    updatedAt: {
-                      ...(start ? { gte: start } : {}),
-                      ...(end ? { lte: end } : {}),
-                    },
-                  }
-                : {}),
+              updatedAt: { gte: start, lte: end },
             },
           })
         : 0,
@@ -180,10 +165,14 @@ export async function GET(request: NextRequest) {
       data: {
         filters: {
           experienceId: experienceId || null,
-          dateFrom: start,
-          dateTo: end,
+          dateFrom: start.toISOString(),
+          dateTo: end.toISOString(),
         },
+        // The period actually applied (UTC), including when the request named
+        // no dates and the default window was used.
+        range: { start: start.toISOString(), end: end.toISOString() },
         experiences,
+        options: { experiences: ownedExperiences },
         totals: {
           views: byExperience.reduce((total, row) => total + row.views, 0),
           lessonStarts: byExperience.reduce(

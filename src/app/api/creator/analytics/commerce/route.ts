@@ -79,7 +79,7 @@ const DEFAULT_TOP_N = 10;
  * so the API and the UI cannot drift into implying more than clicks.
  */
 export const CREATOR_COMMERCE_ANALYTICS_NOTE =
-  "Commerce analytics currently measures outbound product clicks. Order and revenue attribution are not enabled.";
+  "Commerce analytics currently measures outbound product clicks. Orders attributed to those clicks are reported separately in the conversions section below, as order values rather than collected payments.";
 
 export type CreatorCommerceExperienceRow = {
   id: string;

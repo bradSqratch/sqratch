@@ -34,12 +34,19 @@ async function getExperienceSlugFromRequest(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  return questionsGetImpl(request, getViewerContext);
+}
+
+export async function questionsGetImpl(
+  request: NextRequest,
+  getViewer: typeof getViewerContext,
+) {
   try {
     const creatorInbox =
       request.nextUrl.searchParams.get("creatorInbox") === "1";
 
     if (creatorInbox) {
-      const viewer = await getViewerContext(request);
+      const viewer = await getViewer(request);
 
       if (!viewer.userId) {
         return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
@@ -53,7 +60,8 @@ export async function GET(request: NextRequest) {
         select: {
           id: true,
           experiences: {
-            where: experienceId ? { id: experienceId } : undefined,
+            // Every owned experience, whatever the filter: the selector must
+            // keep listing all of them after one is chosen.
             orderBy: { updatedAt: "desc" },
             select: {
               id: true,
@@ -71,7 +79,11 @@ export async function GET(request: NextRequest) {
         );
       }
 
-      const experienceIds = creatorProfile.experiences.map(
+      // The filter narrows the questions shown; it never narrows the options.
+      const selectedExperiences = experienceId
+        ? creatorProfile.experiences.filter((experience) => experience.id === experienceId)
+        : creatorProfile.experiences;
+      const experienceIds = selectedExperiences.map(
         (experience) => experience.id,
       );
 
@@ -154,7 +166,8 @@ export async function GET(request: NextRequest) {
 
       return NextResponse.json({
         data: {
-          experiences: creatorProfile.experiences,
+          experiences: selectedExperiences,
+          options: { experiences: creatorProfile.experiences },
           questions: openQuestions.map((question) => ({
             id: question.id,
             body: question.body,

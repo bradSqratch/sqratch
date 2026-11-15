@@ -63,7 +63,12 @@ export default function CreatorExperiencePostsPage({
   const [postsData, setPostsData] = useState<PostsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  // Three distinct failures, three distinct places: a failed LOAD replaces the
+  // page (nothing to edit yet); a failed SAVE and a failed background REFRESH
+  // appear inline above the editor, which stays mounted with its text.
   const [error, setError] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
 
@@ -72,26 +77,39 @@ export default function CreatorExperiencePostsPage({
     [experience?.status],
   );
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  const load = useCallback(
+    async ({ silent = false }: { silent?: boolean } = {}) => {
+      // A silent reload (after publishing) keeps the page, editor and list on
+      // screen instead of flashing a full-page loading state.
+      if (!silent) {
+        setLoading(true);
+        setError(null);
+      }
+      setRefreshError(null);
 
-    try {
-      const experienceResult = await fetchJson<ExperienceResponse>(
-        `/api/creator/experiences/${experienceId}`,
-      );
-      setExperience(experienceResult);
+      try {
+        const experienceResult = await fetchJson<ExperienceResponse>(
+          `/api/creator/experiences/${experienceId}`,
+        );
+        setExperience(experienceResult);
 
-      const postsResult = await fetchJson<PostsResponse>(
-        `/api/posts?experienceSlug=${experienceResult.slug}`,
-      );
-      setPostsData(postsResult);
-    } catch (loadError) {
-      setError(getErrorMessage(loadError, "Failed to load posts."));
-    } finally {
-      setLoading(false);
-    }
-  }, [experienceId]);
+        const postsResult = await fetchJson<PostsResponse>(
+          `/api/posts?experienceSlug=${experienceResult.slug}`,
+        );
+        setPostsData(postsResult);
+      } catch (loadError) {
+        const message = getErrorMessage(loadError, "Failed to load posts.");
+        if (silent) {
+          setRefreshError(message);
+        } else {
+          setError(message);
+        }
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [experienceId],
+  );
 
   useEffect(() => {
     if (!experienceId) {
@@ -109,7 +127,7 @@ export default function CreatorExperiencePostsPage({
     }
 
     setSaving(true);
-    setError(null);
+    setSaveError(null);
 
     try {
       await fetchJson("/api/posts", {
@@ -126,9 +144,11 @@ export default function CreatorExperiencePostsPage({
 
       setTitle("");
       setBody("");
-      await load();
-    } catch (saveError) {
-      setError(getErrorMessage(saveError, "Failed to publish post."));
+      await load({ silent: true });
+    } catch (failure) {
+      // Keep the typed title and body: they live in this component's state and
+      // the editor stays mounted, so nothing the creator wrote is lost.
+      setSaveError(getErrorMessage(failure, "Failed to publish post."));
     } finally {
       setSaving(false);
     }
@@ -164,7 +184,12 @@ export default function CreatorExperiencePostsPage({
         </PageCard>
       ) : error ? (
         <PageCard>
-          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+          <div role="alert" className="flex flex-wrap items-center gap-3">
+            <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+            <Button type="button" variant="outline" onClick={() => void load()}>
+              Retry
+            </Button>
+          </div>
         </PageCard>
       ) : !experience || !postsData ? (
         <PageCard>
@@ -217,6 +242,15 @@ export default function CreatorExperiencePostsPage({
               )}
             </div>
 
+            {refreshError && (
+              <div role="alert" className="mt-4 flex flex-wrap items-center gap-3 text-sm text-amber-800 dark:text-amber-200">
+                <p>Your post was published, but the list could not be refreshed. {refreshError}</p>
+                <Button type="button" variant="outline" onClick={() => void load({ silent: true })}>
+                  Refresh
+                </Button>
+              </div>
+            )}
+
             <form onSubmit={(event) => void submitPost(event)} className="mt-5 space-y-4">
               <Input
                 value={title}
@@ -237,6 +271,11 @@ export default function CreatorExperiencePostsPage({
               >
                 {saving ? "Publishing..." : "Publish post"}
               </Button>
+              {saveError && (
+                <p role="alert" className="text-sm text-red-700 dark:text-red-300">
+                  {saveError} Your post is still here — you can try again.
+                </p>
+              )}
             </form>
           </PageCard>
 

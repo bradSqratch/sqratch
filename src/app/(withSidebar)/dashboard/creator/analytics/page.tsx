@@ -1,9 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { CreatorPageShell } from "@/components/creator/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
+import { useLatestRequest } from "@/hooks/use-latest-request";
 import {
   currenciesInTrend,
   formatMoneyRows,
@@ -16,6 +17,13 @@ import {
   type NamedBreakdownRow,
   type ProviderBreakdownRow,
 } from "@/lib/commerce/conversion-analytics-client";
+import {
+  CONVERSION_DATE_BASIS_NOTE,
+  CONVERSION_SECTION_TITLE,
+  ORDER_VALUE_LABELS,
+  TREND_COLUMN_LABELS,
+} from "@/lib/commerce/analytics-labels";
+import { FinancialStatusBreakdown } from "@/components/commerce/financial-status-breakdown";
 
 type AnalyticsResponse = {
   filters: {
@@ -28,6 +36,12 @@ type AnalyticsResponse = {
     title: string;
     slug: string;
   }>;
+  /** Every experience the creator owns, regardless of the selected filter. */
+  options?: {
+    experiences: Array<{ id: string; title: string; slug: string }>;
+  };
+  /** The UTC period actually applied, including when the default window was used. */
+  range?: { start: string; end: string };
   totals: {
     views: number;
     lessonStarts: number;
@@ -96,6 +110,17 @@ export default function CreatorAnalyticsPage() {
   });
   const [data, setData] = useState<AnalyticsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Selector options are kept apart from any one response: they list every
+  // owned experience, survive a failed reload, and are never narrowed by the
+  // current filter.
+  const [experienceOptions, setExperienceOptions] = useState<
+    Array<{ id: string; title: string; slug: string }>
+  >([]);
+  // One stale-response guard per independent panel. A slow response for an
+  // earlier filter can never overwrite the data for the current one.
+  const beginEngagement = useLatestRequest();
+  const beginCommerce = useLatestRequest();
+  const beginConversion = useLatestRequest();
   const [commerce, setCommerce] = useState<CommerceAnalyticsResponse | null>(
     null,
   );
@@ -108,10 +133,11 @@ export default function CreatorAnalyticsPage() {
   const [conversion, setConversion] = useState<CreatorConversionAnalytics | null>(null);
   const [conversionError, setConversionError] = useState<string | null>(null);
   const [conversionLoading, setConversionLoading] = useState(true);
-  const conversionRequestSeq = useRef(0);
 
   const load = useCallback(async () => {
+    const request = beginEngagement();
     setError(null);
+    setData(null);
 
     try {
       const query = new URLSearchParams();
@@ -128,12 +154,16 @@ export default function CreatorAnalyticsPage() {
 
       const result = await fetchJson<AnalyticsResponse>(
         `/api/creator/analytics?${query.toString()}`,
+        { signal: request.signal },
       );
+      if (!request.isCurrent()) return;
       setData(result);
+      setExperienceOptions(result.options?.experiences ?? result.experiences);
     } catch (loadError) {
+      if (!request.isCurrent()) return;
       setError(getErrorMessage(loadError, "Failed to load analytics."));
     }
-  }, [filters]);
+  }, [filters, beginEngagement]);
 
   useEffect(() => {
     void load();
@@ -143,6 +173,7 @@ export default function CreatorAnalyticsPage() {
   // has its own endpoint, its own failure mode and its own empty state, and a
   // commerce error must not blank out the experience metrics above it.
   const loadCommerce = useCallback(async () => {
+    const request = beginCommerce();
     setCommerceError(null);
     setCommerceLoading(true);
 
@@ -161,17 +192,20 @@ export default function CreatorAnalyticsPage() {
 
       const result = await fetchJson<CommerceAnalyticsResponse>(
         `/api/creator/analytics/commerce?${query.toString()}`,
+        { signal: request.signal },
       );
+      if (!request.isCurrent()) return;
       setCommerce(result);
     } catch (loadError) {
+      if (!request.isCurrent()) return;
       setCommerce(null);
       setCommerceError(
         getErrorMessage(loadError, "Failed to load product click analytics."),
       );
     } finally {
-      setCommerceLoading(false);
+      if (request.isCurrent()) setCommerceLoading(false);
     }
-  }, [filters]);
+  }, [filters, beginCommerce]);
 
   useEffect(() => {
     void loadCommerce();
@@ -186,7 +220,7 @@ export default function CreatorAnalyticsPage() {
    * silently widening the result.
    */
   const loadConversion = useCallback(async () => {
-    const seq = ++conversionRequestSeq.current;
+    const request = beginConversion();
     setConversionLoading(true);
     setConversionError(null);
 
@@ -198,8 +232,9 @@ export default function CreatorAnalyticsPage() {
 
       const result = await fetchJson<unknown>(
         `/api/creator/analytics/conversions?${query.toString()}`,
+        { signal: request.signal },
       );
-      if (seq !== conversionRequestSeq.current) return; // superseded by a newer request
+      if (!request.isCurrent()) return; // superseded by a newer request
 
       const parsed = parseCreatorConversionAnalytics(result);
       if (!parsed) {
@@ -209,15 +244,15 @@ export default function CreatorAnalyticsPage() {
       }
       setConversion(parsed);
     } catch (loadError) {
-      if (seq !== conversionRequestSeq.current) return;
+      if (!request.isCurrent()) return;
       setConversion(null);
       setConversionError(
-        getErrorMessage(loadError, "Failed to load conversion and revenue analytics."),
+        getErrorMessage(loadError, "Failed to load conversion and order value analytics."),
       );
     } finally {
-      if (seq === conversionRequestSeq.current) setConversionLoading(false);
+      if (request.isCurrent()) setConversionLoading(false);
     }
-  }, [filters]);
+  }, [filters, beginConversion]);
 
   useEffect(() => {
     void loadConversion();
@@ -244,7 +279,7 @@ export default function CreatorAnalyticsPage() {
             className="flex h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
           >
             <option value="">All experiences</option>
-            {data?.experiences.map((experience) => (
+            {experienceOptions.map((experience) => (
               <option key={experience.id} value={experience.id}>
                 {experience.title}
               </option>
@@ -284,15 +319,29 @@ export default function CreatorAnalyticsPage() {
         </div>
       </PageCard>
 
-      {error && (
-        <PageCard>
-          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
-        </PageCard>
-      )}
+      <p className="text-xs text-copy-55">
+        {data?.range
+          ? `Experience metrics for ${data.range.start.slice(0, 10)} to ${data.range.end.slice(0, 10)} (UTC calendar days).`
+          : "Experience metrics use UTC calendar days."}{" "}
+        With no dates chosen, the last 30 days are shown.
+      </p>
 
-      {!data ? (
+      {error ? (
         <PageCard>
-          <p className="text-sm text-copy-65">Loading analytics...</p>
+          <div role="alert" className="flex flex-wrap items-center gap-3">
+            <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+            <button
+              type="button"
+              onClick={() => void load()}
+              className="rounded-md border border-edge/20 px-3 py-1 text-sm text-ink"
+            >
+              Retry
+            </button>
+          </div>
+        </PageCard>
+      ) : !data ? (
+        <PageCard>
+          <p role="status" className="text-sm text-copy-65">Loading analytics...</p>
         </PageCard>
       ) : (
         <>
@@ -305,8 +354,9 @@ export default function CreatorAnalyticsPage() {
             />
             <MetricCard label="Questions" value={data.totals.questions} />
             <MetricCard
-              label="Completed lessons"
+              label="Lessons marked complete, last updated in period"
               value={data.totals.completedLessonsFromProgress}
+              description="Lessons currently marked complete whose progress record changed in this period. SQRATCH does not record when a lesson was first completed, so this can include lessons completed earlier."
             />
           </div>
 
@@ -349,12 +399,14 @@ export default function CreatorAnalyticsPage() {
         data={commerce}
         error={commerceError}
         isLoading={commerceLoading}
+        onRetry={() => void loadCommerce()}
       />
 
       <ConversionAnalyticsSection
         data={conversion}
         error={conversionError}
         isLoading={conversionLoading}
+        onRetry={() => void loadConversion()}
       />
     </CreatorPageShell>
   );
@@ -371,16 +423,27 @@ function CommerceClickSection({
   data,
   error,
   isLoading,
+  onRetry,
 }: {
   data: CommerceAnalyticsResponse | null;
   error: string | null;
   isLoading: boolean;
+  onRetry: () => void;
 }) {
   if (error) {
     return (
       <PageCard>
         <h2 className="text-xl font-semibold">Product clicks</h2>
-        <p className="mt-3 text-sm text-red-700 dark:text-red-300">{error}</p>
+        <div role="alert" className="mt-3 flex flex-wrap items-center gap-3">
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+          <button
+            type="button"
+            onClick={onRetry}
+            className="rounded-md border border-edge/20 px-3 py-1 text-sm text-ink"
+          >
+            Retry
+          </button>
+        </div>
       </PageCard>
     );
   }
@@ -596,7 +659,7 @@ const CREATOR_CONVERSION_COUNT_CARDS: Array<{
     key: "currentlyNetPositivePaidOrders",
     label: "Current paid conversions",
     subtext:
-      "Attributed orders that currently retain positive net revenue. Evidence of attribution, not a claim that you caused the sale.",
+      "Attributed orders that currently retain a positive net order value. Evidence of attribution, not a claim that you caused the sale.",
   },
   {
     key: "pendingOrAuthorizedOrders",
@@ -620,16 +683,27 @@ function ConversionAnalyticsSection({
   data,
   error,
   isLoading,
+  onRetry,
 }: {
   data: CreatorConversionAnalytics | null;
   error: string | null;
   isLoading: boolean;
+  onRetry: () => void;
 }) {
   if (error) {
     return (
       <PageCard>
-        <h2 className="text-xl font-semibold">Attributed conversions &amp; revenue</h2>
-        <p className="mt-3 text-sm text-red-700 dark:text-red-300">{error}</p>
+        <h2 className="text-xl font-semibold">{CONVERSION_SECTION_TITLE}</h2>
+        <div role="alert" className="mt-3 flex flex-wrap items-center gap-3">
+          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+          <button
+            type="button"
+            onClick={onRetry}
+            className="rounded-md border border-edge/20 px-3 py-1 text-sm text-ink"
+          >
+            Retry
+          </button>
+        </div>
       </PageCard>
     );
   }
@@ -637,7 +711,7 @@ function ConversionAnalyticsSection({
   if (isLoading || !data) {
     return (
       <PageCard>
-        <h2 className="text-xl font-semibold">Attributed conversions &amp; revenue</h2>
+        <h2 className="text-xl font-semibold">{CONVERSION_SECTION_TITLE}</h2>
         <p className="mt-3 text-sm text-copy-65">Loading conversion analytics...</p>
       </PageCard>
     );
@@ -648,15 +722,16 @@ function ConversionAnalyticsSection({
   return (
     <>
       <PageCard>
-        <h2 className="text-xl font-semibold">Attributed conversions &amp; revenue</h2>
+        <h2 className="text-xl font-semibold">{CONVERSION_SECTION_TITLE}</h2>
         <p className="mt-2 text-sm text-copy-65">
-          Orders and revenue for {data.range.start.slice(0, 10)} to{" "}
-          {data.range.end.slice(0, 10)}, counted only when SQRATCH has exact
+          Orders and order value for {data.range.start.slice(0, 10)} to{" "}
+          {data.range.end.slice(0, 10)} (UTC), counted only when SQRATCH has exact
           attribution evidence linking an order to your click.
           {data.filters.experienceId
             ? " Filtered to the selected experience."
             : " Across all your experiences."}
         </p>
+        <p className="mt-2 text-xs text-copy-45">{CONVERSION_DATE_BASIS_NOTE}</p>
       </PageCard>
 
       {noOrders ? (
@@ -680,10 +755,15 @@ function ConversionAnalyticsSection({
           </div>
 
           <div className="grid gap-4 lg:grid-cols-3">
-            <MoneyRowsCard title="Gross attributed revenue" rows={data.grossAttributedRevenueByCurrency} />
-            <MoneyRowsCard title="Refunded attributed revenue" rows={data.refundedRevenueByCurrency} />
-            <MoneyRowsCard title="Net attributed revenue" rows={data.netAttributedRevenueByCurrency} />
+            <MoneyRowsCard {...ORDER_VALUE_LABELS.attributedOrderValue} rows={data.attributedOrderValueByCurrency} />
+            <MoneyRowsCard {...ORDER_VALUE_LABELS.refunded} rows={data.refundedAttributedValueByCurrency} />
+            <MoneyRowsCard {...ORDER_VALUE_LABELS.currentNet} rows={data.currentNetAttributedOrderValueByCurrency} />
           </div>
+
+          <FinancialStatusBreakdown
+            rows={data.financialStatusBreakdown}
+            cancelledOrders={data.cancelledAttributedOrders}
+          />
 
           <CreatorConversionTrendSection trend={data.dailyTrend} />
 
@@ -818,9 +898,9 @@ function CreatorTrendCurrencyTable({
 
   const daysWithActivity = trend.filter(
     (point) =>
-      minorForCurrency(point.grossRevenueByCurrency, currencyCode) !== null ||
-      minorForCurrency(point.refundedRevenueByCurrency, currencyCode) !== null ||
-      minorForCurrency(point.netRevenueByCurrency, currencyCode) !== null,
+      minorForCurrency(point.attributedOrderValueByCurrency, currencyCode) !== null ||
+      minorForCurrency(point.refundedAttributedValueByCurrency, currencyCode) !== null ||
+      minorForCurrency(point.currentNetAttributedOrderValueByCurrency, currencyCode) !== null,
   );
   if (daysWithActivity.length === 0) return null;
 
@@ -828,8 +908,8 @@ function CreatorTrendCurrencyTable({
     <PageCard>
       <h2 className="text-xl font-semibold">
         {currencyCode === "UNKNOWN"
-          ? "Revenue per day — unknown currency"
-          : `Revenue per day — ${currencyCode}`}
+          ? "Order value per day — unknown currency"
+          : `Order value per day — ${currencyCode}`}
       </h2>
       <p className="mt-1 text-xs text-copy-45">
         Shown separately per currency. Amounts in different currencies are never added together.
@@ -839,9 +919,9 @@ function CreatorTrendCurrencyTable({
           <thead className="text-copy-55">
             <tr>
               <th scope="col" className="pb-3">Day (UTC)</th>
-              <th scope="col" className="pb-3 text-right">Gross</th>
-              <th scope="col" className="pb-3 text-right">Refunded</th>
-              <th scope="col" className="pb-3 text-right">Net</th>
+              <th scope="col" className="pb-3 text-right">{TREND_COLUMN_LABELS.orderValue}</th>
+              <th scope="col" className="pb-3 text-right">{TREND_COLUMN_LABELS.refunded}</th>
+              <th scope="col" className="pb-3 text-right">{TREND_COLUMN_LABELS.currentNet}</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-edge/10">
@@ -849,13 +929,13 @@ function CreatorTrendCurrencyTable({
               <tr key={point.date}>
                 <td className="py-2 whitespace-nowrap pr-4">{point.date}</td>
                 <td className="py-2 text-right tabular-nums whitespace-nowrap">
-                  {format(point.grossRevenueByCurrency)}
+                  {format(point.attributedOrderValueByCurrency)}
                 </td>
                 <td className="py-2 text-right tabular-nums whitespace-nowrap text-amber-700 dark:text-amber-200/80">
-                  {format(point.refundedRevenueByCurrency)}
+                  {format(point.refundedAttributedValueByCurrency)}
                 </td>
                 <td className="py-2 text-right tabular-nums whitespace-nowrap">
-                  {format(point.netRevenueByCurrency)}
+                  {format(point.currentNetAttributedOrderValueByCurrency)}
                 </td>
               </tr>
             ))}
@@ -885,13 +965,22 @@ function ConversionMetricCard({
 }
 
 /** See the Brand-side sibling of the same name — identical rendering contract. */
-function MoneyRowsCard({ title, rows }: { title: string; rows: MoneyRow[] }) {
+function MoneyRowsCard({
+  title,
+  definition,
+  rows,
+}: {
+  title: string;
+  definition: string;
+  rows: MoneyRow[];
+}) {
   const lines = formatMoneyRows(rows);
   return (
     <PageCard>
       <h3 className="text-lg font-semibold">{title}</h3>
+      <p className="mt-1 text-xs text-copy-45">{definition}</p>
       {lines.length === 0 ? (
-        <p className="mt-3 text-sm text-copy-65">No attributed revenue in this range.</p>
+        <p className="mt-3 text-sm text-copy-65">No attributed order value in this range.</p>
       ) : (
         <ul className="mt-3 space-y-1 text-sm">
           {lines.map((line) => (
@@ -1018,9 +1107,12 @@ function MetricCard({
   label,
   value,
   hint,
+  description,
 }: {
   label: string;
   value: number;
+  /** One line stating exactly what is counted, shown under the number. */
+  description?: string;
   /**
    * Optional qualifier rendered before the number. Used for bounded counts,
    * where the value is a LOWER bound ("at least 100000") because the distinct
@@ -1035,6 +1127,7 @@ function MetricCard({
         {hint && <span className="mr-1 text-base text-copy-55">{hint}</span>}
         {value}
       </p>
+      {description && <p className="mt-2 text-xs text-copy-45">{description}</p>}
     </PageCard>
   );
 }

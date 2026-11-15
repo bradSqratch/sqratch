@@ -1,12 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { CreatorPageShell } from "@/components/creator/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { useLatestRequest } from "@/hooks/use-latest-request";
 
 type CreatorInboxQuestion = {
   id: string;
@@ -39,9 +40,19 @@ type CreatorInboxResponse = {
     title: string;
     slug: string;
   }>;
+  /** Every experience the creator owns, regardless of the selected filter. */
+  options?: {
+    experiences: Array<{
+      id: string;
+      title: string;
+      slug: string;
+    }>;
+  };
   questions: CreatorInboxQuestion[];
   answeredQuestions?: CreatorInboxQuestion[];
 };
+
+type ExperienceOption = { id: string; title: string; slug: string };
 
 export default function CreatorQAPage() {
   const searchParams = useSearchParams();
@@ -49,12 +60,26 @@ export default function CreatorQAPage() {
     searchParams.get("experienceId") || "",
   );
   const [data, setData] = useState<CreatorInboxResponse | null>(null);
+  // Selector options outlive any single response: they come from the full list
+  // of owned experiences, are kept across a failed reload, and are never
+  // narrowed by the selected filter.
+  const [options, setOptions] = useState<ExperienceOption[]>([]);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [answerError, setAnswerError] = useState<string | null>(null);
+  const beginRequest = useLatestRequest();
+
+  // Keep a deep link such as /dashboard/creator/qa?experienceId=… in sync when
+  // the same page is reached again with a different experience.
+  const linkedExperienceId = searchParams.get("experienceId") || "";
+  useEffect(() => {
+    setSelectedExperienceId(linkedExperienceId);
+  }, [linkedExperienceId]);
 
   const load = useCallback(async () => {
-    setError(null);
+    const request = beginRequest();
+    setLoadError(null);
 
     try {
       const query = new URLSearchParams({ creatorInbox: "1" });
@@ -64,17 +89,26 @@ export default function CreatorQAPage() {
 
       const result = await fetchJson<CreatorInboxResponse>(
         `/api/questions?${query.toString()}`,
+        { signal: request.signal },
       );
+      // A slower, older response must never replace a newer selection.
+      if (!request.isCurrent()) return;
       setData(result);
-    } catch (loadError) {
-      setError(getErrorMessage(loadError, "Failed to load creator Q&A inbox."));
+      setOptions(result.options?.experiences ?? result.experiences);
+    } catch (failure) {
+      if (!request.isCurrent()) return;
+      setLoadError(getErrorMessage(failure, "Failed to load creator Q&A inbox."));
     }
-    // selectedExperienceId is in deps below
-  }, [selectedExperienceId]);
+  }, [selectedExperienceId, beginRequest]);
+
+  // The answer handler can outlive the render that created it. Always reload
+  // with the CURRENT selection, never the one captured when the answer was sent.
+  const loadRef = useRef(load);
+  loadRef.current = load;
 
   useEffect(() => {
     void load();
-  }, [load, selectedExperienceId]);
+  }, [load]);
 
   async function answerQuestion(questionId: string) {
     const body = drafts[questionId]?.trim();
@@ -84,7 +118,7 @@ export default function CreatorQAPage() {
     }
 
     setSavingId(questionId);
-    setError(null);
+    setAnswerError(null);
 
     try {
       await fetchJson(`/api/questions/${questionId}/answer`, {
@@ -96,9 +130,9 @@ export default function CreatorQAPage() {
       });
 
       setDrafts((current) => ({ ...current, [questionId]: "" }));
-      await load();
+      await loadRef.current();
     } catch (saveError) {
-      setError(getErrorMessage(saveError, "Failed to answer question."));
+      setAnswerError(getErrorMessage(saveError, "Failed to answer question."));
     } finally {
       setSavingId(null);
     }
@@ -113,11 +147,16 @@ export default function CreatorQAPage() {
         <div className="flex flex-wrap items-center gap-4">
           <select
             value={selectedExperienceId}
-            onChange={(event) => setSelectedExperienceId(event.target.value)}
+            aria-label="Experience"
+            onChange={(event) => {
+              // Show loading for the new selection rather than the previous one's questions.
+              setData(null);
+              setSelectedExperienceId(event.target.value);
+            }}
             className="flex h-10 rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
           >
             <option value="">All experiences</option>
-            {data?.experiences.map((experience) => (
+            {options.map((experience) => (
               <option key={experience.id} value={experience.id}>
                 {experience.title}
               </option>
@@ -126,15 +165,37 @@ export default function CreatorQAPage() {
         </div>
       </PageCard>
 
-      {error && (
+      {answerError && (
         <PageCard>
-          <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+          <p role="alert" className="text-sm text-red-700 dark:text-red-300">{answerError}</p>
         </PageCard>
       )}
 
-      {!data ? (
+      {data && loadError && (
         <PageCard>
-          <p className="text-sm text-copy-65">Loading questions...</p>
+          <div role="alert" className="flex flex-wrap items-center gap-3">
+            <p className="text-sm text-red-700 dark:text-red-300">
+              Could not refresh the inbox. {loadError}
+            </p>
+            <Button type="button" variant="outline" onClick={() => void load()}>
+              Retry
+            </Button>
+          </div>
+        </PageCard>
+      )}
+
+      {!data && loadError ? (
+        <PageCard>
+          <div role="alert" className="flex flex-wrap items-center gap-3">
+            <p className="text-sm text-red-700 dark:text-red-300">{loadError}</p>
+            <Button type="button" variant="outline" onClick={() => void load()}>
+              Retry
+            </Button>
+          </div>
+        </PageCard>
+      ) : !data ? (
+        <PageCard>
+          <p role="status" className="text-sm text-copy-65">Loading questions...</p>
         </PageCard>
       ) : data.questions.length === 0 ? (
         <PageCard>

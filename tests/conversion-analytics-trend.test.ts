@@ -295,13 +295,21 @@ describe("PHASE D — currencies are never combined", () => {
     const trend = buildConversionDailyTrend([order()], RANGE, MAX_DAYS);
     const keys = Object.keys(trend[0]);
     assert.deepEqual(keys.sort(), [
+      "attributedOrderValueByCurrency",
       "attributedOrders",
+      "currentNetAttributedOrderValueByCurrency",
       "currentlyNetPositivePaidOrders",
       "date",
+      // Older names, same values, kept for one release (P36).
       "grossRevenueByCurrency",
       "netRevenueByCurrency",
+      "refundedAttributedValueByCurrency",
       "refundedRevenueByCurrency",
     ]);
+    // Old and new names carry numerically identical values.
+    assert.deepEqual(trend[0].grossRevenueByCurrency, trend[0].attributedOrderValueByCurrency);
+    assert.deepEqual(trend[0].refundedRevenueByCurrency, trend[0].refundedAttributedValueByCurrency);
+    assert.deepEqual(trend[0].netRevenueByCurrency, trend[0].currentNetAttributedOrderValueByCurrency);
     for (const forbidden of ["totalRevenue", "revenue", "grossRevenue", "combined"]) {
       assert.ok(!keys.includes(forbidden));
     }
