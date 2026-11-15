@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Copy, Gift } from "lucide-react";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import {
@@ -86,6 +86,9 @@ export function ShopifyShopRewardCard({
   const [issuedCodeByOffer, setIssuedCodeByOffer] = useState<Record<string, string>>({});
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A failed load is separate from a failed claim: it keeps the previous
+  // offers (if any) on screen and offers a retry instead of rendering nothing.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [hidden, setHidden] = useState(false);
   // Stores the idempotency key for in-flight or uncertain redemptions, keyed
   // by offerId. The same key is reused when retrying after a transport error.
@@ -95,34 +98,43 @@ export function ShopifyShopRewardCard({
 
   const pointsBalance = offers[0]?.userPointsBalance ?? 0;
 
-  useEffect(() => {
-    async function loadRewards() {
-      setLoading(true);
-      setError(null);
-      setHidden(false);
+  const loadSequence = useRef(0);
+  const loadRewards = useCallback(async () => {
+    const sequence = ++loadSequence.current;
+    setLoading(true);
+    setLoadError(null);
+    setHidden(false);
 
-      try {
-        const data = await fetchJson<ShopifyRewardOffer[]>(
-          `/api/rewards/shopify?experienceSlug=${encodeURIComponent(
-            experienceSlug,
-          )}`,
-        );
-        setOffers(data);
-      } catch (loadError) {
-        const message = getErrorMessage(loadError, "Failed to load rewards.");
+    try {
+      const data = await fetchJson<ShopifyRewardOffer[]>(
+        `/api/rewards/shopify?experienceSlug=${encodeURIComponent(
+          experienceSlug,
+        )}`,
+      );
+      if (sequence !== loadSequence.current) return;
+      setOffers(data);
+    } catch (loadFailure) {
+      if (sequence !== loadSequence.current) return;
+      const message = getErrorMessage(loadFailure, "Failed to load rewards.");
 
-        if (message.toLowerCase().includes("unauthorized")) {
-          setHidden(true);
-        } else {
-          setError(message);
-        }
-      } finally {
-        setLoading(false);
+      if (message.toLowerCase().includes("unauthorized")) {
+        setHidden(true);
+      } else {
+        setLoadError(message);
       }
+    } finally {
+      if (sequence === loadSequence.current) setLoading(false);
     }
-
-    void loadRewards();
   }, [experienceSlug]);
+
+  useEffect(() => {
+    void loadRewards();
+    // Invalidate any in-flight load when the slug changes or the card unmounts.
+    const sequence = loadSequence;
+    return () => {
+      sequence.current++;
+    };
+  }, [loadRewards]);
 
   async function copyCode(code: string) {
     await navigator.clipboard.writeText(code);
@@ -185,7 +197,33 @@ export function ShopifyShopRewardCard({
     }
   }
 
-  if (hidden || loading || offers.length === 0) {
+  // Signed-out visitors (unauthorized) and shops with no offers render nothing,
+  // exactly as before. A failed load is different from "no rewards": say so and
+  // offer a retry rather than showing an empty area.
+  if (hidden || (loading && offers.length === 0)) {
+    return null;
+  }
+
+  if (loadError && offers.length === 0) {
+    return (
+      <div
+        role="alert"
+        className="flex flex-wrap items-center gap-3 rounded-2xl border border-red-400/30 bg-red-50/70 p-4 text-sm text-red-800 dark:bg-red-500/10 dark:text-red-100"
+      >
+        <span>Rewards could not be loaded. {loadError}</span>
+        <button
+          type="button"
+          onClick={() => void loadRewards()}
+          disabled={loading}
+          className="rounded-lg border border-current px-3 py-1 font-medium disabled:opacity-60"
+        >
+          {loading ? "Retrying…" : "Retry"}
+        </button>
+      </div>
+    );
+  }
+
+  if (offers.length === 0) {
     return null;
   }
 

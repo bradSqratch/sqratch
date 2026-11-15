@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import { ExperienceShell, GatePanel, LoadingView, ErrorView, PageCard } from "@/components/experience/experience-shell";
 import { useExperience } from "@/components/experience/use-experience";
@@ -61,11 +61,16 @@ function PostCard({
   const [commentSaving, setCommentSaving] = useState(false);
   const [commentError, setCommentError] = useState<string | null>(null);
 
-  async function loadComments() {
-    if (comments || commentsLoading) {
+  // The in-flight flag is a ref, not state: two clicks in the same tick both
+  // see the same stale state, so only a ref guarantees one request at a time.
+  const loadingRef = useRef(false);
+
+  async function loadComments({ force = false }: { force?: boolean } = {}) {
+    if (loadingRef.current || (comments && !force)) {
       return;
     }
 
+    loadingRef.current = true;
     setCommentsLoading(true);
     setCommentError(null);
 
@@ -77,6 +82,7 @@ function PostCard({
     } catch (error) {
       setCommentError(getErrorMessage(error, "Failed to load comments."));
     } finally {
+      loadingRef.current = false;
       setCommentsLoading(false);
     }
   }
@@ -100,9 +106,15 @@ function PostCard({
         body: JSON.stringify({ body: commentDraft }),
       });
 
-      setComments((previous) => [...(previous || []), created]);
       setCommentDraft("");
       setCommentError(null);
+      if (comments) {
+        setComments((previous) => [...(previous || []), created]);
+      } else {
+        // The list was never loaded: appending would show only this comment
+        // and hide the rest, so load the full list instead.
+        await loadComments({ force: true });
+      }
     } catch (error) {
       setCommentError(getErrorMessage(error, "Failed to add comment."));
     } finally {
@@ -158,15 +170,20 @@ function PostCard({
         <Button
           type="button"
           variant="outline"
-          onClick={() => void loadComments()}
+          onClick={() => void loadComments({ force: Boolean(comments) })}
+          disabled={commentsLoading}
           className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
         >
-          {comments ? "Refresh comments" : `View comments (${post.commentCount})`}
+          {commentsLoading
+            ? "Loading comments..."
+            : comments
+              ? "Refresh comments"
+              : `View comments (${post.commentCount})`}
         </Button>
       </div>
 
-      {commentsLoading && <p className="mt-4 text-sm text-copy-55">Loading comments...</p>}
-      {commentError && <p className="mt-4 text-sm text-red-700 dark:text-red-300">{commentError}</p>}
+      {commentsLoading && <p role="status" className="mt-4 text-sm text-copy-55">Loading comments...</p>}
+      {commentError && <p role="alert" className="mt-4 text-sm text-red-700 dark:text-red-300">{commentError}</p>}
 
       {comments && (
         <div className="mt-5 space-y-3">

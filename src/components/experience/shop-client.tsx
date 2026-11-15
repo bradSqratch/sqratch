@@ -46,6 +46,11 @@ export function ExperienceShopClient({
   const [nextCursor, setNextCursor] = useState<string | null>(null);
 
   const [shopLoading, setShopLoading] = useState(false);
+  // True once the first products request has finished (success OR failure).
+  // Rewards load on their own and never wait for, or depend on, products; this
+  // only tells the Commerce7 panel when the campaign context is known or known
+  // to be unavailable, so it does not mount twice with a guessed context.
+  const [shopSettled, setShopSettled] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [shopError, setShopError] = useState<string | null>(null);
   const [clickingId, setClickingId] = useState<string | null>(null);
@@ -127,6 +132,7 @@ export function ExperienceShopClient({
         if (seq === requestSeq.current) {
           setShopLoading(false);
           setLoadingMore(false);
+          if (isFirstPage) setShopSettled(true);
         }
       }
     },
@@ -208,25 +214,8 @@ export function ExperienceShopClient({
         </div>
       }
     >
-      {shopLoading ? (
-        <PageCard>
-          <p className="text-sm text-copy-65">Loading products...</p>
-        </PageCard>
-      ) : shopError && products.length === 0 ? (
-        <PageCard>
-          <p className="text-sm text-red-700 dark:text-red-300">{shopError}</p>
-        </PageCard>
-      ) : !shopMeta ? (
-        <PageCard>
-          <div className="space-y-3">
-            <h2 className="text-2xl font-semibold text-brand">Shop</h2>
-            <p className="max-w-2xl text-sm leading-6 text-copy-70">
-              No products have been linked to this experience yet.
-            </p>
-          </div>
-        </PageCard>
-      ) : (
-        <div className="space-y-6">
+      <div className="space-y-6">
+        {shopMeta && (
           <PageCard>
             <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
               <div>
@@ -244,21 +233,58 @@ export function ExperienceShopClient({
               )}
             </div>
           </PageCard>
+        )}
 
-          <ShopifyShopRewardCard experienceSlug={experienceSlug} />
-          <Commerce7RewardsClient experienceSlug={experienceSlug} campaignId={shopMeta.campaign?.id} />
+        {/* Rewards are independent of products: a product failure or an empty
+            catalog must never hide them. Each panel owns its own loading,
+            failed (with Retry) and empty states. */}
+        <ShopifyShopRewardCard experienceSlug={experienceSlug} />
+        {shopSettled && (
+          <Commerce7RewardsClient experienceSlug={experienceSlug} campaignId={shopMeta?.campaign?.id} />
+        )}
 
-          {products.length === 0 ? (
-            <PageCard>
-              <div className="space-y-3">
-                <h2 className="text-2xl font-semibold text-brand">Shop</h2>
-                <p className="max-w-2xl text-sm leading-6 text-copy-70">
-                  No products have been linked to this experience yet.
-                </p>
-              </div>
-            </PageCard>
-          ) : (
-            <>
+        {shopLoading || !shopSettled ? (
+          <PageCard>
+            <p role="status" className="text-sm text-copy-65">Loading products...</p>
+          </PageCard>
+        ) : shopError && products.length === 0 ? (
+          <PageCard>
+            <div role="alert" className="flex flex-wrap items-center gap-3">
+              <p className="text-sm text-red-700 dark:text-red-300">
+                Products could not be loaded. {shopError}
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void fetchPage(null)}
+                className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
+              >
+                Retry
+              </Button>
+            </div>
+          </PageCard>
+        ) : !shopMeta ? (
+          <PageCard>
+            <div className="space-y-3">
+              <h2 className="text-2xl font-semibold text-brand">Shop</h2>
+              <p className="max-w-2xl text-sm leading-6 text-copy-70">
+                No products have been linked to this experience yet.
+              </p>
+            </div>
+          </PageCard>
+        ) : (
+          <>
+            {products.length === 0 ? (
+              <PageCard>
+                <div className="space-y-3">
+                  <h2 className="text-2xl font-semibold text-brand">Shop</h2>
+                  <p className="max-w-2xl text-sm leading-6 text-copy-70">
+                    No products have been linked to this experience yet.
+                  </p>
+                </div>
+              </PageCard>
+            ) : (
+              <>
               <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
                 {products.map((product) => (
                   <PageCard
@@ -367,10 +393,11 @@ export function ExperienceShopClient({
                   </Button>
                 </div>
               )}
-            </>
-          )}
-        </div>
-      )}
+              </>
+            )}
+          </>
+        )}
+      </div>
     </ExperienceShell>
   );
 }

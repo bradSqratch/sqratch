@@ -767,3 +767,28 @@ test("switching products quickly never shows the earlier product's tags or error
   second.resolve({ ...oneTag, preselectedTagId: "second-tag", tags: [{ ...oneTag.tags[0], id: "second-tag", title: "Second Wine Members" }] }); await settle();
   assert.equal(spinner(app), undefined); assert.match(text(app.render()), /Second Wine Members/); assert.doesNotMatch(text(app.render()), /Stale Tag/); assert.equal(tagSelect(app)?.props.value, "second-tag");
 });
+
+test("a failed rewards load shows an error with one in-flight Retry, and an empty list stays silent", async () => {
+  const app = harness("src/components/rewards/commerce7-rewards-client.tsx", "Commerce7RewardsClient", { experienceSlug: "wine" }); app.render(); app.flush();
+  app.requests[0].reject(new Error("Rewards service unavailable")); await settle();
+  let tree = app.render();
+  assert.match(text(tree), /Rewards could not be loaded\.\s+Rewards service unavailable/);
+  assert.ok(nodes(tree).some((node) => node.type === "section" && node.props.role === "alert"));
+  const retry = button(tree, "Retry"); (retry.props.onClick as () => void)(); (retry.props.onClick as () => void)();
+  assert.equal(app.requests.length, 2, "two clicks send one request");
+  app.requests[1].resolve({ offers: [offer], claims: [], points: 500 }); await settle();
+  tree = app.render(); assert.doesNotMatch(text(tree), /could not be loaded/); assert.match(text(tree), /Wine discount/);
+
+  const empty = harness("src/components/rewards/commerce7-rewards-client.tsx", "Commerce7RewardsClient", { experienceSlug: "none" }); empty.render(); empty.flush();
+  empty.requests[0].resolve({ offers: [], claims: [], points: 0 }); await settle();
+  assert.equal(text(empty.render()), "", "no rewards is an empty state, not an error");
+});
+
+test("a failed retry keeps the error visible and a later retry can succeed", async () => {
+  const app = harness("src/components/rewards/commerce7-rewards-client.tsx", "Commerce7RewardsClient", { experienceSlug: "wine" }); app.render(); app.flush();
+  app.requests[0].reject(new Error("first failure")); await settle();
+  (button(app.render(), "Retry").props.onClick as () => void)();
+  app.requests[1].reject(new Error("second failure")); await settle();
+  const tree = app.render(); assert.match(text(tree), /second failure/); assert.equal(button(tree, "Retry").props.disabled, false);
+  (button(tree, "Retry").props.onClick as () => void)(); assert.equal(app.requests.length, 3);
+});
