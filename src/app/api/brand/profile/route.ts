@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
+import { assertExpectedBrand } from "@/lib/brand-auth";
 import {
   getBrandAdminContext,
   getBrandContextFailure,
   slugifyValue,
 } from "@/lib/brand-auth";
-import { deleteStorageObjectByUrl } from "@/lib/storage-upload";
+import { cleanupUnreferencedMedia } from "@/lib/media-cleanup";
 import prisma from "@/lib/prisma";
 
 export async function GET() {
@@ -72,6 +73,9 @@ export async function POST(request: NextRequest) {
         { status: failure.status },
       );
     }
+
+    const mismatch = assertExpectedBrand(request, context);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
 
     if (context.membership?.brand) {
       return NextResponse.json(
@@ -154,6 +158,9 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
+    const mismatch = assertExpectedBrand(request, context);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
+
     const body = await request.json();
     const name = String(body?.name || "").trim();
     const slug = slugifyValue(
@@ -203,11 +210,11 @@ export async function PATCH(request: NextRequest) {
     await Promise.allSettled([
       logoUrl !== (context.membership.brand.logoUrl || "") &&
       context.membership.brand.logoUrl
-        ? deleteStorageObjectByUrl(context.membership.brand.logoUrl)
+        ? cleanupUnreferencedMedia(context.membership.brand.logoUrl)
         : Promise.resolve(false),
       coverImageUrl !== (context.membership.brand.coverImageUrl || "") &&
       context.membership.brand.coverImageUrl
-        ? deleteStorageObjectByUrl(context.membership.brand.coverImageUrl)
+        ? cleanupUnreferencedMedia(context.membership.brand.coverImageUrl)
         : Promise.resolve(false),
     ]);
 

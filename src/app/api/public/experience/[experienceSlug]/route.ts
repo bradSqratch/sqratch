@@ -31,7 +31,7 @@ export async function GET(
         campaignId: primaryCampaignId,
       }));
 
-    await createAnalyticsEvent({
+    if (!access.isCreatorOwner) await createAnalyticsEvent({
       request,
       name: "experience_view",
       brandId: primaryBrandId,
@@ -106,7 +106,7 @@ export async function POST(
         campaignId: primaryCampaign?.campaignId || null,
       }));
 
-    await createAnalyticsEvent({
+    if (!access.isCreatorOwner) await createAnalyticsEvent({
       request,
       name: "experience_view",
       brandId: primaryCampaign?.campaign.brand?.id || null,

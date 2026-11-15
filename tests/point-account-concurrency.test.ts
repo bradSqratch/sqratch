@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { canUseRealDatabaseUnderTest } from "../src/lib/db-safety";
+import { realDbTest } from "./helpers/real-db";
 
 // ---------------------------------------------------------------------------
 // This test exercises real PostgreSQL uniqueness-constraint and transaction
@@ -10,6 +10,7 @@ import { canUseRealDatabaseUnderTest } from "../src/lib/db-safety";
 // DATABASE_URL — and is SKIPPED by default so `npm test`/`npm run verify`
 // stay fully mockable and safe to run without any database available.
 //
+// The disposable URL also must have no query/fragment and a plain _test database name.
 // The documented invariant this code enforces (do not weaken this without
 // updating both): POINT_ACCOUNT_CONCURRENCY=true alone is NOT sufficient to
 // run these tests for real. Running against a real database additionally
@@ -45,7 +46,7 @@ import { canUseRealDatabaseUnderTest } from "../src/lib/db-safety";
 //          -o "-p 5547 -k /tmp/sqratch-concurrency-sock -h 127.0.0.1" start
 //        createdb -h 127.0.0.1 -p 5547 sqratch_concurrency_test
 //   2. Sync the schema: DATABASE_URL=postgresql://postgres@127.0.0.1:5547/sqratch_concurrency_test \
-//        npx prisma db push --accept-data-loss
+//        npx prisma db push
 //   3. Enable SSL on that cluster (src/lib/prisma.ts requires it by default;
 //      a self-signed cert + `ssl = on` in postgresql.conf is sufficient with
 //      PG_SSL_REJECT_UNAUTHORIZED=false, see below).
@@ -60,17 +61,7 @@ import { canUseRealDatabaseUnderTest } from "../src/lib/db-safety";
 //        npx tsx --test tests/point-account-concurrency.test.ts
 // ---------------------------------------------------------------------------
 
-const realDbDecision = canUseRealDatabaseUnderTest({
-  connectionString: process.env.DATABASE_URL ?? "",
-  allowRealDatabaseTestsEnv: process.env.ALLOW_REAL_DATABASE_TESTS,
-});
-
-const ENABLED =
-  process.env.POINT_ACCOUNT_CONCURRENCY === "true" && realDbDecision.allowed;
-
-const SKIP_REASON = realDbDecision.allowed
-  ? "requires POINT_ACCOUNT_CONCURRENCY=true and a real disposable Postgres (see file header)"
-  : `requires POINT_ACCOUNT_CONCURRENCY=true and the full db-safety opt-in (${realDbDecision.reason}) — see file header`;
+const { enabled: ENABLED, skipReason: SKIP_REASON } = realDbTest("POINT_ACCOUNT_CONCURRENCY");
 
 test(
   "two concurrent missing-account requests result in exactly one account, with no transaction-aborted error",

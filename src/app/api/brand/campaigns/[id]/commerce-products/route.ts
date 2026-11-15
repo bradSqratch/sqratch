@@ -1,3 +1,4 @@
+import { assertExpectedBrand } from "@/lib/brand-auth";
 import { NextRequest, NextResponse } from "next/server";
 import type { Prisma } from "@prisma/client";
 import {
@@ -173,6 +174,8 @@ export async function POST(
       const failure = getBrandContextFailure(auth);
       return NextResponse.json({ error: failure.error, ...(failure.code ? { code: failure.code } : {}) }, { status: failure.status });
     }
+    const mismatch = assertExpectedBrand(request, auth);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
     const { id } = await context.params;
     const brandId = auth.membership.brand.id;
     const campaign = await getCampaignForBrand(id, brandId);
@@ -220,6 +223,8 @@ export async function PATCH(
       const failure = getBrandContextFailure(auth);
       return NextResponse.json({ error: failure.error, ...(failure.code ? { code: failure.code } : {}) }, { status: failure.status });
     }
+    const mismatch = assertExpectedBrand(request, auth);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
     const { id } = await context.params;
     const brandId = auth.membership.brand.id;
     const campaign = await getCampaignForBrand(id, brandId);

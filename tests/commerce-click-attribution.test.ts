@@ -85,6 +85,7 @@ function access(
       id: "experience-1",
       slug: "exp",
       title: "Experience",
+      isActive: true,
       description: null,
       coverImageUrl: null,
       whyVideoSource: null,
@@ -115,6 +116,8 @@ function access(
     entryContext: overrides.entryContext ?? { kind: "DIRECT" },
     isLoggedIn: Boolean(overrides.viewerUserId),
     isCreatorOwner: false,
+    isPublished: true,
+    isOwnerPreview: false,
     hasUnlockedCampaign: false,
     hasRedeemedQrWarning: false,
     canAccessPrivate: false,
@@ -221,6 +224,17 @@ const SHOP_SURFACE: CommerceClickSurface = {
   kind: "BRAND_STOREFRONT",
   brandCommerceProductId: "bcp-1",
 };
+
+test("creator clicks redirect without recording attribution or adding a token", async () => {
+  let recorded = false;
+  const response = await click(SHOP_SURFACE, {
+    getAccess: async () => ({ ...access(), isCreatorOwner: true }),
+    recordAttribution: async () => { recorded = true; },
+  });
+  assert.equal(response.status, 302);
+  assert.equal(recorded, false);
+  assert.equal(new URL(response.headers.get("location")!).searchParams.has("sqratch_click"), false);
+});
 
 const LESSON_SURFACE: CommerceClickSurface = {
   kind: "LESSON",
@@ -1708,11 +1722,27 @@ describe("Phase 10 write-once durability: no code path rewrites surface or attri
     }
   });
 
-  test("no raw SQL exists anywhere in src/, so no UPDATE can bypass the Prisma-level sweep above", () => {
+  test("raw SQL is limited to exact row locks", () => {
+    const allowed = [
+      'tx.$queryRaw`SELECT id FROM "QRCode" WHERE id = ANY(${codeIds}::text[]) ORDER BY id FOR UPDATE`',
+      'tx.$queryRaw`SELECT id FROM "QRCodeBatch" WHERE id = ${batchId} FOR UPDATE`',
+    ];
     for (const { relative, code } of sources) {
-      assert.doesNotMatch(code, /\$executeRaw/, `${relative} uses $executeRaw`);
-      assert.doesNotMatch(code, /\$queryRaw/, `${relative} uses $queryRaw`);
-      assert.doesNotMatch(code, /Prisma\.sql/, `${relative} builds raw SQL`);
+      let checked = code;
+      if (relative === "src/lib/qr-lifecycle.ts") {
+        for (const statement of allowed) {
+          assert.equal(checked.split(statement).length, 2, `missing or duplicate QR lock: ${statement}`);
+          checked = checked.replace(statement, "");
+        }
+      }
+      if (relative === "src/lib/lesson-create.ts") {
+        const statement = 'tx.$queryRaw`SELECT id FROM "Course" WHERE id = ${data.courseId} FOR UPDATE`';
+        assert.equal(checked.split(statement).length, 2, "missing or duplicate course lock");
+        checked = checked.replace(statement, "");
+      }
+      assert.doesNotMatch(checked, /\$executeRaw/, `${relative} uses $executeRaw`);
+      assert.doesNotMatch(checked, /\$queryRaw/, `${relative} uses $queryRaw`);
+      assert.doesNotMatch(checked, /Prisma\.sql/, `${relative} builds raw SQL`);
     }
   });
 

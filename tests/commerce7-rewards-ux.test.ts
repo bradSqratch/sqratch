@@ -19,6 +19,7 @@ function harness(path: string, exportName: string, props = {}, env: { DateImpl?:
   const clipboard = { fail: false };
   const requests: { url: string; init?: RequestInit; resolve: (value: unknown) => void; reject: (error: Error) => void }[] = [];
   const storage = new Map<string, string>(); const copied: string[] = []; let requestKey = 0; const pushed: string[] = []; const location = { pathname: "/x/commerce7-demo-experience/shop", search: "" };
+  const mockedFetchJson = (url: string, init?: RequestInit) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject }));
   const exports: Record<string, (props: object) => Node> = {};
   const react = {
     useState(initial: unknown) { const i = index++; if (!(i in states)) states[i] = typeof initial === "function" ? initial() : initial; return [states[i], (value: unknown) => { states[i] = typeof value === "function" ? value(states[i]) : value; }]; },
@@ -39,7 +40,8 @@ function harness(path: string, exportName: string, props = {}, env: { DateImpl?:
       if (name === "@/lib/reward-claim-window") return claimWindow;
       if (name === "@/lib/commerce7-activation") return activation;
       if (name === "lucide-react") return new Proxy({}, { get: (_target, key) => `Icon:${String(key)}` });
-      if (name === "@/components/experience/client-utils") return { fetchJson: (url: string, init?: RequestInit) => new Promise((resolve, reject) => requests.push({ url, init, resolve, reject })), getErrorMessage: (error: Error) => error.message };
+      if (name === "@/components/brand/brand-fetch") return { useBrandFetch: () => mockedFetchJson };
+      if (name === "@/components/experience/client-utils") return { fetchJson: mockedFetchJson, getErrorMessage: (error: Error) => error.message };
       if (name.startsWith("@/components/ui/")) return new Proxy({}, { get: (_target, key) => String(key) });
       throw new Error(`Unexpected dependency ${name}`);
     },

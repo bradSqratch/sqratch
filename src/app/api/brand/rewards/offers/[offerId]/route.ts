@@ -1,3 +1,4 @@
+import { assertExpectedBrand } from "@/lib/brand-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { saveCommerce7Offer, setCommerce7OfferActive } from "@/lib/commerce7-rewards";
 import { serializeCommerce7OfferResponse } from "@/lib/commerce7-reward-domain";
@@ -55,6 +56,8 @@ export async function PUT(
         { status: failure.status },
       );
     }
+    const mismatch = assertExpectedBrand(request, auth);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
 
     const { offerId } = await context.params;
     const existing = await getOwnedOffer(offerId, auth.membership.brand.id);
@@ -205,6 +208,8 @@ export async function PATCH(
         { status: failure.status },
       );
     }
+    const mismatch = assertExpectedBrand(request, auth);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
 
     const { offerId } = await context.params;
     const existing = await getOwnedOffer(offerId, auth.membership.brand.id);

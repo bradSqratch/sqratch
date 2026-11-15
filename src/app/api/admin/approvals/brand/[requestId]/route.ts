@@ -87,28 +87,20 @@ export async function POST(
       );
     }
 
-    if (brandRequest.status !== "PENDING") {
-      return NextResponse.json(
-        { error: "This brand request has already been processed." },
-        { status: 409 },
-      );
-    }
-
     const response = await prisma.$transaction(
       async (tx) => {
-        const updatedRequest = await tx.brandRequest.update({
-          where: { id: requestId },
+        const claim = await tx.brandRequest.updateMany({
+          where: { id: requestId, status: "PENDING" },
           data: {
             status: action === "approve" ? "APPROVED" : "REJECTED",
             reason,
             reviewedById: context.userId,
           },
-          select: {
-            id: true,
-            status: true,
-            reason: true,
-            updatedAt: true,
-          },
+        });
+        if (claim.count !== 1) throw new Error("REQUEST_ALREADY_DECIDED");
+        const updatedRequest = await tx.brandRequest.findUniqueOrThrow({
+          where: { id: requestId },
+          select: { id: true, status: true, reason: true, updatedAt: true },
         });
 
         if (action === "reject") {
@@ -118,10 +110,11 @@ export async function POST(
           };
         }
 
-        await tx.user.update({
-          where: { id: brandRequest.userId },
+        const promoted = await tx.user.updateMany({
+          where: { id: brandRequest.userId, role: { not: "ADMIN" } },
           data: { role: "BRAND_ADMIN" },
         });
+        if (promoted.count !== 1) throw new Error("TARGET_IS_ADMIN");
 
         const existingMemberships = await tx.brandMember.findMany({
           where: { userId: brandRequest.userId },
@@ -215,6 +208,9 @@ export async function POST(
 
     return NextResponse.json({ data: response });
   } catch (error) {
+    if (error instanceof Error && ["REQUEST_ALREADY_DECIDED", "TARGET_IS_ADMIN"].includes(error.message)) {
+      return NextResponse.json({ code: error.message, error: error.message === "TARGET_IS_ADMIN" ? "Administrators cannot be changed by an approval." : "This request has already been decided." }, { status: 409 });
+    }
     if (error instanceof Error && error.message === "USER_HAS_MULTIPLE_BRANDS") {
       return NextResponse.json(
         { error: "This user has multiple brands; choose the destination explicitly." },

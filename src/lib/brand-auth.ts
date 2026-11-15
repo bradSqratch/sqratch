@@ -99,6 +99,19 @@ export function getBrandContextFailure(context: BrandAdminContext | null) {
   };
 }
 
+/** Compare a page's loaded brand with the already-authorized active brand. */
+export function assertExpectedBrand(request: Request, context: Pick<BrandAdminContext, "membership" | "selectionRequired">) {
+  const expectedBrandId = request.headers.get("x-sqratch-expected-brand");
+  const activeBrand = context.membership?.brand;
+  if (!expectedBrandId || !activeBrand || expectedBrandId === activeBrand.id) return null;
+  return {
+    status: 409 as const,
+    code: "BRAND_CONTEXT_MISMATCH" as const,
+    expectedBrandId,
+    activeBrand: { id: activeBrand.id, name: activeBrand.name },
+  };
+}
+
 export async function getOwnedBrandCampaign(
   campaignId: string,
   brandId: string,

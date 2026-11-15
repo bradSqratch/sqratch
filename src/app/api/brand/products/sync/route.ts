@@ -1,3 +1,4 @@
+import { assertExpectedBrand } from "@/lib/brand-auth";
 import { NextResponse } from "next/server";
 import { CommerceProvider } from "@prisma/client";
 import {
@@ -103,13 +104,14 @@ const DEFAULT_DEPS: BrandProductsSyncDeps = {
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
   const parsed = body as { provider?: unknown; connectionId?: unknown } | null;
-  return productsSyncImpl({}, parsed?.provider, parsed?.connectionId);
+  return productsSyncImpl({}, parsed?.provider, parsed?.connectionId, request);
 }
 
 export async function productsSyncImpl(
   overrides: Partial<BrandProductsSyncDeps> = {},
   requestedProvider?: unknown,
   requestedConnectionId?: unknown,
+  request?: Request,
 ) {
   const deps: BrandProductsSyncDeps = { ...DEFAULT_DEPS, ...overrides };
 
@@ -139,6 +141,8 @@ export async function productsSyncImpl(
         { status: failure.status },
       );
     }
+    const mismatch = request && assertExpectedBrand(request, context);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
 
     // The ONLY brand id ever used below.
     const brand = context.membership.brand;

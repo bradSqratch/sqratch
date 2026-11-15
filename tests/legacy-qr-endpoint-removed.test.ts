@@ -18,3 +18,10 @@ test("legacy unauthenticated QR email endpoint is removed", () => {
 test("QR redemption uses the supported public scan route", () => {
   assert.equal(existsSync(routePath("public", "scan")), true);
 });
+
+test("legacy QR mutation endpoints are removed", () => {
+  for (const route of [["qr", "update-qrcode", "[id]"], ["qr", "delete-qrcode", "[id]"], ["qr", "bulk-delete"], ["qr", "bulk-generate-qr"]]) {
+    assert.equal(existsSync(routePath(...route)), false);
+  }
+  assert.equal(existsSync(path.join(process.cwd(), "src/app/redeemQR/[campaignID]/[qrcodeID]/page.tsx")), true);
+});

@@ -1,3 +1,5 @@
+import "./env-setup";
+import { assertExpectedBrand } from "../src/lib/brand-auth";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
@@ -40,7 +42,7 @@ test("claim route forwards only authenticated user, persisted offer key and serv
 test("Brand claim operations reject missing/wrong-role management context before lookup or provider access", async () => {
   const handler = route("src/app/api/brand/rewards/commerce7/claims/[claimId]/route.ts", {
     "@/lib/prisma": { __esModule: true, default: new Proxy({}, { get() { throw new Error("Unauthorized database access"); } }) },
-    "@/lib/brand-auth": { getBrandManagementContext: async () => null, getBrandContextFailure: () => ({ error: "Brand admin access required.", status: 403 }) },
+    "@/lib/brand-auth": { assertExpectedBrand, getBrandManagementContext: async () => null, getBrandContextFailure: () => ({ error: "Brand admin access required.", status: 403 }) },
     "@/lib/commerce7-rewards": {},
     "@/lib/commerce/providers/commerce7-rewards-client": {},
     "@/lib/commerce7-reward-domain": { RewardClaimError },
@@ -54,7 +56,7 @@ test("Brand native revoke pins the original connection, provider, Brand and coup
   const claim = { id: "claim", brandId: "server-brand", provider: "COMMERCE7", connectionId: "original-connection", externalAccountId: "original-tenant", status: "ISSUED", externalDiscountId: "original-coupon" };
   const handler = route("src/app/api/brand/rewards/commerce7/claims/[claimId]/route.ts", {
     "@/lib/prisma": { __esModule: true, default: { commerceRewardRedemption: { findFirst: async (query: unknown) => { queries.push(query); return claim; }, updateMany: async (query: unknown) => { queries.push(query); return { count: 1 }; } }, commerceConnection: { findFirst: async (query: unknown) => { queries.push(query); return { externalAccountId: "original-tenant" }; } } } },
-    "@/lib/brand-auth": { getBrandManagementContext: async () => ({ membership: { brand: { id: "server-brand" } } }) },
+    "@/lib/brand-auth": { assertExpectedBrand, getBrandManagementContext: async () => ({ membership: { brand: { id: "server-brand" } } }) },
     "@/lib/commerce7-rewards": {},
     "@/lib/commerce/providers/commerce7-rewards-client": { object, Commerce7RewardsClient: class { constructor(tenant: string) { native.push(tenant); } async revokeCoupon(id: string) { native.push(id); } } },
     "@/lib/commerce7-reward-domain": { RewardClaimError },
@@ -65,21 +67,20 @@ test("Brand native revoke pins the original connection, provider, Brand and coup
   assert.equal(JSON.stringify(queries[1]), JSON.stringify({ where: { id: "original-connection", brandId: "server-brand", provider: "COMMERCE7", externalAccountId: "original-tenant", status: "CONNECTED", uninstalledAt: null } }));
   assert.deepEqual(native, ["original-tenant", "original-coupon"]);
 });
-test("account deletion retains Commerce7 reward history and serializes against concurrent claims", async () => {
+test("account deletion retains reward history in a serializable transaction", async () => {
   for (const rewardCount of [1, 0]) {
     let deleted = 0; const counts: unknown[] = []; let transactionOptions: unknown;
-    const handler = route("src/app/api/admin/user-management/update-or-delete-users/[id]/route.ts", {
-      "@/lib/prisma": { __esModule: true, default: {
-        user: { findUnique: async () => ({ imageUrl: null }) }, campaign: { count: async () => 0 }, qRCode: { count: async () => 0 },
-        $transaction: async (work: (tx: unknown) => Promise<unknown>, options: unknown) => { transactionOptions = options; return work({ commerceRewardRedemption: { count: async (query: unknown) => { counts.push(query); return rewardCount; } }, user: { delete: async () => { deleted++; } } }); },
-      } },
-      "next-auth/next": { getServerSession: async () => ({ user: { role: "ADMIN" } }) },
-      "@/app/api/auth/[...nextauth]/options": { authOptions: {} },
-      "@/lib/storage-upload": {}, "@/lib/admin-auth": {},
-    });
-    const response = await handler.DELETE(new Request("https://sqratch.example/api/admin/users/alice"), { params: Promise.resolve({ id: "alice" }) });
-    assert.equal(response.status, rewardCount ? 409 : 200); assert.equal(deleted, rewardCount ? 0 : 1);
-    assert.equal(JSON.stringify(counts), JSON.stringify([{ where: { userId: "alice", provider: "COMMERCE7" } }]));
+    const tx = {
+      user: { findUnique: async ({ where }: { where: { id: string } }) => where.id === "admin" ? { role: "ADMIN", isActive: true } : { id: "alice", role: "USER", isActive: true, imageUrl: null }, delete: async () => { deleted++; } },
+      campaign: { count: async () => 0 }, qRCode: { count: async () => 0 }, pointTransaction: { count: async () => 0 },
+      commerceRewardRedemption: { count: async (query: unknown) => { counts.push(query); return rewardCount; } },
+    };
+    const service = route("src/lib/admin-user-mutations.ts", { "@/lib/prisma": { __esModule: true, default: { $transaction: async (work: (tx: unknown) => Promise<unknown>, options: unknown) => { transactionOptions = options; return work(tx); } } } });
+    const result = service.deleteUser({ actorId: "admin", targetId: "alice" });
+    if (rewardCount) await assert.rejects(result, (error: unknown) => (error as Error).message === "USER_HAS_HISTORY");
+    else await result;
+    assert.equal(deleted, rewardCount ? 0 : 1);
+    assert.equal(JSON.stringify(counts), JSON.stringify([{ where: { userId: "alice" } }]));
     assert.equal(JSON.stringify(transactionOptions), JSON.stringify({ isolationLevel: "Serializable" }));
   }
 });

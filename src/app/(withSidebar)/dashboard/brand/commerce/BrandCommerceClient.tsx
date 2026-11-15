@@ -1,5 +1,7 @@
 "use client";
 
+import { useBrandFetch, useBrandRawFetch } from "@/components/brand/brand-fetch";
+
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { BrandPageShell } from "@/components/brand/page-shell";
@@ -100,6 +102,7 @@ function Commerce7StoreSettingsCard({
   connection: NonNullable<CommerceConnectionSummary>;
   onSynced(next: Commerce7SettingsSyncResponse): void;
 }) {
+  const brandFetch = useBrandFetch();
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -112,7 +115,7 @@ function Commerce7StoreSettingsCard({
     setError(null);
     setMessage(null);
     try {
-      const result = await fetchJson<Commerce7SettingsSyncResponse>(
+      const result = await brandFetch<Commerce7SettingsSyncResponse>(
         `/api/brand/commerce/connections/${connection.connectionId}/settings/sync`,
         { method: "POST" },
       );
@@ -314,6 +317,8 @@ function Commerce7ConnectionLifecycleControl({
   connection: NonNullable<CommerceConnectionSummary>;
   onChanged(action: "DISCONNECTED" | "RECONNECTED"): void;
 }) {
+  const brandFetch = useBrandFetch();
+  const brandRawFetch = useBrandRawFetch();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [appNotInstalled, setAppNotInstalled] = useState(false);
@@ -329,7 +334,7 @@ function Commerce7ConnectionLifecycleControl({
     setBusy(true);
     setError(null);
     try {
-      await fetchJson<Commerce7DisconnectResponse>(
+      await brandFetch<Commerce7DisconnectResponse>(
         `/api/brand/commerce/connections/${connection.connectionId}/disconnect`,
         { method: "POST" },
       );
@@ -349,7 +354,7 @@ function Commerce7ConnectionLifecycleControl({
       // Raw fetch (not the unwrapping `fetchJson`) — the 409 APP_NOT_INSTALLED
       // response carries a `code` this handler needs to branch on directly,
       // which `fetchJson`'s throw-on-error path does not preserve.
-      const response = await fetch(
+      const response = await brandRawFetch(
         `/api/brand/commerce/connections/${connection.connectionId}/reconnect`,
         { method: "POST", credentials: "include" },
       );

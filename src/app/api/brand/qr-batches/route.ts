@@ -1,8 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { NextRequest, NextResponse } from "next/server";
 import { resolveSession, resolveBrandAdminContext } from "@/lib/auth-session";
+import { assertExpectedBrand } from "@/lib/brand-auth";
 import { getBrandContextFailure } from "@/lib/brand-auth";
 
 import prisma from "@/lib/prisma";
+import { unusedQrWhere } from "@/lib/qr-lifecycle";
 import QRCode from "qrcode";
 import { v2 as cloudinary } from "cloudinary";
 import { nanoid } from "nanoid";
@@ -61,6 +64,9 @@ export async function GET(request: NextRequest) {
           id: true,
           name: true,
           createdAt: true,
+          csvExportedAt: true,
+          printedAt: true,
+          qrCodes: { where: { NOT: { ...unusedQrWhere, campaign: { brandId } } }, select: { id: true }, take: 1 },
           campaign: {
             select: {
               id: true,
@@ -142,6 +148,7 @@ export async function GET(request: NextRequest) {
           name: batch.name,
           createdAt: batch.createdAt,
           quantity: batch._count.qrCodes,
+          canDelete: !batch.csvExportedAt && !batch.printedAt && batch.qrCodes.length === 0,
           campaign: batch.campaign,
         })),
         campaigns,
@@ -218,6 +225,8 @@ export async function POST(request: NextRequest) {
         { status: failure.status },
       );
     }
+    const mismatch = assertExpectedBrand(request, brand);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
     const brandId = brand.membership.brand.id;
     const userId = session.user.id;
 
@@ -260,35 +269,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const batch = await prisma.qRCodeBatch.create({
-      data: {
-        campaignId: campaign.id,
-        name: resolvedBatchName,
-      },
-      select: {
-        id: true,
-        name: true,
-      },
-    });
-
+    // The batch remains invisible until every image is ready and its rows
+    // commit together. Export and deletion cannot observe a partial batch.
+    const batch = { id: randomUUID(), name: resolvedBatchName };
     const campaignFolder = `qrCodes/${campaign.name.replace(/[\\/]/g, "-")}/${batch.id}`;
-    try {
-      await cloudinary.api.create_folder(campaignFolder);
-    } catch (error: unknown) {
-      const cloudinaryError = error as { http_code?: number; message?: string };
-      if (
-        !(
-          cloudinaryError?.http_code === 409 ||
-          /already exists/i.test(cloudinaryError?.message || "")
-        )
-      ) {
-        console.warn(
-          "[brand/qr-batches][POST] Cloudinary create_folder warning:",
-          cloudinaryError?.message || error,
-        );
-      }
-    }
-
     const createdRecords: Array<{
       qrCodeData: string;
       qrCodeUrl: string;
@@ -297,68 +281,40 @@ export async function POST(request: NextRequest) {
       batchId: string;
       createdById: string;
     }> = [];
-    const batchSize = 50;
-
-    for (let index = 0; index < quantity; index += batchSize) {
-      const items = Array.from({
-        length: Math.min(batchSize, quantity - index),
-      }).map(async () => {
+    let generationFailed = false;
+    for (let index = 0; index < quantity; index += 50) {
+      const items = Array.from({ length: Math.min(50, quantity - index) }, async () => {
         const qrCodeData = nanoid();
-        const scanUrl = `${domain}/q/${qrCodeData}`;
-
-        try {
-          const buffer = await QRCode.toBuffer(scanUrl, {
-            type: "png",
-            width: 500,
-            color: {
-              dark: "#000000",
-              light: "#ffffff",
-            },
-          });
-
-          const uploadResult = await cloudinary.uploader.upload(
-            `data:image/png;base64,${buffer.toString("base64")}`,
-            {
-              folder: campaignFolder,
-              public_id: `qr_${qrCodeData}`,
-              overwrite: false,
-              resource_type: "image",
-            },
-          );
-
-          return {
-            qrCodeData,
-            qrCodeUrl: uploadResult.secure_url,
-            status: "NEW" as const,
-            campaignId: campaign.id,
-            batchId: batch.id,
-            createdById: userId,
-          };
-        } catch (error) {
-          console.error("[brand/qr-batches][POST] QR generation failed:", error);
-          return null;
-        }
-      });
-
-      const results = await Promise.allSettled(items);
-      const validRecords = results
-        .filter(
-          (
-            result,
-          ): result is PromiseFulfilledResult<
-            NonNullable<(typeof createdRecords)[number]>
-          > => result.status === "fulfilled" && result.value !== null,
-        )
-        .map((result) => result.value);
-
-      if (validRecords.length > 0) {
-        await prisma.qRCode.createMany({
-          data: validRecords,
-          skipDuplicates: true,
+        const buffer = await QRCode.toBuffer(`${domain}/q/${qrCodeData}`, {
+          type: "png", width: 500, color: { dark: "#000000", light: "#ffffff" },
         });
-        createdRecords.push(...validRecords);
+        const result = await cloudinary.uploader.upload(`data:image/png;base64,${buffer.toString("base64")}`, {
+          folder: campaignFolder, public_id: `qr_${qrCodeData}`, overwrite: false, resource_type: "image",
+        });
+        return { qrCodeData, qrCodeUrl: result.secure_url, status: "NEW" as const, campaignId: campaign.id, batchId: batch.id, createdById: userId };
+      });
+      const results = await Promise.allSettled(items);
+      for (const result of results) {
+        if (result.status === "fulfilled") createdRecords.push(result.value);
+        else { generationFailed = true; console.error("[brand/qr-batches][POST] QR generation failed:", result.reason); }
       }
+      if (generationFailed) break;
     }
+    if (generationFailed) {
+      // These confirmed uploads were never submitted to the database. A failed
+      // upload with an unknown provider outcome is intentionally retained.
+      await Promise.all(createdRecords.map(async qr => {
+        try { await cloudinary.uploader.destroy(`${campaignFolder}/qr_${qr.qrCodeData}`, { resource_type: "image" }); }
+        catch (error) { console.error("[brand/qr-batches][POST] Cleanup failed:", error); }
+      }));
+      return NextResponse.json({ error: "Failed to generate QR batch." }, { status: 500 });
+    }
+    // Once submitted, a lost database response may hide a successful commit;
+    // retain uploaded assets on any transaction error.
+    await prisma.$transaction(async tx => {
+      await tx.qRCodeBatch.create({ data: { id: batch.id, campaignId: campaign.id, name: batch.name } });
+      await tx.qRCode.createMany({ data: createdRecords });
+    }, { timeout: 30000 });
 
     return NextResponse.json(
       {

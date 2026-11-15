@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   deleteUploadedAsset,
+  isDefiniteSaveRejection,
   fetchJson,
   getErrorMessage,
 } from "@/components/experience/client-utils";
@@ -271,10 +272,14 @@ export function CreatorExperienceForm({
           : "/dashboard/creator/experiences",
       );
     } catch (submitError) {
-      if (uploadedWhyVideoAssetUrl && !detailsSaved) {
+      if (uploadedWhyVideoAssetUrl && !detailsSaved && isDefiniteSaveRejection(submitError)) {
         await deleteUploadedAsset(uploadedWhyVideoAssetUrl);
       }
 
+      if (uploadedWhyVideoAssetUrl && !isDefiniteSaveRejection(submitError)) {
+        setForm((current) => ({ ...current, whyVideoAssetUrl: uploadedWhyVideoAssetUrl! }));
+        setPendingWhyVideoFile(null);
+      }
       setError(
         detailsSaved
           ? getErrorMessage(

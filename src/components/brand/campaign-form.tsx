@@ -1,5 +1,7 @@
 "use client";
 
+import { useBrandFetch } from "@/components/brand/brand-fetch";
+
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
@@ -33,6 +35,7 @@ export function BrandCampaignForm({
   mode: "create" | "edit";
   campaignId?: string;
 }) {
+  const brandFetch = useBrandFetch();
   const router = useRouter();
   const [form, setForm] = useState<CampaignForm>({
     name: "",
@@ -104,7 +107,7 @@ export function BrandCampaignForm({
           : `/api/brand/campaigns/${campaignId}`;
       const method = mode === "create" ? "POST" : "PATCH";
 
-      await fetchJson<{ id: string }>(url, {
+      await brandFetch<{ id: string }>(url, {
         method,
         headers: {
           "Content-Type": "application/json",

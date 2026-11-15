@@ -58,19 +58,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { CommerceConnectionStatus, CommerceProvider } from "@prisma/client";
-import { canUseRealDatabaseUnderTest } from "../src/lib/db-safety";
+import { realDbTest } from "./helpers/real-db";
 import type { PublicShopBlockCursor } from "../src/lib/commerce/public-shop-pagination";
 
-const realDbDecision = canUseRealDatabaseUnderTest({
-  connectionString: process.env.DATABASE_URL ?? "",
-  allowRealDatabaseTestsEnv: process.env.ALLOW_REAL_DATABASE_TESTS,
-});
-
-const ENABLED = process.env.PUBLIC_SHOP_PAGINATION_REAL_DB === "true" && realDbDecision.allowed;
-
-const SKIP_REASON = realDbDecision.allowed
-  ? "requires PUBLIC_SHOP_PAGINATION_REAL_DB=true and a real disposable Postgres (see file header)"
-  : `requires PUBLIC_SHOP_PAGINATION_REAL_DB=true and the full db-safety opt-in (${realDbDecision.reason}) — see file header`;
+const { enabled: ENABLED, skipReason: SKIP_REASON } = realDbTest("PUBLIC_SHOP_PAGINATION_REAL_DB");
 
 async function cleanup(
   prisma: typeof import("../src/lib/prisma").default,

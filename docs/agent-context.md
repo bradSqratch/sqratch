@@ -70,6 +70,13 @@ gated (`getBrandAdminContext()` / `getBrandManagementContext()` in
    only links to an existing eligible Brand. Brand creation/approval remains
    part of the normal SQRATCH admin approval workflow.
 
+Brand mutation clients capture the loaded brand in page context and send
+`x-sqratch-expected-brand`. The server compares it with the independently
+authorized active membership. A mismatch returns `409 BRAND_CONTEXT_MISMATCH`
+and the form retains its draft; it never retries against another brand. Missing
+headers remain accepted for the staged compatibility release. The header never
+chooses a tenant or grants access.
+
 ---
 
 ## The 7 Files You Must Read Before Any Shopify Change
@@ -126,6 +133,9 @@ gated (`getBrandAdminContext()` / `getBrandManagementContext()` in
 **Hard rules:**
 - `QRCode` status changes (`NEW → USED`) must go through `redeemQrCodeForUser()` only
 - The `status: "NEW"` filter in `updateMany` is the atomic double-redemption guard — never remove it
+- Delete only unused, undistributed QR codes through `qr-lifecycle.ts` inside a READ COMMITTED transaction. Lock the batch before the QR row; lock the QR row before checking history. Never delete unlocks or ledger rows to enable deletion.
+- Campaign reassignment uses the same locked no-history predicate; upload a fresh image first and destroy the old image only after a confirmed commit. Retain the new asset when the commit outcome is uncertain.
+- Legacy QR mutation endpoints are removed; keep the read routes and printed `/redeemQR/...` redirect.
 - `CampaignUnlock` has `@@unique([campaignId, userId])` — one unlock per user per campaign
 - Anonymous unlock dedup uses a partial unique index (Postgres-only, migration `20260615113320`)
 

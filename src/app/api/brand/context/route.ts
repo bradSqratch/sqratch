@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
+import { assertExpectedBrand } from "@/lib/brand-auth";
 import {
   ACTIVE_BRAND_COOKIE,
   listAuthorizedBrandMemberships,
@@ -35,6 +36,12 @@ export async function POST(request: NextRequest) {
   const session = await getServerSession(authOptions);
   const userId = session?.user?.id;
   if (!userId) return NextResponse.json({ error: "Unauthorized." }, { status: 401 });
+
+  const current = await resolveActiveBrandContext({ userId, minimumRole: "MANAGER" });
+  if (current?.membership) {
+    const mismatch = assertExpectedBrand(request, current);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
+  }
 
   const body = await request.json().catch(() => null);
   const brandId = String(body?.brandId || "").trim();

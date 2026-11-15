@@ -10,7 +10,9 @@
     "test": "NODE_ENV=test tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
     "validate": "prisma validate && prisma generate",
-    "verify": "npm run validate && npm run typecheck && npm run lint && npm test && npm run build"
+    "verify": "npm run validate && npm run typecheck && npm run lint && npm test && npm run build",
+    "test:realdb": "tsx scripts/test-realdb.ts",
+    "test:realdb:init-constraints": "tsx scripts/init-realdb-constraints.ts"
   },
   "dependencies": {
     "@next-auth/prisma-adapter": "^1.0.7",

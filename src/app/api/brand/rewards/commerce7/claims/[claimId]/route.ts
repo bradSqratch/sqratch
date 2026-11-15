@@ -1,3 +1,4 @@
+import { assertExpectedBrand } from "@/lib/brand-auth";
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { getBrandManagementContext, getBrandContextFailure } from "@/lib/brand-auth";
@@ -10,6 +11,8 @@ export async function POST(request: NextRequest, context: { params: Promise<{ cl
   try {
     const auth = await getBrandManagementContext();
     if (!auth?.membership?.brand) { const failure = getBrandContextFailure(auth); return NextResponse.json({ error: failure.error }, { status: failure.status }); }
+    const mismatch = assertExpectedBrand(request, auth);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
     const { claimId } = await context.params;
     const claim = await prisma.commerceRewardRedemption.findFirst({ where: { id: claimId, brandId: auth.membership.brand.id, provider: "COMMERCE7" } });
     if (!claim) throw new RewardClaimError("NOT_FOUND", "Claim not found.", 404);

@@ -16,6 +16,7 @@ import {
 import { CreatorPageShell } from "@/components/creator/page-shell";
 import {
   deleteUploadedAsset,
+  isDefiniteSaveRejection,
   fetchJson,
   getErrorMessage,
 } from "@/components/experience/client-utils";
@@ -235,15 +236,21 @@ export default function CreatorCourseLessonsPage({
       setOperation(null);
       await load();
     } catch (saveError) {
-      if (uploadedVideo) {
+      if (uploadedVideo && isDefiniteSaveRejection(saveError)) {
         await deleteUploadedAsset("", {
           courseId,
           bucket: uploadedVideo.bucket,
           path: uploadedVideo.path,
         });
       }
+      if (uploadedVideo && !isDefiniteSaveRejection(saveError)) {
+        setDraft((current) => ({ ...current, videoStorageBucket: uploadedVideo!.bucket,
+          videoStoragePath: uploadedVideo!.path, file: null }));
+      }
       setOperation({ key: "new", phase: "FAILED", progress: 0 });
-      setError(getErrorMessage(saveError, "Failed to create lesson."));
+      setError(isDefiniteSaveRejection(saveError)
+        ? getErrorMessage(saveError, "Failed to create lesson.")
+        : "We could not confirm the save. Check the lesson list, then retry.");
     } finally {
       uploadAbortControllerRef.current = null;
       submissionInFlightRef.current = false;
@@ -251,7 +258,7 @@ export default function CreatorCourseLessonsPage({
     }
   }
 
-  async function updateLesson(id: string, lessonDraft: LessonDraft) {
+  async function updateLesson(id: string, lessonDraft: LessonDraft, retainUpload: (reference: { bucket: string; path: string }) => void) {
     if (submissionInFlightRef.current) {
       return;
     }
@@ -295,15 +302,18 @@ export default function CreatorCourseLessonsPage({
       setOperation(null);
       await load();
     } catch (saveError) {
-      if (uploadedVideo) {
+      if (uploadedVideo && isDefiniteSaveRejection(saveError)) {
         await deleteUploadedAsset("", {
           courseId,
           bucket: uploadedVideo.bucket,
           path: uploadedVideo.path,
         });
       }
+      if (uploadedVideo && !isDefiniteSaveRejection(saveError)) retainUpload(uploadedVideo);
       setOperation({ key: id, phase: "FAILED", progress: 0 });
-      setError(getErrorMessage(saveError, "Failed to update lesson."));
+      setError(isDefiniteSaveRejection(saveError)
+        ? getErrorMessage(saveError, "Failed to update lesson.")
+        : "We could not confirm the save. Check the lesson list, then retry.");
     } finally {
       uploadAbortControllerRef.current = null;
       submissionInFlightRef.current = false;
@@ -425,7 +435,7 @@ function EditableLessonCard({
   deleting: boolean;
   disabled: boolean;
   operation: LessonOperation | null;
-  onSave: (id: string, lessonDraft: LessonDraft) => Promise<void>;
+  onSave: (id: string, lessonDraft: LessonDraft, retainUpload: (reference: { bucket: string; path: string }) => void) => Promise<void>;
   onDelete: (lessonId: string) => Promise<void>;
   onRefresh: () => Promise<void>;
   onCancelUpload: () => void;
@@ -466,7 +476,7 @@ function EditableLessonCard({
           draft={draft}
           onChange={setDraft}
           submitLabel={saving ? "Saving..." : "Save lesson"}
-          onSubmit={() => void onSave(lesson.id, draft)}
+          onSubmit={() => void onSave(lesson.id, draft, (reference) => setDraft((current) => ({ ...current, videoStorageBucket: reference.bucket, videoStoragePath: reference.path, file: null })))}
           operation={operation}
           busy={disabled}
           onCancelUpload={onCancelUpload}

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getCreatorContext } from "@/lib/creator-auth";
 import prisma from "@/lib/prisma";
+import { createLessonOnce } from "@/lib/lesson-create";
 import {
   deleteFileFromStorage,
   storageObjectExists,
@@ -74,15 +75,21 @@ async function cleanupLessonVideo(
     return;
   }
 
-  const deleted = await deleteFileFromStorage(
-    reference.bucket,
-    reference.path,
-  );
-
-  if (!deleted) {
-    console.error(
-      `[creator/lessons][${context}] Failed to delete lesson video object.`,
-    );
+  try {
+    const referenced = await prisma.lesson.count({ where: { videoStorageBucket: reference.bucket, videoStoragePath: reference.path } });
+    if (referenced > 0) return;
+    const legacyLessons = await prisma.lesson.findMany({
+      where: { videoUploadUrl: { not: null }, videoStorageBucket: null, videoStoragePath: null },
+      select: { videoUploadUrl: true, videoStorageBucket: true, videoStoragePath: true, courseId: true, course: { select: { experience: { select: { slug: true } } } } },
+    });
+    if (legacyLessons.some((lesson) => {
+      const other = resolveLessonVideoStorageReference({ lesson, courseId: lesson.courseId, experienceSlug: lesson.course.experience.slug });
+      return other?.bucket === reference.bucket && other.path === reference.path;
+    })) return;
+    const deleted = await deleteFileFromStorage(reference.bucket, reference.path);
+    if (!deleted) console.error(`[creator/lessons][${context}] Failed to delete lesson video object.`);
+  } catch (error) {
+    console.error(`[creator/lessons][${context}] Failed to clean up lesson video object.`, error);
   }
 }
 
@@ -169,6 +176,11 @@ export async function GET(request: NextRequest) {
           experienceSlug: course.experience.slug,
         });
 
+        let videoAssetUrl: string | null = null;
+        if (lesson.videoSource === "UPLOAD" && reference) {
+          try { videoAssetUrl = await createSignedLessonVideoUrl(reference); }
+          catch (error) { console.error("[creator/lessons][GET] Failed to sign lesson video.", error); }
+        }
         return {
           id: lesson.id,
           title: lesson.title,
@@ -177,10 +189,7 @@ export async function GET(request: NextRequest) {
           completionPointsReward: lesson.completionPointsReward,
           videoSource: lesson.videoSource,
           youtubeUrl: lesson.youtubeUrl,
-          videoAssetUrl:
-            lesson.videoSource === "UPLOAD" && reference
-              ? await createSignedLessonVideoUrl(reference)
-              : null,
+          videoAssetUrl,
           videoStorageBucket: reference?.bucket || null,
           videoStoragePath: reference?.path || null,
           // Canonical attachments carry no "stale snapshot" concept: every
@@ -315,8 +324,7 @@ export async function POST(request: NextRequest) {
       videoReference = validation.reference;
     }
 
-    const lesson = await prisma.lesson.create({
-      data: {
+    const { lesson, created } = await createLessonOnce({
         courseId: course.id,
         title,
         description: description || null,
@@ -327,20 +335,7 @@ export async function POST(request: NextRequest) {
         videoUploadUrl: null,
         videoStorageBucket: videoReference?.bucket || null,
         videoStoragePath: videoReference?.path || null,
-      },
-      select: {
-        id: true,
-        title: true,
-        description: true,
-        sortOrder: true,
-        completionPointsReward: true,
-        videoSource: true,
-        youtubeUrl: true,
-        videoUploadUrl: true,
-        videoStorageBucket: true,
-        videoStoragePath: true,
-      },
-    });
+      });
 
     return NextResponse.json(
       {
@@ -349,7 +344,7 @@ export async function POST(request: NextRequest) {
           videoAssetUrl: null,
         },
       },
-      { status: 201 },
+      { status: created ? 201 : 200 },
     );
   } catch (error) {
     console.error("[creator/lessons][POST] Error:", error);

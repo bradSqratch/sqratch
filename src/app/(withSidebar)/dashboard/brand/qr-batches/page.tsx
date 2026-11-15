@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
+import { useBrandFetch } from "@/components/brand/brand-fetch";
 import { BrandPageShell } from "@/components/brand/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
@@ -27,6 +28,7 @@ type Batch = {
   name: string;
   createdAt: string;
   quantity: number;
+  canDelete: boolean;
   campaign: {
     id: string;
     name: string;
@@ -86,9 +88,11 @@ function formatDateTime(value: string | null) {
 }
 
 export default function BrandQRBatchesPage() {
+  const brandFetch = useBrandFetch();
   const [data, setData] = useState<QRBatchPageData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const [selectedCampaignId, setSelectedCampaignId] = useState("all");
   const [selectedBatchId, setSelectedBatchId] = useState("all");
   const [editForm, setEditForm] = useState<EditQRForm | null>(null);
@@ -153,16 +157,11 @@ export default function BrandQRBatchesPage() {
   }, [data?.batches, selectedCampaignId]);
 
   async function reloadData() {
-    setLoading(true);
-    setError(null);
-
     try {
       const response = await fetchJson<QRBatchPageData>("/api/brand/qr-batches");
       setData(response);
     } catch (loadError) {
-      setError(getErrorMessage(loadError, "Failed to load QR batches."));
-    } finally {
-      setLoading(false);
+      setActionError(getErrorMessage(loadError, "Failed to refresh QR batches."));
     }
   }
 
@@ -172,26 +171,23 @@ export default function BrandQRBatchesPage() {
     }
 
     setSavingId(editForm.id);
-    setError(null);
+    setActionError(null);
 
     try {
-      await fetchJson(`/api/brand/qr-codes/${editForm.id}`, {
+      await brandFetch(`/api/brand/qr-codes/${editForm.id}`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
           campaignId: editForm.campaignId,
-          status: editForm.status === "REDEEMED" ? "USED" : "NEW",
-          usedBy:
-            editForm.status === "REDEEMED" ? editForm.usedByEmail || "" : "",
-          usedAt: editForm.status === "REDEEMED" ? editForm.usedAt || "" : "",
         }),
       });
       setEditForm(null);
       await reloadData();
     } catch (saveError) {
-      setError(getErrorMessage(saveError, "Failed to update QR code."));
+      await reloadData();
+      setActionError(getErrorMessage(saveError, "Failed to update QR code."));
     } finally {
       setSavingId(null);
     }
@@ -207,10 +203,10 @@ export default function BrandQRBatchesPage() {
     }
 
     setSavingId(qrCodeId);
-    setError(null);
+    setActionError(null);
 
     try {
-      await fetchJson(`/api/brand/qr-codes/${qrCodeId}`, {
+      await brandFetch(`/api/brand/qr-codes/${qrCodeId}`, {
         method: "DELETE",
       });
       if (editForm?.id === qrCodeId) {
@@ -218,7 +214,8 @@ export default function BrandQRBatchesPage() {
       }
       await reloadData();
     } catch (deleteError) {
-      setError(getErrorMessage(deleteError, "Failed to delete QR code."));
+      await reloadData();
+      setActionError(getErrorMessage(deleteError, "Failed to delete QR code."));
     } finally {
       setSavingId(null);
     }
@@ -234,10 +231,10 @@ export default function BrandQRBatchesPage() {
     }
 
     setDeletingBatchId(batchId);
-    setError(null);
+    setActionError(null);
 
     try {
-      await fetchJson(`/api/brand/qr-batches/${batchId}`, {
+      await brandFetch(`/api/brand/qr-batches/${batchId}`, {
         method: "DELETE",
       });
 
@@ -245,9 +242,13 @@ export default function BrandQRBatchesPage() {
         setSelectedBatchId("all");
       }
 
-      await reloadData();
+      setData((current) => current ? { ...current,
+        batches: current.batches.filter((batch) => batch.id !== batchId),
+        qrCodes: current.qrCodes.filter((code) => code.batch?.id !== batchId),
+      } : current);
     } catch (deleteError) {
-      setError(getErrorMessage(deleteError, "Failed to delete batch."));
+      await reloadData();
+      setActionError(getErrorMessage(deleteError, "Failed to delete batch."));
     } finally {
       setDeletingBatchId(null);
     }
@@ -280,6 +281,7 @@ export default function BrandQRBatchesPage() {
         </PageCard>
       ) : (
         <div className="space-y-6">
+          {actionError && !editForm && <p role="alert" className="text-sm text-red-700 dark:text-red-300">{actionError}</p>}
           <PageCard>
             <div className="overflow-x-auto">
               <table className="w-full min-w-[720px] text-left text-sm">
@@ -319,7 +321,8 @@ export default function BrandQRBatchesPage() {
                           <Button
                             type="button"
                             variant="destructive"
-                            disabled={deletingBatchId === batch.id}
+                            disabled={!batch.canDelete || deletingBatchId === batch.id}
+                            aria-describedby={!batch.canDelete ? `batch-delete-reason-${batch.id}` : undefined}
                             className="h-8 rounded-xl bg-[#C85A63] px-5 text-white hover:bg-[#b94b54]"
                             onClick={(event) => {
                               event.stopPropagation();
@@ -331,6 +334,7 @@ export default function BrandQRBatchesPage() {
                               : "Delete Batch"}
                           </Button>
                         </div>
+                        {!batch.canDelete && <p id={`batch-delete-reason-${batch.id}`} className="mt-1 text-xs text-copy-65">Cannot delete — QR codes have already been used or distributed.</p>}
                       </td>
                     </tr>
                   ))}
@@ -478,6 +482,7 @@ export default function BrandQRBatchesPage() {
             </DialogDescription>
           </DialogHeader>
 
+          {actionError && <p role="alert" className="text-sm text-red-700 dark:text-red-300">{actionError}</p>}
           {editForm && (
             <div className="space-y-4">
               <div className="flex justify-center">
@@ -508,23 +513,7 @@ export default function BrandQRBatchesPage() {
 
               <div className="space-y-2">
                 <label className="text-sm text-copy-80">Status</label>
-                <select
-                  value={editForm.status}
-                  onChange={(event) =>
-                    setEditForm((current) =>
-                      current
-                        ? {
-                            ...current,
-                            status: event.target.value as EditQRForm["status"],
-                          }
-                        : current,
-                    )
-                  }
-                  className="flex h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
-                >
-                  <option value="NEW">NEW</option>
-                  <option value="REDEEMED">REDEEMED</option>
-                </select>
+                <Input value={editForm.status} disabled className="border-edge/10 bg-inset/20 text-ink" />
               </div>
 
               <div className="space-y-2">

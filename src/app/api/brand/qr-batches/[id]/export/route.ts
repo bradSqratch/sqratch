@@ -80,6 +80,9 @@ export async function exportBatchImpl(
       );
     }
 
+    // Mark distributed before reading codes. The update serializes with deletion's batch lock.
+    await prisma.qRCodeBatch.update({ where: { id: batchId }, data: { csvExportedAt: new Date() } });
+
     // Load QR codes selecting only public printable fields (exclude redeemer emails / user PII)
     const qrCodes = await prisma.qRCode.findMany({
       where: { batchId },
@@ -119,12 +122,6 @@ export async function exportBatchImpl(
     console.log(
       `[Audit Log] QR Export generated. Brand ID: ${batch.campaign.brandId || "N/A"}, Campaign ID: ${batch.campaign.id}, Batch ID: ${batch.id}, Row Count: ${qrCodes.length}`
     );
-
-    // Update batch to record export date
-    await prisma.qRCodeBatch.update({
-      where: { id: batchId },
-      data: { csvExportedAt: new Date() },
-    });
 
     return new NextResponse(csvContent, {
       headers: {

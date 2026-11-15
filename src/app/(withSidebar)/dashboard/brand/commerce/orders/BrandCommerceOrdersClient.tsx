@@ -1,5 +1,7 @@
 "use client";
 
+import { useBrandFetch } from "@/components/brand/brand-fetch";
+
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BrandPageShell } from "@/components/brand/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
@@ -132,6 +134,7 @@ function CatchUpOrdersControl({
   disabled: boolean;
   onSuccess: () => void;
 }) {
+  const brandFetch = useBrandFetch();
   const [state, setState] = useState<ReconciliationStateView | null>(null);
   const [loadingState, setLoadingState] = useState(true);
   const [running, setRunning] = useState(false);
@@ -172,7 +175,7 @@ function CatchUpOrdersControl({
 
   async function runOneChunk(): Promise<CatchUpStepResult | null> {
     try {
-      const data = await fetchJson<unknown>(
+      const data = await brandFetch<unknown>(
         `/api/brand/commerce/connections/${connectionId}/orders/catch-up`,
         { method: "POST" },
       );
@@ -317,6 +320,7 @@ function ReconcileCustomRangeControl({
   disabled: boolean;
   onSuccess: () => void;
 }) {
+  const brandFetch = useBrandFetch();
   const [expanded, setExpanded] = useState(false);
   const [fromValue, setFromValue] = useState("");
   const [toValue, setToValue] = useState("");
@@ -359,7 +363,7 @@ function ReconcileCustomRangeControl({
 
   async function runOneChunk(from: string, to: string): Promise<CustomRangeStepResult | null> {
     try {
-      const data = await fetchJson<unknown>(
+      const data = await brandFetch<unknown>(
         `/api/brand/commerce/connections/${connectionId}/orders/reconcile-range`,
         {
           method: "POST",

@@ -6,13 +6,11 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
-import { NextResponse } from "next/server";
 import ts from "typescript";
-import { canUseRealDatabaseUnderTest } from "../src/lib/db-safety";
-const decision = canUseRealDatabaseUnderTest({ connectionString: process.env.DATABASE_URL ?? "", allowRealDatabaseTestsEnv: process.env.ALLOW_REAL_DATABASE_TESTS });
-const enabled = decision.allowed && process.env.COMMERCE7_REWARDS_REAL_DB === "true";
+import { realDbTest } from "./helpers/real-db";
+const { skipReason } = realDbTest("COMMERCE7_REWARDS_REAL_DB");
 
-test("real Postgres: cap 25, duplicate request, point overspend, cancellation and rollback are atomic", { skip: !enabled && `Disposable DB opt-in required (${decision.reason})` }, async () => {
+test("real Postgres: cap 25, duplicate request, point overspend, cancellation and rollback are atomic", { skip: skipReason }, async () => {
   const { default: db } = await import("../src/lib/prisma");
   const { reserveCommerce7Claim, cancelCommerce7Claim, provisionCommerce7Claim, saveCommerce7Offer } = await import("../src/lib/commerce7-rewards");
   const { reconcileCommerce7RewardOrders } = await import("../src/lib/commerce/providers/commerce7-reward-orders");
@@ -85,23 +83,34 @@ test("real Postgres: cap 25, duplicate request, point overspend, cancellation an
     // predicate read so a claim commits before deletion resumes. SSI must
     // reject deletion rather than cascade away the new reward history.
     const raceUser = await user(100); const raceOffer = await offer(1);
+    const raceAdmin = await user();
+    await db.user.update({ where: { id: raceAdmin.id }, data: { role: "ADMIN" } });
     let deletionChecked: () => void = () => {}; let resumeDeletion: () => void = () => {};
     const checkedDeletion = new Promise<void>((resolve) => { deletionChecked = resolve; });
     const deletionGate = new Promise<void>((resolve) => { resumeDeletion = resolve; });
-    const adminExports: { DELETE?: (request: Request, context: { params: Promise<{ id: string }> }) => Promise<Response> } = {};
+    const adminExports: { deleteUser?: (input: { actorId: string; targetId: string }) => Promise<unknown> } = {};
+    let gated = false;
     const adminDependencies: Record<string, unknown> = {
-      "next/server": { NextResponse }, "next-auth/next": { getServerSession: async () => ({ user: { role: "ADMIN" } }) },
-      "@/app/api/auth/[...nextauth]/options": { authOptions: {} }, "@/lib/storage-upload": {}, "@/lib/admin-auth": {},
-      "@/lib/prisma": { __esModule: true, default: { user: db.user, campaign: db.campaign, qRCode: db.qRCode,
-        $transaction: (work: (tx: unknown) => Promise<unknown>, options: { isolationLevel: "Serializable" }) => db.$transaction(async (tx) => work({ user: tx.user, commerceRewardRedemption: { count: async (args: { where: { userId: string; provider: "COMMERCE7" } }) => { const count = await tx.commerceRewardRedemption.count(args); deletionChecked(); await deletionGate; return count; } } }), options),
+      "@/lib/prisma": { __esModule: true, default: {
+        $transaction: (work: (tx: unknown) => Promise<unknown>, options: { isolationLevel: "Serializable" }) => db.$transaction(async (tx) => {
+          const wrapped = new Proxy(tx, { get(target, key) {
+            if (key !== "commerceRewardRedemption") return Reflect.get(target, key);
+            return { count: async (args: { where: { userId: string } }) => {
+              const count = await tx.commerceRewardRedemption.count(args);
+              if (!gated) { gated = true; deletionChecked(); await deletionGate; }
+              return count;
+            } };
+          } });
+          return work(wrapped);
+        }, options),
       } },
     };
-    runInNewContext(ts.transpileModule(readFileSync("src/app/api/admin/user-management/update-or-delete-users/[id]/route.ts", "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, { exports: adminExports, require(name: string) { if (!(name in adminDependencies)) throw new Error("Unexpected admin dependency"); return adminDependencies[name]; } });
-    const deletion = adminExports.DELETE!(new Request("https://sqratch.example/api/admin/users/delete"), { params: Promise.resolve({ id: raceUser.id }) });
+    runInNewContext(ts.transpileModule(readFileSync("src/lib/admin-user-mutations.ts", "utf8"), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, { exports: adminExports, require(name: string) { if (!(name in adminDependencies)) throw new Error("Unexpected admin dependency"); return adminDependencies[name]; }, Error });
+    const deletion = adminExports.deleteUser!({ actorId: raceAdmin.id, targetId: raceUser.id });
     await checkedDeletion;
     try { await reserveCommerce7Claim(raceUser.id, raceOffer.id, "claim-racing-user-deletion", [brand.id]); }
     finally { resumeDeletion(); }
-    assert.equal((await deletion).status, 409);
+    await assert.rejects(deletion);
     assert.ok(await db.user.findUnique({ where: { id: raceUser.id } }));
     assert.equal(await db.commerceRewardRedemption.count({ where: { userId: raceUser.id } }), 1);
     const users = await Promise.all(Array.from({ length: 26 }, () => user()));
@@ -302,7 +311,7 @@ test("real Postgres: cap 25, duplicate request, point overspend, cancellation an
   }
 });
 
-test("real Postgres: exclusive access grants once, always charges a voluntary claim (even with the tag already held), enforces ownership constraints and one in-flight claim per tag", { skip: !enabled && `Disposable DB opt-in required (${decision.reason})` }, async () => {
+test("real Postgres: exclusive access grants once, always charges a voluntary claim (even with the tag already held), enforces ownership constraints and one in-flight claim per tag", { skip: skipReason }, async () => {
   const { default: db } = await import("../src/lib/prisma");
   const { claimCommerce7Reward, reserveCommerce7Claim, provisionCommerce7Claim } = await import("../src/lib/commerce7-rewards");
   const { Commerce7RewardsClient } = await import("../src/lib/commerce/providers/commerce7-rewards-client");
@@ -382,7 +391,7 @@ test("real Postgres: exclusive access grants once, always charges a voluntary cl
   }
 });
 
-test("real Postgres: a burst of 30 distinct claimants for a 25-claim bearer reward issues exactly 25 coupons, labels contention as a retryable 503, and same-user and retried requests never double-charge", { skip: !enabled && `Disposable DB opt-in required (${decision.reason})` }, async (t) => {
+test("real Postgres: a burst of 30 distinct claimants for a 25-claim bearer reward issues exactly 25 coupons, labels contention as a retryable 503, and same-user and retried requests never double-charge", { skip: skipReason }, async (t) => {
   const { default: db } = await import("../src/lib/prisma");
   const { claimCommerce7Reward, reserveCommerce7Claim } = await import("../src/lib/commerce7-rewards");
   const { RewardClaimError } = await import("../src/lib/commerce7-reward-domain");

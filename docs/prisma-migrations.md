@@ -263,3 +263,51 @@ Existing migration folders under `prisma/migrations/` must never be edited after
 ## Rollback
 
 Rollback is manual: indexes and additive columns can be dropped after application rollback, but enum values are not safely removed in place. Never delete point or redemption history.
+
+## Disposable test database
+
+`npm run test:realdb` runs every gated PostgreSQL test. It refuses to start unless
+`DATABASE_URL` explicitly uses a loopback host and a database name ending in
+`_test`, with a plain database name and no URL query or fragment; it never falls
+back to dotenv or a connected database. Existing
+`src/lib/db-safety.ts` gates remain in force. Use a newly created, throwaway
+cluster, never a forwarded connection to a shared server.
+
+Example setup (PostgreSQL tools must be installed):
+
+```sh
+TEST_CLUSTER=$(mktemp -d /tmp/sqratch-pg.XXXXXX)
+mkdir "$TEST_CLUSTER/socket"
+initdb -D "$TEST_CLUSTER/data" --no-locale -U postgres --auth=trust
+openssl req -new -x509 -days 1 -nodes \
+  -out "$TEST_CLUSTER/data/server.crt" -keyout "$TEST_CLUSTER/data/server.key" \
+  -subj '/CN=localhost'
+chmod 600 "$TEST_CLUSTER/data/server.key"
+printf "\nssl = on\nssl_cert_file = 'server.crt'\nssl_key_file = 'server.key'\n" >> "$TEST_CLUSTER/data/postgresql.conf"
+pg_ctl -D "$TEST_CLUSTER/data" -l "$TEST_CLUSTER/postgres.log" \
+  -o "-p 55432 -k $TEST_CLUSTER/socket -h 127.0.0.1" start
+createdb -h 127.0.0.1 -p 55432 -U postgres sqratch_disposable_test
+```
+
+Only after confirming this is the cluster just created, initialize its schema
+(no migrations or shared database operations):
+
+```sh
+DATABASE_URL=postgresql://postgres@127.0.0.1:55432/sqratch_disposable_test \
+DIRECT_URL=postgresql://postgres@127.0.0.1:55432/sqratch_disposable_test \
+  npx prisma db push
+DATABASE_URL=postgresql://postgres@127.0.0.1:55432/sqratch_disposable_test \
+ALLOW_REAL_DATABASE_TESTS=true INIT_EMPTY_TEST_DATABASE=true \
+PG_SSL_REJECT_UNAUTHORIZED=false npm run test:realdb:init-constraints
+DATABASE_URL=postgresql://postgres@127.0.0.1:55432/sqratch_disposable_test \
+PG_SSL_REJECT_UNAUTHORIZED=false npm run test:realdb
+pg_ctl -D "$TEST_CLUSTER/data" stop
+```
+
+Schema push omits PostgreSQL-only checks and partial indexes. The initialization
+command installs the exact final definitions from the checked-in migrations, in
+one transaction, and refuses non-loopback, non-test or populated databases. It
+is intended only for a freshly created cluster; existing constraints or indexes
+cause it to fail instead of being replaced. This does not apply migration history.
+Default `npm test` keeps real-database tests disabled. New tests use
+`tests/helpers/real-db.ts` and add their flag to `scripts/test-realdb.ts`.

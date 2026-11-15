@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   deleteUploadedAsset,
+  isDefiniteSaveRejection,
   fetchJson,
   getErrorMessage,
 } from "@/components/experience/client-utils";
@@ -124,8 +125,12 @@ export default function ProfilePage() {
         setAvatarPreview(null);
       }
     } catch (saveError) {
-      if (uploadedImageUrl) {
+      if (uploadedImageUrl && isDefiniteSaveRejection(saveError)) {
         await deleteUploadedAsset(uploadedImageUrl);
+      }
+      if (uploadedImageUrl && !isDefiniteSaveRejection(saveError)) {
+        setImageUrl(uploadedImageUrl);
+        setPendingAvatarFile(null);
       }
       setError(getErrorMessage(saveError, "Failed to update profile."));
     } finally {

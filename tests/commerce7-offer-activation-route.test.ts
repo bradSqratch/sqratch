@@ -1,4 +1,5 @@
 import "./env-setup";
+import { assertExpectedBrand } from "../src/lib/brand-auth";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { readFileSync } from "node:fs";
@@ -18,7 +19,7 @@ function patchRoute(offers: Record<string, Record<string, unknown>>, brandId = "
     "@/lib/commerce7-reward-http": { rewardErrorResponse: (error: unknown) => NextResponse.json({ error: (error as Error).message, code: (error as { code?: string }).code }, { status: (error as { status?: number }).status ?? 500 }) },
     "@/lib/commerce/providers/commerce7-rewards-client": { object },
     "@prisma/client": { CommerceProvider: { SHOPIFY: "SHOPIFY", COMMERCE7: "COMMERCE7" } },
-    "@/lib/brand-auth": { getBrandManagementContext: async () => ({ membership: { brand: { id: brandId } } }), getBrandContextFailure: () => ({ error: "no", status: 403 }) },
+    "@/lib/brand-auth": { assertExpectedBrand, getBrandManagementContext: async () => ({ membership: { brand: { id: brandId } } }), getBrandContextFailure: () => ({ error: "no", status: 403 }) },
     "@/lib/prisma": { __esModule: true, default: { brandRewardOffer: {
       findFirst: async (query: { where: { id: string; brandId: string } }) => { calls.lookups.push(query); const row = offers[query.where.id]; return row && row.brandId === query.where.brandId ? row : null; },
       update: async (query: unknown) => { calls.updates.push(query); return { id: "shopify-offer", isActive: false, products: [] }; },

@@ -93,6 +93,7 @@ export async function GET(request: NextRequest) {
         where: { id: courseId },
         select: {
           id: true,
+          isActive: true,
           access: true,
           experience: {
             select: {
@@ -125,6 +126,10 @@ export async function GET(request: NextRequest) {
         );
       }
 
+      if (!course.isActive && !access.isCreatorOwner) {
+        return NextResponse.json({ error: "Course not found." }, { status: 404 });
+      }
+
       if (course.access === "PRIVATE" && !access.canAccessPrivate) {
         return NextResponse.json({ data: { lessonProgress: [], courseProgress: [] } });
       }
@@ -138,8 +143,10 @@ export async function GET(request: NextRequest) {
         where: { id: lessonId },
         select: {
           courseId: true,
+          isActive: true,
           course: {
             select: {
+              isActive: true,
               access: true,
               experience: {
                 select: {
@@ -168,6 +175,10 @@ export async function GET(request: NextRequest) {
           { error: "Experience not found." },
           { status: 404 },
         );
+      }
+
+      if ((!lesson.isActive || !lesson.course.isActive) && !access.isCreatorOwner) {
+        return NextResponse.json({ error: "Lesson not found." }, { status: 404 });
       }
 
       if (lesson.course.access === "PRIVATE" && !access.canAccessPrivate) {
@@ -304,10 +315,12 @@ export async function POST(request: NextRequest) {
       select: {
         id: true,
         title: true,
+        isActive: true,
         courseId: true,
         course: {
           select: {
             id: true,
+            isActive: true,
             access: true,
             experience: {
               select: {
@@ -347,6 +360,10 @@ export async function POST(request: NextRequest) {
         { error: "Experience not found." },
         { status: 404 },
       );
+    }
+
+    if ((!lesson.isActive || !lesson.course.isActive) && !access.isCreatorOwner) {
+      return NextResponse.json({ error: "Lesson not found." }, { status: 404 });
     }
 
     if (lesson.course.access === "PRIVATE" && !access.canAccessPrivate) {
@@ -443,7 +460,7 @@ export async function POST(request: NextRequest) {
     // Anonymous completions are rewarded later, on progress merge. Awards are
     // idempotent per (user, lesson/course) via the ledger, so retries and repeat
     // POSTs never double-award. Failures here must not block the progress save.
-    if (access.viewer.userId && progress.isCompleted) {
+    if (access.viewer.userId && progress.isCompleted && !access.isCreatorOwner) {
       try {
         await awardLessonCompletionPoints({
           userId: access.viewer.userId,
@@ -469,7 +486,7 @@ export async function POST(request: NextRequest) {
       ? eventName
       : "";
 
-    if (normalizedEventName) {
+    if (normalizedEventName && !access.isCreatorOwner) {
       // Read-only attribution, resolved from the SAME trusted signal the
       // session write above uses (`storedSession.campaignId`, validated against
       // this Experience) — never `campaigns[0]`. Reuses the already-loaded

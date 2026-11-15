@@ -1,3 +1,5 @@
+import { isMediaReferenced } from "@/lib/media-references";
+import { assertExpectedBrand, getBrandAdminContext, getBrandContextFailure } from "@/lib/brand-auth";
 import { getServerSession } from "next-auth";
 import { NextRequest, NextResponse } from "next/server";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
@@ -107,6 +109,16 @@ async function isCreatorOwnedPath(
   return false;
 }
 
+async function deleteUnreferencedObject(object: { bucket: string; path: string }, url?: string) {
+  if (await isMediaReferenced(prisma, object, url)) {
+    return NextResponse.json({ error: "This asset is in use and cannot be deleted.", code: "ASSET_IN_USE" }, { status: 409 });
+  }
+  const deleted = url
+    ? await deleteStorageObjectByUrl(url)
+    : await deleteFileFromStorage(object.bucket, object.path);
+  return NextResponse.json({ data: { deleted } });
+}
+
 export async function DELETE(request: NextRequest) {
   try {
     const session = await getServerSession(authOptions);
@@ -183,12 +195,9 @@ export async function DELETE(request: NextRequest) {
         );
       }
 
-      const deleted = await deleteFileFromStorage(
-        lessonVideoReference.bucket,
-        lessonVideoReference.path,
-      );
-
-      return NextResponse.json({ data: { deleted } });
+      // When an explicit bucket/path was authorized, never delete a separate
+      // client-supplied URL instead of the object we just checked.
+      return await deleteUnreferencedObject(lessonVideoReference, bucket || path ? undefined : url);
     }
 
     if (!url) {
@@ -200,8 +209,18 @@ export async function DELETE(request: NextRequest) {
 
     // ADMIN may delete any object broadly.
     if (role === "ADMIN") {
-      const deleted = await deleteStorageObjectByUrl(url);
-      return NextResponse.json({ data: { deleted } });
+      if (request.headers.has("x-sqratch-expected-brand")) {
+        const context = await getBrandAdminContext();
+        if (!context?.membership?.brand) {
+          const failure = getBrandContextFailure(context);
+          return NextResponse.json({ error: failure.error, ...(failure.code ? { code: failure.code } : {}) }, { status: failure.status });
+        }
+        const mismatch = assertExpectedBrand(request, context);
+        if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
+      }
+      const object = parsePublicStorageUrl(url);
+      if (!object) return NextResponse.json({ error: "Invalid storage object URL." }, { status: 400 });
+      return await deleteUnreferencedObject(object, url);
     }
 
     // BRAND_ADMIN: only delete objects under their own brand's path.
@@ -225,6 +244,9 @@ export async function DELETE(request: NextRequest) {
         );
       }
 
+      const mismatch = assertExpectedBrand(request, { membership, selectionRequired: false });
+      if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
+
       const parsedUrl = parsePublicStorageUrl(url);
       if (
         !parsedUrl ||
@@ -236,8 +258,9 @@ export async function DELETE(request: NextRequest) {
         );
       }
 
-      const deleted = await deleteStorageObjectByUrl(url);
-      return NextResponse.json({ data: { deleted } });
+      const object = parsePublicStorageUrl(url);
+      if (!object) return NextResponse.json({ error: "Invalid storage object URL." }, { status: 400 });
+      return await deleteUnreferencedObject(object, url);
     }
 
     // CREATOR: only delete objects under their own experience/avatar paths
@@ -259,8 +282,9 @@ export async function DELETE(request: NextRequest) {
         );
       }
 
-      const deleted = await deleteStorageObjectByUrl(url);
-      return NextResponse.json({ data: { deleted } });
+      const object = parsePublicStorageUrl(url);
+      if (!object) return NextResponse.json({ error: "Invalid storage object URL." }, { status: 400 });
+      return await deleteUnreferencedObject(object, url);
     }
 
     // Fallback (should not be reached given the role check above).

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
+  assertExpectedBrand,
   getBrandAdminContext,
   getBrandContextFailure,
 } from "@/lib/brand-auth";
@@ -30,7 +31,7 @@ function buildBrandAssetPath(options: {
   const cleanSlug =
     brandSlug.replace(/[^a-zA-Z0-9-]/g, "-").toLowerCase() || "brand";
 
-  return `brands/${brandId}/${assetType}/${cleanSlug}-${Date.now()}.${extension}`;
+  return `brands/${brandId}/${assetType}/${cleanSlug}-${crypto.randomUUID()}.${extension}`;
 }
 
 export async function POST(request: NextRequest) {
@@ -44,6 +45,8 @@ export async function POST(request: NextRequest) {
         { status: failure.status },
       );
     }
+    const mismatch = assertExpectedBrand(request, brandAdmin);
+    if (mismatch) return NextResponse.json(mismatch, { status: mismatch.status });
 
     const formData = await request.formData();
     const file = formData.get("file");
@@ -90,7 +93,7 @@ export async function POST(request: NextRequest) {
       path,
       file,
       cacheControl: "3600",
-      upsert: true,
+      upsert: false,
     });
 
     return NextResponse.json({

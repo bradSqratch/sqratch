@@ -225,6 +225,7 @@ async function getUserCardsAndActivity(userId: string) {
       prisma.lessonProgress.count({
         where: {
           userId,
+          lesson: { isActive: true, course: { isActive: true, experience: { isActive: true } } },
           isCompleted: false,
           lastPositionSeconds: {
             gt: 0,
@@ -257,6 +258,7 @@ async function getUserCardsAndActivity(userId: string) {
     prisma.lessonProgress.findMany({
       where: {
         userId,
+        lesson: { isActive: true, course: { isActive: true, experience: { isActive: true } } },
         updatedAt: {
           gte: recentWindow,
         },
@@ -278,6 +280,7 @@ async function getUserCardsAndActivity(userId: string) {
     prisma.commerceClickAttribution.findMany({
       where: {
         userId,
+        experience: { isActive: true },
         createdAt: {
           gte: recentWindow,
         },
@@ -296,6 +299,7 @@ async function getUserCardsAndActivity(userId: string) {
     prisma.analyticsEvent.findMany({
       where: {
         userId,
+        lesson: { isActive: true, course: { isActive: true, experience: { isActive: true } } },
         createdAt: {
           gte: recentWindow,
         },

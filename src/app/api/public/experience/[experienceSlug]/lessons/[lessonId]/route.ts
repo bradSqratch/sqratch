@@ -115,6 +115,7 @@ export async function GET(
             isLoggedIn: access.isLoggedIn,
             hasUnlockedCampaign: access.hasUnlockedCampaign,
             isCreatorOwner: access.isCreatorOwner,
+            isOwnerPreview: access.isOwnerPreview,
             canAccessPrivate: access.canAccessPrivate,
             canInteract: access.canInteract,
           },

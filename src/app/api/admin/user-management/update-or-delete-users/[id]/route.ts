@@ -1,16 +1,14 @@
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma";
-import { deleteStorageObjectByUrl } from "@/lib/storage-upload";
-import { getServerSession } from "next-auth/next";
-import { authOptions } from "@/app/api/auth/[...nextauth]/options";
-import { normalizeUserRole } from "@/lib/admin-auth";
+import { changeUserAccess, deleteUser, adminMutationError } from "@/lib/admin-user-mutations";
+import { cleanupUnreferencedMedia } from "@/lib/media-cleanup";
+import { getAdminContext, normalizeUserRole } from "@/lib/admin-auth";
 
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const session = await getServerSession(authOptions);
-  if (!session || session.user.role !== "ADMIN") {
+  const session = await getAdminContext();
+  if (!session) {
     return NextResponse.json(
       { error: "Access denied. Admins only." },
       { status: 403 },
@@ -46,78 +44,7 @@ export async function PATCH(
   }
 
   try {
-    const updated = await prisma.$transaction(async (tx) => {
-      const existingUser = await tx.user.findUnique({
-        where: { id },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-        },
-      });
-
-      if (!existingUser) {
-        throw new Error("USER_NOT_FOUND");
-      }
-
-      // An email change must go through "Transfer email" so the account is
-      // re-verified and its sessions are invalidated.
-      if (existingUser.email.toLowerCase() !== email) {
-        throw new Error("EMAIL_CHANGE_NOT_ALLOWED");
-      }
-
-      const user = await tx.user.update({
-        where: { id },
-        data: { name, role, isActive },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          createdAt: true,
-          isActive: true,
-          creatorProfile: {
-            select: {
-              id: true,
-            },
-          },
-          brandMembers: {
-            select: {
-              id: true,
-              role: true,
-              brand: {
-                select: {
-                  id: true,
-                  name: true,
-                  slug: true,
-                },
-              },
-            },
-            take: 3,
-            orderBy: {
-              createdAt: "asc",
-            },
-          },
-        },
-      });
-
-      if (role === "CREATOR") {
-        await tx.creatorProfile.upsert({
-          where: { userId: id },
-          update: {
-            displayName: name || existingUser.name?.trim() || email.split("@")[0],
-            isActive: true,
-          },
-          create: {
-            userId: id,
-            displayName: name || existingUser.name?.trim() || email.split("@")[0],
-            isActive: true,
-          },
-        });
-      }
-
-      return user;
-    });
+    const updated = await changeUserAccess({ actorId: session.userId, targetId: id, name, email, role, isActive });
 
     return NextResponse.json({
       data: {
@@ -137,6 +64,9 @@ export async function PATCH(
       },
     });
   } catch (error: unknown) {
+    if (error instanceof Error && error.message === "ACTOR_NOT_ADMIN") return NextResponse.json({ error: "Administrator access is no longer active." }, { status: 403 });
+    const conflict = adminMutationError(error);
+    if (conflict) return NextResponse.json(conflict, { status: 409 });
     if (error instanceof Error && error.message === "USER_NOT_FOUND") {
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
@@ -165,8 +95,8 @@ export async function DELETE(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const session = await getServerSession(authOptions);
-  if (!session || session.user.role !== "ADMIN") {
+  const session = await getAdminContext();
+  if (!session) {
     return NextResponse.json(
       { error: "Access denied. Admins only." },
       { status: 403 },
@@ -176,48 +106,18 @@ export async function DELETE(
   const { id } = await params;
 
   try {
-    const user = await prisma.user.findUnique({
-      where: { id },
-      select: { imageUrl: true },
-    });
-
-    if (!user) {
-      return NextResponse.json({ error: "User not found" }, { status: 404 });
-    }
-
-    const [campaignCount, qrCodeCount] = await Promise.all([
-      prisma.campaign.count({ where: { createdById: id } }),
-      prisma.qRCode.count({ where: { createdById: id } }),
-    ]);
-
-    if (campaignCount > 0 || qrCodeCount > 0) {
-      return NextResponse.json(
-        {
-          error:
-            "Cannot delete user: they have created campaigns or QR codes. Deactivate the account instead.",
-          blockers: { campaigns: campaignCount, qrCodes: qrCodeCount },
-        },
-        { status: 409 },
-      );
-    }
-
-    // Preserve reward evidence and lifetime claim ceilings. The serializable
-    // predicate read also protects against a claim racing account deletion.
-    const deleted = await prisma.$transaction(async (tx) => {
-      if (await tx.commerceRewardRedemption.count({ where: { userId: id, provider: "COMMERCE7" } })) return false;
-      await tx.user.delete({ where: { id } });
-      return true;
-    }, { isolationLevel: "Serializable" });
-    if (!deleted) {
-      return NextResponse.json({ error: "Cannot delete user: Commerce7 reward history must be retained. Deactivate the account instead." }, { status: 409 });
-    }
+    const user = await deleteUser({ actorId: session.userId, targetId: id });
 
     if (user.imageUrl) {
-      await deleteStorageObjectByUrl(user.imageUrl);
+      await cleanupUnreferencedMedia(user.imageUrl);
     }
 
     return NextResponse.json({});
   } catch (err: unknown) {
+    if (err instanceof Error && err.message === "ACTOR_NOT_ADMIN") return NextResponse.json({ error: "Administrator access is no longer active." }, { status: 403 });
+    const conflict = adminMutationError(err);
+    if (conflict) return NextResponse.json(conflict, { status: 409 });
+    if (err instanceof Error && err.message === "USER_NOT_FOUND") return NextResponse.json({ error: "User not found" }, { status: 404 });
     const prismaErr = err as { code?: string };
     if (prismaErr.code === "P2034") {
       return NextResponse.json({ error: "Account activity changed during deletion. Review the account and retry or deactivate it." }, { status: 409 });

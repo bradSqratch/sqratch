@@ -5,9 +5,8 @@ import {
   slugifyValue,
 } from "@/lib/creator-auth";
 import prisma from "@/lib/prisma";
+import { cleanupUnreferencedMedia } from "@/lib/media-cleanup";
 import {
-  deleteFileFromStorage,
-  deleteStorageObjectByUrl,
   getMaxUploadBytes,
   uploadFileToStorage,
 } from "@/lib/storage-upload";
@@ -34,7 +33,7 @@ function buildCoverImagePath(
   const slug = slugifyValue(experienceSlug) || "experience-cover";
   const extension = MIME_TYPE_TO_EXTENSION[file.type] || "bin";
 
-  return `experiences/${experienceId}/cover/${slug}-${Date.now()}.${extension}`;
+  return `experiences/${experienceId}/cover/${slug}-${crypto.randomUUID()}.${extension}`;
 }
 
 export async function POST(
@@ -96,39 +95,34 @@ export async function POST(
       upsert: false,
     });
 
-    try {
-      const updated = await prisma.experience.update({
-        where: { id: experience.id },
-        data: {
-          coverImageUrl: uploaded.fileUrl,
-        },
-        select: {
-          id: true,
-          coverImageUrl: true,
-          updatedAt: true,
-        },
-      });
+    // A failed database response can hide a committed update. Keep this new
+    // object on uncertainty; staged cleanup is handled separately by P13.
+    const updated = await prisma.experience.update({
+      where: { id: experience.id },
+      data: {
+        coverImageUrl: uploaded.fileUrl,
+      },
+      select: {
+        id: true,
+        coverImageUrl: true,
+        updatedAt: true,
+      },
+    });
 
-      if (
-        experience.coverImageUrl &&
-        experience.coverImageUrl !== updated.coverImageUrl
-      ) {
-        await deleteStorageObjectByUrl(experience.coverImageUrl);
-      }
-
-      return NextResponse.json({
-        data: {
-          id: updated.id,
-          fileUrl: updated.coverImageUrl,
-          updatedAt: updated.updatedAt,
-        },
-      });
-    } catch (dbError) {
-      await deleteFileFromStorage(uploaded.bucket, uploaded.path).catch(
-        () => false,
-      );
-      throw dbError;
+    if (
+      experience.coverImageUrl &&
+      experience.coverImageUrl !== updated.coverImageUrl
+    ) {
+      await cleanupUnreferencedMedia(experience.coverImageUrl);
     }
+
+    return NextResponse.json({
+      data: {
+        id: updated.id,
+        fileUrl: updated.coverImageUrl,
+        updatedAt: updated.updatedAt,
+      },
+    });
   } catch (error) {
     console.error("[creator/experiences/[id]/cover][POST] Error:", error);
     return NextResponse.json(
