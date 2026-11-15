@@ -27,6 +27,15 @@ SQRATCH tracks two balances per user:
   - `@@unique([userId, idempotencyKey], name: "uq_point_tx_user_idempotency_key")` — general idempotency (`qr-scan:*`, `shopify-reward-redemption:*`, `shopify-reward-refund:*`, `lesson-completion:*`, `course-completion:*`).
 - All point mutations are **server-side**. Reward amounts for lesson/course completion are read from the database (`Lesson.completionPointsReward` / `Course.completionPointsReward`), never trusted from client input.
 
+## Anonymous progress transfer and outstanding awards
+
+Email verification and sign-in both call `transferAnonymousState()` in `src/lib/anonymous-transfer.ts`; no other code moves anonymous progress or unlocks to an account.
+
+- Each anonymous lesson row and each anonymous unlock is claimed under a row lock (`SELECT … FOR UPDATE`) inside its own transaction, so exactly one concurrent caller moves it and rows written afterwards are left for the next call. Progress is merged with raise-only writes (`src/lib/lesson-progress.ts`): a position never decreases and a completed lesson never reverts.
+- Ledger keys are unchanged (`qr-scan:*`, `lesson-completion:*`, `course-completion:*`). A historical row for the same `(userId, qrCodeId)` without an idempotency key counts as already awarded, so it cannot wedge a retry.
+- A failure rolls back only the unit that failed (its anonymous row stays) and the result is `retry_required`. There is no transfer table: the remaining anonymous rows and the committed account rows are the durable state, so a later call (sign-in, or the dashboard Retry) finishes the work without a consumed verification code.
+- **Outstanding completion awards.** Every call also pays completion rewards the account has earned but not yet been paid: completed lessons with a positive reward in an active lesson, active course and published experience the user does not own, then the affected courses. This runs even when there is no browser session, so accounts verified before this change are healed at their next sign-in. If a creator later raises a lesson's reward, learners who had already completed it are paid at their next sign-in (before, at their next progress save for that lesson); no ledger key changed, so nothing can be paid twice.
+
 ## Behaviour by type (`applyPointLedgerEvent`)
 
 | Type | spendable | lifetime earned | lifetime spent | lifetime refunded | ledger sign |

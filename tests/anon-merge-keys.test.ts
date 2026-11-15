@@ -10,7 +10,6 @@ test("collectAnonMergeKeys — sqr_session is returned first", () => {
     sessionCookie: "session-abc",
     anonKeyCookie: "legacy-anon",
     deviceKeyCookie: null,
-    bodyAnonKey: null,
   });
   assert.equal(result[0], "session-abc");
 });
@@ -20,7 +19,6 @@ test("collectAnonMergeKeys — legacy anonKey cookie does NOT shadow sqr_session
     sessionCookie: "session-abc",
     anonKeyCookie: "old-anon-key",
     deviceKeyCookie: null,
-    bodyAnonKey: null,
   });
   // Both are present; session is first
   assert.deepEqual(result, ["session-abc", "old-anon-key"]);
@@ -31,7 +29,6 @@ test("collectAnonMergeKeys — deduplicates identical values", () => {
     sessionCookie: "same-key",
     anonKeyCookie: "same-key",
     deviceKeyCookie: "same-key",
-    bodyAnonKey: "same-key",
   });
   assert.deepEqual(result, ["same-key"]);
 });
@@ -41,7 +38,6 @@ test("collectAnonMergeKeys — drops empty strings", () => {
     sessionCookie: "",
     anonKeyCookie: "",
     deviceKeyCookie: null,
-    bodyAnonKey: null,
   });
   assert.deepEqual(result, []);
 });
@@ -51,19 +47,17 @@ test("collectAnonMergeKeys — drops whitespace-only strings", () => {
     sessionCookie: "   ",
     anonKeyCookie: "\t",
     deviceKeyCookie: null,
-    bodyAnonKey: null,
   });
   assert.deepEqual(result, []);
 });
 
-test("collectAnonMergeKeys — includes all four distinct keys", () => {
+test("collectAnonMergeKeys — includes all three distinct cookie keys", () => {
   const result = collectAnonMergeKeys({
     sessionCookie: "sess-1",
     anonKeyCookie: "anon-1",
     deviceKeyCookie: "device-1",
-    bodyAnonKey: "body-1",
   });
-  assert.deepEqual(result, ["sess-1", "anon-1", "device-1", "body-1"]);
+  assert.deepEqual(result, ["sess-1", "anon-1", "device-1"]);
 });
 
 test("collectAnonMergeKeys — returns empty array when all inputs are null/undefined", () => {
@@ -76,7 +70,6 @@ test("collectAnonMergeKeys — trims whitespace from values", () => {
     sessionCookie: "  sess-padded  ",
     anonKeyCookie: null,
     deviceKeyCookie: null,
-    bodyAnonKey: null,
   });
   assert.deepEqual(result, ["sess-padded"]);
 });
@@ -86,9 +79,17 @@ test("collectAnonMergeKeys — dedupes after trimming", () => {
     sessionCookie: "key",
     anonKeyCookie: "key",
     deviceKeyCookie: null,
-    bodyAnonKey: null,
   });
   assert.deepEqual(result, ["key"]);
+});
+
+test("collectAnonMergeKeys — ignores a request-body key even if a caller supplies one", () => {
+  // The type no longer accepts it; this guards against it being reintroduced.
+  const result = collectAnonMergeKeys({
+    sessionCookie: "sess-1",
+    bodyAnonKey: "someone-elses-session",
+  } as Parameters<typeof collectAnonMergeKeys>[0]);
+  assert.deepEqual(result, ["sess-1"]);
 });
 
 // ─── Manual QA checklist (integration — do not mock Prisma) ──────────────────

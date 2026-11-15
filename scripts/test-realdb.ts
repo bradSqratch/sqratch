@@ -12,7 +12,7 @@ if (!decision.allowed) {
 const flags = [
   "POINT_ACCOUNT_CONCURRENCY", "COMMERCE_CONNECTION_LOCK", "PUBLIC_SHOP_PAGINATION_REAL_DB",
   "COMMERCE7_REWARDS_REAL_DB", "COMMERCE7_CONNECTION_LIFECYCLE", "COMMERCE7_ORDER_RECONCILIATION",
-  "QR_LIFECYCLE_REAL_DB", "ADMIN_INTEGRITY_REAL_DB", "LESSON_INTEGRITY_REAL_DB",
+  "QR_LIFECYCLE_REAL_DB", "ADMIN_INTEGRITY_REAL_DB", "LESSON_INTEGRITY_REAL_DB", "ANONYMOUS_TRANSFER_REAL_DB",
 ];
 const files = readdirSync("tests").filter((name) => name.includes("real-db") && name.endsWith(".test.ts"))
   .map((name) => `tests/${name}`);

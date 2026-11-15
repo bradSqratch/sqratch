@@ -1,122 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
 import prisma from "@/lib/prisma";
 import { cookies } from "next/headers";
-import { awardQrScanPoint } from "@/lib/points";
-import { redeemQrCodeForUser } from "@/lib/qr-redemption";
+import { transferAnonymousState, type AnonymousTransferResult } from "@/lib/anonymous-transfer";
 import { collectAnonMergeKeys } from "@/lib/anon-merge-keys";
 import { verifyAndConsumeEmailVerificationCode } from "@/lib/auth/email-verification";
 import { isValidSessionId } from "@/lib/session-id";
 import { withAuthNoStore } from "@/lib/auth/auth-response";
 
-async function mergeAnonymousCampaignUnlocks(
-  userId: string,
-  userEmail?: string | null,
-  anonKey?: string | null,
-) {
-  if (!anonKey) return;
-
-  const anonUnlocks = await prisma.campaignUnlock.findMany({
-    where: {
-      anonKey,
-      userId: null,
-    },
-    select: {
-      id: true,
-      campaignId: true,
-      qrCodeId: true,
-    },
-  });
-
-  for (const unlock of anonUnlocks) {
-    await prisma.$transaction(async (tx) => {
-      const existingUserUnlock = await tx.campaignUnlock.findFirst({
-        where: {
-          campaignId: unlock.campaignId,
-          userId,
-        },
-        select: { id: true },
-      });
-
-      if (existingUserUnlock) {
-        if (unlock.qrCodeId) {
-          const redemption = await redeemQrCodeForUser({
-            qrCodeId: unlock.qrCodeId,
-            userId,
-            userEmail,
-            db: tx,
-          });
-
-          if (redemption.redeemed) {
-            try {
-              await awardQrScanPoint({
-                userId,
-                qrCodeId: unlock.qrCodeId,
-                db: tx,
-              });
-            } catch {
-              console.error("[auth/verify-email] QR reward failed", {
-                outcome: "reward_failed",
-              });
-            }
-          }
-        }
-
-        await tx.campaignUnlock.delete({
-          where: { id: unlock.id },
-        });
-        return;
-      }
-
-      if (unlock.qrCodeId) {
-        const redemption = await redeemQrCodeForUser({
-          qrCodeId: unlock.qrCodeId,
-          userId,
-          userEmail,
-          db: tx,
-        });
-
-        if (!redemption.redeemed) {
-          await tx.campaignUnlock.delete({
-            where: { id: unlock.id },
-          });
-          return;
-        }
-      }
-
-      await tx.campaignUnlock.update({
-        where: { id: unlock.id },
-        data: {
-          userId,
-        },
-      });
-
-      try {
-        await awardQrScanPoint({
-          userId,
-          qrCodeId: unlock.qrCodeId,
-          db: tx,
-        });
-      } catch {
-        console.error("[auth/verify-email] QR reward failed", {
-          outcome: "reward_failed",
-        });
-      }
-    });
-  }
-}
-
 async function handlePost(request: NextRequest) {
   try {
     const body = await request.json();
-    const {
-      email,
-      code,
-      anonKey: bodyAnonKey,
-    }: {
-      email?: string;
-      code?: string;
-      anonKey?: string;
-    } = body || {};
+    // Anonymous browser identity comes only from this browser's own cookies,
+    // never from the request body: a body-supplied key could nominate someone
+    // else's anonymous session for transfer.
+    const { email, code }: { email?: string; code?: string } = body || {};
 
     const normalizedEmail = String(email || "").trim().toLowerCase();
     const cleanCode = String(code || "").trim();
@@ -161,82 +58,36 @@ async function handlePost(request: NextRequest) {
     // (anonKey / deviceKey) does NOT shadow the active sqr_session.  The active
     // session is always processed first.
     const mergeKeys = collectAnonMergeKeys({
-      bodyAnonKey: validAnonymousKey(bodyAnonKey),
       anonKeyCookie: validAnonymousKey(anonKeyFromCookie),
       deviceKeyCookie: validAnonymousKey(deviceKeyCookie),
       sessionCookie: sessionIdFromCookie,
     });
 
-    for (const key of mergeKeys) {
-      await mergeAnonymousCampaignUnlocks(user.id, user.email, key);
-    }
-
-    if (sessionIdFromCookie) {
-      await prisma.userSession.updateMany({
-        where: { id: sessionIdFromCookie },
-        data: {
-          userId: user.id,
-          lastSeenAt: new Date(),
-        },
+    // Verification has succeeded and its one-time code is spent. Moving
+    // anonymous progress is a separate outcome: it must never turn a verified
+    // account into an error, and a failed transfer is retried at sign-in.
+    let transfer: AnonymousTransferResult = {
+      status: "retry_required",
+      mergedLessons: 0,
+      mergedUnlocks: 0,
+      pointsAwarded: 0,
+    };
+    try {
+      transfer = await transferAnonymousState({
+        userId: user.id,
+        userEmail: user.email,
+        sessionId: sessionIdFromCookie,
+        unlockKeys: mergeKeys,
       });
-    }
-
-    await mergeAnonymousLessonProgress(user.id, sessionIdFromCookie);
-
-    async function mergeAnonymousLessonProgress(
-      userId: string,
-      sessionId?: string | null,
-    ) {
-      if (!sessionId) return;
-
-      const anonProgressRows = await prisma.lessonProgress.findMany({
-        where: { sessionId },
-        orderBy: { updatedAt: "desc" },
-      });
-
-      for (const anonRow of anonProgressRows) {
-        const existingUserRow = await prisma.lessonProgress.findUnique({
-          where: {
-            userId_lessonId: {
-              userId,
-              lessonId: anonRow.lessonId,
-            },
-          },
-        });
-
-        if (!existingUserRow) {
-          await prisma.lessonProgress.create({
-            data: {
-              userId,
-              lessonId: anonRow.lessonId,
-              lastPositionSeconds: anonRow.lastPositionSeconds,
-              isCompleted: anonRow.isCompleted,
-            },
-          });
-          continue;
-        }
-
-        await prisma.lessonProgress.update({
-          where: { id: existingUserRow.id },
-          data: {
-            lastPositionSeconds: Math.max(
-              existingUserRow.lastPositionSeconds,
-              anonRow.lastPositionSeconds,
-            ),
-            isCompleted: existingUserRow.isCompleted || anonRow.isCompleted,
-          },
-        });
-      }
-
-      await prisma.lessonProgress.deleteMany({
-        where: { sessionId },
-      });
+    } catch {
+      console.error("[auth/verify-email] transfer failed", { outcome: "transfer_failed" });
     }
 
     return NextResponse.json({
       ok: true,
       message: "Email verified successfully.",
       user,
+      transfer,
     });
   } catch {
     console.error("[auth/verify-email] Error", { outcome: "request_failed" });
