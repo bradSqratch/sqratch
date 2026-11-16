@@ -10,16 +10,19 @@ const source = fs.readFileSync(
   "utf8",
 );
 
+// The customer branch lives in the customer-home module; the route delegates to it.
+const customerHomeSource = fs.readFileSync(path.join(process.cwd(), "src/lib/customer-home.ts"), "utf8");
+
 test("member activity reads commerce clicks from canonical attribution", () => {
-  assert.match(source, /prisma\.commerceClickAttribution\.findMany\(/);
-  assert.match(source, /label: "Opened shop product"/);
-  assert.doesNotMatch(source, /name: "shop_click"/);
+  assert.match(customerHomeSource, /db\.commerceClickAttribution\.findMany\(/);
+  assert.match(customerHomeSource, /label: "Opened shop product"/);
+  assert.doesNotMatch(customerHomeSource, /name: "shop_click"/);
 });
 
 test("member learning activity remains AnalyticsEvent-backed", () => {
-  assert.match(source, /prisma\.analyticsEvent\.findMany\(/);
-  assert.match(source, /"lesson_started"/);
-  assert.match(source, /"lesson_completed"/);
+  assert.match(customerHomeSource, /db\.analyticsEvent\.findMany\(/);
+  assert.match(customerHomeSource, /"lesson_started"/);
+  assert.match(customerHomeSource, /"lesson_completed"/);
 });
 
 // ---------------------------------------------------------------------------

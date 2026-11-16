@@ -4,6 +4,7 @@ import React, { useEffect, useState, useCallback, useMemo } from "react";
 import axios from "axios";
 import { useSession } from "next-auth/react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import Papa from "papaparse";
@@ -30,8 +31,29 @@ type DashboardSummary = {
   role: Role;
   user: { name: string | null; email: string | null };
   cards: Record<string, string | number | null>;
-  recentActivity?: Array<{ label: string; detail?: string; at?: string }>;
+  recentActivity?: Array<{ label: string; detail?: string; at?: string; href?: string }>;
+  resume?: {
+    experienceTitle: string;
+    lessonTitle: string;
+    lastPositionSeconds: number;
+    href: string;
+  } | null;
+  unlockedExperiences?: Array<{
+    slug: string;
+    title: string;
+    coverImageUrl: string | null;
+    creatorName: string | null;
+    href: string;
+  }>;
+  unlockedExperiencesTotal?: number;
+  rewards?: { spendablePoints: number; href: string };
 };
+
+function formatPosition(totalSeconds: number) {
+  const seconds = Math.max(0, Math.floor(totalSeconds));
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+}
 
 // --------------------
 // Existing UI helpers (unchanged)
@@ -515,6 +537,23 @@ export default function DashboardPage() {
 
         {summary.role === "USER" ? (
           <>
+            {summary.resume ? (
+              <Card className="rounded-2xl border border-edge/10 bg-glass-5 backdrop-blur-xl">
+                <CardContent className="flex flex-col gap-4 p-6 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <div className="text-sm font-semibold text-copy-75">Continue where you left off</div>
+                    <div className="mt-1 text-lg font-medium text-ink">{summary.resume.lessonTitle}</div>
+                    <div className="text-sm text-copy-60">
+                      {summary.resume.experienceTitle} · resumes at {formatPosition(summary.resume.lastPositionSeconds)}
+                    </div>
+                  </div>
+                  <Button asChild className="rounded-full">
+                    <Link href={summary.resume.href}>Continue</Link>
+                  </Button>
+                </CardContent>
+              </Card>
+            ) : null}
+
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <SimpleOverviewCard
                 title="Unlocked Campaigns"
@@ -524,11 +563,50 @@ export default function DashboardPage() {
                 title="Continue Watching"
                 value={summaryCards.continueWatchingLessonsCount ?? 0}
               />
-              <SimpleOverviewCard
-                title="Recent Activity"
-                value={summaryCards.recentActivityCount ?? 0}
-              />
+              <Link
+                href={summary.rewards?.href ?? "/dashboard/points"}
+                className="rounded-2xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-edge/40"
+              >
+                <SimpleOverviewCard
+                  title="Points (view rewards)"
+                  value={summary.rewards?.spendablePoints ?? 0}
+                />
+              </Link>
             </div>
+
+            <Card className="rounded-2xl border border-edge/10 bg-glass-5 backdrop-blur-xl">
+              <CardContent className="p-6">
+                <div className="text-sm font-semibold text-copy-75">Your experiences</div>
+                {(summary.unlockedExperiences ?? []).length === 0 ? (
+                  <div className="mt-4 text-sm text-copy-55">
+                    Nothing unlocked yet. Scan the QR code on a participating product to unlock your first experience.
+                  </div>
+                ) : (
+                  <>
+                    <ul className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                      {(summary.unlockedExperiences ?? []).map((experience) => (
+                        <li key={experience.slug}>
+                          <Link
+                            href={experience.href}
+                            className="block rounded-xl border border-edge/10 bg-glass-5 px-4 py-3 hover:bg-glass-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-edge/40"
+                          >
+                            <div className="text-sm font-medium text-ink">{experience.title}</div>
+                            {experience.creatorName ? (
+                              <div className="text-xs text-copy-60">by {experience.creatorName}</div>
+                            ) : null}
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                    {(summary.unlockedExperiencesTotal ?? 0) > (summary.unlockedExperiences ?? []).length ? (
+                      <div className="mt-3 text-xs text-copy-55">
+                        Showing {(summary.unlockedExperiences ?? []).length} of {summary.unlockedExperiencesTotal} unlocked experiences.
+                      </div>
+                    ) : null}
+                  </>
+                )}
+              </CardContent>
+            </Card>
 
             {/* Recent activity list */}
             <Card className="rounded-2xl border border-edge/10 bg-glass-5 backdrop-blur-xl">
@@ -539,29 +617,35 @@ export default function DashboardPage() {
                 <div className="mt-4 space-y-3">
                   {(summary.recentActivity ?? []).length === 0 ? (
                     <div className="text-sm text-copy-55">
-                      No activity yet.
+                      No activity yet. Open an unlocked experience to get started.
                     </div>
                   ) : (
-                    (summary.recentActivity ?? []).map((a, idx) => (
-                      <div
-                        key={idx}
-                        className="flex items-start justify-between gap-4 rounded-xl border border-edge/10 bg-glass-5 px-4 py-3"
-                      >
-                        <div>
-                          <div className="text-sm font-medium text-ink">
-                            {a.label}
+                    (summary.recentActivity ?? []).map((a, idx) => {
+                      const content = (
+                        <>
+                          <div>
+                            <div className="text-sm font-medium text-ink">{a.label}</div>
+                            {a.detail ? <div className="text-xs text-copy-60">{a.detail}</div> : null}
                           </div>
-                          {a.detail ? (
-                            <div className="text-xs text-copy-60">
-                              {a.detail}
-                            </div>
-                          ) : null}
+                          {a.at ? <div className="text-xs text-copy-55">{a.at}</div> : null}
+                        </>
+                      );
+                      const rowClass =
+                        "flex items-start justify-between gap-4 rounded-xl border border-edge/10 bg-glass-5 px-4 py-3";
+                      return a.href ? (
+                        <Link
+                          key={idx}
+                          href={a.href}
+                          className={`${rowClass} hover:bg-glass-10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-edge/40`}
+                        >
+                          {content}
+                        </Link>
+                      ) : (
+                        <div key={idx} className={rowClass}>
+                          {content}
                         </div>
-                        {a.at ? (
-                          <div className="text-xs text-copy-55">{a.at}</div>
-                        ) : null}
-                      </div>
-                    ))
+                      );
+                    })
                   )}
                 </div>
               </CardContent>
