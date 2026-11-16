@@ -59,7 +59,7 @@ test("the migration is additive, nullable, and leaves isActive alone", () => {
 
 test("the batch page offers archive, unarchive and an archived filter, and explains the blocked delete", () => {
   const page = readFileSync("src/app/(withSidebar)/dashboard/brand/qr-batches/page.tsx", "utf8");
-  assert.match(page, /archived=\$\{archivedView\}/);
+  assert.match(page, /archived: archivedView/);
   assert.match(page, /"Unarchive"/);
   assert.match(page, /Archive this batch to hide it from the list/);
   assert.match(page, /Archived batches/);
