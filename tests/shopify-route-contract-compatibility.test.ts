@@ -387,6 +387,8 @@ describe("brand/shopify/status route contract", () => {
       "shopifyConnectionStatus",
       "hasShopifyAccessToken",
       "shopifyLastProductSyncAt",
+      "shopifyLastCompletedSyncAt",
+      "shopifyLastSyncAttempt",
       "shopifyCurrencyCode",
       "shopifyAuthMode",
       "shopifyAccessTokenExpiresAt",

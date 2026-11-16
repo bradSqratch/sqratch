@@ -2423,6 +2423,7 @@ describe("Route Scenario 4: Reward Redemption", () => {
         },
       }),
       getConnection: async () => ({ ok: true, connection }),
+      previewProducts: async () => { throw new Error("previewProducts is not used in this test"); },
       syncProducts: async () => {
         throw new Error("syncProducts is not used by reward redemption");
       },

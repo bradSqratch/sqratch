@@ -23,10 +23,135 @@ type CommerceConnectionSummary = {
   externalAccountId: string;
   isConnected: boolean;
   lastProductSyncAt: string | null;
+  /** Latest finished, successful catalog sync (from sync-run history). */
+  lastCompletedSyncAt?: string | null;
+  /** Latest sync run of any outcome. */
+  lastSyncAttempt?: SyncAttempt | null;
   storefrontUrl: string | null;
   currencyCode: string | null;
   productRoute: string | null;
 } | null;
+
+type SyncAttempt = {
+  status: "RUNNING" | "SUCCEEDED" | "PARTIAL" | "FAILED";
+  startedAt: string;
+  finishedAt: string | null;
+};
+
+type ConnectionsResponse = {
+  connections: NonNullable<CommerceConnectionSummary>[];
+  complete: boolean;
+};
+
+const ATTEMPT_LABELS: Record<SyncAttempt["status"], string> = {
+  RUNNING: "In progress",
+  SUCCEEDED: "Succeeded",
+  PARTIAL: "Partly completed (not counted as a completed sync)",
+  FAILED: "Failed",
+};
+
+function describeAttempt(attempt: SyncAttempt | null | undefined): string {
+  if (!attempt) return "No sync has been attempted";
+  return `${ATTEMPT_LABELS[attempt.status]} · ${formatDateTime(attempt.finishedAt ?? attempt.startedAt)}`;
+}
+
+const STATE_STYLES: Record<string, { label: string; className: string; hint: string | null }> = {
+  CONNECTED: { label: "Connected", className: "border-emerald-400/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-200", hint: null },
+  REQUIRES_RECONNECT: { label: "Reconnect required", className: "border-amber-400/30 bg-amber-500/10 text-amber-700 dark:text-amber-200", hint: "SQRATCH can no longer reach this store. Reconnect it to resume syncing and rewards." },
+  ERROR: { label: "Error", className: "border-red-400/30 bg-red-500/10 text-red-700 dark:text-red-200", hint: "This connection is in an error state. Reconnect it or contact support if the problem continues." },
+  DISCONNECTED: { label: "Disconnected", className: "border-edge/20 bg-glass-10 text-copy-70", hint: "Disconnected. Its products and history are kept." },
+  UNINSTALLED: { label: "Uninstalled", className: "border-edge/20 bg-glass-10 text-copy-70", hint: "The app was uninstalled from the store. Its products and history are kept." },
+  PENDING: { label: "Pending", className: "border-edge/20 bg-glass-10 text-copy-70", hint: "Setup has not finished." },
+};
+
+function ConnectionsOverview() {
+  const [data, setData] = useState<ConnectionsResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      setData(await fetchJson<ConnectionsResponse>("/api/brand/commerce/connections"));
+    } catch (loadError) {
+      setError(getErrorMessage(loadError, "Failed to load connections."));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (loading && !data) return <p className="text-sm text-copy-65">Loading connections...</p>;
+  if (error) {
+    return (
+      <div role="alert" className="text-sm text-red-700 dark:text-red-300">
+        {error}{" "}
+        <button type="button" className="underline" onClick={() => void load()}>
+          Retry
+        </button>
+      </div>
+    );
+  }
+  if (!data || data.connections.length === 0) return null;
+
+  return (
+    <section aria-label="All store connections" className="space-y-3">
+      <h2 className="text-lg font-semibold">Store connections</h2>
+      {!data.complete ? (
+        <p role="status" className="text-sm text-amber-700 dark:text-amber-200">
+          Some providers could not be checked just now, so this list may be incomplete.{" "}
+          <button type="button" className="underline" onClick={() => void load()}>
+            Check again
+          </button>
+        </p>
+      ) : null}
+      <ul className="grid gap-3 lg:grid-cols-2">
+        {data.connections.map((item) => {
+          const state = STATE_STYLES[item.status] ?? STATE_STYLES.PENDING;
+          return (
+            <li key={item.connectionId} className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="font-semibold">
+                  {providerLabel(item.provider)} <span className="font-normal text-copy-65">· {item.displayName}</span>
+                </p>
+                <span className={`rounded-full border px-3 py-1 text-xs ${state.className}`}>{state.label}</span>
+              </div>
+              <p className="mt-1 text-xs text-copy-55">{item.externalAccountId}</p>
+              {state.hint ? <p className="mt-2 text-sm text-copy-70">{state.hint}</p> : null}
+              <dl className="mt-3 space-y-1 text-sm">
+                <div className="flex justify-between gap-3">
+                  <dt className="text-copy-55">Last completed sync</dt>
+                  <dd className="text-copy-80">{formatDateTime(item.lastCompletedSyncAt ?? null)}</dd>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <dt className="text-copy-55">Last attempt</dt>
+                  <dd className={`text-right ${item.lastSyncAttempt?.status === "FAILED" ? "text-red-700 dark:text-red-300" : "text-copy-80"}`}>
+                    {describeAttempt(item.lastSyncAttempt)}
+                  </dd>
+                </div>
+              </dl>
+              {item.status === "REQUIRES_RECONNECT" || item.status === "ERROR" ? (
+                <p className="mt-3 text-sm">
+                  {item.provider === "SHOPIFY" ? (
+                    <a className="underline" href="/dashboard/brand/shopify">
+                      Reconnect on the Shopify page
+                    </a>
+                  ) : (
+                    "Open the SQRATCH app in your Commerce7 admin to reconnect this store."
+                  )}
+                </p>
+              ) : null}
+            </li>
+          );
+        })}
+      </ul>
+    </section>
+  );
+}
 
 type BrandCommerceStatusResponse = {
   id: string;
@@ -493,6 +618,7 @@ export function BrandCommerceClient() {
           <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
         ) : (
           <div className="space-y-5">
+            <ConnectionsOverview />
             <div className="grid gap-4 lg:grid-cols-3">
               <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
                 <p className="text-sm text-copy-55">Provider</p>
@@ -507,10 +633,13 @@ export function BrandCommerceClient() {
                 </p>
               </div>
               <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
-                <p className="text-sm text-copy-55">Last product sync</p>
+                <p className="text-sm text-copy-55">Last completed catalog sync</p>
                 <p className="mt-2 text-sm text-copy-80">
-                  {formatDateTime(connection?.lastProductSyncAt ?? null)}
+                  {formatDateTime(connection?.lastCompletedSyncAt ?? null)}
                 </p>
+                {connection ? (
+                  <p className="mt-1 text-xs text-copy-55">Last attempt: {describeAttempt(connection.lastSyncAttempt)}</p>
+                ) : null}
               </div>
             </div>
 

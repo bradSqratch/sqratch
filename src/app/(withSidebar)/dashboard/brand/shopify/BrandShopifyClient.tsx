@@ -25,6 +25,8 @@ type BrandProfileResponse = {
   shopifyUninstalledAt: string | null;
   shopifyConnectionStatus: "DISCONNECTED" | "CONNECTED" | "UNINSTALLED";
   shopifyLastProductSyncAt: string | null;
+  /** Latest finished catalog sync; a product preview does not change it. */
+  shopifyLastCompletedSyncAt?: string | null;
   /** True once the store has granted the read_orders scope. */
   orderAttributionReady: boolean;
   /** True once the store has granted the read_themes scope (scope only — not live embed state). */
@@ -275,10 +277,10 @@ export function BrandShopifyClient({
                 </p>
               </div>
               <div className="rounded-2xl border border-edge/10 bg-inset/20 p-4">
-                <p className="text-sm text-copy-55">Last sync</p>
+                <p className="text-sm text-copy-55">Last completed catalog sync</p>
                 <p className="mt-2 text-sm text-copy-80">
-                  {brand?.shopifyLastProductSyncAt
-                    ? new Date(brand.shopifyLastProductSyncAt).toLocaleString()
+                  {brand?.shopifyLastCompletedSyncAt
+                    ? new Date(brand.shopifyLastCompletedSyncAt).toLocaleString()
                     : "Never"}
                 </p>
               </div>
@@ -325,7 +327,7 @@ export function BrandShopifyClient({
                 disabled={syncing || !isConnected}
                 className="rounded-full border-edge/20 bg-transparent text-ink hover:bg-glass-10"
               >
-                {syncing ? "Syncing..." : "Fetch products"}
+                {syncing ? "Fetching..." : "Preview products"}
               </Button>
 
               {isConnected ? (
@@ -419,10 +421,10 @@ export function BrandShopifyClient({
               },
               {
                 label: "Product catalog",
-                value: brand?.shopifyLastProductSyncAt
+                value: brand?.shopifyLastCompletedSyncAt
                   ? "Ready"
                   : "Not yet synced",
-                ready: Boolean(brand?.shopifyLastProductSyncAt),
+                ready: Boolean(brand?.shopifyLastCompletedSyncAt),
               },
               {
                 label: "Order access",

@@ -935,9 +935,12 @@ export function BrandProductsClient() {
                           Campaign eligible
                         </label>
                         <p className="-mt-2 pl-6 text-xs leading-5 text-copy-50">
-                          Marks this product as eligible for future campaign assignment.
-                          Campaign-level product selection and creator filtering will be added in
-                          a later phase.
+                          Marks this product as eligible for campaigns. Choose which eligible
+                          products a campaign features from that campaign&apos;s{" "}
+                          <a href="/dashboard/brand/campaigns" className="underline">
+                            Products page
+                          </a>
+                          .
                         </p>
                       </div>
 

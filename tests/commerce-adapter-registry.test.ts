@@ -73,6 +73,7 @@ function makeFakeAdapter(
         },
       };
     },
+    previewProducts: async () => { throw new Error("previewProducts is not used in this test"); },
     async syncProducts(connectionId: string): Promise<ProductSyncResult> {
       return {
         connectionId,

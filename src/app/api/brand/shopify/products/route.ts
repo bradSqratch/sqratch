@@ -114,7 +114,8 @@ async function runAdapterSync(
       );
     }
 
-    const result = await adapter.syncProducts(summary.id);
+    // Read-only preview: opening this page must not move the connection's last-sync facts.
+    const result = await adapter.previewProducts(summary.id);
 
     return {
       ok: true,

@@ -6,6 +6,7 @@ import prisma from "@/lib/prisma";
 import { normalizeUserRole } from "@/lib/admin-auth";
 import { resolveActiveBrandContext } from "@/lib/brand-context";
 import { loadCustomerHome } from "@/lib/customer-home";
+import { loadSyncSummaries } from "@/lib/commerce/sync-summary";
 import { getActiveCommerceConnectionAnyProvider, isConnectionUsable } from "@/lib/commerce/connection-service";
 
 function getStartOfLastDays(days: number) {
@@ -106,10 +107,16 @@ async function getBrandAdminCards(userId: string) {
   const commerceSummary = await getActiveCommerceConnectionAnyProvider(brand.id);
   const hasCommerceConnection = commerceSummary !== null && isConnectionUsable(commerceSummary);
   const syncWindow = getStartOfLastDays(7);
+  // Judged by the last COMPLETED catalog sync in the run history. The connection's
+  // own `lastProductSyncAt` is also stamped by non-sync paths, so it can look fresh
+  // when no sync has finished.
+  const lastCompletedSyncAt =
+    hasCommerceConnection && commerceSummary
+      ? (await loadSyncSummaries(brand.id, [commerceSummary.id]).catch(() => null))?.get(commerceSummary.id)?.lastCompletedSyncAt ?? null
+      : null;
   const productSyncStatus = !hasCommerceConnection
     ? "DISCONNECTED"
-    : commerceSummary?.lastProductSyncAt &&
-        commerceSummary.lastProductSyncAt >= syncWindow
+    : lastCompletedSyncAt && lastCompletedSyncAt >= syncWindow
       ? "OK"
       : "NEEDS_ATTENTION";
 

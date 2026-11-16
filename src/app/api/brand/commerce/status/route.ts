@@ -6,6 +6,7 @@ import {
 } from "@/lib/brand-auth";
 import { getActiveCommerceConnectionAnyProvider } from "@/lib/commerce/connection-service";
 import type { CommerceConnectionSummary } from "@/lib/commerce/types";
+import { loadSyncSummaries, serializeSyncSummary, type SyncSummary } from "@/lib/commerce/sync-summary";
 
 /**
  * PHASE 16C2 — `GET /api/brand/commerce/status`.
@@ -23,11 +24,13 @@ import type { CommerceConnectionSummary } from "@/lib/commerce/types";
 export type BrandCommerceStatusDeps = {
   getContext(): Promise<BrandAdminContext | null>;
   getConnection(brandId: string): Promise<CommerceConnectionSummary | null>;
+  getSyncSummaries(brandId: string, connectionIds: string[]): Promise<Map<string, SyncSummary>>;
 };
 
 const DEFAULT_DEPS: BrandCommerceStatusDeps = {
   getContext: getBrandManagementContext,
   getConnection: (brandId) => getActiveCommerceConnectionAnyProvider(brandId),
+  getSyncSummaries: (brandId, connectionIds) => loadSyncSummaries(brandId, connectionIds),
 };
 
 export async function GET() {
@@ -52,6 +55,9 @@ export async function commerceStatusGetImpl(
 
     const brand = context.membership.brand;
     const connection = await deps.getConnection(brand.id);
+    const syncSummaries = connection
+      ? await deps.getSyncSummaries(brand.id, [connection.id]).catch(() => new Map<string, SyncSummary>())
+      : new Map<string, SyncSummary>();
 
     return NextResponse.json({
       data: {
@@ -66,6 +72,7 @@ export async function commerceStatusGetImpl(
               externalAccountId: connection.externalAccountId,
               isConnected: connection.status === "CONNECTED",
               lastProductSyncAt: connection.lastProductSyncAt,
+              ...serializeSyncSummary(syncSummaries.get(connection.id)),
               // PHASE 16 BIG ROUND / SUBPHASE 1 — no secrets: storefrontUrl,
               // currencyCode, and productRoute are merchant-facing
               // configuration values, not credentials, and are needed to

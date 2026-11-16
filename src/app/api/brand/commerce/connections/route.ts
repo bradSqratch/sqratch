@@ -10,6 +10,7 @@ import {
   toSafeConnectionSummary,
   type CommerceConnectionListResult,
 } from "@/lib/commerce/connection-service";
+import { loadSyncSummaries, serializeSyncSummary, type SyncSummary } from "@/lib/commerce/sync-summary";
 
 /**
  * `GET /api/brand/commerce/connections`
@@ -35,11 +36,14 @@ import {
 export type BrandCommerceConnectionsDeps = {
   getContext(): Promise<BrandAdminContext | null>;
   getConnections(brandId: string): Promise<CommerceConnectionListResult>;
+  /** Completed-sync and last-attempt facts per connection, from the sync-run history. */
+  getSyncSummaries(brandId: string, connectionIds: string[]): Promise<Map<string, SyncSummary>>;
 };
 
 const DEFAULT_DEPS: BrandCommerceConnectionsDeps = {
   getContext: getBrandManagementContext,
   getConnections: (brandId) => getAllCommerceConnectionsForBrand(brandId),
+  getSyncSummaries: (brandId, connectionIds) => loadSyncSummaries(brandId, connectionIds),
 };
 
 export async function GET() {
@@ -66,6 +70,10 @@ export async function commerceConnectionsGetImpl(
     const result = await deps.getConnections(brand.id);
     const safe = result.connections.map(toSafeConnectionSummary);
     const usable = safe.filter(isConnectionUsable);
+    // A history read failure must not hide the connections themselves.
+    const syncSummaries = await deps
+      .getSyncSummaries(brand.id, safe.map((connection) => connection.id))
+      .catch(() => new Map<string, SyncSummary>());
 
     return NextResponse.json({
       data: {
@@ -76,7 +84,9 @@ export async function commerceConnectionsGetImpl(
           displayName: connection.displayName,
           externalAccountId: connection.externalAccountId,
           isConnected: connection.status === "CONNECTED",
+          // Legacy: also stamped by non-sync paths. Display the two fields below.
           lastProductSyncAt: connection.lastProductSyncAt,
+          ...serializeSyncSummary(syncSummaries.get(connection.id)),
           storefrontUrl: connection.storefrontUrl,
           currencyCode: connection.currencyCode,
           productRoute: connection.productRoute ?? null,

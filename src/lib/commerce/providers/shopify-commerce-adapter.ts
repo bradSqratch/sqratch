@@ -402,7 +402,18 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
     return { ok: true, connection: toCommerceConnectionSummary(row) };
   }
 
+  async previewProducts(connectionId: string): Promise<ProductSyncResult> {
+    return this.fetchCatalogPage(connectionId);
+  }
+
   async syncProducts(connectionId: string): Promise<ProductSyncResult> {
+    const result = await this.fetchCatalogPage(connectionId);
+    await this.deps.markProductSync(connectionId, result.syncedAt);
+    return result;
+  }
+
+  /** Shared read-only fetch behind `previewProducts` and `syncProducts`; it never writes. */
+  private async fetchCatalogPage(connectionId: string): Promise<ProductSyncResult> {
     const row = await this.loadShopifyConnection(connectionId);
 
     if (!row) {
@@ -432,8 +443,6 @@ export class ShopifyCommerceAdapter implements CommerceAdapter {
 
     const syncedAt = new Date();
     const products = result.items.map(toCommerceProduct);
-
-    await this.deps.markProductSync(connectionId, syncedAt);
 
     return {
       connectionId,
