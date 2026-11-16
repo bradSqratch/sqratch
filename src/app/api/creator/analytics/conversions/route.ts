@@ -1,3 +1,4 @@
+import { countFallbackOrders, effectiveOrderDate, orderDateWhere, parseOrderDateBasis } from "@/lib/commerce/order-date-basis";
 import { NextRequest, NextResponse } from "next/server";
 import { getCreatorContext, getOwnedExperienceForCreator } from "@/lib/creator-auth";
 import prisma from "@/lib/prisma";
@@ -112,7 +113,14 @@ function idsOf(rows: readonly ConversionCountRow[]): string[] {
 }
 
 export async function GET(request: NextRequest) {
-  const context = await getCreatorContext();
+  return creatorConversionsGetImpl(request, getCreatorContext);
+}
+
+export async function creatorConversionsGetImpl(
+  request: NextRequest,
+  getContext: typeof getCreatorContext,
+) {
+  const context = await getContext();
   if (!context) return NextResponse.json({ error: "Creator access required." }, { status: 403 });
   const range = resolveCommerceClickAnalyticsDateRange({
     dateFrom: request.nextUrl.searchParams.get("dateFrom"),
@@ -120,6 +128,10 @@ export async function GET(request: NextRequest) {
     now: new Date(),
   });
   if (!range.ok) return NextResponse.json({ error: range.error }, { status: 400 });
+  const dateBasis = parseOrderDateBasis(request.nextUrl.searchParams.get("dateBasis"));
+  if (!dateBasis) {
+    return NextResponse.json({ error: "dateBasis must be provider or ingested." }, { status: 400 });
+  }
 
   // THE NARROWING CHECK, identical in shape to the click-only creator route:
   // a requested Experience id must be one this creator owns, or the request
@@ -136,19 +148,24 @@ export async function GET(request: NextRequest) {
 
   const rows = await prisma.commerceOrder.findMany({
     where: {
-      createdAt: { gte: range.range.start, lte: range.range.end },
-      attribution: {
-        is: {
-          creatorProfileId: context.creatorProfile.id,
-          ...(requestedExperienceId ? { experienceId: requestedExperienceId } : {}),
+      AND: [
+        orderDateWhere(dateBasis, range.range),
+        {
+          attribution: {
+            is: {
+              creatorProfileId: context.creatorProfile.id,
+              ...(requestedExperienceId ? { experienceId: requestedExperienceId } : {}),
+            },
+          },
         },
-      },
+      ],
     },
     select: {
       provider: true, financialStatus: true, currencyCode: true, totalMinor: true, totalRefundedMinor: true, netRevenueMinor: true, cancelledAt: true,
-      // PHASE D — bucket key for the daily trend; the SAME column this
-      // query's `where` filters on. Still no campaign id and no line item.
+      // Bucket key for the daily trend: the same effective date the `where`
+      // filters on. Still no campaign id and no line item.
       createdAt: true,
+      providerCreatedAt: true,
       // No campaign id and no line item is selected at all: a column that is
       // never read cannot be leaked by a later refactor of the shared builder.
       attribution: { select: { experienceId: true, creatorProfileId: true, lessonId: true, connectedProductId: true } },
@@ -156,7 +173,7 @@ export async function GET(request: NextRequest) {
   });
 
   const scoped: ConversionTrendOrder[] = rows.map((row) => ({
-    orderDate: row.createdAt,
+    orderDate: effectiveOrderDate(row, dateBasis),
     provider: row.provider,
     financialStatus: row.financialStatus,
     currencyCode: row.currencyCode,
@@ -202,6 +219,8 @@ export async function GET(request: NextRequest) {
     data: {
       range: { start: range.range.start.toISOString(), end: range.range.end.toISOString() },
       filters: { experienceId: requestedExperienceId },
+      dateBasis,
+      fallbackOrderCount: countFallbackOrders(rows, dateBasis),
       ...data,
       dailyTrend,
     },

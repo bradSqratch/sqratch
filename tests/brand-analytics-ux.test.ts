@@ -93,7 +93,7 @@ function change(tree: unknown, id: string, value: string) {
 const engagement = (scans: number) => ({ campaigns: [{ id: "campaign-1", name: "Campaign One", slug: "one" }], totals: { scans, unlocks: 0, lessonStarts: 0, lessonCompletions: 0, shopClicks: 0 }, byCampaign: [] });
 const clicks = { range: { start: "2026-09-07", end: "2026-10-06" }, totals: { clicks: 0, uniqueSessions: { value: 0, truncated: false }, uniqueUsers: { value: 0, truncated: false }, campaignEntryClicks: 0, directEntryClicks: 0 }, timeSeries: [], surfaceBreakdown: {}, providerBreakdown: [], entryCampaignBreakdown: [], productCampaignBreakdown: [], topProducts: [], topExperiences: [], topLessons: [] };
 const conversion = (attributed = 0): conversionHelpers.BrandConversionAnalytics => ({
-  range: clicks.range, totalIngestedOrders: 1, attributedOrders: attributed, currentlyNetPositivePaidOrders: attributed,
+  range: clicks.range, dateBasis: "provider", fallbackOrderCount: 0, totalIngestedOrders: 1, attributedOrders: attributed, currentlyNetPositivePaidOrders: attributed,
   pendingOrAuthorizedOrders: 0, partiallyRefundedOrders: 0, fullyRefundedOrders: 0,
   attributedOrderValueByCurrency: [], refundedAttributedValueByCurrency: [], currentNetAttributedOrderValueByCurrency: [], financialStatusBreakdown: [], cancelledAttributedOrders: 0,
   attributedOrdersByProvider: [], attributedOrdersByEntryCampaign: [], attributedOrdersByProductCampaign: [], attributedOrdersByExperience: [], attributedOrdersByCreator: [], attributedOrdersByLesson: [], attributedOrdersByProduct: [], dailyTrend: [],

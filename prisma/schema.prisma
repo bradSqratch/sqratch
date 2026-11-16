@@ -1129,8 +1129,11 @@ model CommerceOrder {
   @@index([brandId, providerCreatedAt])
   @@index([connectionId, providerUpdatedAt])
   @@index([financialStatus])
-  /// PHASE 29 — NOT YET APPLIED to any database; see
-  /// prisma/migrations/20260905000000_add_commerce_order_created_at_index.
+  /// PHASE 29 — confirmed present in production by the owner (2026-11); see
+  /// prisma/migrations/20260905000000_add_commerce_order_created_at_index, whose
+  /// "DO NOT APPLY" header is historical. Conversion reports with the provider
+  /// date basis filter on `(brandId, providerCreatedAt)` and, for orders with no
+  /// provider date, on this index.
   /// The Order Explorer (`order-list.ts`) deliberately paginates and orders
   /// by `createdAt` (SQRATCH's own NOT NULL ingestion timestamp) rather than
   /// `providerCreatedAt` (nullable — a keyset built on it would need

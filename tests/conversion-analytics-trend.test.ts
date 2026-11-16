@@ -535,11 +535,12 @@ describe("PHASE D — route wiring", () => {
     ["brand", "src/app/api/brand/analytics/conversions/route.ts"],
     ["creator", "src/app/api/creator/analytics/conversions/route.ts"],
   ] as const) {
-    test(`${label} route selects createdAt and buckets the trend on it — the same column its range filters on`, () => {
+    test(`${label} route buckets the trend on the same effective date its range filters on`, () => {
       const source = readFileSync(join(process.cwd(), path), "utf8");
       assert.match(source, /createdAt: true/);
-      assert.match(source, /orderDate: row\.createdAt/);
-      assert.match(source, /createdAt: \{ gte: range\.range\.start, lte: range\.range\.end \}/);
+      assert.match(source, /providerCreatedAt: true/);
+      assert.match(source, /orderDate: effectiveOrderDate\(row, dateBasis\)/);
+      assert.match(source, /orderDateWhere\(dateBasis, range\.range\)/);
       assert.match(source, /buildConversionDailyTrend\(/);
       assert.match(source, /start: range\.range\.start, end: range\.range\.end/);
       assert.match(source, /dailyTrend,/);

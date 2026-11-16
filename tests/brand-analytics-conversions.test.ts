@@ -45,8 +45,8 @@ describe("Brand Analytics — attributed conversions & revenue panel", () => {
   test("3. the campaign dropdown is never forwarded to the conversions request, and the effect does not depend on it", () => {
     const effectStart = source.indexOf("useEffect(() => {\n    const seq = ++conversionRequestSeq.current;");
     assert.ok(effectStart > -1, "conversion effect not found");
-    const effectEnd = source.indexOf("}, [filters.dateFrom, filters.dateTo, dateError]);", effectStart);
-    assert.ok(effectEnd > -1, "conversion effect must depend only on the date range, not campaignId");
+    const effectEnd = source.indexOf("}, [filters.dateFrom, filters.dateTo, dateError, dateBasis]);", effectStart);
+    assert.ok(effectEnd > -1, "conversion effect must depend only on the date range and basis, not campaignId");
     const effectBody = source.slice(effectStart, effectEnd);
     assert.doesNotMatch(effectBody, /campaignId/);
   });
@@ -183,4 +183,12 @@ describe("Brand Analytics — attributed conversions & revenue panel", () => {
     assert.match(source, /CONVERSION_BREAKDOWN_DISPLAY_LIMIT/);
     assert.match(source, /rows\.slice\(0, CONVERSION_BREAKDOWN_DISPLAY_LIMIT\)/);
   });
+});
+
+test("changing the order-date basis re-requests the conversion report (it is in that effect's dependencies, not another's)", () => {
+  const page = readFileSync("src/app/(withSidebar)/dashboard/brand/analytics/page.tsx", "utf8");
+  const effect = page.slice(page.indexOf("async function loadConversion()"));
+  const deps = /\}, \[([^\]]*)\]\);/.exec(effect.slice(effect.indexOf("void loadConversion();")))?.[1] ?? "";
+  assert.match(deps, /dateBasis/);
+  assert.match(effect, /query\.set\("dateBasis", dateBasis\)/);
 });

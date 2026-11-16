@@ -1,5 +1,7 @@
 "use client";
 
+import { DateBasisNotes, DateBasisSelect } from "@/components/commerce/date-basis-select";
+import type { OrderDateBasis } from "@/lib/commerce/order-date-basis";
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { BrandPageShell } from "@/components/brand/page-shell";
@@ -19,7 +21,6 @@ import {
   type ProviderBreakdownRow,
 } from "@/lib/commerce/conversion-analytics-client";
 import {
-  CONVERSION_DATE_BASIS_NOTE,
   CONVERSION_SECTION_TITLE,
   ORDER_VALUE_LABELS,
   TREND_COLUMN_LABELS,
@@ -155,6 +156,7 @@ export default function BrandAnalyticsPage() {
   // here must never blank scans/unlocks/lesson data or click analytics, and
   // vice versa (see PART 19 of the task brief).
   const [conversion, setConversion] = useState<BrandConversionAnalytics | null>(null);
+  const [dateBasis, setDateBasis] = useState<OrderDateBasis>("provider");
   const [conversionError, setConversionError] = useState<string | null>(null);
   const [conversionLoading, setConversionLoading] = useState(true);
   // Guards against a slow, superseded request landing after a newer one when
@@ -257,6 +259,7 @@ export default function BrandAnalyticsPage() {
         const query = new URLSearchParams();
         if (filters.dateFrom) query.set("dateFrom", filters.dateFrom);
         if (filters.dateTo) query.set("dateTo", filters.dateTo);
+        query.set("dateBasis", dateBasis);
 
         const result = await fetchJson<unknown>(
           `/api/brand/analytics/conversions?${query.toString()}`,
@@ -283,7 +286,7 @@ export default function BrandAnalyticsPage() {
 
     void loadConversion();
     return () => { active = false; };
-  }, [filters.dateFrom, filters.dateTo, dateError]);
+  }, [filters.dateFrom, filters.dateTo, dateError, dateBasis]);
 
   return (
     <BrandPageShell
@@ -396,6 +399,8 @@ export default function BrandAnalyticsPage() {
         data={conversion}
         error={conversionError}
         loading={conversionLoading}
+        dateBasis={dateBasis}
+        onDateBasisChange={setDateBasis}
       />
       </>}
     </BrandPageShell>
@@ -693,9 +698,9 @@ const CONVERSION_COUNT_CARDS: Array<{
 }> = [
   {
     key: "totalIngestedOrders",
-    label: "Orders ingested",
+    label: "Orders in period",
     subtext:
-      "Orders SQRATCH received for this brand in the selected period, whether attributed or not.",
+      "Orders for this brand placed in the selected period (by the order date chosen above), whether attributed or not.",
   },
   {
     key: "attributedOrders",
@@ -730,15 +735,20 @@ function ConversionAnalyticsSection({
   data,
   error,
   loading,
+  dateBasis,
+  onDateBasisChange,
 }: {
   data: BrandConversionAnalytics | null;
   error: string | null;
   loading: boolean;
+  dateBasis: OrderDateBasis;
+  onDateBasisChange: (next: OrderDateBasis) => void;
 }) {
   if (error) {
     return (
       <PageCard>
         <h2 className="text-xl font-semibold">{CONVERSION_SECTION_TITLE}</h2>
+        <DateBasisSelect value={dateBasis} onChange={onDateBasisChange} />
         <p className="mt-3 text-sm text-red-700 dark:text-red-300">{error}</p>
       </PageCard>
     );
@@ -748,6 +758,7 @@ function ConversionAnalyticsSection({
     return (
       <PageCard>
         <h2 className="text-xl font-semibold">{CONVERSION_SECTION_TITLE}</h2>
+        <DateBasisSelect value={dateBasis} onChange={onDateBasisChange} />
         <p className="mt-3 text-sm text-copy-65">Loading conversion analytics...</p>
       </PageCard>
     );
@@ -768,7 +779,8 @@ function ConversionAnalyticsSection({
               attribution evidence from the commerce integration. Counted for your
               whole brand, so the campaign filter above does not apply here.
             </p>
-            <p className="mt-2 text-xs text-copy-45">{CONVERSION_DATE_BASIS_NOTE}</p>
+            <DateBasisSelect value={dateBasis} onChange={onDateBasisChange} />
+            <DateBasisNotes basis={data.dateBasis} fallbackOrderCount={data.fallbackOrderCount} />
           </div>
           <div className="flex flex-wrap gap-2">
             {/* PHASE D7 — deep-links into the Order Explorer already filtered

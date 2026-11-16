@@ -1,5 +1,7 @@
 "use client";
 
+import { DateBasisNotes, DateBasisSelect } from "@/components/commerce/date-basis-select";
+import type { OrderDateBasis } from "@/lib/commerce/order-date-basis";
 import { useCallback, useEffect, useState } from "react";
 import { CreatorPageShell } from "@/components/creator/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
@@ -18,7 +20,6 @@ import {
   type ProviderBreakdownRow,
 } from "@/lib/commerce/conversion-analytics-client";
 import {
-  CONVERSION_DATE_BASIS_NOTE,
   CONVERSION_SECTION_TITLE,
   ORDER_VALUE_LABELS,
   TREND_COLUMN_LABELS,
@@ -131,6 +132,7 @@ export default function CreatorAnalyticsPage() {
   // state: a failure here must never blank the experience or click panels
   // above, and vice versa.
   const [conversion, setConversion] = useState<CreatorConversionAnalytics | null>(null);
+  const [dateBasis, setDateBasis] = useState<OrderDateBasis>("provider");
   const [conversionError, setConversionError] = useState<string | null>(null);
   const [conversionLoading, setConversionLoading] = useState(true);
 
@@ -229,6 +231,7 @@ export default function CreatorAnalyticsPage() {
       if (filters.experienceId) query.set("experienceId", filters.experienceId);
       if (filters.dateFrom) query.set("dateFrom", filters.dateFrom);
       if (filters.dateTo) query.set("dateTo", filters.dateTo);
+      query.set("dateBasis", dateBasis);
 
       const result = await fetchJson<unknown>(
         `/api/creator/analytics/conversions?${query.toString()}`,
@@ -252,7 +255,7 @@ export default function CreatorAnalyticsPage() {
     } finally {
       if (request.isCurrent()) setConversionLoading(false);
     }
-  }, [filters, beginConversion]);
+  }, [filters, dateBasis, beginConversion]);
 
   useEffect(() => {
     void loadConversion();
@@ -407,6 +410,8 @@ export default function CreatorAnalyticsPage() {
         error={conversionError}
         isLoading={conversionLoading}
         onRetry={() => void loadConversion()}
+        dateBasis={dateBasis}
+        onDateBasisChange={setDateBasis}
       />
     </CreatorPageShell>
   );
@@ -684,16 +689,21 @@ function ConversionAnalyticsSection({
   error,
   isLoading,
   onRetry,
+  dateBasis,
+  onDateBasisChange,
 }: {
   data: CreatorConversionAnalytics | null;
   error: string | null;
   isLoading: boolean;
   onRetry: () => void;
+  dateBasis: OrderDateBasis;
+  onDateBasisChange: (next: OrderDateBasis) => void;
 }) {
   if (error) {
     return (
       <PageCard>
         <h2 className="text-xl font-semibold">{CONVERSION_SECTION_TITLE}</h2>
+        <DateBasisSelect value={dateBasis} onChange={onDateBasisChange} />
         <div role="alert" className="mt-3 flex flex-wrap items-center gap-3">
           <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
           <button
@@ -712,6 +722,7 @@ function ConversionAnalyticsSection({
     return (
       <PageCard>
         <h2 className="text-xl font-semibold">{CONVERSION_SECTION_TITLE}</h2>
+        <DateBasisSelect value={dateBasis} onChange={onDateBasisChange} />
         <p className="mt-3 text-sm text-copy-65">Loading conversion analytics...</p>
       </PageCard>
     );
@@ -731,7 +742,8 @@ function ConversionAnalyticsSection({
             ? " Filtered to the selected experience."
             : " Across all your experiences."}
         </p>
-        <p className="mt-2 text-xs text-copy-45">{CONVERSION_DATE_BASIS_NOTE}</p>
+        <DateBasisSelect value={dateBasis} onChange={onDateBasisChange} />
+        <DateBasisNotes basis={data.dateBasis} fallbackOrderCount={data.fallbackOrderCount} />
       </PageCard>
 
       {noOrders ? (

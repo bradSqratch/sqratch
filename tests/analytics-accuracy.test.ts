@@ -103,11 +103,14 @@ test("every conversion panel states its period, timezone and date basis, and the
   ]) {
     const page = readFileSync(path, "utf8");
     assert.match(page, /\(UTC\), counted only when SQRATCH has exact/);
-    assert.match(page, /\{CONVERSION_DATE_BASIS_NOTE\}/);
+    assert.match(page, /<DateBasisNotes basis=\{data\.dateBasis\} fallbackOrderCount=\{data\.fallbackOrderCount\} \/>/);
+    assert.match(page, /<DateBasisSelect/);
     assert.match(page, /<FinancialStatusBreakdown/);
   }
   const labels = readFileSync("src/lib/commerce/analytics-labels.ts", "utf8");
   assert.match(labels, /date SQRATCH received them \(UTC\)/);
+  assert.match(labels, /order date the store recorded \(UTC\)/);
+  assert.match(labels, /order cohort/);
   assert.match(labels, /does not record the amount actually paid/);
   assert.match(labels, /does not show that SQRATCH caused the sale/);
 });
