@@ -3,10 +3,10 @@ import prisma from "@/lib/prisma";
 import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import bcrypt from "bcryptjs";
-import { sendVerificationEmail } from "@/helpers/mailer";
 import { issueEmailVerificationChallenge } from "@/lib/auth/email-verification";
 import { PASSWORD_POLICY_MESSAGE, validatePassword } from "@/lib/password-policy";
 import { normalizeUserRole } from "@/lib/admin-auth";
+import { isUniqueViolationOn } from "@/lib/prisma-errors";
 
 export async function GET(request: Request) {
   const session = await getServerSession(authOptions);
@@ -43,6 +43,7 @@ export async function GET(request: Request) {
       role: true,
       createdAt: true,
       isActive: true,
+      isEmailVerified: true,
       creatorProfile: {
         select: {
           id: true,
@@ -77,6 +78,7 @@ export async function GET(request: Request) {
       role: user.role,
       createdAt: user.createdAt,
       isActive: user.isActive,
+      isEmailVerified: user.isEmailVerified,
       hasCreatorProfile: Boolean(user.creatorProfile),
       brands: user.brandMembers.map((member) => ({
         id: member.brand.id,
@@ -88,9 +90,27 @@ export async function GET(request: Request) {
   });
 }
 
+export type CreateUserDeps = {
+  getSession: () => Promise<{ user?: { role?: string | null } } | null>;
+  db: typeof prisma;
+  sendVerificationEmail: (email: string, code: string) => Promise<void>;
+};
+
 export async function POST(request: Request) {
-  const session = await getServerSession(authOptions);
-  if (!session || session.user.role !== "ADMIN") {
+  return createUserImpl(request, {
+    getSession: () => getServerSession(authOptions),
+    db: prisma,
+    // Loaded lazily: the mail transport is built on import and may be unconfigured.
+    sendVerificationEmail: async (email, code) => {
+      const { sendVerificationEmail } = await import("@/helpers/mailer");
+      await sendVerificationEmail(email, code);
+    },
+  });
+}
+
+export async function createUserImpl(request: Request, deps: CreateUserDeps) {
+  const session = await deps.getSession();
+  if (!session || session.user?.role !== "ADMIN") {
     return NextResponse.json({ error: "Admins only" }, { status: 403 });
   }
 
@@ -123,7 +143,7 @@ export async function POST(request: Request) {
     const hashed = await bcrypt.hash(password, 12);
 
     // Prisma 7 safe transaction: use the "array of queries" form
-    const newUser = await prisma.$transaction(async (tx) => {
+    const newUser = await deps.db.$transaction(async (tx) => {
       // 1) Create user
       const created = await tx.user.create({
         data: {
@@ -169,17 +189,31 @@ export async function POST(request: Request) {
       return { user: created, code: challenge.code };
     });
 
-    // 4) Send verification email AFTER transaction commits
-    await sendVerificationEmail(newUser.user.email, newUser.code);
+    // The account and its challenge are committed. A mail failure must not turn
+    // that into a failed creation (a retry would then answer 409); report the
+    // delivery state so the administrator can resend.
+    let emailSent = true;
+    try {
+      await deps.sendVerificationEmail(newUser.user.email, newUser.code);
+    } catch {
+      emailSent = false;
+      console.warn("[admin/create-user] Verification email delivery failed", {
+        outcome: "delivery_failed",
+      });
+    }
 
     return NextResponse.json(
-      { data: newUser.user, message: "User created; verification email sent." },
+      {
+        data: { ...newUser.user, emailSent },
+        emailSent,
+        message: emailSent
+          ? "User created; verification email sent."
+          : "User created. The verification email could not be sent; resend it from the user list.",
+      },
       { status: 201 },
     );
   } catch (error: unknown) {
-    const err = error as { code?: string; meta?: { target?: string[] } };
-
-    if (err.code === "P2002" && err.meta?.target?.includes("email")) {
+    if (isUniqueViolationOn(error, "email")) {
       return NextResponse.json(
         { error: "Email already in use" },
         { status: 409 },

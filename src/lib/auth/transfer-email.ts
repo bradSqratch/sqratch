@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import { normalizeEmail } from "@/lib/email-validation";
+import { isUniqueViolationOn } from "@/lib/prisma-errors";
 import {
   issueEmailVerificationChallenge,
   TRANSFER_VERIFICATION_TTL_MS,
@@ -97,10 +98,7 @@ export async function transferUserEmail(
       };
     });
   } catch (error) {
-    if (
-      (error as { code?: string } | null)?.code === "P2002" &&
-      (error as { meta?: { target?: string[] } }).meta?.target?.includes("email")
-    ) {
+    if (isUniqueViolationOn(error, "email")) {
       throw new TransferEmailError("EMAIL_IN_USE");
     }
     throw error;

@@ -45,6 +45,7 @@ type UserRecord = {
   role: UserRole;
   createdAt: string;
   isActive: boolean;
+  isEmailVerified?: boolean;
   hasCreatorProfile: boolean;
   brands: Array<{
     id: string;
@@ -144,6 +145,7 @@ export default function AdminUserManagementPage() {
   const [transferConfirmOpen, setTransferConfirmOpen] = useState(false);
   const [transferring, setTransferring] = useState(false);
   const [transferError, setTransferError] = useState<string | null>(null);
+  const [resendingId, setResendingId] = useState<string | null>(null);
   const editingUser = editForm
     ? users.find((user) => user.id === editForm.id) ?? null
     : null;
@@ -189,13 +191,27 @@ export default function AdminUserManagementPage() {
     setError(null);
 
     try {
-      await fetchJson("/api/admin/user-management/get-or-create-users", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
+      const created = await fetchJson<{ email: string; emailSent?: boolean }>(
+        "/api/admin/user-management/get-or-create-users",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(createForm),
         },
-        body: JSON.stringify(createForm),
-      });
+      );
+      setNotice(
+        created.emailSent === false
+          ? {
+              type: "warning",
+              text: `Account created for ${created.email}. The verification email could not be sent. Use Resend email on their row to try again.`,
+            }
+          : {
+              type: "success",
+              text: `Account created for ${created.email}. A verification email was sent.`,
+            },
+      );
       setCreateOpen(false);
       setCreateForm(emptyCreateForm);
       await loadUsers(query);
@@ -282,6 +298,32 @@ export default function AdminUserManagementPage() {
       );
     } finally {
       setTransferring(false);
+    }
+  }
+
+  async function handleResendVerification(user: UserRecord) {
+    setNotice(null);
+    setResendingId(user.id);
+    try {
+      const result = await fetchJson<{ ok: boolean; emailSent: boolean }>(
+        `/api/admin/user-management/resend-verification/${user.id}`,
+        { method: "POST" },
+      );
+      setNotice(
+        result.emailSent
+          ? { type: "success", text: `Verification email sent to ${user.email}.` }
+          : {
+              type: "warning",
+              text: `The verification email to ${user.email} could not be sent. Try again in a moment.`,
+            },
+      );
+    } catch (resendError) {
+      setNotice({
+        type: "warning",
+        text: getErrorMessage(resendError, "Failed to resend the verification email."),
+      });
+    } finally {
+      setResendingId(null);
     }
   }
 
@@ -444,9 +486,25 @@ export default function AdminUserManagementPage() {
                       >
                         {user.isActive ? "Active" : "Disabled"}
                       </span>
+                      {user.isEmailVerified === false ? (
+                        <span className="ml-2 rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1 text-xs text-amber-700 dark:text-amber-200">
+                          Unverified
+                        </span>
+                      ) : null}
                     </TableCell>
                     <TableCell className="py-4">
                       <div className="flex gap-3">
+                        {user.isEmailVerified === false ? (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="h-8 rounded-xl border-border dark:border-[#35507D] bg-transparent px-5 text-ink hover:bg-white/[0.06] hover:text-ink"
+                            disabled={resendingId === user.id}
+                            onClick={() => void handleResendVerification(user)}
+                          >
+                            {resendingId === user.id ? "Sending..." : "Resend email"}
+                          </Button>
+                        ) : null}
                         <Button
                           type="button"
                           variant="outline"
