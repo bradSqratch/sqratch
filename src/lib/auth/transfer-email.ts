@@ -81,6 +81,9 @@ export async function transferUserEmail(
         },
       });
 
+      // A reset link mailed to the old address must not outlive the transfer.
+      await tx.passwordResetToken.deleteMany({ where: { userId: user.id } });
+
       const challenge = await issueEmailVerificationChallenge(
         tx,
         user.id,

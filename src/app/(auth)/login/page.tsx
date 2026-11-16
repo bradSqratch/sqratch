@@ -352,6 +352,11 @@ function LoginPageInner() {
                   focus-visible:ring-0 focus-visible:border-edge/25
                 "
                       />
+                      <p className="mt-2 pl-1 text-sm">
+                        <Link href="/forgot-password" className="text-copy-60 underline hover:text-ink">
+                          Forgot your password?
+                        </Link>
+                      </p>
                     </div>
                   </div>
                 </div>

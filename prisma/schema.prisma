@@ -31,6 +31,7 @@ model User {
   creatorRequests           CreatorRequest[]           @relation("CreatorRequestOwner")
   emailQueue                EmailQueue[]
   emailVerificationTokens   EmailVerificationToken[]
+  passwordResetTokens       PasswordResetToken[]
   lessonProgress            LessonProgress[]
   pointTransactions         PointTransaction[]
   postComments              PostComment[]
@@ -1464,6 +1465,22 @@ model EmailVerificationToken {
   @@index([email])
   @@index([userId, consumedAt, expires])
   @@index([email, consumedAt, expires])
+}
+
+// Single-use password recovery tokens. Only a keyed hash of the token is stored;
+// the plaintext exists only in the emailed link. Issuing a new token removes the
+// user's earlier ones, and consuming one is a conditional update (consumedAt IS
+// NULL and expires > now) in the same transaction as the password change.
+model PasswordResetToken {
+  id         String    @id @default(cuid())
+  userId     String
+  tokenHash  String    @unique
+  expires    DateTime
+  consumedAt DateTime?
+  createdAt  DateTime  @default(now())
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, consumedAt, expires])
 }
 
 model TokenStore {
