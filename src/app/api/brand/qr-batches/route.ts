@@ -6,7 +6,7 @@ import { getBrandContextFailure } from "@/lib/brand-auth";
 
 import prisma from "@/lib/prisma";
 import { unusedQrWhere } from "@/lib/qr-lifecycle";
-import { archivedBatchWhere, archivedCodeWhere, parseArchivedFilter } from "@/lib/qr-archive";
+import { inventoryBatchWhere, inventoryCodeWhere, parseInventoryQuery } from "@/lib/qr-inventory";
 import QRCode from "qrcode";
 import { v2 as cloudinary } from "cloudinary";
 import { nanoid } from "nanoid";
@@ -44,35 +44,22 @@ export async function listQrBatchesImpl(request: NextRequest, deps: AuthResolver
     }
     const brandId = brand.membership.brand.id;
 
-    const PAGE_SIZE = 100;
-    const MAX_PAGE_SIZE = 200;
-    const page = Math.max(1, parseInt(request.nextUrl.searchParams.get("page") ?? "1", 10) || 1);
-    const take = Math.min(
-      Math.max(1, parseInt(request.nextUrl.searchParams.get("pageSize") ?? String(PAGE_SIZE), 10) || PAGE_SIZE),
-      MAX_PAGE_SIZE,
-    );
-    const skip = (page - 1) * take;
-    const archived = parseArchivedFilter(request.nextUrl.searchParams.get("archived"));
-    if (!archived) {
-      return NextResponse.json(
-        { error: "archived must be one of: exclude, include, only." },
-        { status: 400 },
-      );
-    }
+    const parsed = parseInventoryQuery(request.nextUrl.searchParams);
+    if (!parsed.ok) return NextResponse.json({ error: parsed.error }, { status: 400 });
+    const query = parsed.query;
+    const { archived, page, pageSize: take, batchPage, batchPageSize } = query;
+    const batchWhere = inventoryBatchWhere(brandId, query);
+    const codeWhere = inventoryCodeWhere(brandId, query);
 
-    const [batches, campaigns, qrCodes, qrCodeTotal] = await Promise.all([
+    const [batches, batchTotal, qrCodes, qrCodeTotal] = await Promise.all([
       prisma.qRCodeBatch.findMany({
-        where: {
-          campaign: {
-            brandId,
-          },
-          ...archivedBatchWhere(archived),
-        },
+        where: batchWhere,
         orderBy: [
           { createdAt: "desc" },
           { id: "asc" },
         ],
-        take: 500,
+        take: batchPageSize,
+        skip: (batchPage - 1) * batchPageSize,
         select: {
           id: true,
           name: true,
@@ -95,34 +82,15 @@ export async function listQrBatchesImpl(request: NextRequest, deps: AuthResolver
           },
         },
       }),
-      prisma.campaign.findMany({
-        where: {
-          brandId,
-        },
-        orderBy: [
-          { name: "asc" },
-          { id: "asc" },
-        ],
-        take: 500,
-        select: {
-          id: true,
-          name: true,
-          slug: true,
-        },
-      }),
+      prisma.qRCodeBatch.count({ where: batchWhere }),
       prisma.qRCode.findMany({
-        where: {
-          campaign: {
-            brandId,
-          },
-          ...archivedCodeWhere(archived),
-        },
+        where: codeWhere,
         orderBy: [
           { createdAt: "desc" },
           { id: "asc" },
         ],
         take,
-        skip,
+        skip: (page - 1) * take,
         select: {
           id: true,
           qrCodeData: true,
@@ -153,7 +121,7 @@ export async function listQrBatchesImpl(request: NextRequest, deps: AuthResolver
           },
         },
       }),
-      prisma.qRCode.count({ where: { campaign: { brandId }, ...archivedCodeWhere(archived) } }),
+      prisma.qRCode.count({ where: codeWhere }),
     ]);
 
     return NextResponse.json({
@@ -167,7 +135,6 @@ export async function listQrBatchesImpl(request: NextRequest, deps: AuthResolver
           canDelete: !batch.csvExportedAt && !batch.printedAt && batch.qrCodes.length === 0,
           campaign: batch.campaign,
         })),
-        campaigns,
         qrCodes: qrCodes.map((qrCode) => ({
           id: qrCode.id,
           code: qrCode.qrCodeData,
@@ -189,6 +156,12 @@ export async function listQrBatchesImpl(request: NextRequest, deps: AuthResolver
           pageSize: take,
           total: qrCodeTotal,
           totalPages: Math.ceil(qrCodeTotal / take),
+        },
+        batchPagination: {
+          page: batchPage,
+          pageSize: batchPageSize,
+          total: batchTotal,
+          totalPages: Math.ceil(batchTotal / batchPageSize),
         },
       },
     });

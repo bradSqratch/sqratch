@@ -351,7 +351,7 @@ describe("static source assertions", () => {
   test("explains current product-status and curation-control semantics", () => {
     assert.match(clientSource, /changing a product between Active and Draft/i);
     assert.match(clientSource, /Shows this product in the public SQRATCH campaign storefront/i);
-    assert.match(clientSource, /eligible for future campaign assignment/i);
+    assert.match(clientSource, /eligible for campaigns/i);
   });
 
   // -------------------------------------------------------------------------

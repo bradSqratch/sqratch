@@ -21,6 +21,8 @@ import {
 function validBrandFixture(): BrandConversionAnalytics {
   return {
     range: { start: "2026-08-01T00:00:00.000Z", end: "2026-08-26T00:00:00.000Z" },
+    dateBasis: "provider",
+    fallbackOrderCount: 0,
     totalIngestedOrders: 10,
     attributedOrders: 6,
     currentlyNetPositivePaidOrders: 4,

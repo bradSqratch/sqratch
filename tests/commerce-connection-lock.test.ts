@@ -306,6 +306,7 @@ test(
         async getConnection() {
           throw new Error("not used in this test");
         },
+        previewProducts: async () => { throw new Error("previewProducts is not used in this test"); },
         async syncProducts(connectionId): Promise<ProductSyncResult> {
           fetchCallCount += 1;
           signalFetchStarted();
@@ -378,6 +379,7 @@ test(
         async getConnection() {
           throw new Error("not used in this test");
         },
+        previewProducts: async () => { throw new Error("previewProducts is not used in this test"); },
         async syncProducts(connectionId): Promise<ProductSyncResult> {
           return {
             connectionId,
@@ -622,6 +624,7 @@ async function assertOldRunningRowStillBlocksClaim(
       async getConnection() {
         throw new Error("not used in this test");
       },
+      previewProducts: async () => { throw new Error("previewProducts is not used in this test"); },
       async syncProducts(connectionId): Promise<ProductSyncResult> {
         fetchCallCount += 1;
         return {
@@ -724,6 +727,7 @@ test(
         async getConnection() {
           throw new Error("not used in this test");
         },
+        previewProducts: async () => { throw new Error("previewProducts is not used in this test"); },
         async syncProducts(connectionId): Promise<ProductSyncResult> {
           // Commit a REAL config change mid-run: after the baseline
           // fingerprint was captured, before any product write happens.

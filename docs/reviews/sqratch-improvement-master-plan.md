@@ -6,19 +6,24 @@ This is the remaining implementation backlog. Original review evidence is histor
 
 P00–P08 implement disposable database tests, QR history safeguards, publication enforcement, atomic approvals, active-administrator protection, safer media persistence, brand-context preconditions and community display-name privacy. Manual acceptance covered the principal QR conflicts, private/public access, approval conflict, administrator self-demotion, cross-tab brand conflict and display-name privacy. Some browser and provider checks remain below. Draft experiences must return 404 on public viewer routes for everyone; authenticated creator-management screens retain editing and publishing access. Owner activity must not earn points or count as learner activity.
 
-P09, P10, P11, P22, P25 and P36 are implemented: one shared anonymous-transfer service (with outstanding-award settlement, raise-only progress writes and no new table), truthful sign-in and verification transfer status with a Retry notice, QR batch archive (`archivedAt`, migration `20261114120000_add_qr_batch_archive`), independent product/reward states with Retry, explicit comment refresh and a labelled seek control, stable creator selectors with stale-response guards and an inline-error post editor, and honest analytics names (order value, not revenue) with a UTC 30-day default for creator engagement. Their specifications were removed from this backlog; the contracts now live in `docs/points-ledger.md`, `docs/prisma-migrations.md` and `docs/agent-context.md`.
+P09, P10, P11, P22, P25 and P36 shipped earlier: one shared anonymous-transfer service, truthful transfer status, QR batch archive (migration `20261114120000_add_qr_batch_archive`, deployed to production), independent shop product and reward states, stable creator selectors, and honest analytics names. P14, P20, P23, P26, P28 and P38 are implemented on `claude/account-ux-commerce-analytics` and await review: admin account creation survives a mail failure and offers Resend; password recovery (30-minute single-use token, `PasswordResetToken` migration) signs out every session; the customer home offers Continue, unlocked experiences and points; QR inventory searches and pages on the server with searchable batch and campaign pickers; the Store page lists every connection with completed-sync versus attempt facts, and product previews no longer stamp `lastProductSyncAt`; conversion reports choose between the store's order date (default) and SQRATCH's receipt date and count fallback orders. Their specifications were removed from this backlog; the contracts live in `docs/points-ledger.md`, `docs/prisma-migrations.md` and `docs/agent-context.md`.
 
 ## 2. Outstanding issues
 
-- **P1 — Migration rollout, P11:** `20261114120000_add_qr_batch_archive` is authored and verified only on a disposable database. The owner applies it to production before deploying this release, after the preflight in `docs/prisma-migrations.md`; it was never run against a connected database.
-- **P2 — P36 follow-up (A-08):** the deprecated analytics field names (`grossAttributedRevenueByCurrency`, `refundedRevenueByCurrency`, `netAttributedRevenueByCurrency`, and the three trend `…RevenueByCurrency` fields) and the client parser's fallback for them are removed one release after this release is live.
+- **P1 — Migration rollout, P20:** `20261116120000_add_password_reset_token` (one additive table) is verified only on a disposable database. The owner applies it to production before deploying the release, after the preflight in `docs/prisma-migrations.md`. `EMAIL_VERIFICATION_CODE_PEPPER` must be set in production (reset tokens reuse it); the reset mail uses the existing mail transport.
+- **P2 — P36 follow-up (A-08), still open:** the deprecated analytics field names (`grossAttributedRevenueByCurrency`, `refundedRevenueByCurrency`, `netAttributedRevenueByCurrency` and the trend `…RevenueByCurrency` fields) are retained. The Brand and Creator analytics pages parse them only as a fallback and no other consumer was found, but P36 has only just gone live and old tabs may still read them. Remove them and the parser fallback in the release after this one.
+- **P2 — Unique-violation shape:** with the PostgreSQL driver adapter a P2002 carries the violated constraint in `meta.driverAdapterError`, not `meta.target`. Admin create, update and email transfer now use `isUniqueViolationOn` (`src/lib/prisma-errors.ts`); before this, a duplicate email on admin create returned 500 instead of 409. `src/app/api/rewards/shopify/redeem/route.ts` still reads `meta.target` to decide whether a code collision is retryable and likely never retries; fix it separately with a test.
+- **P2 — Password recovery limits:** per-IP limits read the first `x-forwarded-for` entry and are per instance (P44). An unverified account can reset its password but still cannot sign in until it verifies. Middleware page gating accepts a pre-reset JWT until some request runs the session callback; data behind `getServerSession` is protected. Expired and consumed reset rows are removed only on the next request or reset for that user.
+- **P3 — Minor review notes (not fixed):** the Order Explorer link under the conversion report does not carry the date basis (it orders by receipt date); the QR `NEW` status filter also includes `INVALID` codes (matching the list's NEW label); a crashed sync run reads "In progress" without an age; the QR pickers use a simple dialog pattern without arrow-key navigation; a resend to a transferred account uses the default 10-minute code lifetime; a reset gives an account without a password one.
+- **P3 — Customer home:** the experience list is capped at 12 with a "Showing 12 of N" line; there is no "view all" page. Add one only if customers hold more.
+- **P3 — Store page:** Commerce7 reconnect, settings and diagnostics render only for the brand's active connection; a second Commerce7 connection that needs reconnecting shows guidance but no control. Product previews use `previewProducts`; the legacy `syncProducts` (which still stamps the connection) has no remaining caller outside the persisted-sync fallback path and can be removed with `lastProductSyncAt` writers in a later cleanup.
+- **P3 — Schema discrepancies (read-only findings, nothing changed):** see `docs/prisma-migrations.md`, "Known schema discrepancies". The `Campaign.brandId` foreign key and one `CampaignCommerceProduct` index name differ from the Prisma schema; both are cosmetic and any correction needs a separate owner-reviewed migration.
 - **P2 — D-02 accepted default:** sign-in now also pays completion rewards an account has earned but not been paid (see `docs/points-ledger.md`); confirm the retroactive-payment consequence is acceptable.
-- **P2 — Residual acceptance gaps for P09–P36:** exercised in the in-app browser against a disposable database: blocked-transfer sign-in, Retry, normal sign-in, post-failure editor, selector and stale-response behavior, archive/filter/scan/unarchive, shop failure states and recovery, comment refresh, seek keyboard control, analytics labels against synthetic orders. Also exercised against a disposable database with a synthetic code (no mail sent): wrong code (nothing consumed or transferred), correct code (verified, transfer and rewards applied once, redirect to `/login` with `next` kept) and the following sign-in (no duplicate awards). Not exercised: the verification email delivery itself, claiming a reward from the shop UI with real provider offers, a screen-reader pass of the seek control, and live Shopify/Commerce7 behavior.
+- **P2 — Residual acceptance gaps for P09–P36:** exercised in the in-app browser against a disposable database: blocked-transfer sign-in, Retry, normal sign-in, post-failure editor, selector and stale-response behavior, archive/filter/scan/unarchive, shop failure states and recovery, comment refresh, seek keyboard control, analytics labels against synthetic orders. Also exercised against a disposable database with a synthetic code (no mail sent): wrong code (nothing consumed or transferred), correct code (verified, transfer and rewards applied once, redirect to `/login` with `next` kept) and the following sign-in (no duplicate awards). Not exercised: delivery through a real mail provider (a local SMTP sink captured the mail), claiming a reward from the shop UI with real provider offers, screen-reader passes (seek control, QR pickers, recovery pages), live Shopify/Commerce7 behavior including a real product preview, and the batch Next/Previous controls and Edit-dialog campaign picker in a browser (covered by tests).
 - **P1 — P13 / F-03b, C-04:** Media reference checks are not atomic with attachment; staged asset claiming is needed. Unknown save outcomes can leave orphans. Real isolated object-storage integration, response-loss and failure-path browser verification remain outstanding (X-12); do not claim immediate signed-URL revocation.
 - **P1 — P07 / F-08:** Expected-brand headers remain optional for old tabs. After the compatibility release require them on all applicable brand mutations, retaining membership authorization and clear 409 conflicts. Browser-check rewards, products, uploads, global ADMIN and VIEWER cases.
 - **P1 — P01/P02:** Browser-check deletion of untouched batches, individual deletion, all history blockers, stale eligibility conflicts, image failure and legacy printed redirects. Never destroy historical QR evidence.
 - **P1 — P03/P04/P05/P08:** Complete remaining browser acceptance: non-owner and owner draft management, private/inactive content, no owner analytics or awards; concurrent decision UI; admin history deletion and simultaneous actions; nameless comment/question/answer displays. Existing PostgreSQL and mocked tests do not replace browser or external-service checks.
-- **P2 — X-10:** Operator must verify migration/index deployment status before P38; local migration folders do not establish live state.
 - **P2 — X-16:** Design global security headers with Shopify/Commerce7 embedding exemptions and report-only CSP; separate work, not part of the numbered phases.
 - **P1 — D-16 / X-11:** Decide reward funding and budget; creator self-award prevention does not stop collusion with another account.
 - **P2 — Past ledger drift:** Owner should run the read-only drift query in `docs/points-ledger.md`; any repair requires a separate data decision.
@@ -33,7 +38,6 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 
 | ID | Outstanding finding | Priority | Action | Phase |
 |---|---|---|---|---|
-| C-01 | QR list limits are 100 codes, 500 batch and campaign options | P2 | Paginate and search codes; load options independently | P26 |
 | C-03 | Archive and revocation differ | P1 | Add redemption stop as separate state from archive (archive shipped in P11) | P12 |
 | C-04 | A reference check alone is not race-safe | P1 | Stop unsafe cleanup first, then claim-based cleanup | P06, P13 |
 | C-05 | Qualification must be a staged transition | P1 | Additive policy per lesson, default legacy | P16–P19 |
@@ -49,25 +53,17 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 | F-05a | Transition rules: preserve config, ledger, legacy labelling, no re-earning | P1 | Keep ledger keys; add policy enum | P16–P19 |
 | F-07a | Explain blocked actions; record administrative changes | P2 | Error copy in P05; audit table in P15 | P05, P15 |
 | F-08a | Brand scope in caches and request identities; clear on switch | P3 | Guard covers the risk today; keep as a rule for future caching | P07 |
-| U-01 | Customer home shows counts without destinations | P2 | Return resume targets and link them | P23 |
-| U-02 | No forgotten-password recovery | P1 | Token-based recovery with session invalidation | P20 |
 | U-04 | Pending approval is a static screen | P3 | Refreshable status | P24 |
 | U-12 | Q&A count then create allows overrun | P2 | Atomic capacity check | P21 |
-| U-13 | QR inventory shows first 100 codes | P2 | See C-01 | P26 |
 | U-14 | 50-result discovery can omit attached experiences | P2 | Separate attached list from discovery | P27 |
-| U-15 | Store overview shows one preferred connection | P2 | Show all authorized connections | P28 |
 | U-16 | Connection trouble switches or hides the rewards workspace | P2 | Preserve provider workspace and history | P29 |
 | U-17 | Limited product subsets drive selection and diagnostics | P2 | Paginated canonical picker; resolve offer references by id | P29 |
 | U-18 | Newest-100 caps hide older claims | P2 | Pagination and status filters for Commerce7; bound the customer list | P29 |
-| U-19 | Preview fetch updates the canonical sync timestamp | P2 | Stop preview from writing the canonical field | P28 |
 | U-20 | Provider panels have inconsistent surrounding controls | P3 | Move the selector inside the shell | P29 |
-| U-21 | Working functionality described as future work | P3 | Link to the working task | P28 |
 | U-22 | Admin brands shows Shopify only | P2 | Canonical connections with status | P30 |
-| U-23 | Mail failure reports failure after the account is saved | P2 | Return created account plus delivery state; resend | P14 |
 | U-24 | Only three memberships shown, no total | P3 | Count and full detail view | P30 |
 | U-25 | Decision reason missing from the UI | P2 | Reason input, required on reject | P15 |
 | U-26 | Catalog truncation is not a redemption bypass | — | Confirm in P29 by reading the claim route before changing pickers | P29 |
-| N-01 | Customer organizing principle: resume and benefits | P2 | First step is U-01 | P23 |
 | N-02 | Creator: manage one experience | P3 | Experience context header | P34 |
 | N-03 | Brand: operate one campaign | P3 | Campaign workspace nav | P33 |
 | N-04 | Superadmin: actionable queue | P3 | State and history via P15, P30, P40 | P15, P30, P40 |
@@ -80,29 +76,27 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 | S-02 | Preserve unsaved work after recoverable errors | P2 | Covered per surface | P31 |
 | S-03 | Warn before brand switch or navigation that discards edits | P3 | Dirty-form guard | P31 |
 | S-04 | Consistent destructive confirmation | P3 | Shared AlertDialog with stated consequences | P31 |
-| S-05 | Show partial success explicitly | P3 | Per surface | P14, P31 |
+| S-05 | Show partial success explicitly | P3 | Per surface (shown for admin account creation in P14) | P31 |
 | S-06 | Panel-level retries | P3 | Per surface | P31 |
 | S-07 | Consolidate Contact and Support | P3 | Merge content, keep both URLs | P43 |
 | S-08 | Consolidate overlapping admin routes after parity | P3 | Consolidate with redirects | P43 |
 | A-02 | Completion counts use mutable timestamps | P2 | Add an immutable `completedAt`; the mutable-timestamp label shipped in P36 | P37 |
-| A-03 | Conversion reporting uses ingestion date | P2 | Provider-order-date basis; the ingestion-date label shipped in P36 | P38 |
 | A-06 | Drilldown loses date and filter context | P3 | Carry supported scope | P39 |
 | A-07 | All matching orders are materialized | P3 | Measure first | P42 |
 | A-08 | Do not silently change a field's financial meaning | — | Remove the deprecated `gross*`/`net*` analytics field names one release after P36 shipped | P36 follow-up |
 | A-09 | Every report states period, timezone, basis, scope, statuses, currency, freshness | P3 | Shared response metadata | P39 |
-| A-10 | Provider order date with visible fallback and count | P2 | Basis parameter and fallback count | P38 |
-| A-11 | Separate order cohort from payment and refund activity | P3 | Cohort in P38; activity reporting deferred pending provider evidence | P38, H |
+| A-11 | Payment and refund activity by date | P3 | Order-cohort reporting shipped in P38; activity-by-period reporting stays deferred until provider payment and refund timestamps are stored | H |
 | A-13 | Entry, product-authorizing and managed campaign are distinct | P3 | Section-specific scope labels | P39 |
 | A-14 | Shared filter controls only where semantics match | P3 | Scope labels per panel | P39 |
 | A-15 | Product breakdown must state orders-containing versus allocated value | P3 | Read the label in P39; state "orders containing" | P39 |
-| A-16 | Place reporting beside decisions (ten surfaces) | P3 | Delivered incrementally | P23, P33, P34, P40 |
+| A-16 | Place reporting beside decisions (ten surfaces) | P3 | Delivered incrementally | P33, P34, P40 |
 | A-17 | Funnels only where evidence supports them | P3 | Stage counts only | P41 |
 | A-18 | Attribution is not incrementality or commission | — | Acceptance criterion | P39, P41 |
 | A-19 | Minimum reporting response contract | P3 | Shared metadata type | P39 |
 | A-20 | Immutable business events; no manufactured history | P2 | Add `completedAt`, set once, never backfilled | P37 |
 | ST-B | Stage B: shared correctness contracts | P1–P2 | Kept; qualification split into four phases | P12–P19 |
-| ST-C | Stage C: daily workflow friction | P2–P3 | Kept | P20, P21, P23, P24, P26–P35 |
-| ST-D | Stage D: correct analytics | P2–P3 | Kept | P37–P41 |
+| ST-C | Stage C: daily workflow friction | P2–P3 | Kept | P21, P24, P27, P29–P35 |
+| ST-D | Stage D: correct analytics | P2–P3 | Kept (P38 shipped) | P37, P39–P41 |
 | ST-E | Stage E: consolidate and optimize | P3 | Conditional phases | P42–P45 |
 | I-04 | Versioned qualification and checkpoint records | P1 | Additive models | P16 |
 | I-05 | Separate archival and redemption-availability semantics | P1 | Additive redemption-stop columns (archive columns shipped in P11) | P12 |
@@ -118,14 +112,12 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 | T-02 | QR concurrency: consistent winner | — | Phase tests | P12 |
 | T-05 | Participation: client completion and seeking do not qualify | — | Phase tests | P16–P18 |
 | T-06 | Media: lost response keeps committed media; cleanup cannot race | — | Phase tests | P06, P13 |
-| T-10 | List completeness beyond 100, 500, 50, 100 | — | Phase tests | P26, P27, P29 |
-| T-11 | Provider failures preserve history and context | — | Phase tests | P28, P29 |
-| T-12 | Analytics truthfulness cases | — | Phase tests | P37–P39 |
+| T-10 | List completeness beyond 50 and 100 (attach list, Commerce7 claims) | — | Phase tests | P27, P29 |
+| T-12 | Analytics truthfulness cases | — | Phase tests | P37, P39 |
 | T-13 | UI recovery | — | Phase tests | P31, P32 |
 | T-14 | Accessibility | — | Manual browser pass | P31 |
 | T-15 | Performance comparison before and after | — | Baseline first | P42 |
 | X-04 | Scan and public campaign ignore `Campaign.isActive` and `Brand.isActive` | P2 | Product decision D-04 before any enforcement | P12 |
-| X-10 | `(brandId, createdAt)` order index is documented as not applied | P2 | Confirm before analytics phases | E |
 | X-11 | Creator reward budgets remain undecided; colluding accounts can earn points | P1 | Preserve the owner-award exclusion and decide funding and limits | D-16 |
 | X-12 | Missing-object behavior of storage signing remains unverified | P2 | Verify per-lesson fallback with isolated storage | P06, P13 |
 | X-14 | Middleware sets `x-pathname` on the response, so layouts cannot read it | P3 | Forward as a request header | P35 |
@@ -196,23 +188,6 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 - **Testing:** L1 for state transitions with an injected storage client. L2: attach versus claim race. L4 is not needed; storage calls are injected.
 - **Regression risks:** upload authorization response shape; lesson update with unchanged video (`src/app/api/creator/lessons/route.ts:507-511` must still skip cleanup); playback signing.
 - **Decision blockers:** none. Proposed sweep age: 24 hours.
-
-### P14 — Account creation independent of email delivery
-
-- **Priority and complexity:** P2, S.
-- **Problem and evidence:** The user and verification challenge commit, then `sendVerificationEmail` runs inside the same `try`. A mail failure returns 500 "Failed to create user", and a retry returns 409 (`src/app/api/admin/user-management/get-or-create-users/route.ts:126-192`). The email-transfer route already handles this correctly (`src/app/api/admin/user-management/transfer-email/[id]/route.ts:88-110`).
-- **Desired outcome:** Creation returns 201 with `emailSent: true | false`. The admin can resend.
-- **Scope:** the create route; new `POST src/app/api/admin/user-management/resend-verification/[id]`; `src/app/(withSidebar)/admin/user-management/page.tsx`.
-- **Implementation requirements:**
-  1. Wrap only the send in its own `try/catch`. Respond `201 { data, emailSent, message }`.
-  2. Resend: admin-only; issues a fresh challenge with the existing helper and sends; refuses for verified users; rate limited per target.
-  3. UI shows "Account created. Verification email could not be sent." with a Resend button.
-- **Dependencies:** none.
-- **Compatibility and migration:** response gains a field; status stays 201 on success.
-- **Acceptance criteria:** with a failing mailer the account exists, the response is 201 with `emailSent: false`, and resend succeeds once the mailer works.
-- **Testing:** L1 with an injected mailer.
-- **Regression risks:** duplicate-email 409 path.
-- **Decision blockers:** none.
 
 ### P15 — Admin audit trail and decision metadata
 
@@ -327,26 +302,6 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 - **Regression risks:** course progress display; P09 settlement must skip lessons with a pending claim.
 - **Decision blockers:** D-06 (who reviews legacy claims; proposed: superadmin).
 
-### P20 — Password recovery
-
-- **Priority and complexity:** P1, M. Account recovery is security-sensitive and currently impossible without an administrator.
-- **Problem and evidence:** No reset route, page or model exists. Only authenticated change-password does (`src/app/api/user/change-password/route.ts:66-85`), which shows the session-invalidation pattern to reuse (`sessionVersion` increment, checked at `src/app/api/auth/[...nextauth]/options.ts:105-128`).
-- **Desired outcome:** A user requests recovery by email and always sees the same response. A valid link sets a new password once, within a short window, and signs out every existing session.
-- **Scope:** migration adding `PasswordResetToken { id, userId, tokenHash, expires, consumedAt?, createdAt }`; new `src/lib/auth/password-reset.ts`; `POST /api/auth/forgot-password`; `POST /api/auth/reset-password`; pages `(auth)/forgot-password` and `(auth)/reset-password`; a link on the login page; a mail template beside the verification mailer; `src/lib/analytics-policy.ts` test.
-- **Implementation requirements:**
-  1. Request: normalize the email, rate limit by IP and by email, and always return the same 200 body and take similar time whether or not the account exists, is inactive, or is unverified. Send mail only for active accounts.
-  2. Token: at least 32 random bytes, stored only as a keyed hash using the same pepper approach as verification codes (`src/lib/auth/email-verification.ts`). Proposed lifetime: 30 minutes. Issuing a new token invalidates earlier unconsumed ones.
-  3. Reset: one transaction that conditionally consumes the token (`updateMany where consumedAt: null and expires > now`, count must be 1), stores the bcrypt hash, and increments `sessionVersion`.
-  4. Apply the existing password rules from change-password. Do not change `isEmailVerified`.
-  5. The reset page must stay outside the third-party analytics allowlist. Add an assertion to `tests/analytics-privacy.test.ts` that the forgot and reset paths resolve to "not tracked". The global `Referrer-Policy: no-referrer` (`next.config.ts:63`) already prevents token leakage by referrer.
-  6. Never log the token or the email address.
-- **Dependencies:** none. P44 strengthens the rate limit across instances; until then the in-memory limiter applies.
-- **Compatibility and migration:** additive table. No existing flow changes.
-- **Acceptance criteria:** identical responses for existing and unknown emails; a token works once; an expired or reused token fails with a generic message; after reset, an old session is rejected on its next request and the new password signs in.
-- **Testing:** L1 with injected mailer and clock. L2: concurrent double submit of the same token changes the password once. L3: full flow with the dev mail preview.
-- **Regression risks:** credential login timing protections; admin email-transfer flow (also increments `sessionVersion`).
-- **Decision blockers:** D-11 (token lifetime). Proposed default: 30 minutes.
-
 ### P21 — Atomic Q&A daily capacity
 
 - **Priority and complexity:** P2, S.
@@ -359,25 +314,6 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 - **Acceptance criteria:** ten concurrent submissions with a limit of 1 create exactly one question; the others receive 429.
 - **Testing:** L2 for the race; L1 for the window calculation.
 - **Regression risks:** `remainingToday` in the GET response must use the same window.
-- **Decision blockers:** none.
-
-### P23 — Actionable customer home
-
-- **Priority and complexity:** P2, M.
-- **Problem and evidence:** The customer dashboard shows three counts and a text-only activity list (`src/app/(withSidebar)/dashboard/page.tsx:516-575`). The API returns labels with no ids or links (`src/app/api/me/dashboard-summary/route.ts:215-385`).
-- **Desired outcome:** The home page offers "Continue" for the most recent unfinished lesson with its saved position, a list of unlocked experiences, and a rewards entry showing balance and the next action.
-- **Scope:** the USER branch of `dashboard-summary`; `src/app/(withSidebar)/dashboard/page.tsx`.
-- **Implementation requirements:**
-  1. Add `resume: { experienceSlug, lessonId, lessonTitle, lastPositionSeconds } | null`, chosen as the most recently updated incomplete progress row on an active lesson in a published experience the user can access.
-  2. Add `unlockedExperiences[]` (slug, title, cover) derived from the user's campaign unlocks and published attached experiences, bounded to a small page with a "view all" link.
-  3. Add `rewards: { spendablePoints, href: "/dashboard/points" }`.
-  4. Activity items gain an optional `href`. Keep existing fields.
-  5. Show the P10 transfer notice here.
-- **Dependencies:** P03 (publication filter in this route).
-- **Compatibility and migration:** additive response fields.
-- **Acceptance criteria:** a user with an unfinished lesson sees a working Continue link to `/x/{slug}/lessons/{lessonId}`; a user with nothing started sees an explicit empty state with a pointer to scan a code; no draft experience appears.
-- **Testing:** L1 for the selection logic. L3: click-through.
-- **Regression risks:** the creator, brand and admin branches of the same route.
 - **Decision blockers:** none.
 
 ### P24 — Pending-approval status
@@ -394,23 +330,6 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 - **Regression risks:** the layout redirect loop conditions.
 - **Decision blockers:** none.
 
-### P26 — QR inventory pagination and search
-
-- **Priority and complexity:** P2, M.
-- **Problem and evidence:** The API paginates codes (default 100, maximum 200) and caps batch and campaign options at 500 (`src/app/api/brand/qr-batches/route.ts:39-46,59,86`). The page requests no page and filters client-side over the first 100 (`src/app/(withSidebar)/dashboard/brand/qr-batches/page.tsx:104,127-143,160`).
-- **Desired outcome:** Every code is reachable by paging, filtering and search performed on the server. Batch and campaign selectors are searchable and complete.
-- **Scope:** `src/app/api/brand/qr-batches/route.ts`; new `GET /api/brand/qr-batches/options`; the page.
-- **Implementation requirements:**
-  1. Add server-side filters: `batchId`, `campaignId`, `status`, `q` (prefix match on `qrCodeData`), and the P11 archive filter. Keep `page` and `pageSize` and the existing pagination metadata.
-  2. Options endpoint returns batches or campaigns with search and cursor pagination. Remove the option arrays from the main response only after the page stops reading them.
-  3. The page drives all filtering through the API and shows total counts and page controls.
-- **Dependencies:** P11 (archive filter).
-- **Compatibility and migration:** response fields are added before any are removed.
-- **Acceptance criteria:** with 250 codes, the 201st is reachable; with 600 batches, the 600th can be found by search; filters return server totals.
-- **Testing:** L1 with fixtures above each cap; extend `tests/qr-routes-hardening.test.ts`.
-- **Regression risks:** CSV export; brand scoping of every query.
-- **Decision blockers:** none.
-
 ### P27 — Campaign experiences: attached versus discovery
 
 - **Priority and complexity:** P2, S.
@@ -423,24 +342,6 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 - **Acceptance criteria:** with 60 attached experiences all 60 display; discovery pages beyond 50.
 - **Testing:** L1.
 - **Regression risks:** `tests/campaign-product-curation.test.ts` and sort-order handling.
-- **Decision blockers:** none.
-
-### P28 — Commerce connection overview and sync truthfulness
-
-- **Priority and complexity:** P2, M.
-- **Problem and evidence:** The Store page reads one connection chosen by `getActiveCommerceConnectionAnyProvider` (`src/app/api/brand/commerce/status/route.ts:53-77`; `src/lib/commerce/connection-service.ts:247-272`), although a full list endpoint exists (`src/app/api/brand/commerce/connections/route.ts:66-83`). The Shopify product preview calls `adapter.syncProducts`, which writes `lastProductSyncAt` (`src/app/api/brand/shopify/products/route.ts:117`; `src/lib/commerce/providers/shopify-commerce-adapter.ts:433-436`), and the rewards page triggers it on each visit (`src/app/(withSidebar)/dashboard/brand/rewards/page.tsx:313,330`). That field is displayed as the last sync (`src/app/(withSidebar)/dashboard/brand/commerce/BrandCommerceClient.tsx:279,507`). Copy on the products page says campaign-level selection is future work (`src/app/(withSidebar)/dashboard/brand/products/BrandProductsClient.tsx:936-937`) although `campaigns/[id]/products` exists.
-- **Desired outcome:** The Store page lists every authorized connection with its real state. "Last catalog sync" reflects completed canonical syncs only. The stale copy links to the working page.
-- **Scope:** `src/app/(withSidebar)/dashboard/brand/commerce/BrandCommerceClient.tsx`; the Shopify products preview route; the commerce adapter interface (`src/lib/commerce/types.ts`) and both provider adapters; `src/app/(withSidebar)/dashboard/brand/shopify/BrandShopifyClient.tsx`; `src/app/(withSidebar)/dashboard/brand/products/BrandProductsClient.tsx`; `src/app/api/me/dashboard-summary/route.ts:137-138`.
-- **Implementation requirements:**
-  1. Store page fetches the connections list and renders one card per connection: provider, status, last completed sync, last attempt. Keep the single-connection `status` response for other consumers.
-  2. Split the adapter contract: a read-only preview method that never writes connection timestamps, and the existing sync method. The preview route uses the preview method. Apply the same contract to the Commerce7 adapter (`src/lib/commerce/providers/commerce7-commerce-adapter.ts:262-276`); trace its callers first, since they were not verified in this review.
-  3. Display "last completed sync" from the latest successful `CommerceProductSyncRun` and "last attempt" from the latest run of any status (`prisma/schema.prisma:657-683`). No migration.
-  4. Replace the "later phase" sentence with a link to the campaign products page.
-- **Dependencies:** none.
-- **Compatibility and migration:** no schema change. Existing `lastProductSyncAt` values may be later than the true last sync; they are not rewritten. The display switches source instead.
-- **Acceptance criteria:** a brand with Shopify and Commerce7 sees both; opening the rewards page ten times leaves "last completed sync" unchanged; a failed sync shows as an attempt, not a completion.
-- **Testing:** L1 with injected adapters. L4 optional: sandbox store preview. L3: Store page.
-- **Regression risks:** product config fingerprint and connection row lock, which depend on when the connection row changes (`src/lib/commerce/product-config-fingerprint.ts:8-15`; `src/lib/commerce/connection-row-lock.ts:55`); dashboard readiness that reads `lastProductSyncAt`.
 - **Decision blockers:** none.
 
 ### P29 — Rewards workspace completeness
@@ -576,24 +477,6 @@ These rows retain review identifiers and proposed phase mappings. The mapped pha
 - **Regression risks:** course completion award logic reads `isCompleted` and must not change.
 - **Decision blockers:** none.
 
-### P38 — Provider-order-date reporting basis
-
-- **Priority and complexity:** P2, M.
-- **Problem and evidence:** Conversions are filtered and bucketed by `createdAt`, the ingestion time (`src/app/api/brand/analytics/conversions/route.ts:201-203,217`). `providerCreatedAt` exists, is indexed with `brandId`, and is filled by both normalizers except for partial placeholder orders (`prisma/schema.prisma:1099,1121`; `src/lib/commerce/providers/shopify-order-normalizer.ts:548,695`; `src/lib/commerce/providers/commerce7-order-normalizer.ts:427,468`).
-- **Desired outcome:** Reports can show orders placed in a period (an order cohort with its current financial outcome), using the provider's order time, with a visible count of orders that fell back to ingestion time.
-- **Scope:** brand and creator conversions routes; `src/lib/commerce/order-analytics.ts` trend builder; both analytics pages.
-- **Implementation requirements:**
-  1. Add `dateBasis=provider|ingested`. For `provider`, select orders where `providerCreatedAt` is in range, or `providerCreatedAt` is null and `createdAt` is in range. Bucket by the same effective date.
-  2. Respond with `dateBasis` and `fallbackOrderCount`. The UI shows "N orders used the date SQRATCH received them because the store did not supply an order date."
-  3. Describe the figures as an order cohort: "Orders placed in this period, with their current refund state." A refund on an older order changes that older cohort and is not shown as a new order.
-  4. Do not add payment or refund activity-by-period reporting. The schema holds no provider refund or payment timestamps (see outstanding issues).
-- **Dependencies:** P36. Operator check of X-10 (the `(brandId, createdAt)` index) before release, because the fallback branch filters on `createdAt`.
-- **Compatibility and migration:** no schema change. The default basis is a visible behavior change (D-14); the ingestion basis remains selectable.
-- **Acceptance criteria:** an order placed on the 30th and ingested on the 2nd appears in the earlier month under the provider basis and the later month under the ingestion basis; orders with no provider date are counted in the fallback figure; trend totals equal headline totals under each basis.
-- **Testing:** L1 with fixtures for delayed ingestion, null provider date, refunds and several currencies.
-- **Regression risks:** the tenant filter on attribution (`src/app/api/brand/analytics/conversions/route.ts:205-210`) must be unchanged.
-- **Decision blockers:** D-14 (default basis; proposed provider date).
-
 ### P39 — Scope, attribution and drilldown consistency
 
 - **Priority and complexity:** P3, M.
@@ -727,9 +610,7 @@ Each has a proposed default. Phases proceed on the default unless you say otherw
 | D-05 | Checkpoint format and limits | One multiple-choice question per lesson, answer held server-side, sign-in required to submit, 3 attempts per 10 minutes | Free-text or multi-question checkpoints need a larger authoring tool; allowing anonymous submission needs qualification transfer in P09 | P16, P18 |
 | D-06 | How do rewarded legacy lessons transition, and who reviews unsettled legacy claims? | Creators switch per lesson, one-way. Legacy lessons keep awarding until switched. Superadmin reviews claims | A forced cutoff date would stop legacy awards for creators who have not authored a checkpoint | P17, P19 |
 | D-10 | When does the expected-brand header become mandatory? | One release after P07 | Immediate enforcement breaks tabs opened before deploy | P07 |
-| D-11 | Password reset token lifetime | 30 minutes, single use | Longer is more convenient and more exposed | P20 |
 | D-13 | Applicant-facing reason versus internal note | Existing `reason` is applicant-facing; add `internalNote` | Treating existing reasons as internal would hide past explanations from applicants | P15 |
-| D-14 | Analytics defaults | Old field names kept one release; provider order date becomes the default basis | Keeping ingestion as default leaves month boundaries misleading | P36, P38 |
 | D-15 | Shared rate-limit store | A managed key-value store, with in-memory fallback | A Postgres table avoids a new service and adds write load on hot paths | P44 |
 | D-16 | Is there a budget or cap on creator-configured rewards, given that points are redeemed against brand offers? | Not decided here. Flagged because checkpoints do not address it | Without one, a creator and a second account can still mint up to 1000 points per lesson | none; new product work |
 
@@ -741,9 +622,8 @@ Each has a proposed default. Phases proceed on the default unless you say otherw
 These are run by the owner, not by an agent.
 
 1. `npx prisma migrate status` against production, then `prisma migrate diff` as described in `docs/prisma-migrations.md`. That document verifies production only through `20260719061157`; ten later migration folders exist.
-2. Settle X-10: `prisma/schema.prisma:1124-1137` says `20260905000000_add_commerce_order_created_at_index` was not applied anywhere at the time of writing. Confirm its state before P38.
-3. Run the read-only drift query from P01 once, and keep the result.
-4. Run the read-only count from P12 item 9 for `isActive = false` rows.
+2. Run the read-only drift query from P01 once, and keep the result.
+3. Run the read-only count from P12 item 9 for `isActive = false` rows.
 
 ### E.2 Migration inventory
 
@@ -756,7 +636,6 @@ All are additive and nullable or defaulted. None has a backfill.
 | P15 | `AdminAuditEvent`; `reviewedAt`, `internalNote` on both request models | none | Null `reviewedAt` shown as not recorded |
 | P16 | Policy enum and column; checkpoint, qualification and attempt tables | none | Default policy is legacy for every lesson |
 | P19 | Requirement version, course qualification and legacy claim tables | none | Versions start at deployment; none invented for the past |
-| P20 | `PasswordResetToken` table | none | New flow only |
 | P37 | `LessonProgress.completedAt` | none | Null reported as "date not recorded" |
 | P44 | Only if Postgres is chosen as the rate-limit store | none | In-memory fallback |
 
@@ -779,11 +658,10 @@ Rules for every migration: one folder per phase; enum additions are not reversib
 | P13 | Objects without a staged row | Fallback insert at attach | Remove fallback after one release |
 | P16 | Lessons with rewards under self-reported completion | Policy column, default legacy | Per lesson, when its creator switches |
 | P36 | Consumers of `gross*` and `net*` fields | New names alongside | Remove old names after one release |
-| P38 | Reports by ingestion date | `dateBasis` parameter | Ingestion basis stays available |
 
 ### E.5 Rollback notes
 
-- Code-only phases (P14, P21, P23, P24, P26 to P35, P38 to P43, P45) roll back by revert. P02 deletes route files; revert restores them.
+- Code-only phases (P21, P24, P27 to P35, P39 to P43, P45) roll back by revert. P02 deletes route files; revert restores them.
 - P01 and P02 must not be reverted independently of each other once shipped, or the legacy routes return without the guard.
 - Migration phases roll back by reverting code and leaving columns in place.
 - P12 is the one phase where a rollback changes user-visible state: codes stopped while it was live become redeemable again if the predicate is removed. Resume them deliberately before reverting, or keep the predicate.

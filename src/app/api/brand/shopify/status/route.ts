@@ -6,6 +6,7 @@ import {
   type BrandAdminContext,
 } from "@/lib/brand-auth";
 import { getActiveCommerceConnection } from "@/lib/commerce/connection-service";
+import { loadSyncSummaries, type SyncSummary } from "@/lib/commerce/sync-summary";
 import { loadShopifyCredential } from "@/lib/commerce/providers/shopify-credential-store";
 import {
   SQRATCH_ATTRIBUTION_EMBED_BLOCK_HANDLE,
@@ -30,6 +31,8 @@ export type BrandShopifyStatusDeps = {
   getContext(): Promise<BrandAdminContext | null>;
   /** Resolves the brand's provider-neutral Shopify connection summary. */
   getConnectionSummary(brandId: string): Promise<CommerceConnectionSummary | null>;
+  /** Completed-sync history for the Shopify connection. Failures read as "unknown", never as an error. */
+  getSyncSummary?(brandId: string, connectionId: string): Promise<SyncSummary | null>;
   /** Classifies the canonical Shopify credential (presence, authMode, expiry, scopes). Defaults to `loadShopifyCredential`. */
   getCredential(
     brandId: string,
@@ -74,6 +77,8 @@ const DEFAULT_DEPS: BrandShopifyStatusDeps = {
     getActiveCommerceConnection(brandId, CommerceProvider.SHOPIFY),
   getCredential: (brandId, connectionId) =>
     loadShopifyCredential(brandId, undefined, connectionId),
+  getSyncSummary: async (brandId, connectionId) =>
+    (await loadSyncSummaries(brandId, [connectionId])).get(connectionId) ?? null,
   getThemeReadiness: (input) => getShopifyThemeTrackingReadiness(input),
   reconcileScopes: defaultReconcileScopes,
 };
@@ -147,6 +152,10 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
     const providerClientId =
       credential.outcome === "OK" ? credential.credential.providerClientId : null;
 
+    const syncSummary =
+      summary && deps.getSyncSummary
+        ? await deps.getSyncSummary(brand.id, summary.id).catch(() => null)
+        : null;
     const shopifyShopDomain = summary?.externalAccountId ?? null;
     const canonicalGrantedScopes = reconciledScopes ?? summary?.grantedScopes ?? [];
     const shopifyGrantedScopes =
@@ -219,6 +228,9 @@ export async function statusGetImpl(overrides: Partial<BrandShopifyStatusDeps> =
         shopifyConnectionStatus: connectionStatus,
         hasShopifyAccessToken,
         shopifyLastProductSyncAt: summary?.lastProductSyncAt ?? null,
+        // Completed catalog syncs only; a product preview never changes these.
+        shopifyLastCompletedSyncAt: syncSummary?.lastCompletedSyncAt ?? null,
+        shopifyLastSyncAttempt: syncSummary?.lastAttempt ?? null,
         // The single canonical currency representation — see
         // `CommerceConnectionSummary.currencyCode`'s doc comment.
         shopifyCurrencyCode: summary?.currencyCode ?? null,

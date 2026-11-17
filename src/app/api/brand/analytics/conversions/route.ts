@@ -1,3 +1,4 @@
+import { countFallbackOrders, effectiveOrderDate, orderDateWhere, parseOrderDateBasis } from "@/lib/commerce/order-date-basis";
 import { NextRequest, NextResponse } from "next/server";
 import { getBrandAdminContext, getBrandContextFailure } from "@/lib/brand-auth";
 import prisma from "@/lib/prisma";
@@ -184,7 +185,14 @@ function idsOf(rows: readonly ConversionCountRow[]): string[] {
 }
 
 export async function GET(request: NextRequest) {
-  const context = await getBrandAdminContext();
+  return brandConversionsGetImpl(request, getBrandAdminContext);
+}
+
+export async function brandConversionsGetImpl(
+  request: NextRequest,
+  getContext: typeof getBrandAdminContext,
+) {
+  const context = await getContext();
   if (!context?.membership?.brand) {
     const failure = getBrandContextFailure(context);
     return NextResponse.json({ error: failure.error, ...(failure.code ? { code: failure.code } : {}) }, { status: failure.status });
@@ -195,26 +203,35 @@ export async function GET(request: NextRequest) {
     now: new Date(),
   });
   if (!range.ok) return NextResponse.json({ error: range.error }, { status: 400 });
+  const dateBasis = parseOrderDateBasis(request.nextUrl.searchParams.get("dateBasis"));
+  if (!dateBasis) {
+    return NextResponse.json({ error: "dateBasis must be provider or ingested." }, { status: 400 });
+  }
 
   const brandId = context.membership.brand.id;
 
   const rows = await prisma.commerceOrder.findMany({
     where: {
-      createdAt: { gte: range.range.start, lte: range.range.end },
       brandId,
-      // A malformed cross-brand historical link is excluded entirely rather
-      // than leaking its campaign/Experience dimensions into this tenant.
-      OR: [
-        { attribution: null },
-        { attribution: { is: { attributedBrandId: brandId } } },
+      AND: [
+        orderDateWhere(dateBasis, range.range),
+        // A malformed cross-brand historical link is excluded entirely rather
+        // than leaking its campaign/Experience dimensions into this tenant.
+        {
+          OR: [
+            { attribution: null },
+            { attribution: { is: { attributedBrandId: brandId } } },
+          ],
+        },
       ],
     },
     select: {
       provider: true, financialStatus: true, currencyCode: true, totalMinor: true, totalRefundedMinor: true, netRevenueMinor: true, cancelledAt: true,
-      // PHASE D — the bucket key for the daily trend. Deliberately the SAME
-      // column this query's own `where` filters the range on, so the daily
-      // series always sums back to the headline totals.
+      // The bucket key for the daily trend is the same effective date the
+      // `where` filters the range on (see `orderDateWhere` and
+      // `effectiveOrderDate`), so the daily series sums back to the headline totals.
       createdAt: true,
+      providerCreatedAt: true,
       attribution: {
         select: {
           experienceId: true,
@@ -232,7 +249,7 @@ export async function GET(request: NextRequest) {
   });
 
   const scoped: ConversionTrendOrder[] = rows.map((row) => ({
-    orderDate: row.createdAt,
+    orderDate: effectiveOrderDate(row, dateBasis),
     provider: row.provider,
     financialStatus: row.financialStatus,
     currencyCode: row.currencyCode,
@@ -282,6 +299,8 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     data: {
       range: { start: range.range.start.toISOString(), end: range.range.end.toISOString() },
+      dateBasis,
+      fallbackOrderCount: countFallbackOrders(rows, dateBasis),
       ...enriched,
       dailyTrend,
     },

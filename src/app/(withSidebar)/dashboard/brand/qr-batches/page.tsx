@@ -1,13 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useBrandFetch } from "@/components/brand/brand-fetch";
 import { BrandPageShell } from "@/components/brand/page-shell";
 import { fetchJson, getErrorMessage } from "@/components/experience/client-utils";
 import { PageCard } from "@/components/experience/experience-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { SearchableOptionSelect, type PickedOption } from "@/components/brand/searchable-option-select";
+import { useLatestRequest } from "@/hooks/use-latest-request";
 import {
   Dialog,
   DialogContent,
@@ -16,12 +18,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-
-type CampaignOption = {
-  id: string;
-  name: string;
-  slug: string;
-};
 
 type Batch = {
   id: string;
@@ -57,11 +53,16 @@ type QRCodeRow = {
   };
 };
 
+type Pagination = { page: number; pageSize: number; total: number; totalPages: number };
+
 type QRBatchPageData = {
   batches: Batch[];
-  campaigns: CampaignOption[];
   qrCodes: QRCodeRow[];
+  pagination: Pagination;
+  batchPagination: Pagination;
 };
+
+type StatusFilter = "all" | "NEW" | "REDEEMED";
 
 type ArchivedView = "exclude" | "only" | "include";
 
@@ -80,7 +81,39 @@ type EditQRForm = {
   usedBy: string | null;
   usedByEmail: string | null;
   campaignId: string;
+  campaignName: string;
 };
+
+function Pager({ label, pagination, onPage, disabled }: { label: string; pagination: Pagination; onPage: (page: number) => void; disabled?: boolean }) {
+  const { page, pageSize, total, totalPages } = pagination;
+  const first = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const last = Math.min(total, page * pageSize);
+  return (
+    <nav aria-label={`${label} pages`} className="flex flex-wrap items-center justify-between gap-3 pt-4 text-sm text-copy-65">
+      <span aria-live="polite">
+        {total === 0 ? "No results" : `Showing ${first}–${last} of ${total}`}
+      </span>
+      <span className="flex items-center gap-2">
+        <Button type="button" variant="outline" disabled={disabled || page <= 1} onClick={() => onPage(page - 1)} className="h-8 rounded-xl border-edge/20 bg-glass-10 px-4 text-ink hover:bg-glass-20">
+          Previous
+        </Button>
+        <span>Page {page} of {Math.max(1, totalPages)}</span>
+        <Button type="button" variant="outline" disabled={disabled || page >= totalPages} onClick={() => onPage(page + 1)} className="h-8 rounded-xl border-edge/20 bg-glass-10 px-4 text-ink hover:bg-glass-20">
+          Next
+        </Button>
+      </span>
+    </nav>
+  );
+}
+
+function useDebounced<T>(value: T, delayMs = 300) {
+  const [debounced, setDebounced] = useState(value);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebounced(value), delayMs);
+    return () => window.clearTimeout(timer);
+  }, [value, delayMs]);
+  return debounced;
+}
 
 function formatDateTime(value: string | null) {
   if (!value) {
@@ -98,90 +131,78 @@ function formatDateTime(value: string | null) {
 
 export default function BrandQRBatchesPage() {
   const brandFetch = useBrandFetch();
+  const beginRequest = useLatestRequest();
   const [data, setData] = useState<QRBatchPageData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
-  const [selectedCampaignId, setSelectedCampaignId] = useState("all");
-  const [selectedBatchId, setSelectedBatchId] = useState("all");
+  const [campaignFilter, setCampaignFilter] = useState<PickedOption | null>(null);
+  const [batchFilter, setBatchFilter] = useState<PickedOption | null>(null);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [codeSearch, setCodeSearch] = useState("");
+  const [batchSearch, setBatchSearch] = useState("");
+  const [page, setPage] = useState(1);
+  const [batchPage, setBatchPage] = useState(1);
   const [editForm, setEditForm] = useState<EditQRForm | null>(null);
   const [savingId, setSavingId] = useState<string | null>(null);
   const [deletingBatchId, setDeletingBatchId] = useState<string | null>(null);
   const [archivingBatchId, setArchivingBatchId] = useState<string | null>(null);
   const [archivedView, setArchivedView] = useState<ArchivedView>("exclude");
-  const listUrl = `/api/brand/qr-batches?archived=${archivedView}`;
+  const debouncedCodeSearch = useDebounced(codeSearch.trim());
+  const debouncedBatchSearch = useDebounced(batchSearch.trim());
+
+  // Every filter is applied by the server; the page only holds the current
+  // result. Changing any filter returns to page 1 of that result.
+  const listUrl = (() => {
+    const params = new URLSearchParams({ archived: archivedView, page: String(page), batchPage: String(batchPage) });
+    if (campaignFilter) params.set("campaignId", campaignFilter.id);
+    if (batchFilter) params.set("batchId", batchFilter.id);
+    if (statusFilter !== "all") params.set("status", statusFilter);
+    if (debouncedCodeSearch) params.set("q", debouncedCodeSearch);
+    if (debouncedBatchSearch) params.set("batchQ", debouncedBatchSearch);
+    return `/api/brand/qr-batches?${params.toString()}`;
+  })();
+
+  const load = useCallback(
+    async (url: string, mode: "initial" | "refresh") => {
+      // A response is applied only while its request is still the latest, so a
+      // slow earlier filter can never overwrite a newer one.
+      const request = beginRequest();
+      if (mode === "initial") setLoading(true);
+      setRefreshing(true);
+      setError(null);
+      try {
+        const response = await fetchJson<QRBatchPageData>(url, { signal: request.signal });
+        if (request.isCurrent()) setData(response);
+      } catch (loadError) {
+        if (request.isCurrent()) {
+          if (mode === "refresh") setActionError(getErrorMessage(loadError, "Failed to refresh QR batches."));
+          else setError(getErrorMessage(loadError, "Failed to load QR batches."));
+        }
+      } finally {
+        if (request.isCurrent()) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      }
+    },
+    [beginRequest],
+  );
 
   useEffect(() => {
-    // Switching views quickly must never let a slow earlier response replace
-    // the current view's rows: a response is applied only while its effect
-    // is still the latest.
-    let cancelled = false;
-    async function load() {
-      setLoading(true);
-      setError(null);
+    void load(listUrl, data ? "refresh" : "initial");
+    // `data` is read only to choose the loading style, not to trigger a load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listUrl, load]);
 
-      try {
-        const response = await fetchJson<QRBatchPageData>(listUrl);
-        if (!cancelled) setData(response);
-      } catch (loadError) {
-        if (!cancelled) setError(getErrorMessage(loadError, "Failed to load QR batches."));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [listUrl]);
-
-  const visibleBatches = useMemo(() => {
-    const batches = data?.batches || [];
-
-    if (selectedCampaignId === "all") {
-      return batches;
-    }
-
-    return batches.filter((batch) => batch.campaign?.id === selectedCampaignId);
-  }, [data?.batches, selectedCampaignId]);
-
-  const visibleQrCodes = useMemo(() => {
-    const qrCodes = data?.qrCodes || [];
-
-    return qrCodes.filter((qrCode) => {
-      if (
-        selectedCampaignId !== "all" &&
-        qrCode.campaign.id !== selectedCampaignId
-      ) {
-        return false;
-      }
-
-      if (selectedBatchId !== "all" && qrCode.batch?.id !== selectedBatchId) {
-        return false;
-      }
-
-      return true;
-    });
-  }, [data?.qrCodes, selectedBatchId, selectedCampaignId]);
-
-  const batchOptions = useMemo(() => {
-    const batches = data?.batches || [];
-
-    return batches.filter((batch) =>
-      selectedCampaignId === "all"
-        ? true
-        : batch.campaign?.id === selectedCampaignId,
-    );
-  }, [data?.batches, selectedCampaignId]);
+  function resetPages() {
+    setPage(1);
+    setBatchPage(1);
+  }
 
   async function reloadData() {
-    try {
-      const response = await fetchJson<QRBatchPageData>(listUrl);
-      setData(response);
-    } catch (loadError) {
-      setActionError(getErrorMessage(loadError, "Failed to refresh QR batches."));
-    }
+    await load(listUrl, "refresh");
   }
 
   async function handleSaveQrCode() {
@@ -248,8 +269,8 @@ export default function BrandQRBatchesPage() {
       await brandFetch(`/api/brand/qr-batches/${batchId}/${archive ? "archive" : "unarchive"}`, {
         method: "POST",
       });
-      if (selectedBatchId === batchId && archivedView !== "include") {
-        setSelectedBatchId("all");
+      if (batchFilter?.id === batchId && archivedView !== "include") {
+        setBatchFilter(null);
       }
       await reloadData();
     } catch (archiveError) {
@@ -279,14 +300,10 @@ export default function BrandQRBatchesPage() {
         method: "DELETE",
       });
 
-      if (selectedBatchId === batchId) {
-        setSelectedBatchId("all");
+      if (batchFilter?.id === batchId) {
+        setBatchFilter(null);
       }
-
-      setData((current) => current ? { ...current,
-        batches: current.batches.filter((batch) => batch.id !== batchId),
-        qrCodes: current.qrCodes.filter((code) => code.batch?.id !== batchId),
-      } : current);
+      await reloadData();
     } catch (deleteError) {
       await reloadData();
       setActionError(getErrorMessage(deleteError, "Failed to delete batch."));
@@ -334,7 +351,8 @@ export default function BrandQRBatchesPage() {
                   value={archivedView}
                   onChange={(event) => {
                     setArchivedView(event.target.value as ArchivedView);
-                    setSelectedBatchId("all");
+                    setBatchFilter(null);
+                    resetPages();
                   }}
                   className="h-10 min-w-[180px] rounded-xl border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
                 >
@@ -346,7 +364,22 @@ export default function BrandQRBatchesPage() {
                 </select>
               </label>
             </div>
-            <div className="overflow-x-auto">
+            <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+              <label className="flex items-center gap-3 text-sm text-copy-70">
+                <span>Find batch</span>
+                <Input
+                  type="search"
+                  value={batchSearch}
+                  onChange={(event) => {
+                    setBatchSearch(event.target.value);
+                    setBatchPage(1);
+                  }}
+                  placeholder="Batch name"
+                  className="h-10 w-[240px] rounded-xl border-edge/10 bg-inset/20 text-ink"
+                />
+              </label>
+            </div>
+            <div className="overflow-x-auto" aria-busy={refreshing}>
               <table className="w-full min-w-[720px] text-left text-sm">
                 <thead className="text-copy-55">
                   <tr>
@@ -358,11 +391,14 @@ export default function BrandQRBatchesPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-edge/10">
-                  {visibleBatches.map((batch) => (
+                  {data.batches.map((batch) => (
                     <tr
                       key={batch.id}
                       className="cursor-pointer transition hover:bg-white/[0.03]"
-                      onClick={() => setSelectedBatchId(batch.id)}
+                      onClick={() => {
+                        setBatchFilter({ id: batch.id, name: batch.name });
+                        setPage(1);
+                      }}
                     >
                       <td className="py-3">
                         {batch.name}
@@ -427,13 +463,14 @@ export default function BrandQRBatchesPage() {
                 </tbody>
               </table>
 
-              {visibleBatches.length === 0 && (
+              {data.batches.length === 0 && (
                 <p className="pt-4 text-sm text-copy-60">
                   {archivedView === "only"
-                    ? "No archived batches."
+                    ? "No archived batches match."
                     : "No batches match the selected filters."}
                 </p>
               )}
+              <Pager label="Batches" pagination={data.batchPagination} onPage={setBatchPage} disabled={refreshing} />
             </div>
           </PageCard>
 
@@ -442,50 +479,69 @@ export default function BrandQRBatchesPage() {
               <div className="space-y-1">
                 <h2 className="text-2xl font-semibold">QR Code List</h2>
                 <p className="text-sm text-copy-60">
-                  Filter QR codes by campaign or batch and review their current
+                  Search QR codes by code and filter by campaign, batch or status to review their current
                   redemption status.
                 </p>
               </div>
 
               <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap">
                 <label className="flex items-center gap-3 text-sm text-copy-70">
-                  <span>Campaign</span>
-                  <select
-                    value={selectedCampaignId}
+                  <span>Find code</span>
+                  <Input
+                    type="search"
+                    value={codeSearch}
                     onChange={(event) => {
-                      setSelectedCampaignId(event.target.value);
-                      setSelectedBatchId("all");
+                      setCodeSearch(event.target.value);
+                      setPage(1);
                     }}
-                    className="h-10 min-w-[220px] rounded-xl border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
-                  >
-                    <option value="all">All campaigns</option>
-                    {data.campaigns.map((campaign) => (
-                      <option key={campaign.id} value={campaign.id}>
-                        {campaign.name}
-                      </option>
-                    ))}
-                  </select>
+                    placeholder="Code or scan link"
+                    className="h-10 w-[220px] rounded-xl border-edge/10 bg-inset/20 text-ink"
+                  />
                 </label>
 
+                <SearchableOptionSelect
+                  label="Campaign"
+                  type="campaigns"
+                  value={campaignFilter}
+                  allLabel="All campaigns"
+                  onChange={(option) => {
+                    setCampaignFilter(option);
+                    setBatchFilter(null);
+                    resetPages();
+                  }}
+                />
+
+                <SearchableOptionSelect
+                  label="Batch"
+                  type="batches"
+                  value={batchFilter}
+                  allLabel="All batches"
+                  params={{ archived: archivedView, campaignId: campaignFilter?.id }}
+                  onChange={(option) => {
+                    setBatchFilter(option);
+                    setPage(1);
+                  }}
+                />
+
                 <label className="flex items-center gap-3 text-sm text-copy-70">
-                  <span>Batch</span>
+                  <span>Status</span>
                   <select
-                    value={selectedBatchId}
-                    onChange={(event) => setSelectedBatchId(event.target.value)}
-                    className="h-10 min-w-[220px] rounded-xl border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
+                    value={statusFilter}
+                    onChange={(event) => {
+                      setStatusFilter(event.target.value as StatusFilter);
+                      setPage(1);
+                    }}
+                    className="h-10 min-w-[140px] rounded-xl border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
                   >
-                    <option value="all">All batches</option>
-                    {batchOptions.map((batch) => (
-                      <option key={batch.id} value={batch.id}>
-                        {batch.name}
-                      </option>
-                    ))}
+                    <option value="all">All statuses</option>
+                    <option value="NEW">New</option>
+                    <option value="REDEEMED">Redeemed</option>
                   </select>
                 </label>
               </div>
             </div>
 
-            <div className="mt-6 overflow-x-auto">
+            <div className="mt-6 overflow-x-auto" aria-busy={refreshing}>
               <table className="w-full min-w-[980px] text-left text-sm">
                 <thead className="text-copy-55">
                   <tr>
@@ -499,7 +555,7 @@ export default function BrandQRBatchesPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-edge/10">
-                  {visibleQrCodes.map((qrCode) => (
+                  {data.qrCodes.map((qrCode) => (
                     <tr key={qrCode.id}>
                       <td className="py-3 font-medium text-copy-90">
                         {qrCode.code}
@@ -525,6 +581,7 @@ export default function BrandQRBatchesPage() {
                                 usedBy: qrCode.usedBy,
                                 usedByEmail: qrCode.usedByEmail,
                                 campaignId: qrCode.campaign.id,
+                                campaignName: qrCode.campaign.name,
                               })
                             }
                           >
@@ -546,11 +603,12 @@ export default function BrandQRBatchesPage() {
                 </tbody>
               </table>
 
-              {visibleQrCodes.length === 0 && (
+              {data.qrCodes.length === 0 && (
                 <p className="pt-4 text-sm text-copy-60">
                   No QR codes match the selected filters.
                 </p>
               )}
+              <Pager label="QR codes" pagination={data.pagination} onPage={setPage} disabled={refreshing} />
             </div>
           </PageCard>
         </div>
@@ -624,26 +682,20 @@ export default function BrandQRBatchesPage() {
 
               <div className="space-y-2">
                 <label className="text-sm text-copy-80">Campaign</label>
-                <select
-                  value={editForm.campaignId}
-                  onChange={(event) =>
+                <SearchableOptionSelect
+                  label="Campaign"
+                  type="campaigns"
+                  includeAll={false}
+                  allLabel={editForm.campaignName}
+                  value={{ id: editForm.campaignId, name: editForm.campaignName }}
+                  onChange={(option) =>
                     setEditForm((current) =>
-                      current
-                        ? {
-                            ...current,
-                            campaignId: event.target.value,
-                          }
+                      current && option
+                        ? { ...current, campaignId: option.id, campaignName: option.name }
                         : current,
                     )
                   }
-                  className="flex h-10 w-full rounded-md border border-edge/10 bg-inset/20 px-3 text-sm text-ink"
-                >
-                  {data?.campaigns.map((campaign) => (
-                    <option key={campaign.id} value={campaign.id}>
-                      {campaign.name}
-                    </option>
-                  ))}
-                </select>
+                />
               </div>
             </div>
           )}

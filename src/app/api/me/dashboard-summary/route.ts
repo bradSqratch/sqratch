@@ -5,39 +5,14 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/options";
 import prisma from "@/lib/prisma";
 import { normalizeUserRole } from "@/lib/admin-auth";
 import { resolveActiveBrandContext } from "@/lib/brand-context";
+import { loadCustomerHome } from "@/lib/customer-home";
+import { loadSyncSummaries } from "@/lib/commerce/sync-summary";
 import { getActiveCommerceConnectionAnyProvider, isConnectionUsable } from "@/lib/commerce/connection-service";
-
-type RecentActivityItem = {
-  label: string;
-  detail?: string;
-  at?: string;
-};
 
 function getStartOfLastDays(days: number) {
   const date = new Date();
   date.setDate(date.getDate() - days);
   return date;
-}
-
-function toRelativeTime(date: Date) {
-  const diffMs = Date.now() - date.getTime();
-  const diffMinutes = Math.floor(diffMs / (1000 * 60));
-
-  if (diffMinutes < 1) {
-    return "just now";
-  }
-
-  if (diffMinutes < 60) {
-    return `${diffMinutes}m ago`;
-  }
-
-  const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) {
-    return `${diffHours}h ago`;
-  }
-
-  const diffDays = Math.floor(diffHours / 24);
-  return `${diffDays}d ago`;
 }
 
 async function getAdminCards() {
@@ -132,10 +107,16 @@ async function getBrandAdminCards(userId: string) {
   const commerceSummary = await getActiveCommerceConnectionAnyProvider(brand.id);
   const hasCommerceConnection = commerceSummary !== null && isConnectionUsable(commerceSummary);
   const syncWindow = getStartOfLastDays(7);
+  // Judged by the last COMPLETED catalog sync in the run history. The connection's
+  // own `lastProductSyncAt` is also stamped by non-sync paths, so it can look fresh
+  // when no sync has finished.
+  const lastCompletedSyncAt =
+    hasCommerceConnection && commerceSummary
+      ? (await loadSyncSummaries(brand.id, [commerceSummary.id]).catch(() => null))?.get(commerceSummary.id)?.lastCompletedSyncAt ?? null
+      : null;
   const productSyncStatus = !hasCommerceConnection
     ? "DISCONNECTED"
-    : commerceSummary?.lastProductSyncAt &&
-        commerceSummary.lastProductSyncAt >= syncWindow
+    : lastCompletedSyncAt && lastCompletedSyncAt >= syncWindow
       ? "OK"
       : "NEEDS_ATTENTION";
 
@@ -212,182 +193,6 @@ async function getCreatorCards(userId: string) {
   };
 }
 
-async function getUserCardsAndActivity(userId: string) {
-  const recentWindow = getStartOfLastDays(14);
-
-  const [unlockedCampaignsCount, continueWatchingLessonsCount] =
-    await Promise.all([
-      prisma.campaignUnlock.count({
-        where: {
-          userId,
-        },
-      }),
-      prisma.lessonProgress.count({
-        where: {
-          userId,
-          lesson: { isActive: true, course: { isActive: true, experience: { isActive: true } } },
-          isCompleted: false,
-          lastPositionSeconds: {
-            gt: 0,
-          },
-        },
-      }),
-    ]);
-
-  const [recentUnlocks, recentProgress, recentCommerceClicks, recentEvents] = await Promise.all([
-    prisma.campaignUnlock.findMany({
-      where: {
-        userId,
-        createdAt: {
-          gte: recentWindow,
-        },
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-      take: 5,
-      select: {
-        createdAt: true,
-        campaign: {
-          select: {
-            name: true,
-          },
-        },
-      },
-    }),
-    prisma.lessonProgress.findMany({
-      where: {
-        userId,
-        lesson: { isActive: true, course: { isActive: true, experience: { isActive: true } } },
-        updatedAt: {
-          gte: recentWindow,
-        },
-      },
-      orderBy: {
-        updatedAt: "desc",
-      },
-      take: 5,
-      select: {
-        updatedAt: true,
-        isCompleted: true,
-        lesson: {
-          select: {
-            title: true,
-          },
-        },
-      },
-    }),
-    prisma.commerceClickAttribution.findMany({
-      where: {
-        userId,
-        experience: { isActive: true },
-        createdAt: {
-          gte: recentWindow,
-        },
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-      take: 5,
-      select: {
-        createdAt: true,
-        experience: {
-          select: { title: true },
-        },
-      },
-    }),
-    prisma.analyticsEvent.findMany({
-      where: {
-        userId,
-        lesson: { isActive: true, course: { isActive: true, experience: { isActive: true } } },
-        createdAt: {
-          gte: recentWindow,
-        },
-        name: {
-          in: ["lesson_started", "lesson_completed"],
-        },
-      },
-      orderBy: {
-        createdAt: "desc",
-      },
-      take: 5,
-      select: {
-        name: true,
-        createdAt: true,
-        experience: {
-          select: {
-            title: true,
-          },
-        },
-      },
-    }),
-  ]);
-
-  const unlockItems: Array<RecentActivityItem & { ts: Date }> = recentUnlocks.map(
-    (unlock) => ({
-      label: "Unlocked campaign",
-      detail: unlock.campaign.name,
-      at: toRelativeTime(unlock.createdAt),
-      ts: unlock.createdAt,
-    }),
-  );
-
-  const progressItems: Array<RecentActivityItem & { ts: Date }> = recentProgress.map(
-    (progress) => ({
-      label: progress.isCompleted ? "Completed lesson" : "Watched lesson",
-      detail: progress.lesson.title,
-      at: toRelativeTime(progress.updatedAt),
-      ts: progress.updatedAt,
-    }),
-  );
-
-  const eventItems: Array<RecentActivityItem & { ts: Date }> = recentEvents.map(
-    (event) => {
-      const label = event.name === "lesson_completed"
-        ? "Completed lesson"
-        : "Started lesson";
-
-      return {
-        label,
-        detail: event.experience?.title || undefined,
-        at: toRelativeTime(event.createdAt),
-        ts: event.createdAt,
-      };
-    },
-  );
-
-  const commerceClickItems: Array<RecentActivityItem & { ts: Date }> =
-    recentCommerceClicks.map((click) => ({
-      label: "Opened shop product",
-      detail: click.experience.title,
-      at: toRelativeTime(click.createdAt),
-      ts: click.createdAt,
-    }));
-
-  const recentActivity = [
-    ...progressItems,
-    ...unlockItems,
-    ...commerceClickItems,
-    ...eventItems,
-  ]
-    .sort((a, b) => b.ts.getTime() - a.ts.getTime())
-    .slice(0, 6)
-    .map((item) => ({
-      label: item.label,
-      detail: item.detail,
-      at: item.at,
-    }));
-
-  return {
-    cards: {
-      unlockedCampaignsCount,
-      continueWatchingLessonsCount,
-      recentActivityCount: recentActivity.length,
-    },
-    recentActivity,
-  };
-}
-
 export async function GET() {
   const session = await getServerSession(authOptions);
 
@@ -456,7 +261,7 @@ export async function GET() {
       });
     }
 
-    const userData = await getUserCardsAndActivity(userId);
+    const userData = await loadCustomerHome(userId);
     return NextResponse.json({
       data: {
         ...base,

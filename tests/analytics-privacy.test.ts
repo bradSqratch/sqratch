@@ -11,7 +11,7 @@ const sensitive = [
   '/login?callbackUrl=%2Fcommerce7%2Flink%3Ft%3DSYNTHETIC_NESTED_TOKEN_789',
   '/verify-email?email=test.user%40example.com',
   '/signup?next=%2Fcommerce7%2Flink%3Ft%3DSYNTHETIC_SIGNUP_TOKEN',
-  '/sign-up', '/forgot-password', '/reset-password?token=SYNTHETIC_RECOVERY_TOKEN',
+  '/sign-up', '/forgot-password', '/reset-password?token=SYNTHETIC_RECOVERY_TOKEN', '/reset-password#token=SYNTHETIC_FRAGMENT_TOKEN',
   '/account', '/profile', '/dashboard', '/admin/user-management',
   '/auth/callback', '/api/auth/callback/google?code=SYNTHETIC_OAUTH_CODE',
   '/api/shopify/oauth/callback?code=SYNTHETIC_SHOPIFY_CODE', '/shopify?host=SYNTHETIC_HOST',

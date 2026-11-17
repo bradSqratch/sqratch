@@ -23,6 +23,7 @@
  * these arrays.
  */
 
+import type { OrderDateBasis } from "@/lib/commerce/order-date-basis";
 import { formatMoneyDisplay, getCurrencyExponent } from "./money";
 
 // ---------------------------------------------------------------------------
@@ -202,6 +203,12 @@ function isProviderBreakdownArray(value: unknown): value is ProviderBreakdownRow
   return Array.isArray(value) && value.every(isProviderBreakdownRow);
 }
 
+function normalizeBasis(record: Record<string, unknown>): { dateBasis: OrderDateBasis; fallbackOrderCount: number } {
+  const dateBasis: OrderDateBasis = record.dateBasis === "provider" ? "provider" : "ingested";
+  const count = record.fallbackOrderCount;
+  return { dateBasis, fallbackOrderCount: typeof count === "number" && count >= 0 ? count : 0 };
+}
+
 function isRange(value: unknown): value is ConversionRange {
   if (!value || typeof value !== "object") return false;
   const range = value as Record<string, unknown>;
@@ -263,6 +270,10 @@ function normalizeMoney(record: Record<string, unknown>): NormalizedMoney | null
 
 export type BrandConversionAnalytics = ConversionCounts & NormalizedMoney & {
   range: ConversionRange;
+  /** Which date placed each order in the period; "ingested" when the server predates the basis option. */
+  dateBasis: OrderDateBasis;
+  /** Orders dated by SQRATCH's receipt time because the store gave no date (provider basis only). */
+  fallbackOrderCount: number;
   /** @deprecated Older name for `attributedOrderValueByCurrency`; kept for one release. */
   grossAttributedRevenueByCurrency?: MoneyRow[];
   /** @deprecated Older name for `refundedAttributedValueByCurrency`. */
@@ -306,7 +317,7 @@ export function parseBrandConversionAnalytics(data: unknown): BrandConversionAna
   if (!namedFields.every((field) => isNamedBreakdownArray(record[field]))) return null;
   const dailyTrend = parseConversionDailyTrend(record.dailyTrend);
   if (dailyTrend === null) return null;
-  return { ...(data as BrandConversionAnalytics), ...money, dailyTrend };
+  return { ...(data as BrandConversionAnalytics), ...money, ...normalizeBasis(record), dailyTrend };
 }
 
 // ---------------------------------------------------------------------------
@@ -326,6 +337,8 @@ export function parseBrandConversionAnalytics(data: unknown): BrandConversionAna
 
 export type CreatorConversionAnalytics = ConversionCounts & NormalizedMoney & {
   range: ConversionRange;
+  dateBasis: OrderDateBasis;
+  fallbackOrderCount: number;
   /** @deprecated Older name for `attributedOrderValueByCurrency`; kept for one release. */
   grossAttributedRevenueByCurrency?: MoneyRow[];
   /** @deprecated Older name for `refundedAttributedValueByCurrency`. */
@@ -360,7 +373,7 @@ export function parseCreatorConversionAnalytics(data: unknown): CreatorConversio
   if (!filters || (filters.experienceId !== null && typeof filters.experienceId !== "string")) return null;
   const dailyTrend = parseConversionDailyTrend(record.dailyTrend);
   if (dailyTrend === null) return null;
-  return { ...(data as CreatorConversionAnalytics), ...money, dailyTrend };
+  return { ...(data as CreatorConversionAnalytics), ...money, ...normalizeBasis(record), dailyTrend };
 }
 
 // ---------------------------------------------------------------------------

@@ -258,25 +258,32 @@ writers already explicitly set `provider = SHOPIFY`.
 
 `20261114120000_add_qr_batch_archive` adds two nullable columns to `QRCodeBatch` (`archivedAt`, `archivedById`) and one foreign key from `archivedById` to `User(id)` with `ON DELETE SET NULL`. It is additive, has no backfill and rewrites no row. Existing batches have `archivedAt IS NULL`, which means "not archived". `QRCodeBatch."isActive"` is not touched and is not read or written by the archive feature.
 
-**Preflight (read-only, run first):**
-
-```sql
--- Expect zero rows: the columns must not exist yet.
-SELECT column_name FROM information_schema.columns
-WHERE table_name = 'QRCodeBatch' AND column_name IN ('archivedAt', 'archivedById');
--- Note the count for the post-deploy comparison.
-SELECT count(*) FROM "QRCodeBatch";
-```
-
-Then `npx prisma migrate status` must list this migration as the only pending one (see "How to determine migration status" above before trusting a clean result).
-
-**Deployment order:** back up, apply `npx prisma migrate deploy` once from a controlled release job, then deploy the application release. The new application code reads and writes the columns and must not run before the migration. The migration takes a brief `ACCESS EXCLUSIVE` lock on `QRCodeBatch` and `User` (adding nullable columns and a foreign key on an empty column); run it in a normal release window.
-
-**Post-deploy verification:** `npx prisma migrate status` reports up to date, `npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script` returns an empty migration, the preflight query now returns both columns, `SELECT count(*) FROM "QRCodeBatch"` matches the earlier count, and `SELECT count(*) FROM "QRCodeBatch" WHERE "archivedAt" IS NOT NULL` is `0` until a brand archives one.
+**Deployment record:** applied to production by the owner (migration completed, no incomplete Prisma migrations, both columns and the foreign key present, 11 batches and zero archived at the time, batch management loading). An independent read-only Supabase check confirmed it. Do not run it again. It was verified before release against a disposable PostgreSQL database: applied to a schema pushed from the previous `schema.prisma`, then `prisma migrate diff` reported no drift.
 
 **Rollback:** roll the application back at any time; the older release ignores the columns. The columns may stay. Do not drop them while any batch is archived, because older versions would simply list those batches again (archiving never affects scanning, redemption, exports or history, so nothing else changes). If the migration must be reversed after archived batches exist, first decide with the owner whether to keep the archive markers.
 
-**Verified locally only** against a disposable PostgreSQL database: the migration applied to a schema pushed from the previous `schema.prisma`, then `prisma migrate diff` reported no drift against the new schema. It has not been run against any connected, shared or production database.
+## Password reset tokens (P20)
+
+`20261116120000_add_password_reset_token` adds one table, `PasswordResetToken` (`tokenHash` unique, `expires`, `consumedAt`, a cascade foreign key to `User`, and an index on `userId, consumedAt, expires`). Nothing else changes and no row is touched.
+
+**Preflight (read-only):** `SELECT to_regclass('public."PasswordResetToken"');` must return NULL. `npx prisma migrate status` must list this migration as the only pending one. `EMAIL_VERIFICATION_CODE_PEPPER` must already be set in the production environment, because the new routes hash tokens with it; confirm mail delivery is configured (`MAILTRAP_*`, `ADMIN_EMAIL`, `DOMAIN`).
+
+**Deployment order:** back up, run `npx prisma migrate deploy` once from a controlled release job, then deploy the application. Code must not run before the table exists: the forgot-password route would fail inside its background task (the user would still see the generic answer and receive no mail), and reset would answer 500.
+
+**Post-deploy checks:** `migrate status` is up to date; `migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script` is empty; request a reset for a test account and confirm one row appears with a 30-minute `expires` and that the stored `tokenHash` is a 64-character hex string; complete the reset and confirm the old session is signed out.
+
+**Rollback:** revert the application. The table can stay; it only ever holds hashed, expired-or-consumed tokens. Do not drop it while the reset routes are deployed.
+
+**Verified locally only:** applied to a disposable database built with `db push` from the previous schema, after which `migrate diff` was empty. Not applied to any connected or production database.
+
+## Known schema discrepancies (read-only investigation, 2026-11)
+
+Neither item has been corrected. Production was only read, never changed.
+
+1. **`Campaign.brandId` foreign key: production `ON DELETE SET NULL`, Prisma schema expects `RESTRICT`.** Cause: `20250909_clean_baseline` and `202604_lms_migration` created `Campaign_brandId_fkey` with `ON DELETE SET NULL` when the column was nullable. `20260815120000_harden_campaign_brand_ownership_and_click_attribution` made the column `NOT NULL` but did not recreate the constraint, while Prisma's default for a required relation became `RESTRICT`. Effect: deleting a Brand that still owns Campaigns fails either way (SQL not-null violation instead of a foreign-key violation), so no data is at risk; only the error class differs. Optional owner-reviewed correction, not part of any release: `ALTER TABLE "Campaign" DROP CONSTRAINT "Campaign_brandId_fkey", ADD CONSTRAINT "Campaign_brandId_fkey" FOREIGN KEY ("brandId") REFERENCES "Brand"("id") ON DELETE RESTRICT ON UPDATE CASCADE;` (brief lock on `Campaign`; no row changes).
+2. **`CampaignCommerceProduct` index with an older name.** Most likely cause (production names were not re-queried): the Prisma default name `CampaignCommerceProduct_brandId_campaignId_isActive_displayOrder_idx` is 68 characters, over PostgreSQL's 63-byte identifier limit. `20260807120000_add_campaign_commerce_product_curation` spells the full name, so a database built by replaying migrations stores it truncated by PostgreSQL, while a schema pushed by Prisma stores `..._isActive_display_idx` (verified on a disposable database built with `db push`). `migrate diff` against a replayed database will propose renaming it. The index itself is correct and used; renaming is cosmetic. If it is ever aligned, do it as a separate `ALTER INDEX ... RENAME TO` migration or shorten the name with `map:` in the schema.
+3. **`prisma migrate diff` terminating with `zsh: abort`.** Not reproducible: against a disposable local PostgreSQL database `npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script` exits 0 and prints an empty migration (Prisma 7.10.0, Node 24.19.0, macOS 27). The earlier abort therefore did not come from the schema or the CLI version alone; the only difference was the remote connection. If it recurs, run it with the direct (non-pooled) connection string and capture stderr.
+4. **Migrations cannot be replayed from an empty database.** `prisma migrate deploy` on an empty database stops at `202604_lms_migration` (`type "ApprovalStatus" already exists`), because production was baselined. Verify new migrations the way P11 did: build the previous schema with `prisma db push` on a disposable database, apply the new migration folder, then require an empty `migrate diff`.
 
 ## Deployment procedure
 

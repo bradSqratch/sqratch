@@ -259,7 +259,18 @@ export class Commerce7CommerceAdapter implements CommerceAdapter {
    * Whole-catalog fetch-and-normalize. Products are not persisted here; the
    * neutral sync service owns reconciliation.
    */
+  async previewProducts(connectionId: string): Promise<ProductSyncResult> {
+    return this.fetchCatalog(connectionId);
+  }
+
   async syncProducts(connectionId: string): Promise<ProductSyncResult> {
+    const result = await this.fetchCatalog(connectionId);
+    await this.deps.markProductSync(connectionId, result.syncedAt);
+    return result;
+  }
+
+  /** Shared read-only fetch behind `previewProducts` and `syncProducts`; it never writes. */
+  private async fetchCatalog(connectionId: string): Promise<ProductSyncResult> {
     const row = await this.loadCommerce7Connection(connectionId);
 
     if (!row) {
@@ -273,7 +284,6 @@ export class Commerce7CommerceAdapter implements CommerceAdapter {
     );
 
     const syncedAt = new Date();
-    await this.deps.markProductSync(connectionId, syncedAt);
 
     return {
       connectionId,

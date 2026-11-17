@@ -41,6 +41,7 @@ function makeDb(users: FakeUser[], options?: { p2002?: boolean }) {
     users: users.map((user) => ({ ...user })),
     userUpdates: [] as Array<Record<string, unknown>>,
     tokensDeleted: [] as string[],
+    resetTokensDeleted: [] as string[],
     tokens: [] as Array<{
       userId: string;
       email: string;
@@ -75,6 +76,12 @@ function makeDb(users: FakeUser[], options?: { p2002?: boolean }) {
         assert.deepEqual(Object.keys(where), ["id"]);
         state.userUpdates.push({ id: where.id, ...data });
         return {};
+      },
+    },
+    passwordResetToken: {
+      deleteMany: async ({ where }: { where: { userId: string } }) => {
+        state.resetTokensDeleted.push(where.userId);
+        return { count: 0 };
       },
     },
     emailVerificationToken: {
@@ -148,6 +155,7 @@ describe("transferUserEmail", () => {
     ]);
 
     assert.deepEqual(state.tokensDeleted, ["brand-1"]);
+    assert.deepEqual(state.resetTokensDeleted, ["brand-1"], "pending reset links are cancelled by the transfer");
     assert.equal(state.tokens.length, 1);
     const token = state.tokens[0];
     assert.equal(token.email, "client@example.com");

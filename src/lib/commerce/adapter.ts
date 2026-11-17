@@ -40,9 +40,20 @@ export interface CommerceAdapter {
   getConnection(connectionId: string): Promise<CommerceConnectionResult>;
 
   /**
-   * Fetches and normalizes the connection's live product catalog. Products
-   * are never persisted — this is a fetch-and-normalize operation, not a
-   * reconciliation against stored rows.
+   * READ-ONLY preview of the connection's live product catalog (one page for
+   * providers that paginate). It fetches and normalizes only: it never writes
+   * the connection row, `lastProductSyncAt`, sync-run history or any product
+   * row, so opening a page that lists provider products cannot change what the
+   * brand sees as its last sync.
+   */
+  previewProducts(connectionId: string): Promise<ProductSyncResult>;
+
+  /**
+   * Legacy single-call sync: the same fetch as `previewProducts`, then it
+   * stamps `CommerceConnection.lastProductSyncAt`. The persisted catalog sync
+   * (`product-sync.ts`) does not depend on that stamp; it records completion
+   * through `completeProductSync` after the rows are saved. New callers that
+   * only need to read products must use `previewProducts`.
    */
   syncProducts(connectionId: string): Promise<ProductSyncResult>;
 

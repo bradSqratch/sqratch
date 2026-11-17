@@ -126,6 +126,50 @@ export async function sendEmailTransferVerificationEmail({
   });
 }
 
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char] as string);
+}
+
+/**
+ * Sends the password recovery link. The token travels in the URL fragment so it
+ * never reaches server logs or a Referer header; the reset page reads it in the
+ * browser and removes it from the address bar.
+ */
+export async function sendPasswordResetEmail({
+  email,
+  name,
+  token,
+}: {
+  email: string;
+  name?: string | null;
+  token: string;
+}) {
+  const from = process.env.ADMIN_EMAIL;
+  const safeName = name && name.trim() ? name.trim() : "there";
+  const resetUrl = `${getAppBaseUrl().replace(/\/+$/, "")}/reset-password#token=${encodeURIComponent(token)}`;
+
+  return transporter.sendMail({
+    from,
+    to: email,
+    subject: "Reset your SQRATCH password",
+    html: `
+      <div style="font-family: Arial, sans-serif; color: #111; line-height: 1.6;">
+        <h1 style="margin-bottom: 12px;">Reset your password</h1>
+        <p style="margin: 0 0 16px;">Hi ${escapeHtml(safeName)}, we received a request to reset the password for your SQRATCH account.</p>
+        <p style="margin: 0 0 16px;"><a href="${resetUrl}" style="display: inline-block; padding: 12px 22px; background: #111; color: #fff; text-decoration: none; border-radius: 8px;">Choose a new password</a></p>
+        <p style="margin: 0 0 8px; font-size: 14px; color: #555;">This link works once and expires in 30 minutes. Using it signs you out everywhere.</p>
+        <p style="margin: 0; font-size: 14px; color: #555;">If you did not ask for this, you can ignore this email; your password has not changed.</p>
+      </div>
+    `,
+    text:
+      `Hi ${safeName},\n\n` +
+      "We received a request to reset the password for your SQRATCH account.\n\n" +
+      `Choose a new password: ${resetUrl}\n\n` +
+      "This link works once and expires in 30 minutes. Using it signs you out everywhere.\n" +
+      "If you did not ask for this, you can ignore this email; your password has not changed.\n",
+  });
+}
+
 /**
  * Sends a invite email that contains the campaign invite URL.
  */

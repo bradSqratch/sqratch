@@ -536,6 +536,7 @@ function makeFakeAdapter(
     getConnection: async () => {
       throw new Error("getConnection not stubbed for this test");
     },
+    previewProducts: async () => { throw new Error("previewProducts is not used in this test"); },
     syncProducts: async () => {
       throw new Error("syncProducts not stubbed for this test");
     },

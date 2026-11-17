@@ -23,9 +23,22 @@ export const ORDER_VALUE_LABELS = {
 
 export const CONVERSION_SECTION_TITLE = "Attributed conversions & order value";
 
-/** The date every conversion figure is filtered and bucketed on, until provider order dates are used. */
-export const CONVERSION_DATE_BASIS_NOTE =
-  "Orders are placed in a period by the date SQRATCH received them (UTC), which can be later than the date the customer ordered.";
+/**
+ * States which date places an order in the period. Both bases describe an order
+ * cohort: orders placed (or received) in the period with their CURRENT refund and
+ * cancellation state. A refund on an older order changes that older period. SQRATCH
+ * stores no payment or refund timestamps, so nothing here reports payments or
+ * refunds by date.
+ */
+export function conversionDateBasisNote(basis: "provider" | "ingested"): string {
+  return basis === "provider"
+    ? "Orders are placed in a period by the order date the store recorded (UTC). Figures are an order cohort: orders placed in the period, with their current refund and cancellation state. A refund on an older order changes that older period and is not shown as new activity."
+    : "Orders are placed in a period by the date SQRATCH received them (UTC), which can be later than the date the customer ordered. Figures show those orders with their current refund and cancellation state.";
+}
+
+export function fallbackOrdersNote(count: number): string {
+  return `${count} ${count === 1 ? "order used" : "orders used"} the date SQRATCH received ${count === 1 ? "it" : "them"} because the store did not supply an order date.`;
+}
 
 export const CONVERSION_LIMITATIONS_NOTE =
   "Attribution shows an order followed a tracked SQRATCH link. It does not show that SQRATCH caused the sale. SQRATCH does not record the amount actually paid, so these figures are order values, not collected payments.";

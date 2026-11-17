@@ -1,3 +1,4 @@
+import { isUniqueViolationOn } from "@/lib/prisma-errors";
 import { NextResponse } from "next/server";
 import { changeUserAccess, deleteUser, adminMutationError } from "@/lib/admin-user-mutations";
 import { cleanupUnreferencedMedia } from "@/lib/media-cleanup";
@@ -78,9 +79,7 @@ export async function PATCH(
       );
     }
 
-    const err = error as { code?: string; meta?: { target?: string[] } };
-
-    if (err.code === "P2002" && err.meta?.target?.includes("email")) {
+    if (isUniqueViolationOn(error, "email")) {
       return NextResponse.json(
         { error: "Email already in use" },
         { status: 409 },

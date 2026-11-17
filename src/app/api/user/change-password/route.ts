@@ -82,6 +82,8 @@ async function handlePost(request: NextRequest) {
           sessionVersion: { increment: 1 },
         },
       });
+      // A pending reset link must not outlive a password change.
+      await tx.passwordResetToken.deleteMany({ where: { userId: user.id } });
     });
 
     return NextResponse.json({ data: { success: true } });

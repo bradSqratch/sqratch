@@ -152,6 +152,7 @@ function makeAdapter(
     async getConnection() {
       throw new Error("getConnection should not be called in product-sync tests");
     },
+    previewProducts: async () => { throw new Error("previewProducts is not used in this test"); },
     syncProducts: syncProductsImpl,
   };
 }
@@ -182,6 +183,7 @@ function makePagedAdapter(
     async getConnection() {
       throw new Error("getConnection should not be called in product-sync tests");
     },
+    previewProducts: async () => { throw new Error("previewProducts is not used in this test"); },
     async syncProducts() {
       throw new Error("legacy syncProducts should not be called for a paged adapter");
     },
